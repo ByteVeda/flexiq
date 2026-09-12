@@ -100,10 +100,10 @@ A worker registers every scheduled task it knows about at startup. Firing is
 per-scheduler and not leader-elected, so register a periodic from one process
 unless a fleet double-firing it is acceptable.
 
-Periodic tasks are **not namespace-aware**: the table is keyed by name alone in
-every backend, so a namespaced handle refuses to register, list, delete, pause
-or resume one rather than reach another namespace's rows. Everything else on a
-namespaced handle works as usual.
+A schedule is identified by `(namespace, name)`, so a namespaced handle
+registers, lists, deletes, pauses and resumes its own and reaches no other
+tenant's. A handle with no namespace addresses the default namespace — one
+namespace, not every tenant's.
 
 ## Talking to the other SDKs
 

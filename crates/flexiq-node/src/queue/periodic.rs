@@ -51,22 +51,30 @@ impl JsQueue {
             enabled: enabled.unwrap_or(true),
             next_run,
             timezone,
+            namespace: self.namespace.clone(),
         };
         self.storage.register_periodic(&row).map_err(to_napi_err)?;
         Ok(next_run)
     }
 
-    /// Every registered periodic task, enabled or paused.
+    /// Every periodic task registered in this queue's namespace, enabled or
+    /// paused.
     #[napi]
     pub fn list_periodic(&self) -> Result<Vec<JsPeriodicTask>> {
-        let tasks = self.storage.list_periodic().map_err(to_napi_err)?;
+        let tasks = self
+            .storage
+            .list_periodic(self.namespace.as_deref())
+            .map_err(to_napi_err)?;
         Ok(tasks.into_iter().map(periodic_to_js).collect())
     }
 
-    /// Unschedule a periodic task. Returns false if none had that name.
+    /// Unschedule a periodic task. Returns false if this queue's namespace had
+    /// none by that name.
     #[napi]
     pub fn delete_periodic(&self, name: String) -> Result<bool> {
-        self.storage.delete_periodic(&name).map_err(to_napi_err)
+        self.storage
+            .delete_periodic(&name, self.namespace.as_deref())
+            .map_err(to_napi_err)
     }
 
     /// Pause (false) or resume (true) a periodic task by toggling its enabled
@@ -74,7 +82,7 @@ impl JsQueue {
     #[napi]
     pub fn set_periodic_enabled(&self, name: String, enabled: bool) -> Result<bool> {
         self.storage
-            .set_periodic_enabled(&name, enabled)
+            .set_periodic_enabled(&name, enabled, self.namespace.as_deref())
             .map_err(to_napi_err)
     }
 }

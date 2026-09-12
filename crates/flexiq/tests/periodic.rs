@@ -104,44 +104,41 @@ fn a_scheduled_task_actually_fires() {
     );
 }
 
-/// Periodic rows are keyed by name alone in every backend — `NewPeriodicTask`
-/// has no namespace — so a namespaced handle would read and overwrite another
-/// namespace's schedules. Refused until the table grows one.
+/// Two tenants declaring the same scheduled task are two schedules (#918).
+///
+/// This crate used to refuse every periodic operation on a namespaced handle,
+/// because the row was keyed by `name` alone and a namespaced call would have
+/// reached another tenant's. Identity is `(namespace, name)` now, so the
+/// refusal is gone and the isolation is real.
 #[test]
-fn a_namespaced_handle_refuses_every_periodic_operation() {
-    let q = FlexiQ::in_memory()
-        .expect("opens")
-        .with_namespace("tenant-a");
+fn a_namespaced_handle_only_reaches_its_own_schedules() {
+    let base = FlexiQ::in_memory().expect("opens");
+    let a = base.clone().with_namespace("tenant-a");
+    let b = base.clone().with_namespace("tenant-b");
 
-    for message in [
-        q.list_periodic().map(|_| ()).unwrap_err().to_string(),
-        q.delete_periodic("nightly")
-            .map(|_| ())
-            .unwrap_err()
-            .to_string(),
-        q.pause_periodic("nightly")
-            .map(|_| ())
-            .unwrap_err()
-            .to_string(),
-        q.resume_periodic("nightly")
-            .map(|_| ())
-            .unwrap_err()
-            .to_string(),
-    ] {
-        assert!(
-            message.contains("namespaced handle"),
-            "the refusal should say why: {message}"
-        );
+    for tenant in [&a, &b] {
+        let worker = tenant
+            .worker()
+            .register::<nightly>()
+            .spawn()
+            .expect("a namespaced worker registers its schedules");
+        worker.shutdown().expect("clean shutdown");
     }
 
-    let err = match q.worker().register::<nightly>().spawn() {
-        Ok(handle) => {
-            handle.shutdown().expect("clean shutdown");
-            panic!("a namespaced worker must refuse to register a schedule");
-        }
-        Err(err) => err.to_string(),
-    };
-    assert!(err.contains("namespaced handle"), "message: {err}");
+    // Neither registration overwrote the other, and the default namespace —
+    // which declared nothing — has no row at all.
+    assert_eq!(a.list_periodic().expect("lists").len(), 1);
+    assert_eq!(b.list_periodic().expect("lists").len(), 1);
+    assert!(base.list_periodic().expect("lists").is_empty());
+
+    // A pause reaches one tenant's row.
+    assert!(a.pause_periodic("nightly").expect("pauses"));
+    assert!(b.list_periodic().expect("lists")[0].enabled);
+
+    // A delete is "not found" for a name only another namespace holds.
+    assert!(!base.delete_periodic("nightly").expect("deletes"));
+    assert!(a.delete_periodic("nightly").expect("deletes"));
+    assert_eq!(b.list_periodic().expect("lists").len(), 1);
 }
 
 /// Restarting a worker writes nothing when the declaration has not changed.
@@ -165,7 +162,7 @@ fn restarting_a_worker_writes_nothing_when_the_declaration_is_unchanged() {
     // operator having paused it.
     let sentinel = flexiq_core::now_millis() + 999_999;
     q.storage()
-        .update_periodic_schedule("nightly", flexiq_core::now_millis(), sentinel)
+        .update_periodic_schedule("nightly", flexiq_core::now_millis(), sentinel, None)
         .expect("advances");
     assert!(q.pause_periodic("nightly").expect("pauses"));
 
@@ -183,7 +180,7 @@ fn restarting_a_worker_writes_nothing_when_the_declaration_is_unchanged() {
     );
 }
 
-/// A worker with no scheduled tasks is unaffected by the refusal above.
+/// The no-schedules path on a namespaced worker, which registers nothing.
 #[test]
 fn a_namespaced_worker_without_schedules_still_starts() {
     let q = FlexiQ::in_memory()

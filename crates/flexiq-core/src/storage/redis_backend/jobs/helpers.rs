@@ -24,7 +24,7 @@ impl RedisStorage {
     /// composite Redis key: `-` for the default namespace, `<len>:<ns>`
     /// otherwise. Length-prefixing keeps it injective — without it a `:`
     /// inside `ns` would let two different namespaces address the same key.
-    fn namespace_segment(namespace: Option<&str>) -> String {
+    pub(in crate::storage::redis_backend) fn namespace_segment(namespace: Option<&str>) -> String {
         match namespace {
             Some(ns) => format!("{}:{ns}", ns.len()),
             None => "-".to_string(),

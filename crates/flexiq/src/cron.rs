@@ -16,7 +16,7 @@
 //! process, or accept that a fleet may double-fire.
 
 use flexiq_core::periodic::{next_cron_time, next_cron_time_tz};
-use flexiq_core::{now_millis, NewPeriodicTask, QueueError, Result, Storage};
+use flexiq_core::{now_millis, NewPeriodicTask, Result, Storage};
 
 use crate::Task;
 
@@ -29,34 +29,24 @@ pub struct PeriodicSpec {
     pub timezone: Option<&'static str>,
 }
 
-/// Why a namespaced handle refuses every periodic operation.
-///
-/// Periodic tasks are not namespace-aware anywhere below this crate.
-/// [`NewPeriodicTask`] carries no namespace, and every backend keys the table by
-/// `name` alone — so on a shared database two namespaces registering the same
-/// task name overwrite one another's row, a listing returns every tenant's
-/// schedules, and a delete or pause reaches a name it does not own.
-///
-/// Refusing is the honest answer while that is true: scoping this properly is a
-/// migration plus a change to the `Storage` contract and all three backends,
-/// which is its own piece of work. A handle with no namespace behaves exactly
-/// as before.
-pub(crate) fn unsupported_in_namespace(operation: &str) -> QueueError {
-    QueueError::Other(format!(
-        "{operation} is not available on a namespaced handle: periodic tasks are keyed by name \
-         alone in every backend, so a namespaced call would reach another namespace's rows. \
-         Use a handle without a namespace."
-    ))
-}
-
-/// Write `T`'s schedule, if it is not already the one on record.
+/// Write `T`'s schedule into `namespace`, if it is not already the one on
+/// record.
 ///
 /// A worker calls this at every start. An unchanged declaration is a no-op, so
 /// restarting a worker touches nothing an operator or another worker's
 /// scheduler may have changed in the meantime.
-pub(crate) fn register<T: Task>(storage: &impl Storage, spec: &PeriodicSpec) -> Result<()> {
+///
+/// `namespace` is the worker's own: a schedule is identified by
+/// `(namespace, name)` (#918), so two tenants sharing a database can each
+/// declare a task called `nightly` without either one seeing or overwriting the
+/// other's row.
+pub(crate) fn register<T: Task>(
+    storage: &impl Storage,
+    spec: &PeriodicSpec,
+    namespace: Option<&str>,
+) -> Result<()> {
     let existing = storage
-        .list_periodic()?
+        .list_periodic(namespace)?
         .into_iter()
         .find(|task| task.name == T::NAME);
 
@@ -105,6 +95,7 @@ pub(crate) fn register<T: Task>(storage: &impl Storage, spec: &PeriodicSpec) -> 
         enabled,
         next_run,
         timezone: spec.timezone.map(str::to_string),
+        namespace: namespace.map(str::to_string),
     };
     storage.register_periodic(&row)
 }

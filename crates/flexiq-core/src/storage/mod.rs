@@ -854,31 +854,39 @@ macro_rules! impl_storage {
             fn get_due_periodic(
                 &self,
                 now: i64,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::storage::records::PeriodicTask>> {
-                self.get_due_periodic(now)
+                self.get_due_periodic(now, namespace)
             }
             fn update_periodic_schedule(
                 &self,
                 name: &str,
                 last_run: i64,
                 next_run: i64,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<()> {
-                self.update_periodic_schedule(name, last_run, next_run)
+                self.update_periodic_schedule(name, last_run, next_run, namespace)
             }
             fn list_periodic(
                 &self,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::storage::records::PeriodicTask>> {
-                self.list_periodic()
+                self.list_periodic(namespace)
             }
-            fn delete_periodic(&self, name: &str) -> $crate::error::Result<bool> {
-                self.delete_periodic(name)
+            fn delete_periodic(
+                &self,
+                name: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<bool> {
+                self.delete_periodic(name, namespace)
             }
             fn set_periodic_enabled(
                 &self,
                 name: &str,
                 enabled: bool,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<bool> {
-                self.set_periodic_enabled(name, enabled)
+                self.set_periodic_enabled(name, enabled, namespace)
             }
             fn register_subscription(
                 &self,
@@ -1787,20 +1795,42 @@ impl Storage for StorageBackend {
     fn register_periodic(&self, task: &records::NewPeriodicTask) -> Result<()> {
         delegate!(self, register_periodic, task)
     }
-    fn get_due_periodic(&self, now: i64) -> Result<Vec<records::PeriodicTask>> {
-        delegate!(self, get_due_periodic, now)
+    fn get_due_periodic(
+        &self,
+        now: i64,
+        namespace: Option<&str>,
+    ) -> Result<Vec<records::PeriodicTask>> {
+        delegate!(self, get_due_periodic, now, namespace)
     }
-    fn update_periodic_schedule(&self, name: &str, last_run: i64, next_run: i64) -> Result<()> {
-        delegate!(self, update_periodic_schedule, name, last_run, next_run)
+    fn update_periodic_schedule(
+        &self,
+        name: &str,
+        last_run: i64,
+        next_run: i64,
+        namespace: Option<&str>,
+    ) -> Result<()> {
+        delegate!(
+            self,
+            update_periodic_schedule,
+            name,
+            last_run,
+            next_run,
+            namespace
+        )
     }
-    fn list_periodic(&self) -> Result<Vec<records::PeriodicTask>> {
-        delegate!(self, list_periodic)
+    fn list_periodic(&self, namespace: Option<&str>) -> Result<Vec<records::PeriodicTask>> {
+        delegate!(self, list_periodic, namespace)
     }
-    fn delete_periodic(&self, name: &str) -> Result<bool> {
-        delegate!(self, delete_periodic, name)
+    fn delete_periodic(&self, name: &str, namespace: Option<&str>) -> Result<bool> {
+        delegate!(self, delete_periodic, name, namespace)
     }
-    fn set_periodic_enabled(&self, name: &str, enabled: bool) -> Result<bool> {
-        delegate!(self, set_periodic_enabled, name, enabled)
+    fn set_periodic_enabled(
+        &self,
+        name: &str,
+        enabled: bool,
+        namespace: Option<&str>,
+    ) -> Result<bool> {
+        delegate!(self, set_periodic_enabled, name, enabled, namespace)
     }
     fn register_subscription(&self, sub: &records::NewSubscription) -> Result<()> {
         delegate!(self, register_subscription, sub)

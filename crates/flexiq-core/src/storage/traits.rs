@@ -374,20 +374,51 @@ pub trait Storage: Send + Sync + Clone {
     fn try_acquire_token(&self, key: &str, max_tokens: f64, refill_rate: f64) -> Result<bool>;
 
     // ── Periodic task operations ────────────────────────────────────
+    //
+    // A periodic task is identified by `(namespace, name)` — a name is unique
+    // within a namespace and nowhere else (#918). So unlike the id-addressed
+    // members above, where `namespace: None` is an unscoped address that
+    // matches any tenant, `None` here names the **default namespace**: one
+    // namespace, the same value `NewJob::namespace` carries.
+    //
+    // `get_due_periodic` is the one exception, and it is not an address: a
+    // scheduler running without a namespace serves the whole cluster, so it
+    // reads every namespace's due rows and the job it fires inherits the
+    // *row's* namespace.
 
-    /// Register or update a periodic task by name.
+    /// Register or update the periodic task named by `task`'s
+    /// `(namespace, name)`. Leaves `last_run` alone, so re-registering an
+    /// unchanged schedule does not forget when it last fired.
     fn register_periodic(&self, task: &NewPeriodicTask) -> Result<()>;
     /// Enabled periodic tasks whose `next_run` is due at `now`.
-    fn get_due_periodic(&self, now: i64) -> Result<Vec<PeriodicTask>>;
-    /// Advance a periodic task's schedule after it fires.
-    fn update_periodic_schedule(&self, name: &str, last_run: i64, next_run: i64) -> Result<()>;
-    /// All registered periodic tasks, enabled or paused.
-    fn list_periodic(&self) -> Result<Vec<PeriodicTask>>;
-    /// Remove a periodic task. Returns false if no task had that name.
-    fn delete_periodic(&self, name: &str) -> Result<bool>;
+    ///
+    /// `namespace` is a filter, not an address: `None` reads **every**
+    /// namespace, because an unscoped scheduler fires every tenant's
+    /// schedules.
+    fn get_due_periodic(&self, now: i64, namespace: Option<&str>) -> Result<Vec<PeriodicTask>>;
+    /// Advance a periodic task's schedule after it fires. `namespace` is
+    /// `None` for the default namespace.
+    fn update_periodic_schedule(
+        &self,
+        name: &str,
+        last_run: i64,
+        next_run: i64,
+        namespace: Option<&str>,
+    ) -> Result<()>;
+    /// Every periodic task registered in `namespace`, enabled or paused.
+    /// `None` is the default namespace.
+    fn list_periodic(&self, namespace: Option<&str>) -> Result<Vec<PeriodicTask>>;
+    /// Remove a periodic task. Returns false if `namespace` had no task by
+    /// that name — including when another namespace does.
+    fn delete_periodic(&self, name: &str, namespace: Option<&str>) -> Result<bool>;
     /// Pause (false) or resume (true) a periodic task by toggling `enabled`.
-    /// Returns false if no task had that name.
-    fn set_periodic_enabled(&self, name: &str, enabled: bool) -> Result<bool>;
+    /// Returns false if `namespace` had no task by that name.
+    fn set_periodic_enabled(
+        &self,
+        name: &str,
+        enabled: bool,
+        namespace: Option<&str>,
+    ) -> Result<bool>;
 
     // ── Topic pub/sub ───────────────────────────────────────────────
 

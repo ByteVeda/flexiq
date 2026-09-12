@@ -54,10 +54,11 @@ A schedule is declared in code with `#[flexiq::task(cron = "...")]` and written
 at `spawn()`. Deleting the row removes the registration, not the declaration —
 a worker that still has the task registered writes it back at its next startup.
 
-<Callout type="warn">
-  All four are **refused on a namespaced handle**. Periodic rows carry no
-  namespace and every backend keys that table by name alone, so a namespaced
-  listing would hand back another tenant's schedules.
+<Callout type="info">
+  All four are **scoped to the handle's namespace**: a schedule is identified by
+  `(namespace, name)`, so a listing hands back this tenant's rows only and a
+  delete naming another tenant's schedule returns `false`. A handle with no
+  namespace addresses the default namespace, not every tenant's.
 </Callout>
 
 ## Everything else: `queue.storage()`

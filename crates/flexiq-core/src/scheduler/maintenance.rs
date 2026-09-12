@@ -298,9 +298,17 @@ impl Scheduler {
     }
 
     /// Check for periodic tasks that are due and enqueue them.
+    ///
+    /// A scheduler with no namespace serves the whole cluster, so it reads
+    /// every namespace's due rows and each job it mints inherits the *row's*
+    /// namespace rather than the scheduler's (#918). `unique_key` is namespace
+    /// scoped since `m0017`, so two tenants whose schedules share a name no
+    /// longer deduplicate against each other.
     pub(super) fn check_periodic(&self) -> Result<()> {
         let now = now_millis();
-        let due_tasks = self.storage.get_due_periodic(now)?;
+        let due_tasks = self
+            .storage
+            .get_due_periodic(now, self.namespace.as_deref())?;
 
         for task in due_tasks {
             let unique_key = Some(format!("periodic:{}:{}", task.name, now));
@@ -318,7 +326,7 @@ impl Scheduler {
                 depends_on: vec![],
                 expires_at: None,
                 result_ttl_ms: None,
-                namespace: self.namespace.clone(),
+                namespace: task.namespace.clone(),
                 debounce_key: None,
             };
 
@@ -339,10 +347,12 @@ impl Scheduler {
                 }
             };
 
-            if let Err(e) = self
-                .storage
-                .update_periodic_schedule(&task.name, now, next_run)
-            {
+            if let Err(e) = self.storage.update_periodic_schedule(
+                &task.name,
+                now,
+                next_run,
+                task.namespace.as_deref(),
+            ) {
                 error!("failed to update schedule for '{}': {e}", task.name);
             }
         }

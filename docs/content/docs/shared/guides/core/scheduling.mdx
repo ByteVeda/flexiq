@@ -219,9 +219,9 @@ Re-registering an **unchanged** declaration writes nothing at all. That is what
 stops a restart from resetting a `next_run` another worker's scheduler had
 advanced, or from resuming a task an operator paused.
 
-A periodic is refused on a namespaced worker, and every method below is refused
-on a namespaced handle: the table is keyed by name alone in every backend, so a
-namespaced call would reach some other namespace's rows.
+A namespaced worker writes its schedules into its own namespace, so two tenants
+can each declare a task called `nightly` without either one overwriting the
+other's row.
 
 </SdkOnly>
 
@@ -564,11 +564,7 @@ for schedule in queue.list_periodic()? {
 ```
 
 All four act on the catalog in storage, so any process pointed at the same
-backend can manage it — including a producer that never starts a worker. All four
-are also **refused on a namespaced handle**, and return an error saying so: the
-table is keyed by name alone in every backend, so a namespaced listing would
-return other namespaces' schedules and a delete would reach a name it does not
-own.
+backend can manage it — including a producer that never starts a worker.
 
 Deleting the row is not the same as retiring the schedule. A worker that still
 has the task in its `register::<T>()` chain writes it back at its next startup,
@@ -576,6 +572,20 @@ because the declaration is in the code and the row is only its record. Remove th
 `cron` attribute as well, or the schedule comes back with the next deploy.
 
 </SdkOnly>
+
+### Namespaces
+
+A schedule is identified by **`(namespace, name)`**, so a name is unique within
+a namespace and nowhere else. Every call above rides the handle's namespace:
+tenants sharing one database each register, list, pause and delete their own
+schedules, and deleting a name only another tenant holds reports "not found"
+rather than reaching it. A handle with no namespace addresses the default
+namespace — one namespace, not every tenant's.
+
+The scheduler reads the other way, because it is not addressing a schedule: one
+running without a namespace fires **every** namespace's due schedules, and each
+job it enqueues lands in the schedule's own namespace. Run a scheduler per
+tenant to narrow that.
 
 ## Overrun and multiple schedulers
 

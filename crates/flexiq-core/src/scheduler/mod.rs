@@ -3274,29 +3274,25 @@ mod tests {
         assert!(dead.iter().any(|d| d.original_job_id == job.id));
     }
 
-    #[test]
-    fn test_check_periodic() {
-        let scheduler = test_scheduler();
-
-        // Register a periodic task that's due now
-        let now = now_millis();
-        let row = NewPeriodicTask {
-            name: "every_minute".to_string(),
+    /// A schedule due a second ago, in `namespace`.
+    fn due_periodic(name: &str, namespace: Option<&str>) -> NewPeriodicTask {
+        NewPeriodicTask {
+            name: name.to_string(),
             task_name: "periodic_task".to_string(),
             cron_expr: "* * * * * *".to_string(), // every second
             args: None,
             kwargs: None,
             queue: "default".to_string(),
             enabled: true,
-            next_run: now - 1000, // due 1 second ago
+            next_run: now_millis() - 1000, // due 1 second ago
             timezone: None,
-        };
-        scheduler.storage.register_periodic(&row).unwrap();
+            namespace: namespace.map(str::to_string),
+        }
+    }
 
-        scheduler.check_periodic().unwrap();
-
-        // A job should have been enqueued
-        let jobs = scheduler
+    /// Pending `periodic_task` jobs visible to `namespace` (`None` = any).
+    fn periodic_jobs(scheduler: &Scheduler, namespace: Option<&str>) -> Vec<crate::job::Job> {
+        scheduler
             .storage
             .list_jobs(
                 Some(JobStatus::Pending as i32),
@@ -3304,10 +3300,91 @@ mod tests {
                 Some("periodic_task"),
                 10,
                 0,
-                None,
+                namespace,
             )
+            .unwrap()
+    }
+
+    #[test]
+    fn test_check_periodic() {
+        let scheduler = test_scheduler();
+        scheduler
+            .storage
+            .register_periodic(&due_periodic("every_minute", None))
             .unwrap();
-        assert_eq!(jobs.len(), 1);
+
+        scheduler.check_periodic().unwrap();
+
+        // A job should have been enqueued
+        assert_eq!(periodic_jobs(&scheduler, None).len(), 1);
+    }
+
+    /// A scheduler with no namespace serves the whole cluster: it fires every
+    /// tenant's due schedules, and each job it mints lands in the *row's*
+    /// namespace rather than the scheduler's (#918).
+    #[test]
+    fn an_unscoped_scheduler_fires_each_namespace_into_its_own() {
+        let scheduler = test_scheduler();
+        for namespace in [Some("tenant-a"), Some("tenant-b"), None] {
+            scheduler
+                .storage
+                .register_periodic(&due_periodic("nightly", namespace))
+                .unwrap();
+        }
+
+        scheduler.check_periodic().unwrap();
+
+        // `list_jobs(.., None)` is a job listing, where `None` is unscoped and
+        // matches every tenant — the opposite of what `None` means addressing a
+        // periodic, which is why the default namespace is read out of this one
+        // rather than asked for on its own.
+        let mut minted: Vec<Option<String>> = periodic_jobs(&scheduler, None)
+            .into_iter()
+            .map(|job| job.namespace)
+            .collect();
+        minted.sort();
+        assert_eq!(
+            minted,
+            vec![
+                None,
+                Some("tenant-a".to_string()),
+                Some("tenant-b".to_string())
+            ],
+            "one job per namespace, each in the row's own"
+        );
+    }
+
+    /// A namespaced scheduler reads only its own due rows, so another tenant's
+    /// schedule is neither fired nor advanced by it.
+    #[test]
+    fn a_namespaced_scheduler_leaves_another_tenants_schedule_alone() {
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let scheduler = Scheduler::new(
+            storage,
+            vec!["default".to_string()],
+            SchedulerConfig::default(),
+            Some("tenant-a".to_string()),
+        );
+        for namespace in [Some("tenant-a"), Some("tenant-b")] {
+            scheduler
+                .storage
+                .register_periodic(&due_periodic("nightly", namespace))
+                .unwrap();
+        }
+
+        scheduler.check_periodic().unwrap();
+
+        assert_eq!(periodic_jobs(&scheduler, Some("tenant-a")).len(), 1);
+        assert!(periodic_jobs(&scheduler, Some("tenant-b")).is_empty());
+
+        // Tenant B's deadline is untouched, so its own scheduler still finds it.
+        let b = scheduler
+            .storage
+            .list_periodic(Some("tenant-b"))
+            .unwrap()
+            .remove(0);
+        assert_eq!(b.last_run, None);
     }
 
     #[test]

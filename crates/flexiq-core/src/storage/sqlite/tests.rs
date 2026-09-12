@@ -2330,6 +2330,7 @@ fn make_periodic(name: &str, next_run: i64) -> crate::storage::records::NewPerio
         enabled: true,
         next_run,
         timezone: None,
+        namespace: None,
     }
 }
 
@@ -2347,17 +2348,17 @@ fn test_periodic_pause_resume_and_delete() {
         .unwrap();
 
     // Both registered tasks are listed.
-    let listed = storage.list_periodic().unwrap();
+    let listed = storage.list_periodic(None).unwrap();
     assert_eq!(listed.len(), 2);
     assert!(listed.iter().all(|row| row.enabled));
 
     // Both are due and fire.
-    assert_eq!(storage.get_due_periodic(now).unwrap().len(), 2);
+    assert_eq!(storage.get_due_periodic(now, None).unwrap().len(), 2);
 
     // Pausing "alpha" toggles enabled off and stops it firing.
-    assert!(storage.set_periodic_enabled("alpha", false).unwrap());
+    assert!(storage.set_periodic_enabled("alpha", false, None).unwrap());
     let due_names: Vec<String> = storage
-        .get_due_periodic(now)
+        .get_due_periodic(now, None)
         .unwrap()
         .into_iter()
         .map(|row| row.name)
@@ -2365,23 +2366,23 @@ fn test_periodic_pause_resume_and_delete() {
     assert_eq!(due_names, vec!["beta".to_string()]);
 
     // But it is still listed (paused, not removed).
-    assert_eq!(storage.list_periodic().unwrap().len(), 2);
+    assert_eq!(storage.list_periodic(None).unwrap().len(), 2);
 
     // Resuming brings it back into the due set.
-    assert!(storage.set_periodic_enabled("alpha", true).unwrap());
-    assert_eq!(storage.get_due_periodic(now).unwrap().len(), 2);
+    assert!(storage.set_periodic_enabled("alpha", true, None).unwrap());
+    assert_eq!(storage.get_due_periodic(now, None).unwrap().len(), 2);
 
     // Deleting removes it from the listing.
-    assert!(storage.delete_periodic("alpha").unwrap());
-    let remaining = storage.list_periodic().unwrap();
+    assert!(storage.delete_periodic("alpha", None).unwrap());
+    let remaining = storage.list_periodic(None).unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].name, "beta");
 
     // A second delete reports nothing removed.
-    assert!(!storage.delete_periodic("alpha").unwrap());
+    assert!(!storage.delete_periodic("alpha", None).unwrap());
 
     // Toggling an unknown task reports nothing changed.
-    assert!(!storage.set_periodic_enabled("ghost", false).unwrap());
+    assert!(!storage.set_periodic_enabled("ghost", false, None).unwrap());
 }
 
 // -- Topic pub/sub --

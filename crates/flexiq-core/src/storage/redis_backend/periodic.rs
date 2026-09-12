@@ -1,3 +1,35 @@
+//! The periodic-task registry.
+//!
+//! A schedule is identified by `(namespace, name)` (#918), so the namespace
+//! rides in the key — `periodic:<ns-segment>:<name>`, using the same
+//! length-prefixed [`namespace_segment`](RedisStorage::namespace_segment)
+//! encoding the `unique_key` pointer got in #773. The due sorted set stays a
+//! single index so an unscoped scheduler reads every tenant's schedules in one
+//! call, and its members are **whole keys** rather than bare names: a member is
+//! then something to `GET`, never something to parse back into a namespace and
+//! a name.
+//!
+//! # Rows written before this
+//!
+//! Pre-#918 rows live at `periodic:<name>` and are orphaned by the rename, not
+//! migrated — Redis has no schema to migrate, and this follows what #773 did to
+//! the `unique_key` pointer. They are inert rather than merely unreachable:
+//!
+//! - a legacy due member is a bare name, which is not a key under the periodic
+//!   root, so `get_due_periodic` drops it from the index without a read.
+//!   Nothing fires, which matters — reading one *would* find the legacy key,
+//!   fire it, and then write the advance to the new key, leaving the old
+//!   `next_run` in place to fire again on the next tick, forever. Its score
+//!   never moves either, so leaving it in the index would hand it back on every
+//!   pass;
+//! - `list_periodic` skips any key that is not the key its own
+//!   `(namespace, name)` would compute, which is exactly the set of legacy
+//!   rows.
+//!
+//! A worker re-registers its declared schedules at startup, so a code-declared
+//! periodic comes back on the first boot after the upgrade. An operator can
+//! `DEL` what is left.
+
 use redis::Commands;
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +49,10 @@ struct PeriodicEntry {
     pub last_run: Option<i64>,
     pub next_run: i64,
     pub timezone: Option<String>,
+    /// Absent in documents written before #918, which decode as the default
+    /// namespace — and are then skipped, because their key is the pre-#918 one.
+    #[serde(default)]
+    pub namespace: Option<String>,
 }
 
 impl From<PeriodicEntry> for PeriodicTask {
@@ -32,101 +68,182 @@ impl From<PeriodicEntry> for PeriodicTask {
             last_run: e.last_run,
             next_run: e.next_run,
             timezone: e.timezone,
+            namespace: e.namespace,
         }
     }
 }
 
 impl RedisStorage {
-    /// Register or update a periodic task by name.
-    pub fn register_periodic(&self, task: &NewPeriodicTask) -> Result<()> {
+    /// The key one schedule lives at.
+    fn periodic_key(&self, namespace: Option<&str>, name: &str) -> String {
+        self.key(&["periodic", &Self::namespace_segment(namespace), name])
+    }
+
+    /// The one due index, shared by every namespace. Its members are whole
+    /// schedule keys.
+    fn periodic_due_key(&self) -> String {
+        self.key(&["periodic", "due"])
+    }
+
+    /// The prefix every schedule key starts with. A due member that does not is
+    /// a pre-#918 bare name, and reading it would reach a key this module does
+    /// not own.
+    fn periodic_root(&self) -> String {
+        self.key(&["periodic", ""])
+    }
+
+    /// Whether `key` is the key `entry`'s own identity would compute. A stored
+    /// document that does not address itself was written before #918.
+    fn addresses_itself(&self, key: &str, entry: &PeriodicEntry) -> bool {
+        key == self.periodic_key(entry.namespace.as_deref(), &entry.name)
+    }
+
+    /// Read-modify-write one schedule atomically, returning whether it wrote.
+    ///
+    /// Every write below rewrites the whole document, so a plain GET-then-SET
+    /// would lose whatever a concurrent writer committed in between — a worker
+    /// re-registering a schedule would put back the `last_run` the scheduler had
+    /// just advanced. `WATCH` makes that a retry instead: the `EXEC` aborts if
+    /// anything touched the key since the read, and the closure runs again on
+    /// the new document.
+    ///
+    /// `mutate` returns the entry to store, or `None` to leave the key alone —
+    /// which is how "no such schedule" is said. The due index is kept in step
+    /// here rather than at each call site: an enabled schedule is a member
+    /// scored by its `next_run`, a paused one is not a member at all.
+    fn rewrite_periodic<F>(&self, key: &str, mutate: F) -> Result<bool>
+    where
+        F: Fn(Option<PeriodicEntry>) -> Option<PeriodicEntry>,
+    {
         let mut conn = self.conn()?;
+        let due_key = self.periodic_due_key();
 
-        let entry = PeriodicEntry {
-            name: task.name.clone(),
-            task_name: task.task_name.clone(),
-            cron_expr: task.cron_expr.clone(),
-            args: task.args.clone(),
-            kwargs: task.kwargs.clone(),
-            queue: task.queue.clone(),
-            enabled: task.enabled,
-            last_run: None,
-            next_run: task.next_run,
-            timezone: task.timezone.clone(),
-        };
+        redis::transaction(&mut conn, &[key], |conn, pipe| {
+            let stored: Option<String> = conn.get(key)?;
+            let existing = stored.as_deref().map(decode_entry).transpose()?;
 
-        let json = serde_json::to_string(&entry)?;
+            let Some(entry) = mutate(existing) else {
+                // Nothing to write. Returning a value rather than an empty
+                // `EXEC` lets the helper `UNWATCH` and stop.
+                return Ok(Some(false));
+            };
 
-        let pkey = self.key(&["periodic", &task.name]);
-        let due_key = self.key(&["periodic", "due"]);
+            pipe.set(key, encode_entry(&entry)?).ignore();
+            if entry.enabled {
+                pipe.zadd(&due_key, key, entry.next_run as f64).ignore();
+            } else {
+                pipe.zrem(&due_key, key).ignore();
+            }
+            pipe.query::<Option<()>>(conn)
+                .map(|done| done.map(|()| true))
+        })
+        .map_err(map_err)
+    }
 
-        let pipe = &mut redis::pipe();
-        pipe.set(&pkey, &json);
-        if entry.enabled {
-            pipe.zadd(&due_key, &task.name, task.next_run as f64);
-        }
-        pipe.query::<()>(&mut conn).map_err(map_err)?;
+    /// Register or update the schedule named by `(namespace, name)`.
+    pub fn register_periodic(&self, task: &NewPeriodicTask) -> Result<()> {
+        let namespace = task.namespace.as_deref();
+        let pkey = self.periodic_key(namespace, &task.name);
+
+        self.rewrite_periodic(&pkey, |existing| {
+            Some(PeriodicEntry {
+                name: task.name.clone(),
+                task_name: task.task_name.clone(),
+                cron_expr: task.cron_expr.clone(),
+                args: task.args.clone(),
+                kwargs: task.kwargs.clone(),
+                queue: task.queue.clone(),
+                enabled: task.enabled,
+                // Re-registering must not forget when the task last fired — the
+                // Diesel backends leave `last_run` off the changeset for the
+                // same reason. Read under the `WATCH`, so a scheduler advancing
+                // this row mid-registration retries rather than losing it.
+                last_run: existing.and_then(|e| e.last_run),
+                next_run: task.next_run,
+                timezone: task.timezone.clone(),
+                namespace: task.namespace.clone(),
+            })
+        })?;
 
         Ok(())
     }
 
-    /// Enabled periodic tasks whose `next_run` is due at `now` (Unix
-    /// milliseconds).
-    pub fn get_due_periodic(&self, now: i64) -> Result<Vec<PeriodicTask>> {
+    /// Enabled schedules due at `now` (Unix milliseconds). `namespace` is a
+    /// filter, not an address: `None` reads every namespace, because a
+    /// scheduler running unscoped fires every tenant's schedules.
+    pub fn get_due_periodic(&self, now: i64, namespace: Option<&str>) -> Result<Vec<PeriodicTask>> {
         let mut conn = self.conn()?;
-        let due_key = self.key(&["periodic", "due"]);
+        let due_key = self.periodic_due_key();
+        let root = self.periodic_root();
 
-        let names: Vec<String> = conn
+        let keys: Vec<String> = conn
             .zrangebyscore(&due_key, "-inf", now as f64)
             .map_err(map_err)?;
 
         let mut rows = Vec::new();
-        for name in names {
-            let pkey = self.key(&["periodic", &name]);
-            let data: Option<String> = conn.get(&pkey).map_err(map_err)?;
+        let mut legacy = Vec::new();
+        for key in keys {
+            if !key.starts_with(&root) {
+                // A pre-#918 member is a bare name rather than a key, so nothing
+                // reads it and nothing advances its score: it would come back on
+                // every pass forever. Drop it as it is found.
+                legacy.push(key);
+                continue;
+            }
+            let data: Option<String> = conn.get(&key).map_err(map_err)?;
             if let Some(d) = data {
                 let entry: PeriodicEntry = serde_json::from_str(&d)?;
-                if entry.enabled {
-                    rows.push(PeriodicTask::from(entry));
+                if !entry.enabled || !self.addresses_itself(&key, &entry) {
+                    continue;
                 }
+                if namespace.is_some() && entry.namespace.as_deref() != namespace {
+                    continue;
+                }
+                rows.push(PeriodicTask::from(entry));
             }
+        }
+
+        if !legacy.is_empty() {
+            let _pruned: i64 = conn.zrem(&due_key, legacy).map_err(map_err)?;
         }
 
         Ok(rows)
     }
 
-    /// Advance a periodic task's schedule after it fires.
-    pub fn update_periodic_schedule(&self, name: &str, last_run: i64, next_run: i64) -> Result<()> {
-        let mut conn = self.conn()?;
-        let pkey = self.key(&["periodic", name]);
+    /// Advance a schedule after it fires.
+    ///
+    /// A schedule paused between the due read and this write stays out of the
+    /// due index — the rewrite follows the stored `enabled`, not the fact that
+    /// this row was due a moment ago.
+    pub fn update_periodic_schedule(
+        &self,
+        name: &str,
+        last_run: i64,
+        next_run: i64,
+        namespace: Option<&str>,
+    ) -> Result<()> {
+        let pkey = self.periodic_key(namespace, name);
 
-        let data: Option<String> = conn.get(&pkey).map_err(map_err)?;
-        if let Some(d) = data {
-            let mut entry: PeriodicEntry = serde_json::from_str(&d)?;
-            entry.last_run = Some(last_run);
-            entry.next_run = next_run;
-
-            let json = serde_json::to_string(&entry)?;
-
-            let due_key = self.key(&["periodic", "due"]);
-            let pipe = &mut redis::pipe();
-            pipe.set(&pkey, &json);
-            pipe.zadd(&due_key, name, next_run as f64);
-            pipe.query::<()>(&mut conn).map_err(map_err)?;
-        }
+        self.rewrite_periodic(&pkey, |existing| {
+            existing.map(|mut entry| {
+                entry.last_run = Some(last_run);
+                entry.next_run = next_run;
+                entry
+            })
+        })?;
 
         Ok(())
     }
 
-    /// List all registered periodic tasks, enabled or paused. Scans the
+    /// Every schedule registered in `namespace`, enabled or paused. Scans the
     /// `periodic:*` keyspace (like `list_dead`/`list_workers`) so there is no
-    /// secondary index to keep consistent — tasks registered by any version are
-    /// listed.
-    pub fn list_periodic(&self) -> Result<Vec<PeriodicTask>> {
+    /// secondary index to keep consistent.
+    pub fn list_periodic(&self, namespace: Option<&str>) -> Result<Vec<PeriodicTask>> {
         let mut conn = self.conn()?;
         let pattern = self.key(&["periodic", "*"]);
-        // The due sorted-set shares the `periodic:` namespace but is not a task
+        // The due sorted set shares the `periodic:` namespace but is not a task
         // JSON blob, so skip it (a `GET` on it would be a WRONGTYPE error).
-        let due_key = self.key(&["periodic", "due"]);
+        let due_key = self.periodic_due_key();
 
         let mut rows = Vec::new();
         let mut cursor: u64 = 0;
@@ -147,6 +264,12 @@ impl RedisStorage {
                 let data: Option<String> = conn.get(&key).map_err(map_err)?;
                 if let Some(d) = data {
                     let entry: PeriodicEntry = serde_json::from_str(&d)?;
+                    if !self.addresses_itself(&key, &entry) {
+                        continue;
+                    }
+                    if entry.namespace.as_deref() != namespace {
+                        continue;
+                    }
                     rows.push(PeriodicTask::from(entry));
                 }
             }
@@ -160,46 +283,59 @@ impl RedisStorage {
         Ok(rows)
     }
 
-    /// Remove a periodic task. Returns false if no task had that name.
-    pub fn delete_periodic(&self, name: &str) -> Result<bool> {
+    /// Remove a schedule. False when `namespace` had none by that name,
+    /// including when another namespace does.
+    pub fn delete_periodic(&self, name: &str, namespace: Option<&str>) -> Result<bool> {
         let mut conn = self.conn()?;
-        let pkey = self.key(&["periodic", name]);
-        let due_key = self.key(&["periodic", "due"]);
+        let pkey = self.periodic_key(namespace, name);
+        let due_key = self.periodic_due_key();
 
         let pipe = &mut redis::pipe();
         pipe.del(&pkey);
-        pipe.zrem(&due_key, name);
+        pipe.zrem(&due_key, &pkey);
         let (deleted, _zrem): (i64, i64) = pipe.query(&mut conn).map_err(map_err)?;
 
         Ok(deleted > 0)
     }
 
-    /// Pause (false) or resume (true) a periodic task by toggling `enabled`.
-    /// Returns false if no task had that name.
-    pub fn set_periodic_enabled(&self, name: &str, enabled: bool) -> Result<bool> {
-        let mut conn = self.conn()?;
-        let pkey = self.key(&["periodic", name]);
+    /// Pause (false) or resume (true) a schedule. False when `namespace` had
+    /// none by that name.
+    pub fn set_periodic_enabled(
+        &self,
+        name: &str,
+        enabled: bool,
+        namespace: Option<&str>,
+    ) -> Result<bool> {
+        let pkey = self.periodic_key(namespace, name);
 
-        let data: Option<String> = conn.get(&pkey).map_err(map_err)?;
-        let Some(d) = data else {
-            return Ok(false);
-        };
-
-        let mut entry: PeriodicEntry = serde_json::from_str(&d)?;
-        entry.enabled = enabled;
-
-        let json = serde_json::to_string(&entry)?;
-        let due_key = self.key(&["periodic", "due"]);
-
-        let pipe = &mut redis::pipe();
-        pipe.set(&pkey, &json);
-        if enabled {
-            pipe.zadd(&due_key, name, entry.next_run as f64);
-        } else {
-            pipe.zrem(&due_key, name);
-        }
-        pipe.query::<()>(&mut conn).map_err(map_err)?;
-
-        Ok(true)
+        self.rewrite_periodic(&pkey, |existing| {
+            existing.map(|mut entry| {
+                entry.enabled = enabled;
+                entry
+            })
+        })
     }
+}
+
+/// Decode a stored document. The transaction closure's error type is Redis',
+/// not ours, so a malformed document has to be said in those terms.
+fn decode_entry(stored: &str) -> redis::RedisResult<PeriodicEntry> {
+    serde_json::from_str(stored).map_err(|e| {
+        redis::RedisError::from((
+            redis::ErrorKind::Parse,
+            "malformed periodic task document",
+            e.to_string(),
+        ))
+    })
+}
+
+/// Encode an entry for storage. Same reason as [`decode_entry`].
+fn encode_entry(entry: &PeriodicEntry) -> redis::RedisResult<String> {
+    serde_json::to_string(entry).map_err(|e| {
+        redis::RedisError::from((
+            redis::ErrorKind::Client,
+            "could not encode a periodic task",
+            e.to_string(),
+        ))
+    })
 }

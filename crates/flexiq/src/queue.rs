@@ -191,49 +191,38 @@ impl FlexiQ {
         self.storage.stats(self.namespace.as_deref())
     }
 
-    /// Every registered periodic task.
+    /// Every periodic task registered in this handle's namespace.
     ///
-    /// **Refused on a namespaced handle.** Periodic rows carry no namespace and
-    /// every backend keys the table by name alone, so a namespaced listing would
-    /// return other namespaces' schedules. The same holds for
+    /// A schedule is identified by `(namespace, name)`, so this — and
     /// [`delete_periodic`](Self::delete_periodic),
     /// [`pause_periodic`](Self::pause_periodic) and
-    /// [`resume_periodic`](Self::resume_periodic), and for registering one on a
-    /// namespaced worker.
+    /// [`resume_periodic`](Self::resume_periodic) — reach only the handle's own
+    /// rows. A handle with no namespace addresses the default namespace, not
+    /// every tenant's.
     pub fn list_periodic(&self) -> Result<Vec<flexiq_core::PeriodicTask>> {
-        self.refuse_periodic_in_namespace("list_periodic")?;
-        self.storage.list_periodic()
+        self.storage.list_periodic(self.namespace.as_deref())
     }
 
-    /// Remove a periodic. `false` when there was none by that name.
+    /// Remove a periodic. `false` when this namespace had none by that name.
     ///
     /// A worker that still has the task registered writes it back at its next
     /// startup: the schedule is declared in code, and this removes the row
     /// rather than the declaration.
     pub fn delete_periodic(&self, name: &str) -> Result<bool> {
-        self.refuse_periodic_in_namespace("delete_periodic")?;
-        self.storage.delete_periodic(name)
+        self.storage
+            .delete_periodic(name, self.namespace.as_deref())
     }
 
     /// Stop a periodic firing, without forgetting it.
     pub fn pause_periodic(&self, name: &str) -> Result<bool> {
-        self.refuse_periodic_in_namespace("pause_periodic")?;
-        self.storage.set_periodic_enabled(name, false)
+        self.storage
+            .set_periodic_enabled(name, false, self.namespace.as_deref())
     }
 
     /// Let a paused periodic fire again.
     pub fn resume_periodic(&self, name: &str) -> Result<bool> {
-        self.refuse_periodic_in_namespace("resume_periodic")?;
-        self.storage.set_periodic_enabled(name, true)
-    }
-
-    /// The periodic table is keyed by name alone, so a namespaced handle has no
-    /// safe way to touch it.
-    fn refuse_periodic_in_namespace(&self, operation: &str) -> Result<()> {
-        match self.namespace {
-            Some(_) => Err(crate::cron::unsupported_in_namespace(operation)),
-            None => Ok(()),
-        }
+        self.storage
+            .set_periodic_enabled(name, true, self.namespace.as_deref())
     }
 }
 

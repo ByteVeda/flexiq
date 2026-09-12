@@ -1003,6 +1003,7 @@ impl PyQueue {
             enabled: true,
             next_run,
             timezone: timezone.map(str::to_string),
+            namespace: self.namespace.clone(),
         };
 
         self.storage
@@ -1010,12 +1011,13 @@ impl PyQueue {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// List all registered periodic tasks, enabled or paused. Omits the opaque
-    /// args/kwargs payloads; `last_run`/`next_run` are Unix milliseconds.
+    /// List the periodic tasks registered in this queue's namespace, enabled or
+    /// paused. Omits the opaque args/kwargs payloads; `last_run`/`next_run` are
+    /// Unix milliseconds.
     pub fn list_periodic(&self) -> PyResult<Vec<Py<PyAny>>> {
         let rows = self
             .storage
-            .list_periodic()
+            .list_periodic(self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         Python::attach(|py| {
@@ -1036,24 +1038,25 @@ impl PyQueue {
         })
     }
 
-    /// Remove a periodic task. Returns false if no task had that name.
+    /// Remove a periodic task. Returns false if this queue's namespace had no
+    /// task by that name.
     pub fn delete_periodic(&self, name: &str) -> PyResult<bool> {
         self.storage
-            .delete_periodic(name)
+            .delete_periodic(name, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Pause a periodic task so it stops firing. Returns false if no task had that name.
     pub fn pause_periodic(&self, name: &str) -> PyResult<bool> {
         self.storage
-            .set_periodic_enabled(name, false)
+            .set_periodic_enabled(name, false, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Resume a paused periodic task. Returns false if no task had that name.
     pub fn resume_periodic(&self, name: &str) -> PyResult<bool> {
         self.storage
-            .set_periodic_enabled(name, true)
+            .set_periodic_enabled(name, true, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 

@@ -1458,18 +1458,16 @@ fn test_listing_is_blob_free(s: &impl Storage) {
     );
 }
 
-fn due_periodic_names(s: &impl Storage) -> Vec<String> {
-    s.get_due_periodic(now_millis())
+fn due_periodic_names(s: &impl Storage, namespace: Option<&str>) -> Vec<String> {
+    s.get_due_periodic(now_millis(), namespace)
         .unwrap()
         .into_iter()
         .map(|p| p.name)
         .collect()
 }
 
-fn test_periodic_crud(s: &impl Storage) {
-    use flexiq_core::NewPeriodicTask;
-    let past = now_millis() - 1_000;
-    let row = |name: &'static str| NewPeriodicTask {
+fn periodic_row(name: &str, namespace: Option<&str>) -> flexiq_core::NewPeriodicTask {
+    flexiq_core::NewPeriodicTask {
         name: name.to_string(),
         task_name: "periodic-task".to_string(),
         cron_expr: "* * * * *".to_string(),
@@ -1477,15 +1475,19 @@ fn test_periodic_crud(s: &impl Storage) {
         kwargs: None,
         queue: "default".to_string(),
         enabled: true,
-        next_run: past,
+        next_run: now_millis() - 1_000,
         timezone: None,
-    };
-    s.register_periodic(&row("pc-a")).unwrap();
-    s.register_periodic(&row("pc-b")).unwrap();
+        namespace: namespace.map(str::to_string),
+    }
+}
 
-    // list_periodic returns every registered task.
+fn test_periodic_crud(s: &impl Storage) {
+    s.register_periodic(&periodic_row("pc-a", None)).unwrap();
+    s.register_periodic(&periodic_row("pc-b", None)).unwrap();
+
+    // list_periodic returns every task registered in the namespace.
     let listed: Vec<String> = s
-        .list_periodic()
+        .list_periodic(None)
         .unwrap()
         .into_iter()
         .map(|p| p.name)
@@ -1493,20 +1495,125 @@ fn test_periodic_crud(s: &impl Storage) {
     assert!(listed.contains(&"pc-a".to_string()) && listed.contains(&"pc-b".to_string()));
 
     // Pausing drops it from the due set but keeps it in the catalog.
-    assert!(s.set_periodic_enabled("pc-a", false).unwrap());
-    assert!(!due_periodic_names(s).contains(&"pc-a".to_string()));
-    assert!(s.list_periodic().unwrap().iter().any(|p| p.name == "pc-a"));
+    assert!(s.set_periodic_enabled("pc-a", false, None).unwrap());
+    assert!(!due_periodic_names(s, None).contains(&"pc-a".to_string()));
+    assert!(s
+        .list_periodic(None)
+        .unwrap()
+        .iter()
+        .any(|p| p.name == "pc-a"));
 
     // Resuming makes it due again.
-    assert!(s.set_periodic_enabled("pc-a", true).unwrap());
-    assert!(due_periodic_names(s).contains(&"pc-a".to_string()));
+    assert!(s.set_periodic_enabled("pc-a", true, None).unwrap());
+    assert!(due_periodic_names(s, None).contains(&"pc-a".to_string()));
 
     // Toggling or deleting an unknown task reports "not found".
-    assert!(!s.set_periodic_enabled("pc-missing", true).unwrap());
+    assert!(!s.set_periodic_enabled("pc-missing", true, None).unwrap());
 
-    assert!(s.delete_periodic("pc-a").unwrap());
-    assert!(!s.list_periodic().unwrap().iter().any(|p| p.name == "pc-a"));
-    assert!(!s.delete_periodic("pc-a").unwrap());
+    assert!(s.delete_periodic("pc-a", None).unwrap());
+    assert!(!s
+        .list_periodic(None)
+        .unwrap()
+        .iter()
+        .any(|p| p.name == "pc-a"));
+    assert!(!s.delete_periodic("pc-a", None).unwrap());
+}
+
+/// Two namespaces registering the same schedule name are two schedules (#918).
+///
+/// Before this, `periodic_tasks` was keyed by `name` alone: the second
+/// registration overwrote the first, a listing returned both tenants' rows, and
+/// a delete or a pause reached a name the caller did not own.
+fn test_periodic_is_namespace_scoped(s: &impl Storage) {
+    let (a, b) = (Some("pns-tenant-a"), Some("pns-tenant-b"));
+
+    // Same name in two namespaces, plus the default namespace's own.
+    s.register_periodic(&periodic_row("nightly", a)).unwrap();
+    s.register_periodic(&periodic_row("nightly", b)).unwrap();
+    s.register_periodic(&periodic_row("nightly", None)).unwrap();
+
+    // Neither registration overwrote the other, and a listing is one tenant's.
+    // Filtered by name: an earlier case leaves its own rows in the default
+    // namespace, and this is about isolation, not about the whole catalog.
+    for ns in [a, b, None] {
+        let listed: Vec<_> = s
+            .list_periodic(ns)
+            .unwrap()
+            .into_iter()
+            .filter(|p| p.name == "nightly")
+            .collect();
+        assert_eq!(
+            listed.len(),
+            1,
+            "{ns:?} must see only its own schedule, saw {listed:?}"
+        );
+        assert_eq!(listed[0].namespace.as_deref(), ns);
+    }
+
+    // A pause reaches one namespace's row. The other two stay due.
+    assert!(s.set_periodic_enabled("nightly", false, a).unwrap());
+    assert!(!due_periodic_names(s, a).contains(&"nightly".to_string()));
+    assert!(due_periodic_names(s, b).contains(&"nightly".to_string()));
+    assert!(due_periodic_names(s, None).contains(&"nightly".to_string()));
+    assert!(s.set_periodic_enabled("nightly", true, a).unwrap());
+
+    // An unscoped due read is the engine's, and sees every namespace: one
+    // scheduler with no namespace fires every tenant's schedules.
+    let due_everywhere = s.get_due_periodic(now_millis(), None).unwrap();
+    assert_eq!(
+        due_everywhere
+            .iter()
+            .filter(|p| p.name == "nightly")
+            .count(),
+        3,
+        "an unscoped scheduler must see all three, saw {due_everywhere:?}"
+    );
+
+    // A delete reaches one namespace's row and reports "not found" for a name
+    // only another namespace holds.
+    assert!(s.delete_periodic("nightly", a).unwrap());
+    assert!(!s.delete_periodic("nightly", a).unwrap());
+    for ns in [b, None] {
+        assert!(
+            s.list_periodic(ns)
+                .unwrap()
+                .iter()
+                .any(|p| p.name == "nightly"),
+            "deleting {a:?}'s row must leave {ns:?}'s alone"
+        );
+    }
+
+    assert!(s.delete_periodic("nightly", b).unwrap());
+    assert!(s.delete_periodic("nightly", None).unwrap());
+}
+
+/// Re-registering a schedule rewrites it in place and keeps `last_run`.
+///
+/// SQLite used to upsert with `REPLACE INTO`, which deletes the row before
+/// inserting — so every worker restart forgot when the task last fired, while
+/// Postgres' `ON CONFLICT … DO UPDATE` kept it. Both now run the same
+/// UPDATE-else-INSERT.
+fn test_periodic_re_registration_keeps_last_run(s: &impl Storage) {
+    let fired_at = now_millis() - 5_000;
+    s.register_periodic(&periodic_row("pc-rerun", None))
+        .unwrap();
+    s.update_periodic_schedule("pc-rerun", fired_at, now_millis() + 60_000, None)
+        .unwrap();
+
+    let mut changed = periodic_row("pc-rerun", None);
+    changed.cron_expr = "0 * * * *".to_string();
+    s.register_periodic(&changed).unwrap();
+
+    let row = s
+        .list_periodic(None)
+        .unwrap()
+        .into_iter()
+        .find(|p| p.name == "pc-rerun")
+        .expect("the re-registration must update the row, not move it");
+    assert_eq!(row.cron_expr, "0 * * * *");
+    assert_eq!(row.last_run, Some(fired_at));
+
+    assert!(s.delete_periodic("pc-rerun", None).unwrap());
 }
 
 fn test_topic_subscriptions_crud(s: &impl Storage) {
@@ -2139,6 +2246,8 @@ fn run_storage_tests(s: &impl Storage) {
     test_workers(s);
     test_pause_resume_queue(s);
     test_periodic_crud(s);
+    test_periodic_is_namespace_scoped(s);
+    test_periodic_re_registration_keeps_last_run(s);
     test_topic_subscriptions_crud(s);
     test_topic_backlog_stats(s);
     test_topic_log_messages(s);
@@ -3503,6 +3612,50 @@ fn redis_storage_tests() {
     redis_debounce_coalesces_onto_a_plainly_enqueued_job(&storage);
     redis_debounce_slides_an_empty_payload(&storage);
     redis_purge_metrics_drains_across_batches(&storage);
+    redis_prunes_a_legacy_due_member(&storage);
+}
+
+/// A schedule registered before #918 lives at `periodic:<name>` and is a bare
+/// name in the due index, not a key. It must never fire — firing it would write
+/// the advance to the *new* key and leave the old `next_run` to fire again on
+/// every tick — and it must not be handed back forever either: nothing advances
+/// its score, so the due read drops it from the index as it finds it.
+#[cfg(feature = "redis")]
+fn redis_prunes_a_legacy_due_member(s: &flexiq_core::RedisStorage) {
+    use redis::Commands;
+
+    let legacy_key = format!("{}periodic:pre918", s.prefix());
+    let due_key = format!("{}periodic:due", s.prefix());
+    // Written by a pre-#918 binary: no `namespace` field, and the due member is
+    // the bare name.
+    let document = r#"{"name":"pre918","task_name":"legacy_task","cron_expr":"* * * * *","args":null,"kwargs":null,"queue":"default","enabled":true,"last_run":null,"next_run":0,"timezone":null}"#;
+
+    let mut conn = s.conn().unwrap();
+    let _: () = conn.set(&legacy_key, document).unwrap();
+    let _: () = conn.zadd(&due_key, "pre918", 0.0).unwrap();
+
+    let due = s.get_due_periodic(now_millis(), None).unwrap();
+    assert!(
+        !due.iter().any(|p| p.name == "pre918"),
+        "a legacy row must not fire: {due:?}"
+    );
+
+    let score: Option<f64> = conn.zscore(&due_key, "pre918").unwrap();
+    assert!(
+        score.is_none(),
+        "the legacy member must be pruned from the due index"
+    );
+
+    // The document itself is left where it is — an operator's to delete — but
+    // no listing owns up to it, because its key is not the one its identity
+    // would compute.
+    let listed = s.list_periodic(None).unwrap();
+    assert!(
+        !listed.iter().any(|p| p.name == "pre918"),
+        "a legacy row must not be listed: {listed:?}"
+    );
+
+    let _: () = conn.del(&legacy_key).unwrap();
 }
 
 /// A per-entry-TTL row archived before the `archived:expiry` index existed must

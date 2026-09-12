@@ -16,9 +16,7 @@ use std::collections::HashSet;
 
 use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
-use sea_query::{
-    Alias, ColumnDef, OnConflict, Query, SchemaStatementBuilder, SqliteQueryBuilder, Table,
-};
+use sea_query::{Alias, ColumnDef, Query, SchemaStatementBuilder, SqliteQueryBuilder, Table};
 
 #[cfg(feature = "postgres")]
 use diesel::pg::PgConnection;
@@ -161,6 +159,22 @@ pub fn dml(backend: Backend, stmt: &sea_query::UpdateStatement) -> Stmt {
     }
 }
 
+/// Render an `INSERT … SELECT` — how a table rebuild carries the old rows into
+/// the new shape. Column lists are code-defined; no literal and no user input
+/// reaches here.
+pub fn insert_select(backend: Backend, stmt: &sea_query::InsertStatement) -> Stmt {
+    Stmt {
+        sql: match backend {
+            Backend::Sqlite => stmt.to_string(SqliteQueryBuilder),
+            #[cfg(feature = "postgres")]
+            Backend::Postgres => stmt.to_string(PostgresQueryBuilder),
+            #[cfg(not(feature = "postgres"))]
+            Backend::Postgres => unreachable!("Postgres migrations require the `postgres` feature"),
+        },
+        tolerate: Tolerate::Nothing,
+    }
+}
+
 fn render_schema<S: SchemaStatementBuilder>(stmt: &S, backend: Backend) -> String {
     match backend {
         Backend::Sqlite => stmt.to_string(SqliteQueryBuilder),
@@ -210,20 +224,20 @@ fn select_versions_sql(table: &str, backend: Backend) -> String {
     }
 }
 
+/// The ledger insert, which is also the lock two booting processes take against
+/// each other.
+///
+/// Deliberately **not** `ON CONFLICT DO NOTHING`. `run_generic` runs this first
+/// inside the migration's transaction, so a second process that read the same
+/// version as pending blocks on the primary key and then loses it — rolling its
+/// transaction back before it has applied anything. Swallowing the conflict
+/// would let both apply the same one-shot DDL, which a table rebuild like
+/// `m0018` does not survive twice.
 fn record_version_sql(table: &str, version: &str, now: i64, backend: Backend) -> String {
     let stmt = Query::insert()
         .into_table(Alias::new(table))
         .columns([Alias::new(VERSION_COL), Alias::new(APPLIED_AT_COL)])
         .values_panic([version.into(), now.into()])
-        // Two processes booting at once can both apply a migration and then race
-        // to record it; without this the loser hits a primary-key violation and
-        // fails *after* the schema already converged. The version is what matters,
-        // not which racer's `applied_at` wins.
-        .on_conflict(
-            OnConflict::column(Alias::new(VERSION_COL))
-                .do_nothing()
-                .to_owned(),
-        )
         .to_owned();
     match backend {
         Backend::Sqlite => stmt.to_string(SqliteQueryBuilder),
@@ -314,22 +328,58 @@ fn run_generic<C: MigrationConn + Connection>(
         if applied.contains(migration.version()) {
             continue;
         }
-        // Apply the migration's statements and record its version in one
-        // transaction: an interruption between the two would otherwise leave an
-        // applied change untracked, so the next boot re-runs it — safe for the
-        // idempotent baseline, but not for later one-shot DDL.
-        conn.transaction::<_, QueueError, _>(|conn| {
-            for stmt in migration.up(backend) {
-                conn.exec(&stmt.sql, stmt.tolerate)?;
-            }
+        // Record the version and apply the statements in one transaction: an
+        // interruption between the two would otherwise leave an applied change
+        // untracked, so the next boot re-runs it — safe for the idempotent
+        // baseline, but not for later one-shot DDL.
+        //
+        // The recording goes *first* because the ledger's primary key is the
+        // only thing serializing two processes booting at once. `applied` was
+        // read outside this transaction, so both can see the same version as
+        // pending; the loser blocks on the duplicate key here and rolls back
+        // before touching the schema, instead of rebuilding a table the winner
+        // has already rebuilt.
+        let outcome = conn.transaction::<_, QueueError, _>(|conn| {
             conn.exec(
                 &record_version_sql(tracking_table, migration.version(), now_millis(), backend),
                 Tolerate::Nothing,
-            )
-        })?;
+            )?;
+            for stmt in migration.up(backend) {
+                conn.exec(&stmt.sql, stmt.tolerate)?;
+            }
+            Ok(())
+        });
+
+        if let Err(err) = outcome {
+            // A unique violation is either the race above or a migration's own
+            // DDL colliding with existing data. Only the first is survivable,
+            // and the ledger is what tells them apart: the winner's row is
+            // committed by the time our insert is refused.
+            let lost_the_race = is_unique_violation(&err)
+                && conn
+                    .load_versions(&select_versions_sql(tracking_table, backend))?
+                    .iter()
+                    .any(|v| v == migration.version());
+            if !lost_the_race {
+                return Err(err);
+            }
+            continue;
+        }
         newly_applied.push(migration.version().to_string());
     }
     Ok(newly_applied)
+}
+
+/// Whether this error is a row refused by a unique index — the shape the ledger
+/// takes when a second process has already recorded the version.
+fn is_unique_violation(err: &QueueError) -> bool {
+    matches!(
+        err,
+        QueueError::Storage(diesel::result::Error::DatabaseError(
+            diesel::result::DatabaseErrorKind::UniqueViolation,
+            _
+        ))
+    )
 }
 
 /// What one explicit migration run did.
@@ -592,6 +642,166 @@ mod tests {
             stmt.sql.contains("ADD COLUMN IF NOT EXISTS"),
             "{}",
             stmt.sql
+        );
+    }
+
+    /// Seeds `probe`, the table the two race tests below watch.
+    fn seed_probe(conn: &mut SqliteConnection) {
+        let probe = Table::create()
+            .table(Alias::new("probe"))
+            .col(ColumnDef::new(Alias::new("version")).text().not_null())
+            .to_owned();
+        conn.exec(&probe.to_string(SqliteQueryBuilder), Tolerate::Nothing)
+            .expect("seed probe table");
+    }
+
+    fn probe_rows(conn: &mut SqliteConnection) -> Vec<String> {
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = diesel::sql_types::Text)]
+            version: String,
+        }
+        let select = Query::select()
+            .column(Alias::new("version"))
+            .from(Alias::new("probe"))
+            .to_owned()
+            .to_string(SqliteQueryBuilder);
+        let rows: Vec<Row> = diesel::sql_query(select).load(conn).expect("read probe");
+        rows.into_iter().map(|r| r.version).collect()
+    }
+
+    /// Copies its own ledger row into `probe`, which only finds anything if the
+    /// recording ran before the migration's own statements.
+    struct CopiesItsOwnLedgerRow;
+
+    impl Migration for CopiesItsOwnLedgerRow {
+        fn version(&self) -> &'static str {
+            "0001_probe"
+        }
+        fn up(&self, backend: Backend) -> Vec<Stmt> {
+            // No predicate needed: this is the first migration of its run, so
+            // the only row the ledger can hold is the one recorded for it.
+            let mine = Query::select()
+                .column(Alias::new(VERSION_COL))
+                .from(Alias::new("schema_migrations"))
+                .to_owned();
+            let mut copy = Query::insert();
+            copy.into_table(Alias::new("probe"))
+                .columns([Alias::new("version")]);
+            copy.select_from(mine).expect("one column either side");
+            vec![insert_select(backend, &copy.to_owned())]
+        }
+    }
+
+    /// Stands in for the other process in the race: it records a *later*
+    /// version, so by the time the runner reaches that migration the ledger row
+    /// is there although the `applied` set read at the start said it was pending.
+    struct RecordsTheNextVersion;
+
+    impl Migration for RecordsTheNextVersion {
+        fn version(&self) -> &'static str {
+            "0001_racer"
+        }
+        fn up(&self, backend: Backend) -> Vec<Stmt> {
+            vec![raw_ddl(record_version_sql(
+                "schema_migrations",
+                "0002_rebuild",
+                0,
+                backend,
+            ))]
+        }
+    }
+
+    /// The kind of migration that must never run twice — `m0018` rebuilds a
+    /// table, and a second pass would carry the rows through a shape that has
+    /// lost a column.
+    struct DestroysTheProbe;
+
+    impl Migration for DestroysTheProbe {
+        fn version(&self) -> &'static str {
+            "0002_rebuild"
+        }
+        fn up(&self, _backend: Backend) -> Vec<Stmt> {
+            vec![ddl(
+                Backend::Sqlite,
+                &Table::drop().table(Alias::new("probe")).to_owned(),
+            )]
+        }
+    }
+
+    #[test]
+    fn the_ledger_row_lands_before_the_migration_runs() {
+        // Ordering is what makes the ledger's primary key a lock: the loser has
+        // to block on the key *before* it applies any DDL, not after.
+        let mut conn = mem();
+        seed_probe(&mut conn);
+
+        let migrations: Vec<Box<dyn Migration>> = vec![Box::new(CopiesItsOwnLedgerRow)];
+        run_sqlite(&mut conn, "schema_migrations", &migrations).expect("apply");
+
+        assert_eq!(probe_rows(&mut conn), vec!["0001_probe".to_string()]);
+    }
+
+    #[test]
+    fn a_version_another_process_recorded_is_not_applied_again() {
+        // The race m0018 made dangerous: both processes read the version as
+        // pending, and the loser must skip it rather than rebuild the table the
+        // winner already rebuilt.
+        let mut conn = mem();
+        seed_probe(&mut conn);
+
+        let migrations: Vec<Box<dyn Migration>> =
+            vec![Box::new(RecordsTheNextVersion), Box::new(DestroysTheProbe)];
+        let newly = run_sqlite(&mut conn, "schema_migrations", &migrations)
+            .expect("losing the race is not an error");
+
+        assert_eq!(newly, vec!["0001_racer".to_string()]);
+        assert!(
+            probe_rows(&mut conn).is_empty(),
+            "the drop must not have run"
+        );
+        assert!(applied(&mut conn).iter().any(|v| v == "0002_rebuild"));
+    }
+
+    #[test]
+    fn a_migrations_own_unique_violation_still_fails_the_run() {
+        // The skip above keys on the ledger, not on the error kind alone: a
+        // migration whose own DDL collides with existing data must not be
+        // mistaken for a lost race and silently passed over.
+        struct DuplicateIndex;
+        impl Migration for DuplicateIndex {
+            fn version(&self) -> &'static str {
+                "0001_dup"
+            }
+            fn up(&self, _backend: Backend) -> Vec<Stmt> {
+                vec![raw_ddl(
+                    "CREATE UNIQUE INDEX idx_probe_version ON probe (version)",
+                )]
+            }
+        }
+
+        let mut conn = mem();
+        seed_probe(&mut conn);
+        for _ in 0..2 {
+            conn.exec(
+                &Query::insert()
+                    .into_table(Alias::new("probe"))
+                    .columns([Alias::new("version")])
+                    .values_panic(["same".into()])
+                    .to_owned()
+                    .to_string(SqliteQueryBuilder),
+                Tolerate::Nothing,
+            )
+            .expect("seed duplicate rows");
+        }
+
+        let migrations: Vec<Box<dyn Migration>> = vec![Box::new(DuplicateIndex)];
+        let err = run_sqlite(&mut conn, "schema_migrations", &migrations)
+            .expect_err("the index cannot be built over duplicate rows");
+        assert!(is_unique_violation(&err), "{err:?}");
+        assert!(
+            !applied(&mut conn).iter().any(|v| v == "0001_dup"),
+            "a failed migration must not be recorded"
         );
     }
 
