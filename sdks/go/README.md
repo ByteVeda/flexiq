@@ -33,7 +33,6 @@ back through the producer door as an ordinary client.
 What neither door has, all of it deliberate rather than missing: middleware, the admin surface,
 settings, migrations, pub/sub and the worker registry. See
 [the delta from an embedded SDK](../../contracts/REMOTE_SDK_CONTRACT.md#the-delta-from-an-embedded-sdk).
-Durable steps are absent from the executor package specifically — see its own section below.
 
 Task registration is absent for a different reason: the server holds no task registry at all.
 Enqueuing a name nobody implements succeeds, and the job dead-letters later.
@@ -254,10 +253,10 @@ and a step whose result decodes into your own type beats one that hands back `an
 | `job.SleepUntil(ctx, name, at)` | The same against an absolute instant |
 | `job.RunKey()` | The id this durable run began under |
 
-The `key` handed to the body is this step's **downstream idempotency key**, `{run}:{name}#{n}`, and
-it is the same string on every attempt. Memoization closes the replay window; only a key the other
-service dedupes on closes the crash window between a remote call succeeding and its row committing.
-Hand it to any API that takes one.
+The `key` handed to the body is this step's **downstream idempotency key**, and it is the same
+string on every attempt: `{run}:{name}#{n}` for a `Step`, `{run}:{name}:{key}` for a `StepKeyed`.
+Memoization closes the replay window; only a key the other service dedupes on closes the crash
+window between a remote call succeeding and its row committing. Hand it to any API that takes one.
 
 Unkeyed steps are numbered by occurrence, so they must be asked for in the same order every time —
 a loop over a map wants `StepKeyed`. Asking for a different sequence than the one recorded is caught
