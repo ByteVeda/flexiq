@@ -410,6 +410,46 @@ func TestAnOrdinaryRefusalDoesNotDemoteASupersededOne(t *testing.T) {
 	}
 }
 
+// An acknowledgement without a deadline is a broken scheduler, not a deadline
+// to invent: the candidate this call proposed is not what the job was
+// rescheduled to, and on a replay it is a different time entirely.
+func TestASleepAcknowledgedWithoutADeadlineFailsRetryably(t *testing.T) {
+	fake := &fakeScheduler{attach: stepDispatch(t, nil, func(commit *executorv1.StepCommitFrame) *executorv1.AttachResponse {
+		return stepAckFrame(&executorv1.StepAckFrame{
+			JobId: commit.GetJobId(), Seq: commit.GetSeq(), Ok: true,
+		})
+	}, stepCapabilities()...)}
+
+	var caught error
+	runsSteps(t, fake, func(ctx context.Context, job *executor.Job) (any, error) {
+		caught = job.Sleep(ctx, "cooloff", time.Hour)
+		return nil, caught
+	})
+
+	// Either frame ends the attempt, so wait on whichever came and then say
+	// which it was — otherwise inventing a deadline reads as a timeout rather
+	// than as the wrong frame.
+	await(t, fake, "the attempt to end", func() bool {
+		return settled(fake.frames(), stepJobID) != nil || sleptOf(fake.frames()) != nil
+	})
+	if slept := sleptOf(fake.frames()); slept != nil {
+		t.Fatalf("wrote a slept frame for a deadline nothing confirmed: %v", slept.GetWakeAt().AsTime())
+	}
+
+	frame := settled(fake.frames(), stepJobID)
+	// Retryable: the commit may well have landed, and a replay of it comes back
+	// as already.
+	if failure := frame.GetFailure(); failure == nil || !failure.GetShouldRetry() {
+		t.Fatalf("settled with %v, want a retryable failure", frame.GetFrame())
+	}
+	if !errors.Is(caught, executor.ErrStepRetryable) {
+		t.Fatalf("the handler caught %v, want a retryable step error", caught)
+	}
+	if !strings.Contains(caught.Error(), "without a deadline") {
+		t.Errorf("the error does not say what was missing: %v", caught)
+	}
+}
+
 // An unconfirmed commit is indistinguishable from one that never happened, so
 // running out of budget is retryable and the replay re-runs the step under the
 // same downstream key.

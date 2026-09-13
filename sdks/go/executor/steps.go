@@ -307,7 +307,7 @@ func (s *jobSteps) commit(ctx context.Context, pending step.Pending, encoded []b
 	}
 
 	if pending.Kind() == step.KindSleep {
-		return s.settleSleep(pending, *wakeAt, ack)
+		return s.settleSleep(pending, ack)
 	}
 	if err := s.advance(pending, len(encoded)); err != nil {
 		return s.latch(localStepError(s.job.ID, pending.StepKey(), err))
@@ -324,11 +324,19 @@ func (s *jobSteps) advance(pending step.Pending, encoded int) error {
 
 // settleSleep records the deadline storage settled on, which on a replay is not
 // the one this call proposed.
-func (s *jobSteps) settleSleep(pending step.Pending, candidate time.Time, ack *executorv1.StepAckFrame) error {
-	settled := candidate
-	if echoed := ack.GetWakeAt(); echoed != nil {
-		settled = echoed.AsTime()
+//
+// An acknowledgement without one is a broken scheduler, not a deadline to
+// invent: falling back to the candidate would write a slept frame naming a time
+// nothing confirmed, and on a replay that is a different time from the one the
+// job was actually rescheduled to. Retryable, because the commit may well have
+// landed and a replay of it comes back as `already`.
+func (s *jobSteps) settleSleep(pending step.Pending, ack *executorv1.StepAckFrame) error {
+	echoed := ack.GetWakeAt()
+	if echoed == nil {
+		return s.latch(retryableStep(s.job.ID, pending.StepKey(),
+			"the scheduler acknowledged the sleep without a deadline"))
 	}
+	settled := echoed.AsTime()
 
 	s.mu.Lock()
 	// already means the deadline was on disk before this commit and the write
