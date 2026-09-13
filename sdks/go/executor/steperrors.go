@@ -36,13 +36,15 @@ var (
 // ErrStepDiverged means the running code asked for a different step than the
 // one recorded at that position: the step sequence changed between attempts.
 //
-// Permanent, and the one refusal a task body **cannot** carry on past. Every
-// other one is the body's to handle however it likes — catch it, do something
-// else, return a value, and this client takes that at its word. This one says
-// the deployed code and the recorded rows disagree, so a memoized result would
-// answer a different question than the step asking for it, and an attempt that
-// continued would write into a sequence that no longer lines up. Returning
-// normally past it fails the attempt anyway.
+// Permanent, and one of the two refusals a task body **cannot** carry on past —
+// [ErrStepSuperseded] is the other, and settles nothing at all. Every refusal
+// besides those two is the body's to handle however it likes: catch it, do
+// something else, return a value, and this client takes that at its word.
+//
+// This one says the deployed code and the recorded rows disagree, so a memoized
+// result would answer a different question than the step asking for it, and an
+// attempt that continued would write into a sequence that no longer lines up.
+// Returning normally past it fails the attempt anyway.
 //
 // The other SDKs enforce that with an exception tier `catch` cannot reach —
 // `BaseException` in Python, `java.lang.Error` in Java. Go has no such tier, so

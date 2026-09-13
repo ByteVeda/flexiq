@@ -95,9 +95,11 @@
 // reason.
 //
 // A refusal is the task body's to handle: catch it, do something else, return a
-// value, and the job is recorded a success. The one exception is
-// [ErrStepDiverged] — returning normally past one fails the attempt anyway,
-// because the deployed code and the recorded rows disagree.
+// value, and the job is recorded a success. Two are not, and returning normally
+// past either does not make them so. [ErrStepDiverged] fails the attempt
+// anyway, because the deployed code and the recorded rows disagree.
+// [ErrStepSuperseded] settles nothing at all — another attempt owns the job,
+// and this one may not write over it.
 //
 // # What this package does not do
 //
