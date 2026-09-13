@@ -1,6 +1,7 @@
 package step
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -13,6 +14,16 @@ import (
 // A name is accepted and recommended at every call site: a job whose sequence
 // reads sleep#0, sleep#1, sleep#2 tells nobody which one diverged.
 const DefaultSleepName = "sleep"
+
+// ErrDiverged marks the running code asking for a different step than the one
+// recorded at that position.
+//
+// It is told apart from every other refusal because it is the one the caller
+// must not be able to carry on past: the rest are the task's to handle, but a
+// memoized result answering a different question than the step asking for it
+// is a changed deploy, and an attempt that continues writes into a sequence
+// that no longer lines up.
+var ErrDiverged = errors.New("the step sequence diverged")
 
 // Pending is a step that has been issued but not yet committed.
 //
@@ -197,8 +208,8 @@ func (s *Sequence) BeginSleep(name string, now int64) (SleepDecision, error) {
 	recorded := s.recorded[index]
 	if recorded.WakeAt == nil {
 		return SleepDecision{}, fmt.Errorf(
-			"step divergence on job %s at position %d: expected a sleep step with a deadline, found %q with none",
-			s.jobID, recorded.Seq, Abbreviate(recorded.StepKey))
+			"%w: on job %s at position %d, expected a sleep step with a deadline, found %q with none",
+			ErrDiverged, s.jobID, recorded.Seq, Abbreviate(recorded.StepKey))
 	}
 	s.claimed[index] = true
 	if now >= *recorded.WakeAt {
@@ -423,14 +434,14 @@ func (s *Sequence) divergence(position int, stepKey string, kind Kind) error {
 	// row, and a keyed match finds one wherever it sits — which says nothing
 	// about how far this attempt has got. The offending step is always the last
 	// one issued.
-	return fmt.Errorf("step sequence changed for job %s at position %d\n"+
+	return fmt.Errorf("%w: step sequence changed for job %s at position %d\n"+
 		"  recorded: %s\n"+
 		"  running:  %s\n"+
 		"  step %d was %s, now %s\n"+
 		"A memoized result would answer a different question than the step asking for it. "+
 		"Drain or dead-letter this task's in-flight jobs before deploying a change to its "+
 		"step sequence",
-		s.jobID, position,
+		ErrDiverged, s.jobID, position,
 		renderSequence(s.recordedKeys(), position),
 		renderSequence(s.issued, max(len(s.issued)-1, 0)),
 		position, expected, found)

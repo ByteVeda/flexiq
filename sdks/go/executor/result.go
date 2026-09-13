@@ -23,9 +23,12 @@ type outcome struct {
 	cancelled bool
 	wall      time.Duration
 	// slept is the deadline a durable sleep committed, and latched is the last
-	// step refusal this attempt saw. Both are the step latch's, read once the
-	// handler has returned — because a Go task body can ignore an error, and a
-	// step that did not commit must not settle as a success.
+	// step refusal this attempt saw. Both are read once the handler has
+	// returned, because a Go task body can ignore an error and three of these
+	// outcomes are not the body's to decide: an attempt that slept is over, one
+	// that was superseded must write nothing at all, and one that diverged
+	// cannot write into a sequence that no longer lines up. Every other refusal
+	// is the body's, and it is taken at its word.
 	slept   *time.Time
 	latched *StepError
 }
@@ -54,13 +57,20 @@ func settle(job *Job, o outcome) *executorv1.AttachRequest {
 	case o.slept != nil:
 		return sleptFrame(job, *o.slept, wall)
 
-	// A step failed and the body returned successfully past it. Its memo is not
-	// there, so recording a success would record one for an attempt whose
-	// sequence has a gap in it. The original verdict decides the retry.
-	case o.err == nil && o.latched != nil:
+	// A divergence the body returned normally past. It is the one refusal that
+	// is not the body's to handle: the deployed code and the recorded rows
+	// disagree, so an attempt that carried on wrote into a sequence that no
+	// longer lines up. Every other refusal is taken at the body's word.
+	//
+	// The other SDKs put their control signals in an exception tier `catch`
+	// cannot reach. Go has no such tier, so the check happens here.
+	case o.err == nil && errors.Is(o.latchedErr(), ErrStepDiverged):
 		return failureFrame(job, failure{
-			error:       flexiq.EncodeTaskError(errStepSwallowed, swallowedStepError(o.latched), nil),
-			shouldRetry: errors.Is(o.latched, ErrStepRetryable),
+			error: flexiq.EncodeTaskError("StepDivergedError",
+				o.latched.Error()+" (the task body returned successfully past this)", nil),
+			// Permanent. The next attempt reads the same rows and runs the same
+			// code, and would diverge identically.
+			shouldRetry: false,
 			wall:        wall,
 		})
 

@@ -588,50 +588,43 @@ func TestASwallowedSleepStillEndsTheAttempt(t *testing.T) {
 	}
 }
 
-// A step that did not commit is a memo that is not there, so a success would be
-// recorded for an attempt whose sequence has a gap in it.
-func TestASwallowedStepFailureDoesNotSettleAsASuccess(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		verdict     executorv1.StepFailure
-		shouldRetry bool
-	}{
-		{"retryable", executorv1.StepFailure_STEP_FAILURE_RETRYABLE, true},
-		{"permanent", executorv1.StepFailure_STEP_FAILURE_PERMANENT, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fake := &fakeScheduler{attach: stepDispatch(t, nil, func(commit *executorv1.StepCommitFrame) *executorv1.AttachResponse {
-				return refusedAck(commit, tc.verdict, "the step store said no")
-			}, stepCapabilities()...)}
+// A body that catches a refused step and returns a value anyway is taken at its
+// word. Only it knows whether the work it was asked to do is done; the cost — a
+// completed job whose step sequence has a gap in it — is the caller's, and
+// returning the error is the supported way to decline it.
+//
+// The outcomes that are *not* the body's to decide have their own tests: a
+// slept attempt is over, a superseded one writes nothing at all, and a
+// divergence fails whatever the body does.
+func TestARefusedStepTheBodyReturnedPastIsTakenAtItsWord(t *testing.T) {
+	fake := &fakeScheduler{attach: stepDispatch(t, nil, func(commit *executorv1.StepCommitFrame) *executorv1.AttachResponse {
+		return refusedAck(commit, executorv1.StepFailure_STEP_FAILURE_PERMANENT, "the step store said no")
+	}, stepCapabilities()...)}
 
-			runsSteps(t, fake, func(ctx context.Context, job *executor.Job) (any, error) {
-				_, _ = executor.Step(ctx, job, "charge", func(context.Context, string) (any, error) {
-					return nil, nil
-				})
-				return "swallowed it", nil
-			})
-
-			frame := awaitSettled(t, fake, stepJobID)
-			failure := frame.GetFailure()
-			if failure == nil {
-				t.Fatalf("settled with %T, want the swallowed failure", frame.GetFrame())
-			}
-			// The original verdict survives being swallowed: a permanent one
-			// still dead-letters, a retryable one still retries.
-			if failure.GetShouldRetry() != tc.shouldRetry {
-				t.Errorf("should_retry = %v, want %v", failure.GetShouldRetry(), tc.shouldRetry)
-			}
-			recorded := flexiq.ParseTaskError(failure.GetError())
-			if recorded.Type != "StepSwallowedError" {
-				t.Errorf("errtype = %q, want %q", recorded.Type, "StepSwallowedError")
-			}
-			if !strings.Contains(recorded.Message, "returned successfully past this failure") {
-				t.Errorf("the failure does not say it was swallowed: %s", recorded.Message)
-			}
-			if !strings.Contains(recorded.Message, "the step store said no") {
-				t.Errorf("the failure lost the scheduler's own reason: %s", recorded.Message)
-			}
+	var caught error
+	runsSteps(t, fake, func(ctx context.Context, job *executor.Job) (any, error) {
+		_, caught = executor.Step(ctx, job, "charge", func(context.Context, string) (any, error) {
+			return nil, nil
 		})
+		return "handled it myself", nil
+	})
+
+	frame := awaitSettled(t, fake, stepJobID)
+	if frame.GetSuccess() == nil {
+		t.Fatalf("settled with %T, want the success the body returned", frame.GetFrame())
+	}
+	// The error still said what happened. The body simply chose not to
+	// propagate it, which is a decision this client does not overrule.
+	if !errors.Is(caught, executor.ErrStepPermanent) {
+		t.Fatalf("the body caught %v, want a permanent step error", caught)
+	}
+
+	var decoded string
+	if err := flexiq.DecodeResult(frame.GetSuccess().GetResult(), &decoded); err != nil {
+		t.Fatalf("the result does not decode: %v", err)
+	}
+	if decoded != "handled it myself" {
+		t.Errorf("result = %q, want the value the body returned", decoded)
 	}
 }
 
@@ -664,11 +657,47 @@ func TestAChangedSequenceDivergesBeforeTheBodyRuns(t *testing.T) {
 	if failure := frame.GetFailure(); failure == nil || failure.GetShouldRetry() {
 		t.Fatalf("settled with %v, want a permanent failure", frame.GetFrame())
 	}
-	if !errors.Is(caught, executor.ErrStepPermanent) || !errors.Is(caught, executor.ErrFatal) {
-		t.Fatalf("the handler caught %v, want a permanent step error", caught)
+	if !errors.Is(caught, executor.ErrStepDiverged) ||
+		!errors.Is(caught, executor.ErrStepPermanent) ||
+		!errors.Is(caught, executor.ErrFatal) {
+		t.Fatalf("the handler caught %v, want a permanent divergence", caught)
 	}
 	if !strings.Contains(caught.Error(), "step sequence changed") {
 		t.Errorf("the error does not name the divergence: %v", caught)
+	}
+}
+
+// The one refusal a task body may not carry on past. Go has no exception tier
+// `catch` cannot reach, so the check happens when the handler returns.
+func TestADivergenceTheBodyReturnedPastStillFailsTheAttempt(t *testing.T) {
+	snapshot := snapshotOf(t, step.Record{
+		Seq: 0, StepKey: "charge#0", Kind: step.KindRun,
+		Result: mustEncodeResult(t, "receipt-1"), CreatedAt: 1,
+	})
+	fake := &fakeScheduler{attach: stepDispatch(t, snapshot, alwaysOK, stepCapabilities()...)}
+
+	runsSteps(t, fake, func(ctx context.Context, job *executor.Job) (any, error) {
+		_, _ = executor.Step(ctx, job, "refund", func(context.Context, string) (any, error) {
+			return nil, nil
+		})
+		return "carried on past the divergence", nil
+	})
+
+	frame := awaitSettled(t, fake, stepJobID)
+	failure := frame.GetFailure()
+	if failure == nil {
+		t.Fatalf("settled with %T, want the divergence", frame.GetFrame())
+	}
+	// Permanent: the next attempt reads the same rows and runs the same code.
+	if failure.GetShouldRetry() {
+		t.Error("should_retry = true; a divergence is the same answer every attempt")
+	}
+	recorded := flexiq.ParseTaskError(failure.GetError())
+	if recorded.Type != "StepDivergedError" {
+		t.Errorf("errtype = %q, want %q", recorded.Type, "StepDivergedError")
+	}
+	if !strings.Contains(recorded.Message, "step sequence changed") {
+		t.Errorf("the failure does not name the divergence: %s", recorded.Message)
 	}
 }
 

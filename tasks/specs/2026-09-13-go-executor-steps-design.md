@@ -75,7 +75,7 @@ expose one either; adding it later is two lines, and nothing asks for it now.
 
 `*StepError` with `errors.Is` sentinels — `ErrStepRetryable`,
 `ErrStepPermanent`, `ErrStepSuperseded`, `ErrStepUnavailable`,
-`ErrStepSwallowed`, `ErrStepSlept`. The FFI shells use an exception tier a
+`ErrStepDiverged`, `ErrStepSlept`. The FFI shells use an exception tier a
 `catch` cannot reach (`BaseException` in Python, `java.lang.Error` in Java);
 Go has no such tier, and `errors.go` already committed this package to
 `Fatal`/`ErrCancelled`.
@@ -90,21 +90,34 @@ unrecognised verdict reads as retryable — nothing confirmed the write landed,
 and a scheduler that grows a fourth verdict must not turn into a dead letter
 here.
 
-### A latch, because Go cannot stop a body swallowing an error
+### A latch, and how narrow it is
 
-`_, _ = executor.Step(...)` compiles. Node and Python both hit this and both
-answer with a latch checked the instant the handler returns; this is the same
-thing.
+`_, _ = executor.Step(...)` compiles, so a Go body can return past a refusal the
+way a `catch {}` does. Node and Python both hit this and both answer with a
+latch checked the instant the handler returns.
+
+The scope is the governing design's, not this one's. §7.7 of
+`tasks/specs/2026-08-22-durable-steps-design.md` says a **sleep and a
+divergence** must not be catchable away, and `tasks/plans/2026-08-25-node-durable-steps.md`
+spells out that the latch only *bites* on a swallowed divergence. So:
 
 | Latch state | Frame |
 |---|---|
 | superseded | **none at all** — another attempt owns this job |
 | slept | `slept`, with the deadline the **ack** settled on |
-| a refusal the body returned past | `failure`, `should_retry` from the verdict |
+| diverged | `failure`, permanent, errtype `StepDivergedError` |
+| any other refusal | whatever the body returned |
 
 Superseded outranks everything, including a sleep: an attempt that lost its
 fence writes nothing. A swallowed sleep still ends the attempt, because the
-claim is gone either way.
+claim is gone either way. A divergence fails whatever the body does, because the
+deployed code and the recorded rows disagree and an attempt that carried on
+would write into a sequence that no longer lines up.
+
+Everything else is **taken at the body's word**. Only the task knows whether the
+work it was asked to do is done, and the cost of carrying on — a completed job
+with a gap in its step sequence — is the caller's to weigh. Returning the error
+is how they decline it.
 
 ### Where the wait is bounded
 

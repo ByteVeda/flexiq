@@ -276,6 +276,19 @@ A refused step carries a verdict, matched with `errors.Is`:
 | `executor.ErrStepPermanent` | It will never succeed — a divergence, a cap, a bad encoding. Also answers to `ErrFatal` |
 | `executor.ErrStepSuperseded` | Another attempt owns this job. This one stops and sends **no frame at all** |
 | `executor.ErrStepUnavailable` | The scheduler offers no step store. Retryable |
+| `executor.ErrStepDiverged` | The recorded sequence and the deployed code disagree. Permanent, and see below |
+
+**A refusal is yours to handle.** Catch it, do something else, return a value, and the job is
+recorded a success — only your code knows whether the work it was asked to do is done. The cost is
+yours to weigh too: that step's memo is not there, so the job completes with a gap in its sequence.
+Returning the error is how you decline it.
+
+The exception is `ErrStepDiverged`. Returning normally past one fails the attempt anyway, because
+the deployed code and the recorded rows disagree and an attempt that carried on would write into a
+sequence that no longer lines up. The other SDKs enforce that with an exception tier `catch` cannot
+reach — `BaseException` in Python, `java.lang.Error` in Java — and Go has no such tier, so this
+client checks once, when the handler returns. Drain or dead-letter a task's in-flight jobs before
+deploying a change to its step sequence.
 
 ### Capabilities
 

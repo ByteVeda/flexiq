@@ -28,11 +28,15 @@ belongs.
 
 Three things this cost more thought than expected:
 
-- **A Go body can swallow an error**, so the verdict is latched and read the
-  instant the handler returns. Superseded outranks everything and sends **no
-  frame at all**; a swallowed sleep still writes `slept`, because the claim is
-  gone either way; a swallowed refusal settles as a failure carrying the
-  original verdict.
+- **A Go body can swallow an error**, and the first cut latched every refusal
+  for it. The governing design is narrower: §7.7 of
+  `tasks/specs/2026-08-22-durable-steps-design.md` says the latch exists for a
+  **sleep and a divergence**, and the Node plan spells out that it only *bites*
+  on a swallowed divergence. So an ordinary refusal the body caught and returned
+  past is taken at its word — only that code knows whether the work is done —
+  while a divergence fails the attempt whatever the body does. Superseded still
+  sends **no frame at all**, and a swallowed sleep still writes `slept`, because
+  the claim is gone either way.
 - **`seq` is the number of rows already stored, not the walk's position.** A
   keyed hit claims a row out of order and leaves the cursor behind. Mutating it
   to the cursor reddens exactly one test, which is the point of having it.

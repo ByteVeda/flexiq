@@ -94,6 +94,11 @@
 // "your charge step silently lost its memo" that beats a failure naming the
 // reason.
 //
+// A refusal is the task body's to handle: catch it, do something else, return a
+// value, and the job is recorded a success. The one exception is
+// [ErrStepDiverged] — returning normally past one fails the attempt anyway,
+// because the deployed code and the recorded rows disagree.
+//
 // # What this package does not do
 //
 // Task registration, middleware, the admin surface, settings and pub/sub are

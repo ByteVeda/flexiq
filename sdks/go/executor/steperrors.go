@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	executorv1 "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/executor/v1"
+	"github.com/ByteVeda/flexiq/sdks/go/v2/internal/step"
 )
 
 // The verdicts a refused step carries, matched with [errors.Is].
@@ -31,6 +32,25 @@ var (
 	// "your charge step lost its memo" that beats a failure naming the reason.
 	ErrStepUnavailable = errors.New("flexiq: the scheduler offers no step store")
 )
+
+// ErrStepDiverged means the running code asked for a different step than the
+// one recorded at that position: the step sequence changed between attempts.
+//
+// Permanent, and the one refusal a task body **cannot** carry on past. Every
+// other one is the body's to handle however it likes — catch it, do something
+// else, return a value, and this client takes that at its word. This one says
+// the deployed code and the recorded rows disagree, so a memoized result would
+// answer a different question than the step asking for it, and an attempt that
+// continued would write into a sequence that no longer lines up. Returning
+// normally past it fails the attempt anyway.
+//
+// The other SDKs enforce that with an exception tier `catch` cannot reach —
+// `BaseException` in Python, `java.lang.Error` in Java. Go has no such tier, so
+// this client checks once, when the handler returns.
+//
+// Drain or dead-letter a task's in-flight jobs before deploying a change to its
+// step sequence.
+var ErrStepDiverged = errors.New("flexiq: the step sequence changed between attempts")
 
 // ErrStepSlept ends the attempt in a durable sleep.
 //
@@ -100,24 +120,6 @@ func unavailableStep(jobID string) *StepError {
 	}
 }
 
-// swallowedStepError is the failure a task body produces by returning
-// successfully past a step that did not commit.
-//
-// A Go task can ignore an error, and a step that did not commit is a memo that
-// is not there: recording a success would record one for an attempt whose
-// sequence has a gap in it. The original verdict is kept, so a swallowed
-// permanent failure still dead-letters and a swallowed retryable one still
-// retries.
-//
-// It never reaches the task — by definition the task has already returned — so
-// it exists only as the recorded failure, and errStepSwallowed is its errtype
-// rather than a sentinel nothing could match on.
-const errStepSwallowed = "StepSwallowedError"
-
-func swallowedStepError(cause *StepError) string {
-	return cause.Error() + " (the task body returned successfully past this failure)"
-}
-
 // refusalFor rebuilds the verdict an ack carried.
 //
 // From the enum, never the message. An unrecognised verdict reads as retryable:
@@ -144,8 +146,16 @@ func refusalFor(jobID, stepKey string, ack *executorv1.StepAckFrame) *StepError 
 // result and a malformed name all fail identically on the next attempt. The one
 // exception is a snapshot that would not decode, which is a fact about this
 // dispatch rather than about the code — see snapshotStepError.
+//
+// A divergence is tagged as well as classified. It is the only refusal the task
+// body is not allowed to carry on past, and the tag is how the settlement tells
+// it from the rest.
 func localStepError(jobID, stepKey string, err error) *StepError {
-	return permanentStep(jobID, stepKey, err.Error())
+	refusal := permanentStep(jobID, stepKey, err.Error())
+	if errors.Is(err, step.ErrDiverged) {
+		refusal.causes = append(refusal.causes, ErrStepDiverged)
+	}
+	return refusal
 }
 
 // snapshotStepError is the one local refusal that is *not* permanent.

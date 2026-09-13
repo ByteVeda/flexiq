@@ -127,8 +127,9 @@ type jobSteps struct {
 
 	mu       sync.Mutex
 	sequence *step.Sequence
-	// latched is the last refusal a step call returned, so a task body that
-	// swallowed one cannot settle as a success.
+	// latched is the last refusal a step call returned. A superseded one
+	// decides how the attempt settles whatever the body went on to do, because
+	// an attempt that lost its fence must write nothing at all.
 	latched *StepError
 	// sleptAt is the deadline the scheduler settled on, once a sleep committed.
 	sleptAt *time.Time
@@ -371,7 +372,8 @@ func (s *jobSteps) finish(log *slog.Logger) {
 	}
 }
 
-// resolution is what the latch has to say about how this attempt must settle.
+// resolution is what this attempt's steps have to say about how it settles: a
+// deadline it committed, and the last refusal it saw.
 func (s *jobSteps) resolution() (slept *time.Time, latched *StepError) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
