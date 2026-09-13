@@ -77,6 +77,11 @@ type session struct {
 	// echo. See stampLease.
 	leaseAcked bool
 	sideOn     bool
+	// stepsOn does gate its capability, and must: a scheduler that will not
+	// apply step commits sends no snapshot either, so running a step body
+	// against it would run un-memoized. Set during the handshake and read-only
+	// afterwards.
+	stepsOn bool
 
 	settleCh chan *executorv1.AttachRequest
 	side     *sideChannel
@@ -94,6 +99,11 @@ type session struct {
 	running map[string]*runningJob
 	leases  map[string][]byte
 	logged  map[string]bool
+	// snapshots holds each dispatch's recorded steps between its job_steps
+	// frame and the job frame that follows it. stepAcks is the commits waiting
+	// on an answer; nil once the reader has gone and abandoned them.
+	snapshots map[string]stepSnapshot
+	stepAcks  map[stepAckKey]chan *executorv1.StepAckFrame
 
 	inFlight sync.WaitGroup
 }
@@ -119,6 +129,8 @@ func newSession(cfg *config, log *slog.Logger, client executorv1.ExecutorService
 		running:    make(map[string]*runningJob),
 		leases:     make(map[string][]byte),
 		logged:     make(map[string]bool),
+		snapshots:  make(map[string]stepSnapshot),
+		stepAcks:   make(map[stepAckKey]chan *executorv1.StepAckFrame),
 	}
 }
 
@@ -136,7 +148,7 @@ func (s *session) handshake(ctx context.Context, cancelStream context.CancelFunc
 		Tasks:           tasks,
 		Slots:           s.cfg.wireSlots(),
 		ProtocolVersion: ProtocolVersion,
-		Capabilities:    []string{CapSideChannel, CapLease},
+		Capabilities:    []string{CapSideChannel, CapLease, CapSteps},
 	}}}
 	if err := s.stream.Send(hello); err != nil {
 		return attachError(err)
@@ -193,18 +205,25 @@ func (s *session) handshake(ctx context.Context, cancelStream context.CancelFunc
 			s.sideOn = true
 		case CapLease:
 			s.leaseAcked = true
+		case CapSteps:
+			s.stepsOn = true
 		}
 	}
 
 	s.log.Info("flexiq: attached",
 		"executor_id", s.cfg.id, "scheduler_id", ack.GetSchedulerId(),
 		"slots", s.cfg.slots, "tasks", len(tasks),
-		"side_channel", s.sideOn, "lease", s.leaseAcked)
+		"side_channel", s.sideOn, "lease", s.leaseAcked, "steps", s.stepsOn)
 	return nil
 }
 
 // read is the session's main loop. It returns why the stream ended.
 func (s *session) read(ctx context.Context) (sessionEnd, error) {
+	// Nothing can acknowledge a step commit once the reader has gone. Released
+	// here rather than left to each waiter's budget, which would hold a
+	// draining stream open for a full step-ack timeout per outstanding commit.
+	defer s.abandonAcks()
+
 	for {
 		response, err := s.stream.Recv()
 		if err != nil {
@@ -229,13 +248,15 @@ func (s *session) read(ctx context.Context) (sessionEnd, error) {
 			s.requestCancel(frame.Cancel.GetJobId())
 		case *executorv1.AttachResponse_Shutdown:
 			return endShutdown, nil
+		case *executorv1.AttachResponse_JobSteps:
+			// It arrives immediately before the job frame it belongs to, so the
+			// dispatch can answer a memo hit without a storage read this side
+			// has no credentials for.
+			s.rememberSnapshot(frame.JobSteps)
+		case *executorv1.AttachResponse_StepAck:
+			s.deliverAck(frame.StepAck)
 		case *executorv1.AttachResponse_HelloAck:
 			s.once("hello_ack", "flexiq: a second hello acknowledgement on an attached stream; ignoring it")
-		case *executorv1.AttachResponse_JobSteps, *executorv1.AttachResponse_StepAck:
-			// This client does not advertise steps, so the scheduler should
-			// send none. One arriving anyway is skipped rather than fatal — the
-			// stream stays aligned and its jobs keep running.
-			s.once("steps", "flexiq: the scheduler sent a durable-step frame to an executor that did not advertise steps; ignoring it")
 		case nil:
 			// An arm this build does not recognise decodes to no arm at all.
 			// That is how a newer scheduler and an older executor stay
@@ -249,6 +270,10 @@ func (s *session) read(ctx context.Context) (sessionEnd, error) {
 // frame that says why it is not.
 func (s *session) dispatch(frame *executorv1.JobFrame) {
 	job := jobFromFrame(frame, s)
+
+	// Taken unconditionally, before any path that refuses the job: a snapshot
+	// nobody removes is a snapshot that outlives the dispatch it belongs to.
+	snapshot := s.takeSnapshot(job.ID)
 
 	// The lease is remembered before anything can be sent about this job,
 	// refusals included: a frame that should carry one and does not is dropped,
@@ -282,6 +307,7 @@ func (s *session) dispatch(frame *executorv1.JobFrame) {
 	// follow its job frame immediately, and a lookup that misses because the
 	// handler had not booked itself in yet is a cancel silently dropped.
 	jobCtx, cancel := s.jobContext(job)
+	job.steps = newJobSteps(jobCtx, s, job, snapshot)
 	record := &runningJob{cancel: cancel}
 	s.mu.Lock()
 	s.running[job.ID] = record
@@ -310,6 +336,8 @@ func (s *session) run(jobCtx context.Context, job *Job, handler Handler, record 
 		timedOut:  errors.Is(jobCtx.Err(), context.DeadlineExceeded),
 		cancelled: record.requested.Load(),
 	}
+	job.steps.finish(s.log)
+	result.slept, result.latched = job.steps.resolution()
 	record.cancel()
 
 	// The telemetry this attempt queued goes out ahead of the frame that
@@ -321,7 +349,12 @@ func (s *session) run(jobCtx context.Context, job *Job, handler Handler, record 
 		s.enqueue(pending)
 	}
 
-	s.send(job.ID, settle(job, result))
+	// A superseded step commit settles nothing: another attempt owns this job,
+	// and a frame about it now would be this one writing over that one. settle
+	// answers nil for exactly that case and for no other.
+	if frame := settle(job, result); frame != nil {
+		s.send(job.ID, frame)
+	}
 	s.forget(job.ID)
 }
 
@@ -372,6 +405,7 @@ func (s *session) forget(jobID string) {
 	s.mu.Lock()
 	delete(s.running, jobID)
 	delete(s.leases, jobID)
+	delete(s.snapshots, jobID)
 	s.mu.Unlock()
 }
 

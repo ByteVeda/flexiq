@@ -119,14 +119,6 @@ func shutdownFrame() *executorv1.AttachResponse {
 	}}
 }
 
-// jobStepsFrame is a durable-step snapshot, which this client never asks for.
-// It exists so a test can prove one arriving anyway is skipped.
-func jobStepsFrame(jobID string, snapshot []byte) *executorv1.AttachResponse {
-	return &executorv1.AttachResponse{Frame: &executorv1.AttachResponse_JobSteps{
-		JobSteps: &executorv1.JobStepsFrame{JobId: jobID, Snapshot: snapshot},
-	}}
-}
-
 // fakeScheduler answers whatever a test scripts. Attach is given the attempt
 // number so a test about reconnecting can behave differently the second time.
 type fakeScheduler struct {

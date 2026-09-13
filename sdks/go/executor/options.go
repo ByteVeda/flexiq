@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
+	"github.com/ByteVeda/flexiq/sdks/go/v2/internal/step"
 )
 
 // MaxMessageBytes is the executor door's per-message cap: the 64 MiB the worker
@@ -40,8 +41,11 @@ const (
 	// CapLease unlocks a lease on every dispatch, echoed on every frame about
 	// it. Absent, frames carry none.
 	CapLease = "lease"
-	// CapSteps unlocks durable steps. This client does not implement them and
-	// never advertises it.
+	// CapSteps unlocks durable steps: the scheduler applies step commits and
+	// sends each dispatch its recorded snapshot. Unlike the other two this one
+	// **fails rather than degrades** — a durable step that silently did not
+	// commit is a step that will re-run a charge — so a step call against a
+	// scheduler that did not acknowledge it fails retryably instead.
 	CapSteps = "steps"
 )
 
@@ -54,6 +58,7 @@ const (
 	defaultShutdownDrain     = 30 * time.Second
 	defaultBackoffFloor      = 250 * time.Millisecond
 	defaultBackoffCeiling    = 30 * time.Second
+	defaultStepAckTimeout    = 30 * time.Second
 )
 
 // Option configures a [Worker].
@@ -77,6 +82,9 @@ type config struct {
 	shutdownDrain     time.Duration
 	backoffMin        time.Duration
 	backoffMax        time.Duration
+	stepAckTimeout    time.Duration
+
+	stepLimits step.Limits
 
 	logger *slog.Logger
 }
@@ -97,6 +105,8 @@ func defaultConfig() config {
 		shutdownDrain:     defaultShutdownDrain,
 		backoffMin:        defaultBackoffFloor,
 		backoffMax:        defaultBackoffCeiling,
+		stepAckTimeout:    defaultStepAckTimeout,
+		stepLimits:        step.DefaultLimits(),
 		logger:            slog.Default(),
 	}
 }
@@ -229,6 +239,29 @@ func WithReconnectBackoff(minDelay, maxDelay time.Duration) Option {
 	}
 }
 
+// WithStepAckTimeout bounds how long a durable step waits for the scheduler to
+// acknowledge its commit. Defaults to 30 seconds, the reference executor's own
+// number.
+//
+// The wait is bounded by the job's remaining time as well, whichever is
+// shorter: waiting past the attempt's deadline only delays a reap the scheduler
+// has already decided on. Running out is a **retryable** failure — an
+// unconfirmed commit is indistinguishable from one that never happened, and the
+// replay re-runs the step under the same downstream idempotency key.
+func WithStepAckTimeout(d time.Duration) Option {
+	return func(c *config) { c.stepAckTimeout = d }
+}
+
+// WithStepLimits sets the caps a step commit is refused against before the
+// round trip, for a scheduler configured away from the defaults.
+//
+// The check that holds is the scheduler's either way. This one only buys an
+// error that names the step and the value that failed, instead of one that
+// arrives from the far side of the network.
+func WithStepLimits(limits StepLimits) Option {
+	return func(c *config) { c.stepLimits = limits.internal() }
+}
+
 // WithLogger sets where this package logs. Defaults to [slog.Default].
 //
 // It logs a rotation, a reconnect, a refused attach and a frame it does not
@@ -260,6 +293,11 @@ func (c config) validate() error {
 	}
 	if c.heartbeatInterval <= 0 || c.handshakeTimeout <= 0 || c.shutdownDrain <= 0 {
 		return errors.New("flexiq: handshake, heartbeat and drain durations must be positive")
+	}
+	if c.stepAckTimeout <= 0 {
+		// Zero would fail every step commit before the frame reached the wire,
+		// which reads as "the scheduler never answered" and retries forever.
+		return errors.New("flexiq: step ack timeout must be positive")
 	}
 	if c.backoffMin <= 0 || c.backoffMax < c.backoffMin {
 		return errors.New("flexiq: reconnect backoff must be positive and non-decreasing")

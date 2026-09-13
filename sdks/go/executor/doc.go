@@ -53,10 +53,50 @@
 // scheduler asks for the job to stop. A handler that returns its context's
 // error after a cancel settles the job as cancelled rather than failed.
 //
+// # Durable steps
+//
+// A step runs once per job, not once per attempt. Its result is recorded, and
+// a later attempt replays that record instead of running the body again — which
+// is what stops a retry charging a card twice.
+//
+//	w.Handle("billing.charge", func(ctx context.Context, job *executor.Job) (any, error) {
+//		var order Order
+//		if err := job.Bind(&order); err != nil {
+//			return nil, executor.Fatal(err)
+//		}
+//
+//		receipt, err := executor.Step(ctx, job, "charge",
+//			func(ctx context.Context, key string) (Receipt, error) {
+//				return gateway.Charge(ctx, order, key)
+//			})
+//		if err != nil {
+//			return nil, err
+//		}
+//
+//		if err := job.Sleep(ctx, "settlement", 24*time.Hour); err != nil {
+//			return nil, err
+//		}
+//		return receipt, nil
+//	})
+//
+// [Step] is a package function rather than a method because a Go method cannot
+// have a type parameter. [StepKeyed] identifies a step by data instead of by
+// position, and [Job.Sleep] ends the attempt and reschedules the job.
+//
+// The key handed to the body is this step's downstream idempotency key, stable
+// across every attempt. Memoization closes the replay window; only a key the
+// other service dedupes on closes the crash window between a remote call
+// succeeding and its row committing.
+//
+// Unlike the side channel, this capability **fails rather than degrades**: a
+// step call against a scheduler that does not offer a step store returns a
+// retryable [StepError] rather than running un-memoized. There is no version of
+// "your charge step silently lost its memo" that beats a failure naming the
+// reason.
+//
 // # What this package does not do
 //
-// Durable steps. The "steps" capability is not advertised, so the scheduler
-// sends no step frames and none are sent back. Task registration, middleware,
-// the admin surface, settings and pub/sub are absent because they are not on
-// this door — see contracts/REMOTE_SDK_CONTRACT.md.
+// Task registration, middleware, the admin surface, settings and pub/sub are
+// absent because they are not on this door — see
+// contracts/REMOTE_SDK_CONTRACT.md.
 package executor

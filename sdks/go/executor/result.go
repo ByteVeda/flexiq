@@ -22,18 +22,48 @@ type outcome struct {
 	timedOut  bool
 	cancelled bool
 	wall      time.Duration
+	// slept is the deadline a durable sleep committed, and latched is the last
+	// step refusal this attempt saw. Both are the step latch's, read once the
+	// handler has returned — because a Go task body can ignore an error, and a
+	// step that did not commit must not settle as a success.
+	slept   *time.Time
+	latched *StepError
 }
 
-// settle turns a handler's return into exactly one settling frame.
+// settle turns a handler's return into exactly one settling frame, or into no
+// frame at all for the one case that must send none.
 //
-// Exactly one, always: a dispatched job the scheduler never hears about again
-// is a slot it believes is busy until the reaper notices. The lease is not
-// stamped here — session.send does that, so there is no path that builds one of
-// these and forgets.
+// Otherwise exactly one, always: a dispatched job the scheduler never hears
+// about again is a slot it believes is busy until the reaper notices. The lease
+// is not stamped here — session.send does that, so there is no path that builds
+// one of these and forgets.
 func settle(job *Job, o outcome) *executorv1.AttachRequest {
 	wall := durationpb.New(o.wall)
 
 	switch {
+	// Another attempt owns this job now, so this one must stop without writing.
+	// Not a failure and not a success: a frame either way would be this attempt
+	// writing over the one that replaced it.
+	case errors.Is(o.latchedErr(), ErrStepSuperseded):
+		return nil
+
+	// The attempt ended in a durable sleep: the row is committed, the claim is
+	// released and the job is already scheduled to wake. It outranks whatever
+	// the body returned on its way out, including a body that swallowed the
+	// signal — the claim is gone either way.
+	case o.slept != nil:
+		return sleptFrame(job, *o.slept, wall)
+
+	// A step failed and the body returned successfully past it. Its memo is not
+	// there, so recording a success would record one for an attempt whose
+	// sequence has a gap in it. The original verdict decides the retry.
+	case o.err == nil && o.latched != nil:
+		return failureFrame(job, failure{
+			error:       flexiq.EncodeTaskError("StepError", swallowed(o.latched).Error(), nil),
+			shouldRetry: errors.Is(o.latched, ErrStepRetryable),
+			wall:        wall,
+		})
+
 	case o.err == nil:
 		result, err := encodeResult(o.value)
 		if err != nil {
@@ -88,6 +118,17 @@ func settle(job *Job, o outcome) *executorv1.AttachRequest {
 			wall:        wall,
 		})
 	}
+}
+
+// latchedErr is the latched refusal as an error, and nil when there is none.
+//
+// Spelled out rather than passed straight to errors.Is: a nil *StepError in an
+// error interface is not a nil error, and unwrapping one panics.
+func (o outcome) latchedErr() error {
+	if o.latched == nil {
+		return nil
+	}
+	return o.latched
 }
 
 type failure struct {

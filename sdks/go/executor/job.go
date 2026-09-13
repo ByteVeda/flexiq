@@ -56,6 +56,10 @@ type Job struct {
 
 	payload []byte
 	session *session
+	// steps is this attempt's durable-step state, opened over the snapshot the
+	// dispatch carried. Nil for a job that was never dispatched by a session,
+	// which is what [Step] reads as "no step store".
+	steps *jobSteps
 }
 
 // Payload returns the raw wire envelope, which is a tag byte followed by the
