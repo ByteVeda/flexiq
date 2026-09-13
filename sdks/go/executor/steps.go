@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -344,13 +345,39 @@ func (s *jobSteps) settleSleep(pending step.Pending, candidate time.Time, ack *e
 	return nil
 }
 
-// latch remembers a refusal so a task body that returns past it cannot settle
-// the job as a success, and hands it back for the caller to propagate.
+// latch remembers a refusal for the settlement to read, and hands it back for
+// the caller to propagate.
+//
+// A terminal refusal is never demoted by a later one. A body that caught a
+// superseded commit and asked for another step gets an ordinary refusal for the
+// one left uncommitted, and letting that overwrite would settle the stale
+// attempt — as a success if the body then returned a value, and as a failure
+// frame if it returned an error. Either is this attempt writing over the one
+// that replaced it.
 func (s *jobSteps) latch(err *StepError) *StepError {
 	s.mu.Lock()
-	s.latched = err
+	if terminalRank(err) >= terminalRank(s.latched) {
+		s.latched = err
+	}
 	s.mu.Unlock()
 	return err
+}
+
+// terminalRank orders refusals by how little of the outcome is the task body's
+// to decide. A superseded attempt must write nothing at all, a diverged one
+// must fail whatever the body returns, and everything else is taken at the
+// body's word — so the latest ordinary refusal simply wins over the one before.
+func terminalRank(err *StepError) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, ErrStepSuperseded):
+		return 2
+	case errors.Is(err, ErrStepDiverged):
+		return 1
+	default:
+		return 0
+	}
 }
 
 // finish closes the attempt out, warning if its code no longer runs steps that

@@ -358,6 +358,58 @@ func TestASupersededStepSettlesWithNoFrameAtAll(t *testing.T) {
 	}
 }
 
+// A later refusal must not demote a superseded one.
+//
+// A body that caught the superseded commit and asked for another step gets an
+// ordinary refusal back for the one left uncommitted. Letting that overwrite the
+// latch would settle the stale attempt — as a success here, as a failure frame
+// if the body returned an error — and either is this attempt writing over the
+// one that replaced it.
+func TestAnOrdinaryRefusalDoesNotDemoteASupersededOne(t *testing.T) {
+	fake := &fakeScheduler{attach: stepDispatch(t, nil, func(commit *executorv1.StepCommitFrame) *executorv1.AttachResponse {
+		return refusedAck(commit, executorv1.StepFailure_STEP_FAILURE_SUPERSEDED,
+			"the execution claim for this job was lost")
+	}, stepCapabilities()...)}
+
+	returned := make(chan struct{})
+	var second error
+	runsSteps(t, fake, func(ctx context.Context, job *executor.Job) (any, error) {
+		defer close(returned)
+		_, _ = executor.Step(ctx, job, "charge", func(context.Context, string) (any, error) {
+			return nil, nil
+		})
+		// Caught, ignored, and on to the next one — which the sequence refuses
+		// because the first is still uncommitted.
+		_, second = executor.Step(ctx, job, "notify", func(context.Context, string) (any, error) {
+			return nil, nil
+		})
+		return "carried on past both", nil
+	})
+
+	await(t, fake, "the handler to return", func() bool {
+		select {
+		case <-returned:
+			return true
+		default:
+			return false
+		}
+	})
+	time.Sleep(200 * time.Millisecond)
+
+	if second == nil {
+		t.Fatal("the second step was accepted while the first was still uncommitted")
+	}
+	if errors.Is(second, executor.ErrStepSuperseded) {
+		t.Fatalf("the second refusal was superseded (%v); this test needs an ordinary one to overwrite with", second)
+	}
+	if frame := settled(fake.frames(), stepJobID); frame != nil {
+		t.Fatalf("a superseded attempt sent %T; it must write nothing at all", frame.GetFrame())
+	}
+	if slept := sleptOf(fake.frames()); slept != nil {
+		t.Fatal("a superseded attempt sent a slept frame; it must write nothing at all")
+	}
+}
+
 // An unconfirmed commit is indistinguishable from one that never happened, so
 // running out of budget is retryable and the replay re-runs the step under the
 // same downstream key.
