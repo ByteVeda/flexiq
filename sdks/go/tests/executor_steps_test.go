@@ -552,6 +552,37 @@ func TestADamagedSnapshotFailsTheStepRatherThanReadingAsEmpty(t *testing.T) {
 	}
 }
 
+// The same rule for the one damaged shape Go's json package accepts in silence.
+// Read as empty, a null metadata line runs every recorded step body again.
+func TestANullSnapshotFailsTheStepRatherThanReadingAsEmpty(t *testing.T) {
+	fake := &fakeScheduler{attach: stepDispatch(t, []byte("null\n"), alwaysOK, stepCapabilities()...)}
+
+	ran := false
+	var caught error
+	runsSteps(t, fake, func(ctx context.Context, job *executor.Job) (any, error) {
+		_, err := executor.Step(ctx, job, "charge", func(context.Context, string) (any, error) {
+			ran = true
+			return nil, nil
+		})
+		caught = err
+		return nil, err
+	})
+
+	frame := awaitSettled(t, fake, stepJobID)
+	if ran {
+		t.Fatal("the body ran against a null snapshot")
+	}
+	if failure := frame.GetFailure(); failure == nil || !failure.GetShouldRetry() {
+		t.Fatalf("settled with %v, want a retryable failure", frame.GetFrame())
+	}
+	if !errors.Is(caught, executor.ErrStepRetryable) {
+		t.Fatalf("the handler caught %v, want a retryable step error", caught)
+	}
+	if !strings.Contains(caught.Error(), "null metadata line") {
+		t.Errorf("the error does not say the snapshot was damaged: %v", caught)
+	}
+}
+
 func TestASleepCommitsItsDeadlineAndThenEndsTheAttempt(t *testing.T) {
 	// The deadline storage settled on, deliberately not the one proposed.
 	settledAt := time.Now().Add(90 * time.Minute).UTC().Truncate(time.Second)

@@ -128,6 +128,13 @@ func DecodeSnapshot(jobID string, payload []byte) ([]Record, error) {
 	if err := json.Unmarshal(payload[:split], &entries); err != nil {
 		return nil, fmt.Errorf(snapshotFault+"has an unreadable metadata line: %w", jobID, err)
 	}
+	if entries == nil {
+		// encoding/json accepts a bare null for a slice and leaves it nil, where
+		// the scheduler's own decoder refuses one. Unrefused it is the worst
+		// shape there is: a damaged snapshot that reads as "no steps recorded",
+		// which runs every durable step body again. An empty "[]" stays valid.
+		return nil, fmt.Errorf(snapshotFault+"has a null metadata line", jobID)
+	}
 
 	blobs := payload[split+1:]
 	records := make([]Record, 0, len(entries))

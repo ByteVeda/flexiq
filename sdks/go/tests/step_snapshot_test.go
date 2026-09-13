@@ -82,6 +82,11 @@ func TestADamagedSnapshotFailsRatherThanComingBackShort(t *testing.T) {
 	}{
 		{"no metadata line", []byte(`[]`), "has no metadata line"},
 		{"unreadable metadata", []byte("not json\n"), "has an unreadable metadata line"},
+		// encoding/json accepts a bare null for a slice and leaves it nil, where
+		// the scheduler's own decoder refuses one. Taken as empty it is the
+		// worst shape there is: a damaged snapshot that reads as "no steps
+		// recorded", which runs every durable step body again.
+		{"null metadata", []byte("null\n"), "has a null metadata line"},
 		{"truncated blob", whole[:len(whole)-4], "is truncated at step charge#0 (6 of 10 bytes)"},
 		{"trailing bytes", append(append([]byte{}, whole...), 'x'), "carries 1 byte(s) no step claims"},
 		{
