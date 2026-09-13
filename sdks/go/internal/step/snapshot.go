@@ -63,13 +63,38 @@ type Record struct {
 // instead, which is the same trade the outer frame makes. job_id is
 // deliberately absent — the frame already names it, and a second copy could
 // only disagree.
+//
+// Every field is a pointer, including the four the scheduler always writes.
+// Decoded into values they would take a zero on an absent or null key and say
+// nothing about it, where the scheduler's own decoder refuses both — serde has
+// no default for a bare i32 or String. The difference is not cosmetic: a
+// missing step_key reads as "" and a keyed replay then misses its row and runs
+// the body again, which is the double charge this whole file exists to prevent.
 type snapshotEntry struct {
-	Seq       int32  `json:"seq"`
-	StepKey   string `json:"step_key"`
-	Kind      Kind   `json:"kind"`
-	ResultLen *int   `json:"result_len"`
-	WakeAt    *int64 `json:"wake_at"`
-	CreatedAt int64  `json:"created_at"`
+	Seq       *int32  `json:"seq"`
+	StepKey   *string `json:"step_key"`
+	Kind      *Kind   `json:"kind"`
+	ResultLen *int    `json:"result_len"`
+	WakeAt    *int64  `json:"wake_at"`
+	CreatedAt *int64  `json:"created_at"`
+}
+
+// required names the first field this entry did not supply, or "" when it
+// supplied them all. result_len and wake_at are absent from the list on
+// purpose: both are genuinely optional, and null is a value there.
+func (e snapshotEntry) required() string {
+	switch {
+	case e.Seq == nil:
+		return "seq"
+	case e.StepKey == nil:
+		return "step_key"
+	case e.Kind == nil:
+		return "kind"
+	case e.CreatedAt == nil:
+		return "created_at"
+	default:
+		return ""
+	}
 }
 
 // Prefix of every message this file produces, so an operator grepping for one
@@ -84,11 +109,11 @@ func EncodeSnapshot(records []Record) ([]byte, error) {
 	entries := make([]snapshotEntry, 0, len(records))
 	for _, record := range records {
 		entry := snapshotEntry{
-			Seq:       record.Seq,
-			StepKey:   record.StepKey,
-			Kind:      record.Kind,
+			Seq:       &record.Seq,
+			StepKey:   &record.StepKey,
+			Kind:      &record.Kind,
 			WakeAt:    record.WakeAt,
-			CreatedAt: record.CreatedAt,
+			CreatedAt: &record.CreatedAt,
 		}
 		if record.Result != nil {
 			length := len(record.Result)
@@ -138,19 +163,23 @@ func DecodeSnapshot(jobID string, payload []byte) ([]Record, error) {
 
 	blobs := payload[split+1:]
 	records := make([]Record, 0, len(entries))
-	for _, entry := range entries {
-		result, rest, err := takeBlob(jobID, entry, blobs)
+	for position, entry := range entries {
+		if missing := entry.required(); missing != "" {
+			return nil, fmt.Errorf(snapshotFault+"is missing %s at position %d",
+				jobID, missing, position)
+		}
+		result, rest, err := takeBlob(jobID, *entry.StepKey, entry.ResultLen, blobs)
 		if err != nil {
 			return nil, err
 		}
 		blobs = rest
 		records = append(records, Record{
-			Seq:       entry.Seq,
-			StepKey:   entry.StepKey,
-			Kind:      entry.Kind,
+			Seq:       *entry.Seq,
+			StepKey:   *entry.StepKey,
+			Kind:      *entry.Kind,
 			Result:    result,
 			WakeAt:    entry.WakeAt,
-			CreatedAt: entry.CreatedAt,
+			CreatedAt: *entry.CreatedAt,
 		})
 	}
 
@@ -165,18 +194,18 @@ func DecodeSnapshot(jobID string, payload []byte) ([]Record, error) {
 // Copied rather than sub-sliced: a Record outlives the frame it was decoded
 // from, and a slice into that buffer would pin the whole snapshot in memory
 // for the life of the job.
-func takeBlob(jobID string, entry snapshotEntry, blobs []byte) (result, rest []byte, err error) {
-	if entry.ResultLen == nil {
+func takeBlob(jobID, stepKey string, resultLen *int, blobs []byte) (result, rest []byte, err error) {
+	if resultLen == nil {
 		return nil, blobs, nil
 	}
-	length := *entry.ResultLen
+	length := *resultLen
 	if length < 0 {
 		return nil, nil, fmt.Errorf(snapshotFault+"declares a negative length for step %s",
-			jobID, Abbreviate(entry.StepKey))
+			jobID, Abbreviate(stepKey))
 	}
 	if len(blobs) < length {
 		return nil, nil, fmt.Errorf(snapshotFault+"is truncated at step %s (%d of %d bytes)",
-			jobID, Abbreviate(entry.StepKey), len(blobs), length)
+			jobID, Abbreviate(stepKey), len(blobs), length)
 	}
 	result = make([]byte, length)
 	copy(result, blobs[:length])

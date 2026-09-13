@@ -111,6 +111,58 @@ func TestADamagedSnapshotFailsRatherThanComingBackShort(t *testing.T) {
 	}
 }
 
+// The scheduler writes all four of these on every row and serde refuses a
+// snapshot missing one, so decoding them into values would take a silent zero
+// where the oracle takes an error. A missing step_key is the sharp one: it
+// reads as "" and a keyed replay then misses its row and runs the body again.
+func TestASnapshotMissingARequiredFieldIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		entry string
+		want  string
+	}{
+		{"seq omitted", `{"step_key":"x#0","kind":"run","created_at":1}`, "is missing seq"},
+		{"seq null", `{"seq":null,"step_key":"x#0","kind":"run","created_at":1}`, "is missing seq"},
+		{"step_key omitted", `{"seq":0,"kind":"run","created_at":1}`, "is missing step_key"},
+		{"step_key null", `{"seq":0,"step_key":null,"kind":"run","created_at":1}`, "is missing step_key"},
+		{"kind omitted", `{"seq":0,"step_key":"x#0","created_at":1}`, "is missing kind"},
+		{"kind null", `{"seq":0,"step_key":"x#0","kind":null,"created_at":1}`, "is missing kind"},
+		{"created_at omitted", `{"seq":0,"step_key":"x#0","kind":"run"}`, "is missing created_at"},
+		{"created_at null", `{"seq":0,"step_key":"x#0","kind":"run","created_at":null}`, "is missing created_at"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			records, err := step.DecodeSnapshot("job-1", []byte("["+tc.entry+"]\n"))
+			if err == nil {
+				t.Fatalf("DecodeSnapshot accepted it and returned %d records", len(records))
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %q, want it to mention %q", err, tc.want)
+			}
+			// The position too: a thousand-step snapshot missing one field is
+			// not findable from the field name alone.
+			if !strings.Contains(err.Error(), "at position 0") {
+				t.Errorf("error = %q, want it to name the position", err)
+			}
+		})
+	}
+}
+
+// result_len and wake_at are genuinely optional, so null is a value there and
+// must stay one.
+func TestASnapshotMayOmitTheOptionalFields(t *testing.T) {
+	records, err := step.DecodeSnapshot("job-1",
+		[]byte(`[{"seq":0,"step_key":"x#0","kind":"run","created_at":1}]`+"\n"))
+	if err != nil {
+		t.Fatalf("DecodeSnapshot: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("decoded %d records, want 1", len(records))
+	}
+	if records[0].Result != nil || records[0].WakeAt != nil {
+		t.Fatalf("record = %+v, want both optional fields absent", records[0])
+	}
+}
+
 // An empty snapshot is a legal snapshot: the metadata line is "[]" and no
 // blobs follow it. Only an absent *frame* means "this job has no steps".
 func TestAnEmptySnapshotDecodesToNoRecords(t *testing.T) {
