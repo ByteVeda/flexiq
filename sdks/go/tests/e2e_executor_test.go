@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -202,5 +203,122 @@ func TestAProduceScopedTokenCannotOpenAnExecutorStream(t *testing.T) {
 	}
 	if !refusal.Permanent {
 		t.Fatalf("refusal = %+v, want it permanent", refusal)
+	}
+}
+
+// Durable steps against a real scheduler.
+//
+// The bufconn suite drives the frames; only a live server can prove the two
+// halves of the snapshot agree. The scheduler encodes it in Rust and this
+// client decodes it in Go, and a step whose memo did not survive that round
+// trip is a step that runs its body twice.
+
+func TestADurableStepSurvivesTheAttemptThatWroteIt(t *testing.T) {
+	type receipt struct {
+		Key   string `cbor:"key"`
+		Cents int64  `cbor:"cents"`
+	}
+
+	var charges, attempts atomic.Int32
+
+	attachWorker(t, "go-e2e-steps", func(w *executor.Worker) {
+		if err := w.Handle("go.e2e.step", func(ctx context.Context, job *executor.Job) (any, error) {
+			attempts.Add(1)
+
+			written, err := executor.Step(ctx, job, "charge",
+				func(_ context.Context, key string) (receipt, error) {
+					charges.Add(1)
+					return receipt{Key: key, Cents: 2500}, nil
+				})
+			if err != nil {
+				return nil, err
+			}
+
+			// Ends this attempt. The job is rescheduled, and the attempt that
+			// wakes replays the charge above from its recorded row instead of
+			// running it again.
+			if err := job.Sleep(ctx, "settlement", 2*time.Second); err != nil {
+				return nil, err
+			}
+			return written, nil
+		}); err != nil {
+			t.Fatalf("Handle: %v", err)
+		}
+	})
+
+	result, err := producer.Enqueue(context.Background(), flexiq.EnqueueRequest{
+		Task:    "go.e2e.step",
+		Options: flexiq.EnqueueOptions{Queue: executorQueue},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	job := awaitJob(t, result.Job.ID)
+	if job.Status != flexiq.StatusComplete {
+		t.Fatalf("job status = %s, want complete. Error: %s\n%s", job.Status, job.Error, live.logTail())
+	}
+
+	if ran := attempts.Load(); ran != 2 {
+		t.Fatalf("the task body ran %d time(s), want 2: one that slept and one that woke", ran)
+	}
+	if charged := charges.Load(); charged != 1 {
+		t.Fatalf("the step body ran %d time(s), want 1; that is the double charge this exists to prevent", charged)
+	}
+
+	var decoded receipt
+	if err := job.DecodeResult(&decoded); err != nil {
+		t.Fatalf("the recorded result is not a readable envelope: %v", err)
+	}
+	// The memo came back through the scheduler's own snapshot encoder, bytes
+	// intact, and the key it was minted under is the run's.
+	if want := result.Job.ID + ":charge#0"; decoded.Key != want {
+		t.Fatalf("the replayed receipt carried key %q, want %q", decoded.Key, want)
+	}
+	if decoded.Cents != 2500 {
+		t.Errorf("cents = %d, want 2500", decoded.Cents)
+	}
+}
+
+// A sleep that has already elapsed is a memo hit, so the second wake does not
+// start the first sleep over. Without that the job would sleep forever and this
+// test would never see it finish.
+func TestAJobWithTwoSleepsDoesNotRestartTheFirstOnTheSecondWake(t *testing.T) {
+	var attempts atomic.Int32
+
+	attachWorker(t, "go-e2e-sleeps", func(w *executor.Worker) {
+		if err := w.Handle("go.e2e.sleeps", func(ctx context.Context, job *executor.Job) (any, error) {
+			attempts.Add(1)
+			if err := job.Sleep(ctx, "first", time.Second); err != nil {
+				return nil, err
+			}
+			if err := job.Sleep(ctx, "second", time.Second); err != nil {
+				return nil, err
+			}
+			return attempts.Load(), nil
+		}); err != nil {
+			t.Fatalf("Handle: %v", err)
+		}
+	})
+
+	result, err := producer.Enqueue(context.Background(), flexiq.EnqueueRequest{
+		Task:    "go.e2e.sleeps",
+		Options: flexiq.EnqueueOptions{Queue: executorQueue},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	job := awaitJob(t, result.Job.ID)
+	if job.Status != flexiq.StatusComplete {
+		t.Fatalf("job status = %s, want complete. Error: %s\n%s", job.Status, job.Error, live.logTail())
+	}
+
+	var ran int64
+	if err := job.DecodeResult(&ran); err != nil {
+		t.Fatalf("the recorded result is not a readable envelope: %v", err)
+	}
+	if ran != 3 {
+		t.Fatalf("the task body ran %d time(s), want 3: the first attempt and one wake per sleep", ran)
 	}
 }
