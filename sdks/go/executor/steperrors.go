@@ -43,16 +43,6 @@ var (
 // this client writes the slept frame regardless.
 var ErrStepSlept = errors.New("flexiq: the attempt ended in a durable sleep")
 
-// ErrStepSwallowed is settled when a step failed and the task body returned
-// successfully anyway.
-//
-// A Go task can ignore an error, and a step that did not commit is a memo that
-// is not there: recording a success would record one for an attempt whose
-// sequence has a hole in it. The original verdict is preserved, so a swallowed
-// permanent failure still dead-letters and a swallowed retryable one still
-// retries.
-var ErrStepSwallowed = errors.New("flexiq: a step failure was swallowed by the task body")
-
 // StepError is a step that could not be committed.
 //
 // Test it with [errors.Is] against one of the verdicts above. A permanent one
@@ -110,14 +100,22 @@ func unavailableStep(jobID string) *StepError {
 	}
 }
 
-// swallowed re-raises a latched refusal the task body returned past.
-func swallowed(cause *StepError) *StepError {
-	return &StepError{
-		JobID:   cause.JobID,
-		StepKey: cause.StepKey,
-		Message: cause.Message + " (the task body returned successfully past this failure)",
-		causes:  append([]error{ErrStepSwallowed}, cause.causes...),
-	}
+// swallowedStepError is the failure a task body produces by returning
+// successfully past a step that did not commit.
+//
+// A Go task can ignore an error, and a step that did not commit is a memo that
+// is not there: recording a success would record one for an attempt whose
+// sequence has a gap in it. The original verdict is kept, so a swallowed
+// permanent failure still dead-letters and a swallowed retryable one still
+// retries.
+//
+// It never reaches the task — by definition the task has already returned — so
+// it exists only as the recorded failure, and errStepSwallowed is its errtype
+// rather than a sentinel nothing could match on.
+const errStepSwallowed = "StepSwallowedError"
+
+func swallowedStepError(cause *StepError) string {
+	return cause.Error() + " (the task body returned successfully past this failure)"
 }
 
 // refusalFor rebuilds the verdict an ack carried.

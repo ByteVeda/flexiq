@@ -621,8 +621,15 @@ func TestASwallowedStepFailureDoesNotSettleAsASuccess(t *testing.T) {
 			if failure.GetShouldRetry() != tc.shouldRetry {
 				t.Errorf("should_retry = %v, want %v", failure.GetShouldRetry(), tc.shouldRetry)
 			}
-			if !strings.Contains(failure.GetError(), "returned successfully past this failure") {
-				t.Errorf("the failure does not say it was swallowed: %s", failure.GetError())
+			recorded := flexiq.ParseTaskError(failure.GetError())
+			if recorded.Type != "StepSwallowedError" {
+				t.Errorf("errtype = %q, want %q", recorded.Type, "StepSwallowedError")
+			}
+			if !strings.Contains(recorded.Message, "returned successfully past this failure") {
+				t.Errorf("the failure does not say it was swallowed: %s", recorded.Message)
+			}
+			if !strings.Contains(recorded.Message, "the step store said no") {
+				t.Errorf("the failure lost the scheduler's own reason: %s", recorded.Message)
 			}
 		})
 	}

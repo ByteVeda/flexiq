@@ -59,7 +59,7 @@ func settle(job *Job, o outcome) *executorv1.AttachRequest {
 	// sequence has a gap in it. The original verdict decides the retry.
 	case o.err == nil && o.latched != nil:
 		return failureFrame(job, failure{
-			error:       flexiq.EncodeTaskError("StepError", swallowed(o.latched).Error(), nil),
+			error:       flexiq.EncodeTaskError(errStepSwallowed, swallowedStepError(o.latched), nil),
 			shouldRetry: errors.Is(o.latched, ErrStepRetryable),
 			wall:        wall,
 		})
