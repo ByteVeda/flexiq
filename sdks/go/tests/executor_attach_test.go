@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -75,7 +76,7 @@ func TestHelloIsTheFirstFrameAndAdvertisesEveryRegisteredTask(t *testing.T) {
 	}
 }
 
-func TestTheExecutorNeverAdvertisesTheStepsCapability(t *testing.T) {
+func TestTheExecutorAdvertisesEveryCapabilityItImplements(t *testing.T) {
 	fake := &fakeScheduler{
 		attach: func(_ int, s *schedulerStream) error {
 			if err := s.handshake(executor.CapLease, executor.CapSideChannel, executor.CapSteps); err != nil {
@@ -91,12 +92,17 @@ func TestTheExecutorNeverAdvertisesTheStepsCapability(t *testing.T) {
 
 	await(t, fake, "the handshake", func() bool { return firstHello(fake.frames()) != nil })
 
-	// A scheduler willing to do steps changes nothing: the rule is that a
-	// client sends no frame for a behaviour it did not advertise, and this one
-	// implements none.
-	for _, capability := range firstHello(fake.frames()).GetCapabilities() {
-		if capability == executor.CapSteps {
-			t.Fatal("hello advertised steps, which this client does not implement")
+	// All three, and nothing else. The scheduler decides what to check our
+	// frames for from exactly this list, so a capability claimed here and not
+	// implemented is worse than one that is missing.
+	advertised := firstHello(fake.frames()).GetCapabilities()
+	want := []string{executor.CapSideChannel, executor.CapLease, executor.CapSteps}
+	if len(advertised) != len(want) {
+		t.Fatalf("hello advertised %v, want %v", advertised, want)
+	}
+	for _, capability := range want {
+		if !slices.Contains(advertised, capability) {
+			t.Fatalf("hello advertised %v, missing %q", advertised, capability)
 		}
 	}
 }
@@ -296,10 +302,6 @@ func TestAnUnknownFrameArmIsSkippedAndTheStreamStaysAligned(t *testing.T) {
 			if err := s.send(&executorv1.AttachResponse{}); err != nil {
 				return err
 			}
-			// A step frame, which this executor never asked for.
-			if err := s.send(jobStepsFrame("job-1", []byte("[]\n"))); err != nil {
-				return err
-			}
 			if err := s.send(jobFrame("job-1", "t", mustEncodeCall(t))); err != nil {
 				return err
 			}
@@ -311,7 +313,7 @@ func TestAnUnknownFrameArmIsSkippedAndTheStreamStaysAligned(t *testing.T) {
 	mustHandle(t, w, "t", func(context.Context, *executor.Job) (any, error) { return "done", nil })
 	runWorker(t, w)
 
-	await(t, fake, "the job after the frames the executor could not read", func() bool {
+	await(t, fake, "the job after the frame the executor could not read", func() bool {
 		return settled(fake.frames(), "job-1") != nil
 	})
 }

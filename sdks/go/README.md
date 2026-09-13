@@ -33,7 +33,6 @@ back through the producer door as an ordinary client.
 What neither door has, all of it deliberate rather than missing: middleware, the admin surface,
 settings, migrations, pub/sub and the worker registry. See
 [the delta from an embedded SDK](../../contracts/REMOTE_SDK_CONTRACT.md#the-delta-from-an-embedded-sdk).
-Durable steps are absent from the executor package specifically — see its own section below.
 
 Task registration is absent for a different reason: the server holds no task registry at all.
 Enqueuing a name nobody implements succeeds, and the job dead-letters later.
@@ -223,23 +222,95 @@ Cancelling the context `Run` was given begins a graceful drain. No new work is a
 already running keep their contexts until the drain budget expires, and their results still reach
 the scheduler before the stream closes.
 
+### Durable steps
+
+A step runs once per **job**, not once per attempt. Its result is recorded, and a later attempt
+replays that record instead of running the body again — which is what stops a retry charging a card
+twice.
+
+```go
+receipt, err := executor.Step(ctx, job, "charge",
+    func(ctx context.Context, key string) (Receipt, error) {
+        return gateway.Charge(ctx, order, key)
+    })
+if err != nil {
+    return nil, err
+}
+
+if err := job.Sleep(ctx, "settlement", 24*time.Hour); err != nil {
+    return nil, err            // ends the attempt; the job wakes tomorrow
+}
+```
+
+`Step` is a package function rather than a method because a Go method cannot have a type parameter,
+and a step whose result decodes into your own type beats one that hands back `any`.
+
+| Call | What it does |
+| --- | --- |
+| `executor.Step(ctx, job, name, body)` | Runs `body` once, identified by the order it was asked for |
+| `executor.StepKeyed(ctx, job, name, key, body)` | Runs `body` once per key, matched wherever it sits |
+| `job.Sleep(ctx, name, d)` | Commits a deadline, ends the attempt, returns `ErrStepSlept` |
+| `job.SleepUntil(ctx, name, at)` | The same against an absolute instant |
+| `job.RunKey()` | The id this durable run began under |
+
+The `key` handed to the body is this step's **downstream idempotency key**, and it is the same
+string on every attempt: `{run}:{name}#{n}` for a `Step`, `{run}:{name}:{key}` for a `StepKeyed`.
+Memoization closes the replay window; only a key the other service dedupes on closes the crash
+window between a remote call succeeding and its row committing. Hand it to any API that takes one.
+
+Unkeyed steps are numbered by occurrence, so they must be asked for in the same order every time —
+a loop over a map wants `StepKeyed`. Asking for a different sequence than the one recorded is caught
+against the snapshot **before** the body runs, not after it has charged a card.
+
+A sleep must be propagated: by the time it returns, the row is committed, the execution claim is
+released and the job is already pending at its deadline. Anything the body does past that point runs
+unclaimed and will run again on the wake. Swallowing the error does not resume the attempt — this
+client writes the `slept` frame either way.
+
+A refused step carries a verdict, matched with `errors.Is`:
+
+| Sentinel | Means |
+| --- | --- |
+| `executor.ErrStepRetryable` | The backend failed, not the request. The attempt fails and the job retries |
+| `executor.ErrStepPermanent` | It will never succeed — a divergence, a cap, a bad encoding. Also answers to `ErrFatal` |
+| `executor.ErrStepSuperseded` | Another attempt owns this job. This one stops and sends **no frame at all** |
+| `executor.ErrStepUnavailable` | The scheduler offers no step store. Retryable |
+| `executor.ErrStepDiverged` | The recorded sequence and the deployed code disagree. Permanent, and see below |
+
+**Most refusals are yours to handle.** Catch one, do something else, return a value, and the job is
+recorded a success — only your code knows whether the work it was asked to do is done. The cost is
+yours to weigh too: that step's memo is not there, so the job completes with a gap in its sequence.
+Returning the error is how you decline it.
+
+Two are not yours, and returning normally past either does not make them so:
+
+- **`ErrStepDiverged`** fails the attempt anyway. The deployed code and the recorded rows disagree,
+  and an attempt that carried on would write into a sequence that no longer lines up. Drain or
+  dead-letter a task's in-flight jobs before deploying a change to its step sequence.
+- **`ErrStepSuperseded`** settles nothing at all — no success, no failure, no frame. Another attempt
+  owns the job, and this one may not write over it.
+
+The other SDKs enforce this with an exception tier `catch` cannot reach — `BaseException` in Python,
+`java.lang.Error` in Java. Go has no such tier, so this client checks once, when the handler
+returns.
+
 ### Capabilities
 
-Optional behaviour is negotiated, never versioned. This client implements two:
+Optional behaviour is negotiated, never versioned. This client implements three:
 
 | Capability | What it gives you |
 | --- | --- |
 | `side_channel` | `job.Progress`, `job.Log` and `job.Publish` |
 | `lease` | The dispatch lease, echoed on every frame about the attempt |
+| `steps` | `executor.Step`, `executor.StepKeyed`, `job.Sleep` |
 
-Both degrade silently when the scheduler does not acknowledge them — the side-channel calls become
-no-ops. They are fire and forget either way: nothing answers them, they never settle a job, and one
-naming a job this stream is not running is dropped at the far end.
+The first two degrade silently when the scheduler does not acknowledge them — the side-channel calls
+become no-ops. They are fire and forget either way: nothing answers them, they never settle a job,
+and one naming a job this stream is not running is dropped at the far end.
 
-**Durable steps are not implemented.** The `steps` capability is never advertised, so the scheduler
-sends no step frames and none go back. That capability is the one that fails rather than degrades —
-a durable step that silently did not commit is a step that will re-run a charge — which is exactly
-why it is absent rather than half-present.
+**`steps` fails rather than degrades.** A durable step that silently did not commit is a step that
+will re-run a charge, so a step call against a scheduler that did not acknowledge the capability
+returns a retryable error naming it rather than running un-memoized.
 
 ### An executor cannot enqueue
 

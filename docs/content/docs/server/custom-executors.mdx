@@ -25,9 +25,8 @@ which are gated on a capability, and what a lease is required on.
   You do not have to write one:
   [`github.com/ByteVeda/flexiq/sdks/go/v2/executor`](https://github.com/ByteVeda/flexiq/tree/master/sdks/go/executor)
   implements this page — the handshake, the session token, the settling frames,
-  the lease echo, reconnect and rotation — behind a handler you register per
-  task. Durable steps are the one thing it leaves out, so it advertises no
-  `steps` capability and the scheduler sends it no step frames.
+  the lease echo, durable steps, reconnect and rotation — behind a handler you
+  register per task. It advertises all three capabilities below.
 </Callout>
 
 ## What an executor is not allowed to do
