@@ -21,15 +21,19 @@ job is re-enqueued. When the budget is exhausted the job dead-letters with
 a timeout apart from any other error.
 
 <Callout type="warning">
-  For `async` tasks, the timeout aborts the task's
-  [`AbortSignal`](/node/guides/core/cancellation); honor it (e.g. pass `signal`
-  to `fetch`) so the underlying work actually stops, not just the bookkeeping.
+  A timeout ends the attempt, not the task. JavaScript cannot interrupt a
+  promise, so the handler keeps running after its attempt is marked failed, and
+  the worker frees its slot, so the next job can start beside it. The task's
+  [`AbortSignal`](/node/guides/core/cancellation) does not abort on a timeout —
+  only on a cancel request. Give the work its own deadline (pass
+  `AbortSignal.timeout(ms)` to `fetch`, for example) so it stops with the
+  attempt.
 </Callout>
 
 Always set a timeout on production tasks — without one, a wedged task can hold a
 worker slot indefinitely.
 
-> **Coming from BullMQ?** BullMQ has no first-class per-job timeout option —
-> processors typically race their own work against a manual `Promise.race` (or
-> rely on `lockDuration` as an indirect signal). flexiq's `timeoutMs` is
-> enforced by the dispatcher directly, no manual race needed.
+> **Coming from BullMQ?** BullMQ has no per-job timeout option; its docs
+> suggest an `AbortController` inside the processor. flexiq's `timeoutMs` fails
+> the attempt without one, but as above it does not stop the handler, so keep
+> the deadline on the work itself.
