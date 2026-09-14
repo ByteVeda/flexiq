@@ -25,8 +25,10 @@ import { collectInventories } from "./api/inventory.mjs";
 // about the shipped index and not about a copy of it.
 
 /** Gzipped index budget. It ships as a lazy chunk, but a full-text index is
- *  large by nature and a regression here is a real cost to every first search. */
-const MAX_INDEX_GZIP_KB = 320;
+ *  large by nature and a regression here is a real cost to every first search.
+ *  Raised from 320 when content alone reached it (322 KB with the BullMQ
+ *  guide); raise it again only for pages, never for a leak in extraction. */
+const MAX_INDEX_GZIP_KB = 330;
 
 const docFiles = readDocFiles();
 const corpus = toCorpus(docFiles);
