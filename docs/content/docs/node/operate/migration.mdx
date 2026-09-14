@@ -309,8 +309,11 @@ whichever worker runs the job; a handler that stops by throwing ends the job
 and its worker slot is freed, but JavaScript cannot interrupt a promise: the
 handler keeps running beside the next job — its own retry included, repeating
 its side effects — and `currentJob().signal` does not abort. Give your own I/O
-a deadline shorter than `timeoutMs` — pass `AbortSignal.timeout(ms)` to
-`fetch`, for example — so the work stops before the attempt is failed.
+a deadline shorter than `timeoutMs`, combined with the task's signal so a
+cancel still reaches it —
+`AbortSignal.any([currentJob()!.signal, AbortSignal.timeout(ms)])`, on Node
+20.3 or later — so the work stops before the attempt is failed. See
+[timeouts](/node/guides/reliability/timeouts) for an example.
 
 ## Waiting for a result
 

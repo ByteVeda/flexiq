@@ -28,10 +28,28 @@ a timeout apart from any other error.
   still performing. The task's
   [`AbortSignal`](/node/guides/core/cancellation) does not abort on a timeout —
   only on a cancel request. Give the work its own deadline, shorter than
-  `timeoutMs` so the handler stops and cleans up before the attempt is failed
-  (pass `AbortSignal.timeout(ms)` to `fetch`, for example), and keep its side
-  effects idempotent.
+  `timeoutMs` so the handler stops and cleans up before the attempt is failed,
+  and keep its side effects idempotent.
 </Callout>
+
+Combine that deadline with the task's signal, so a cancel request still reaches
+the work:
+
+```ts
+queue.task(
+  "scrape",
+  async (url: string) => {
+    const { signal } = currentJob()!;
+    // Stops on a cancel request or after 25s, whichever comes first.
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(25_000)]);
+    const res = await fetch(url, { signal: deadline });
+    return res.text();
+  },
+  { timeoutMs: 30_000 },
+);
+```
+
+`AbortSignal.any` needs Node 20.3 or later.
 
 Always set a timeout on production tasks — without one, a wedged task can hold a
 worker slot indefinitely.
