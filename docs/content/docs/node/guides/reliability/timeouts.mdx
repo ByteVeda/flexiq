@@ -23,11 +23,14 @@ a timeout apart from any other error.
 <Callout type="warning">
   A timeout ends the attempt, not the task. JavaScript cannot interrupt a
   promise, so the handler keeps running after its attempt is marked failed, and
-  the worker frees its slot, so the next job can start beside it. The task's
+  the worker frees its slot, so the next job can start beside it — this job's
+  own retry included, which repeats whatever side effects the first handler is
+  still performing. The task's
   [`AbortSignal`](/node/guides/core/cancellation) does not abort on a timeout —
-  only on a cancel request. Give the work its own deadline (pass
-  `AbortSignal.timeout(ms)` to `fetch`, for example) so it stops with the
-  attempt.
+  only on a cancel request. Give the work its own deadline, shorter than
+  `timeoutMs` so the handler stops and cleans up before the attempt is failed
+  (pass `AbortSignal.timeout(ms)` to `fetch`, for example), and keep its side
+  effects idempotent.
 </Callout>
 
 Always set a timeout on production tasks — without one, a wedged task can hold a

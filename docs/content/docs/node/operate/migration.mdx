@@ -307,9 +307,10 @@ whichever worker runs the job; a handler that stops by throwing ends the job
 
 **Timeouts do not stop the handler.** A timed-out attempt is recorded as failed
 and its worker slot is freed, but JavaScript cannot interrupt a promise: the
-handler keeps running beside the next job, and `currentJob().signal` does not
-abort. Give your own I/O its own deadline — pass `AbortSignal.timeout(ms)` to
-`fetch`, for example — so the work stops when the attempt does.
+handler keeps running beside the next job — its own retry included, repeating
+its side effects — and `currentJob().signal` does not abort. Give your own I/O
+a deadline shorter than `timeoutMs` — pass `AbortSignal.timeout(ms)` to
+`fetch`, for example — so the work stops before the attempt is failed.
 
 ## Waiting for a result
 
