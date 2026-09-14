@@ -1,65 +1,815 @@
 ---
 title: Migrating from BullMQ
-description: "Concept mapping from BullMQ to the FlexiQ Node SDK."
+description: "What each line of a BullMQ app becomes in FlexiQ, where the behaviour changes, and what you give up by moving."
 ---
 
-If you're coming from BullMQ, the moving parts map closely. The biggest shifts:
-FlexiQ is **storage-backed** (SQLite, Postgres, *or* Redis — not Redis-only),
-handlers are **registered by name** on the queue rather than wired to a separate
-`Worker` processor, and orchestration is built in.
+This page is for a BullMQ app that already works. Each section takes one piece
+of it — the queue and worker, the job options, the processor, the event
+listeners, the repeatable jobs, the flows — shows what it becomes, and says
+where the behaviour changes. The last sections are the reasons to move, and the
+reasons not to. It covers BullMQ 5 and 6, and names the version where the two
+differ.
 
-## Concept map
+## Defaults that differ
+
+Port nothing until you have read this table. Each row changes what an unchanged
+handler does on its first day.
+
+|  | BullMQ | FlexiQ |
+|---|---|---|
+| Retries | `attempts: 1` — a failure is final | `maxRetries: 3` — four attempts, with backoff |
+| Timeout | none | `timeoutMs: 300000` — five minutes per attempt |
+| Worker concurrency | 1 job at a time | unbounded until you set `concurrency` |
+| Finished jobs | kept until you remove them | deleted after 7 days; dead letters after 30 |
+
+- **A handler that is not safe to run twice now runs up to four times.** Set
+  `maxRetries: 0` to keep BullMQ's behaviour, or make it safe to repeat —
+  [durable steps](#durable-steps) are how.
+- **A job that runs longer than five minutes times out, every attempt.** Raise
+  `timeoutMs` before you move it.
+- **A worker with no `concurrency` claims everything it can.** Set it on every
+  worker, or one process takes jobs its peers could have run.
+- **History is deleted by default.** A worker started without a `retention`
+  option applies these windows. See
+  [removing finished jobs](#removing-finished-jobs).
+
+`maxRetries` and `timeoutMs` are stamped on the job **when it is enqueued**,
+from the task options registered in the process that enqueues it. A producer
+that never registered the task stamps the defaults, whatever the worker
+registered — so register the task, options included, in every process that
+enqueues it, or pass both on each `enqueue`. Periodic jobs and workflow steps
+have their own rules; see [repeatable jobs](#repeatable-jobs) and
+[flows](#flows).
+
+Priority runs the other way as well — see [priority](#priority).
+
+## Queue, Worker and processor
+
+<Tabs items={["BullMQ", "FlexiQ"]}>
+  <Tab value="BullMQ">
+
+```ts
+import { Queue, Worker } from "bullmq";
+
+const connection = { host: "localhost", port: 6379 };
+const queue = new Queue("emails", { connection });
+
+await queue.add("welcome", { userId: 42 });
+
+const worker = new Worker(
+  "emails",
+  async (job) => {
+    if (job.name === "welcome") return sendWelcome(job.data.userId);
+  },
+  { connection, concurrency: 10 },
+);
+```
+
+  </Tab>
+  <Tab value="FlexiQ">
+
+```ts
+import { Queue } from "@byteveda/flexiq";
+
+const queue = new Queue(); // a SQLite file at .flexiq/flexiq.db — no server
+
+queue.task("welcome", (data: { userId: number }) => sendWelcome(data.userId));
+
+queue.enqueue("welcome", [{ userId: 42 }], { queue: "emails" });
+
+const worker = queue.runWorker({ queues: ["emails"], concurrency: 10 });
+```
+
+  </Tab>
+</Tabs>
+
+- **One `Queue` object is the producer, the admin API and the worker factory.**
+  There is no separate `Worker` to construct and no connection to share.
+- **The job name picks the handler; the queue is a lane.** A BullMQ queue name
+  becomes the `queue` option — what workers poll and what limits attach to — and
+  the job name becomes the task name. A processor that switches on `job.name`
+  becomes one `queue.task()` per name.
+- **`job.data` becomes the handler's arguments.** `enqueue` takes an array of
+  positional arguments, so wrapping the old `data` object — `[data]` — keeps the
+  handler's shape. One object is also the shape
+  [other languages](#one-engine-several-languages) can produce.
+- **A worker claims every job on the queues it polls.** A job for a task this
+  worker never registered fails, retries, and dead-letters once it is out of
+  retries. Workers that register different tasks should poll different queues.
+- **`flexiq run` takes no concurrency.** Start the worker from your own
+  entrypoint, as above, so you can set it.
+- **`enqueue` returns the job id, not a job.** Read the job back with
+  `queue.getJob(id)`, and its result with [`queue.result(id)`](#waiting-for-a-result).
+
+### Connections
 
 | BullMQ | FlexiQ |
 |---|---|
-| `new Queue(name, { connection })` | `new Queue({ backend, dsn })` — one object is producer + admin |
-| `new Worker(name, processor, { connection })` | `queue.task(name, fn)` to register, then `queue.runWorker()` |
-| `queue.add("job", data, opts)` | `queue.task("job", fn)` once, then `queue.enqueue("job", args, opts)` |
-| `job.data` | the positional `args` passed to the handler |
-| `job.id`, progress | `currentJob()` → `jobId`, `setProgress()` |
-| `await job.waitUntilFinished(queueEvents)` | `await queue.result(id, { timeoutMs })` — defaults to 30s and throws `ResultTimeoutError` on timeout |
-| `attempts` + `backoff` | `maxRetries` + `retryBackoff` |
-| `rateLimiter` | per-task / per-queue `rateLimit: "100/m"` |
-| `QueueEvents` | `queue.on(event, …)` + [middleware](/node/guides/extend/middleware) |
-| `QueueScheduler` | not needed — a running `queue.runWorker()` handles delayed and repeatable jobs itself |
-| Repeatable jobs (cron) | `queue.registerPeriodic(name, task, cron)` |
-| Flows (parent/child) | [Workflows](/node/modules/workflows) (DAG, fan-out, gates, saga) |
-| `queue.getJobCounts()` | `await queue.stats()` / `statsAllQueues()` |
-| Bull Board | the built-in [dashboard](/node/modules/dashboard) |
+| — | `new Queue({ dbPath: "jobs.db" })` — SQLite, the default |
+| `connection: { host, port }` | `new Queue({ backend: "redis", dsn: "redis://localhost:6379" })` |
+| `createPostgresBackend` (BullMQ 6) | `new Queue({ backend: "postgres", dsn: process.env.DATABASE_URL })` |
+| `prefix: "bull"` | `prefix` on Redis, `schema` on Postgres |
 
-## Side by side
+Every process — producer or worker — opens the same backend. See
+[backends](/node/operate/backends) for which one to pick.
+
+### Shutting down
+
+BullMQ's `await worker.close()` waits for the jobs the worker is running.
+`worker.stop()` does not: it stops dispatch and resolves without waiting for
+handlers already in flight. Their results still land if the process stays up.
+If it exits first, another worker recovers each interrupted job within tens of
+seconds, and it runs again as a retry — spending one of its `maxRetries`.
 
 ```ts
-// BullMQ
-const queue = new Queue("emails", { connection });
-await queue.add("welcome", { userId: 1 });
-new Worker("emails", async (job) => send(job.data.userId), { connection });
-
-// FlexiQ
-const queue = new Queue({ backend: "redis", dsn: "redis://localhost" });
-queue.task("welcome", (userId: number) => send(userId));
-queue.enqueue("welcome", [1], { queue: "emails" });
-queue.runWorker({ queues: ["emails"] });
+process.on("SIGTERM", () => worker.stop());
 ```
 
-## What changes
+That recovery is also what replaces stalled-job handling. BullMQ moves a job
+whose lock expired back to waiting and fails it after `maxStalledCount` stalls;
+FlexiQ requeues it as an ordinary retry. Either way, write handlers that can be
+interrupted and run again.
 
-- **Backend choice** — start on SQLite with zero infrastructure; move to Postgres
-  or Redis for multi-machine workers without code changes. See
-  [backends](/node/operate/backends).
-- **Typed args** — `enqueue` infers argument types from the registered task; data
-  is positional `args`, not a single `data` object.
-- **Registration on the worker** — a worker runs only the tasks registered in its
-  process. Producers need only the task *name*.
-- **Built-in orchestration** — DAG [workflows](/node/modules/workflows) and a
-  [mesh](/node/modules/mesh) replace hand-rolled flows and external
-  schedulers.
-- **No separate scheduler process** — delayed and `registerPeriodic` (cron) jobs
-  fire from the same `queue.runWorker()` poll loop that runs your tasks. If no
-  worker process is running, cron jobs simply don't fire — there's no
-  `QueueScheduler`-equivalent to run independently.
+## Job options
 
-<Callout type="info">
-  Migrating incrementally? Point FlexiQ at the same Redis you already run, move
-  one task family at a time, and keep both systems until cut over.
-</Callout>
+| BullMQ `opts` | FlexiQ | What changes |
+|---|---|---|
+| `attempts: 3` | `maxRetries: 2` | FlexiQ counts retries, not attempts. Per job, or as the enqueuing process's task default. |
+| `backoff: { type: "exponential", delay }` | `retryBackoff: { baseMs, maxMs }` on the task | The wait before retry n, counting from 0, is random in `[0, min(maxMs, baseMs × 2ⁿ)]`. Per task, not per job. |
+| `backoff: 2000`, `{ type: "fixed" }`, a custom `backoffStrategy` | none | Setting `baseMs` equal to `maxMs` still draws a random wait up to it. |
+| `delay: 5000` | `delayMs: 5000` | |
+| `priority: 3` | `priority: -3` | Negate it. See below. |
+| `jobId: "order-42"` | `uniqueKey: "order-42"` | FlexiQ mints every job id. See below. |
+| `removeOnComplete`, `removeOnFail` | the worker's `retention` | By age, per table — not per job, not by count. See below. |
+| `lifo: true` | `configureQueue(name, { dispatchOrder: "lifo" })` | Per queue, not per job. Ignored on Redis. |
+| `deduplication: { id }` | `uniqueKey` | Both hold the key until the first job finishes. |
+| `deduplication` with `ttl`, `extend` and `replace`, or BullMQ 5's `debounce` | `debounce`, `debounceKey`, `debounceMaxWait`, `debounceReplacePayload` | A sliding window with a mandatory ceiling — see [debouncing](/node/guides/reliability/debouncing). |
+| `deduplication: { id, ttl }` alone, which throttles | none | |
+| — | `timeoutMs` | Five minutes unless you set it. |
+| `repeat` (BullMQ 5) | [`registerPeriodic`](#repeatable-jobs) | |
+| `parent`, `failParentOnFailure` | [workflows](#flows) | |
+
+<Tabs items={["BullMQ", "FlexiQ"]}>
+  <Tab value="BullMQ">
+
+```ts
+await queue.add(
+  "charge",
+  { orderId: 42 },
+  {
+    jobId: "charge-42",
+    attempts: 5,
+    backoff: { type: "exponential", delay: 2000 },
+    delay: 10_000,
+    priority: 1,
+  },
+);
+```
+
+  </Tab>
+  <Tab value="FlexiQ">
+
+```ts
+queue.task("charge", (data: { orderId: number }) => charge(data.orderId), {
+  maxRetries: 4,
+  retryBackoff: { baseMs: 2000, maxMs: 60_000 },
+  timeoutMs: 30_000,
+});
+
+queue.enqueue("charge", [{ orderId: 42 }], {
+  uniqueKey: "charge-42",
+  delayMs: 10_000,
+  priority: -1,
+});
+```
+
+  </Tab>
+</Tabs>
+
+### Priority
+
+The numbers run the other way, and so does the default:
+
+- **BullMQ**: `1` is the highest priority, and a job with **no** priority runs
+  before every prioritized one.
+- **FlexiQ**: a higher number runs first. A job with no priority is `0`, so a
+  positive priority runs before it and a negative one after.
+
+Negating keeps BullMQ's order exactly. Unprioritized jobs stay at `0` and still
+go first, `priority: 1` becomes `-1`, and `priority: 10` becomes `-10`.
+
+### Custom job ids
+
+You cannot choose a FlexiQ job id. `uniqueKey` does what BullMQ's `jobId` is
+usually there for — stop a second enqueue from creating a second job — with a
+different lifetime:
+
+- A BullMQ `jobId` stays taken while the job exists, completed and failed ones
+  included, until it is removed.
+- A `uniqueKey` is taken only while its job is pending or running. A duplicate
+  enqueue in that window returns the existing job's id; once the job finishes,
+  the next enqueue with that key creates a new job.
+
+A BullMQ `jobId` is unique within its queue; a `uniqueKey` is unique across
+the whole namespace, so the same key on two queues returns the first queue's
+job. Prefix it with the queue or task name wherever ids can collide. To find a
+job by your own identifier later, carry it in `metadata`, which
+`queue.listJobsFiltered({ metadataLike })` searches.
+
+### Removing finished jobs
+
+`removeOnComplete` and `removeOnFail` are per job, and can keep the last N. The
+FlexiQ equivalent is per namespace and by age: each history table has a window,
+in seconds, and whichever worker wins the retention election deletes rows older
+than it, using its own windows — so give every worker the same `retention`.
+
+```ts
+queue.runWorker({
+  queues: ["emails"],
+  concurrency: 10,
+  retention: {
+    archivedJobs: 24 * 3600, // finished jobs, whatever their outcome
+    deadLetter: 14 * 24 * 3600,
+    jobErrors: 7 * 24 * 3600,
+    taskLogs: 3 * 24 * 3600,
+    taskMetrics: 7 * 24 * 3600,
+  },
+});
+```
+
+Omitting `retention` applies the defaults — finished jobs 7 days, dead letters
+30. Passing it replaces them, and a table you leave out is kept **forever**.
+There is no count-based window. To delete on demand, `purgeCompleted` and
+`purgeDead` take a Unix-millisecond cutoff, not an age:
+
+```ts
+await queue.purgeCompleted(Date.now() - 24 * 3600 * 1000); // finished over a day ago
+```
+
+### Adding in bulk
+
+`queue.addBulk([...])` becomes `queue.enqueueMany(name, [{ args, options }])` —
+one storage round-trip, ids returned in input order. A batch holds one task
+name, so mixed batches become one call per task.
+
+## Inside the processor
+
+BullMQ hands the processor a `Job`. A FlexiQ handler receives its arguments, and
+reaches the running job through `currentJob()`:
+
+| BullMQ | FlexiQ |
+|---|---|
+| `job.data` | the handler's arguments |
+| `job.id` | `currentJob()!.jobId` |
+| `job.name` | the task the handler is registered under |
+| `job.attemptsMade` | `queue.getJob(currentJob()!.jobId)!.retryCount` |
+| `await job.updateProgress(50)` | `currentJob()!.setProgress(50)` — a number, 0–100 |
+| `await job.log("line")` | `currentJob()!.log("line", "info", extra)` |
+| the returned value | the job's result |
+| `signal`, the processor's third argument | `currentJob()!.signal` |
+| `worker.cancelJob(id)` | `queue.requestCancel(id)`, from any process |
+| `throw new UnrecoverableError()` | a `retryOn` predicate on the task that returns `false` |
+| `job.moveToDelayed(ts, token)` + `throw new DelayedError()` | `await currentJob()!.step.sleepUntil(ts)` |
+| `job.moveToWaitingChildren(token)` | a [workflow](#flows) step |
+| `await queue.rateLimit(ms)` + `throw new RateLimitError()` | none |
+| `job.updateData(...)` | none — a payload is fixed once enqueued |
+
+**Permanent failures.** BullMQ fails a job without retrying when the processor
+throws `UnrecoverableError`. FlexiQ asks the task instead:
+
+```ts
+class InvalidPayload extends Error {}
+
+queue.task(
+  "import",
+  (data: { url?: string }) => {
+    if (!data.url) throw new InvalidPayload("no url");
+    return fetchAndStore(data.url);
+  },
+  { retryOn: (error) => !(error instanceof InvalidPayload) },
+);
+```
+
+A `false` from `retryOn` dead-letters the job on that attempt, however many
+retries it had left.
+
+**Rescheduling from inside a job.** The `moveToDelayed` + `DelayedError` pattern
+becomes a step sleep. It ends the attempt, frees the worker slot, and puts the
+job back at the deadline without spending a retry. The attempt that wakes
+replays the handler from the top, so wrap anything before the sleep that must
+not repeat in `step.run` — see [durable steps](#durable-steps).
+
+**Cancelling.** `queue.requestCancel(id)` aborts `currentJob().signal` in
+whichever worker runs the job; a handler that stops by throwing ends the job
+`cancelled`, and one that ignores the signal finishes as usual. BullMQ's
+`worker.cancelJob` reaches only the worker it is called on.
+`queue.cancelJob(id)` cancels a job that has not started.
+
+**Timeouts do not stop the handler.** A timed-out attempt is recorded as failed
+and its worker slot is freed, but JavaScript cannot interrupt a promise: the
+handler keeps running beside the next job, and `currentJob().signal` does not
+abort. Give your own I/O its own deadline — pass `AbortSignal.timeout(ms)` to
+`fetch`, for example — so the work stops when the attempt does.
+
+## Waiting for a result
+
+<Tabs items={["BullMQ", "FlexiQ"]}>
+  <Tab value="BullMQ">
+
+```ts
+const queueEvents = new QueueEvents("emails", { connection });
+
+const job = await queue.add("welcome", { userId: 42 });
+const result = await job.waitUntilFinished(queueEvents, 30_000);
+```
+
+  </Tab>
+  <Tab value="FlexiQ">
+
+```ts
+const id = queue.enqueue("welcome", [{ userId: 42 }], { queue: "emails" });
+const result = await queue.result(id, { timeoutMs: 30_000 });
+```
+
+  </Tab>
+</Tabs>
+
+`queue.result` polls storage, so it works from any process that opens the same
+backend, with no `QueueEvents` connection to hold open. It waits through
+retries, and rejects with `JobFailedError` once the job dead-letters,
+`JobCancelledError` if it was cancelled, or `ResultTimeoutError` if the wait
+runs out.
+
+## Inspecting and managing a queue
+
+| BullMQ | FlexiQ |
+|---|---|
+| `queue.getJob(id)` | `queue.getJob(id)` — a snapshot, or `null` |
+| `queue.getJobCounts()` | `await queue.statsByQueue(name)`, or `stats()` for every queue |
+| `queue.getJobs(["failed"])` | `await queue.listJobs({ queue: name, status: "dead" })` |
+| `job.retry()`, `queue.retryJobs()` | `queue.retryDead(deadId)` per [dead letter](/node/guides/reliability/dead-letter) |
+| `job.remove()` | `queue.cancelJob(id)` while it is pending |
+| `queue.pause()`, `queue.resume()` | `queue.pauseQueue(name)`, `queue.resumeQueue(name)` — every worker |
+| `queue.clean(grace, limit, "completed")` | `await queue.purgeCompleted(cutoffMs)`, `purgeDead(cutoffMs)` |
+| `queue.drain()`, `queue.obliterate()` | none |
+| `queue.getWorkers()` | `await queue.listWorkers()` |
+| `queue.getMetrics("completed")` | `await queue.getMetrics(sinceMs)` — recorded without opting in |
+| Bull Board, Taskforce.sh | the built-in [dashboard](/node/modules/dashboard) |
+
+Job statuses are `pending`, `running`, `complete`, `failed`, `dead` and
+`cancelled`. A job that ran out of retries is `dead`, and also has an entry in
+the dead-letter queue, with its own id — that id is what `retryDead` takes.
+
+## Events
+
+BullMQ has two kinds of listener. `worker.on(...)` hears what that worker did;
+`QueueEvents` reads an event stream, so any process can hear what every worker
+did. FlexiQ has only the first kind. `queue.on(event, handler)` is an
+in-process emitter, and an event fires in the process where it happened:
+
+| BullMQ | FlexiQ | Fires in |
+|---|---|---|
+| `added`, `waiting` | `job.enqueued`, on every enqueue — a deduplicated one included, with the id it returned | the process that enqueued |
+| `active` | no event — use a middleware `before` hook | the worker |
+| `progress` | no event — read `getJob(id).progress` | — |
+| `completed` | `job.completed` | the worker that ran the job |
+| `failed` | `job.retrying` or `job.dead`, one per failed attempt; `job.failed` fires first only when the handler threw, not on a timeout | the worker that ran the job |
+| `retries-exhausted` | `job.dead` | the worker that ran the job |
+| `stalled` | `worker.offline` for the dead worker; its jobs come back as retries | the worker that noticed |
+| `paused`, `resumed` | `queue.paused`, `queue.resumed` | the process that called `pauseQueue` |
+| `removed` | `job.cancelled`, for a running job that was cancelled | the worker that ran the job |
+| `delayed`, `drained`, `cleaned` | no event | — |
+| `duplicated`, `deduplicated` | none of its own — `job.enqueued` fires with the existing job's id | the process that enqueued |
+| `waiting-children` | no event — a workflow step stays `pending` until its predecessors settle | — |
+| — | `workflow.*` — a run submitted, finished, compensated | the submitting process, then the worker advancing the run |
+| — | `job.sleeping` — an attempt ended in a [step sleep](#durable-steps) | the worker that ran the job |
+
+```ts
+queue.on("job.completed", (e) => metrics.timing(e.taskName, e.durationMs));
+queue.on("job.dead", (e) => alertOps(e.jobId, e.error));
+```
+
+The full list, with every payload, is on the [events](/node/guides/extend/events)
+page.
+
+To hear about a job from a process that did not run it, pick by what you need:
+
+- **One job's outcome** — `await queue.result(id)`, from anywhere.
+- **Every outcome, pushed** — a [webhook](/node/guides/extend/webhooks). The
+  subscription is stored with the queue, and the worker that ran the job POSTs
+  a signed delivery, retried with backoff.
+- **Live progress** — have the handler `currentJob()!.publish(value)` and read
+  the values with `queue.stream(id)`.
+- **A person looking** — the [dashboard](/node/modules/dashboard).
+
+To *wrap* execution rather than observe it — a span, a timer, a log context —
+use [middleware](/node/guides/extend/middleware). `before` opens every attempt,
+and `after`, `onError` or — when the attempt ends in a step sleep — `onSleep`
+closes it; `onCompleted`, `onRetry`, `onDeadLetter` and `onCancel` report how
+each attempt ended.
+
+## Repeatable jobs
+
+BullMQ 5 has two forms — the `repeat` option on `queue.add` and, since 5.16,
+job schedulers. BullMQ 6 keeps only job schedulers. Both become a periodic task:
+
+<Tabs items={["BullMQ", "FlexiQ"]}>
+  <Tab value="BullMQ">
+
+```ts
+await queue.upsertJobScheduler(
+  "daily-digest",
+  { pattern: "0 9 * * *", tz: "America/New_York" },
+  { name: "digest", data: { edition: "morning" } },
+);
+```
+
+  </Tab>
+  <Tab value="FlexiQ">
+
+```ts
+queue.task("digest", (data: { edition: string }) => sendDigest(data.edition));
+
+queue.registerPeriodic("daily-digest", "digest", "0 0 9 * * *", {
+  args: [{ edition: "morning" }],
+  timezone: "America/New_York",
+  queue: "emails",
+});
+```
+
+  </Tab>
+</Tabs>
+
+- **The cron needs its seconds field, first.** BullMQ makes it optional; FlexiQ
+  rejects a five-field pattern — `invalid cron expression '0 9 * * *'` — so
+  prefix it with `0 `.
+- **A pattern with no timezone runs in UTC.** BullMQ reads it in the host's
+  local time. Set `timezone` wherever you relied on that.
+- **`every: ms` has no direct form.** Write the interval as a cron:
+  `every: 30_000` is `*/30 * * * * *`. An interval that does not divide a
+  minute or an hour has no exact cron spelling.
+- **`limit`, `startDate`, `endDate`, `immediately` and `offset` have no
+  equivalent.**
+- **Registration is an upsert by name**, like `upsertJobScheduler`.
+  `deletePeriodic(name)` replaces `removeJobScheduler`, `listPeriodic()`
+  replaces `getJobSchedulers`, and `pausePeriodic` / `resumePeriodic` stop a
+  schedule without deleting it.
+- **Set `queue`.** A periodic job goes to `"default"` unless told otherwise, and
+  a worker polling only `"emails"` would never see it.
+- **A periodic job always gets 3 retries and a five-minute timeout.** The
+  task's own `maxRetries` and `timeoutMs` do not reach it, so a scheduled job
+  that runs longer cannot be ported as-is.
+
+See [scheduling](/node/guides/core/scheduling).
+
+## Flows
+
+A BullMQ flow names the parent and nests the children that must finish first. A
+FlexiQ workflow names every step and lists what each one runs `after`:
+
+<Tabs items={["BullMQ", "FlexiQ"]}>
+  <Tab value="BullMQ">
+
+```ts
+const flow = new FlowProducer({ connection });
+
+await flow.add({
+  name: "render-report",
+  queueName: "reports",
+  children: [
+    { name: "fetch-sales", queueName: "reports", data: { month: "2026-08" } },
+    { name: "fetch-costs", queueName: "reports", data: { month: "2026-08" } },
+  ],
+});
+```
+
+  </Tab>
+  <Tab value="FlexiQ">
+
+```ts
+const run = queue.workflows
+  .define("monthly-report")
+  .step("fetch-sales", "fetchSales", { args: ["2026-08"], queue: "reports" })
+  .step("fetch-costs", "fetchCosts", { args: ["2026-08"], queue: "reports" })
+  .step("render-report", "renderReport", {
+    after: ["fetch-sales", "fetch-costs"],
+    queue: "reports",
+  })
+  .submit();
+
+const finished = await run.wait();
+```
+
+  </Tab>
+</Tabs>
+
+**Results are not passed along.** A step receives its own `args` and nothing
+else, so there is no `job.getChildrenValues()`. When a step needs its
+predecessors' results, fan out and fan in — the `fanIn` task receives every
+child's result as one array:
+
+```ts
+queue.workflows
+  .define("thumbnails")
+  .step("list", "listImages") // returns ["a.png", "b.png", ...]
+  .fanOut("resize", { after: "list", task: "resize" }) // one job per item
+  .fanIn("collect", { after: "resize", task: "collect" }) // gets [result, ...]
+  .submit();
+```
+
+When the "flow" was really one function in stages, handing values from one to
+the next, it wants [durable steps](#durable-steps) instead: the values are
+ordinary variables, and each stage still runs once.
+
+**Failure.** By default a BullMQ parent whose child failed stays in
+`waiting-children` until the child is retried or removed. A FlexiQ step runs
+only if every predecessor completed, so a failed step skips everything
+downstream of it and the run ends `failed` — the behaviour
+`failParentOnFailure` asks for. `condition: "always"` runs a step regardless,
+as `ignoreDependencyOnFailure` lets a parent proceed; `condition: "on_failure"`
+runs it only when a predecessor failed, which is where cleanup goes.
+
+A step can set its own `queue`, `maxRetries`, `timeoutMs` and `priority`, the
+way a child names its own queue. It takes retries and timeout from the step,
+never from the task: unset, a step gets 3 retries and five minutes. Workflows also have what flows do not:
+approval gates, saga compensation, sub-workflows and cached steps. Start at
+[workflows](/node/modules/workflows).
+
+## Concurrency and rate limits
+
+| BullMQ | FlexiQ | Applies to |
+|---|---|---|
+| `new Worker(name, fn, { concurrency: 10 })` | `runWorker({ concurrency: 10 })` | one worker process |
+| `queue.setGlobalConcurrency(4)` | `configureQueue(name, { maxConcurrent: 4 })` | the queue, across every worker |
+| `limiter: { max: 100, duration: 60_000 }`, `queue.setGlobalRateLimit(100, 60_000)` | `configureQueue(name, { rateLimit: "100/m" })` | the queue, across every worker |
+| — | `queue.task(name, fn, { maxConcurrent, rateLimit })` | one task, across every worker |
+| — | `queue.task(name, fn, { maxInFlightPerTask })` | one task, within one worker |
+| `await queue.rateLimit(ms)` + `RateLimitError` | none | |
+| Groups (BullMQ Pro) | none | |
+
+```ts
+queue.configureQueue("emails", { maxConcurrent: 4, rateLimit: "100/m" });
+queue.task("call_partner_api", callPartner, { rateLimit: "10/s" });
+
+queue.runWorker({ queues: ["emails"], concurrency: 10 });
+```
+
+- **A rate is a count per second, minute or hour.** `max: 10, duration: 1000`
+  is `"10/s"`; a `duration` of 1500 ms has no exact spelling.
+- **Limits are read when a worker starts.** `configureQueue` and a task's
+  limits are the worker's, so every worker serving a queue should declare the
+  same ones. BullMQ's `setGlobalConcurrency` changes a live queue; a FlexiQ
+  change — in code, or as a dashboard override — applies at the next worker
+  start.
+- **A job over a limit waits.** It stays `pending` and does not spend a retry,
+  as in BullMQ. For a rate limit, `onExcess: "drop"` on the task sheds it to the
+  dead-letter queue instead — see
+  [rate limiting](/node/guides/reliability/rate-limiting). A concurrency cap
+  always makes it wait.
+- **Limits can be per task.** BullMQ limits a queue, so throttling one kind of
+  job meant giving it a queue of its own. A FlexiQ task carries its own limits.
+
+**Namespaces isolate; they do not limit.** A worker claims only its own
+namespace's jobs, and unique keys, stats and workflow runs are scoped to it,
+which makes a namespace the boundary between tenants. It carries no cap of its
+own. A concurrency cap counts only its namespace's running jobs, but a rate
+limit's bucket is keyed by the queue or task name alone, so namespaces sharing a
+database and a name share that rate. There is nothing like BullMQ Pro's
+per-group limits.
+
+## Sandboxed processors
+
+BullMQ can run a processor in a child process or a worker thread:
+
+```ts
+const worker = new Worker("video", path.join(__dirname, "transcode.js"), {
+  connection,
+  useWorkerThreads: true,
+});
+```
+
+That buys two things: CPU-heavy work stays off the worker's event loop, and a
+crash fails the job instead of taking down the worker. FlexiQ has **no per-job
+sandbox** — a handler runs on its worker's event loop. What replaces the
+sandbox depends on which of the two you were using it for:
+
+- **CPU-heavy work.** Hand it to a worker-thread pool from inside the handler,
+  and await it there. Give those tasks their own queue and their own worker
+  processes, so they cannot starve the rest.
+- **Crash isolation.** A worker is already its own process. When one dies, its
+  in-flight jobs come back as retries once its heartbeat is 30 seconds stale.
+
+The [attached executor](/node/modules/executor) is the nearest FlexiQ piece, and
+it splits at a different seam. `flexiq-server` holds the database connection
+and does the scheduling; your app runs `flexiq executor ./app.js`, dials it, and
+runs the jobs it is sent. That keeps your code apart from the database
+credentials and the scheduler, and lets the executors scale on their own. It
+does not keep one job apart from another.
+
+## Durable steps
+
+BullMQ has no memoized step. The
+[pattern its documentation suggests](https://docs.bullmq.io/patterns/process-step-jobs)
+keeps a step marker in `job.data`, advances it with `job.updateData`, and
+switches on it. A durable step does that bookkeeping for you:
+
+<Tabs items={["BullMQ", "FlexiQ"]}>
+  <Tab value="BullMQ">
+
+```ts
+const worker = new Worker(
+  "checkout",
+  async (job) => {
+    let step = job.data.step ?? "charge";
+    while (step !== "done") {
+      switch (step) {
+        case "charge":
+          await charge(job.data.orderId);
+          step = "receipt";
+          break;
+        case "receipt":
+          await sendReceipt(job.data.orderId);
+          step = "done";
+          break;
+      }
+      await job.updateData({ ...job.data, step });
+    }
+  },
+  { connection },
+);
+```
+
+  </Tab>
+  <Tab value="FlexiQ">
+
+```ts
+queue.task("checkout", async (data: { orderId: string }) => {
+  const { step } = currentJob()!;
+  const chargeId = await step.run("charge", () =>
+    charge(data.orderId, { idempotencyKey: step.idempotencyKey }),
+  );
+  await step.sleep("1h"); // ends this attempt; the job comes back in an hour
+  await step.run("receipt", () => sendReceipt(chargeId));
+  return chargeId;
+});
+```
+
+  </Tab>
+</Tabs>
+
+`step.run` commits what its body returned next to the job, and every later
+attempt returns the committed value instead of running the body again — so a
+retry after the receipt failed does not charge the card twice. `step.sleep`
+ends the attempt without spending a retry and without holding the worker slot
+for the hour.
+
+Neither version is exactly-once. A process can die after the charge succeeded
+and before anything recorded it, in BullMQ's `updateData` gap as in a step's.
+What closes that gap is a key the payment provider deduplicates on, and
+`step.idempotencyKey` is one that stays the same on every attempt. Steps work on
+all three backends; the rules are on the [durable steps](/node/modules/steps)
+page.
+
+## One engine, several languages
+
+FlexiQ is one Rust core with Node, Python, Java and Rust SDKs over it. They
+read and write the same storage under one wire contract, so a job enqueued from
+Python runs on a Node worker:
+
+<Tabs items={["Python producer", "Node worker"]}>
+  <Tab value="Python producer">
+
+```python
+from flexiq import Queue
+from flexiq.serializers import CborSerializer
+
+queue = Queue("flexiq.db", serializer=CborSerializer())
+queue.enqueue("orders.process", args=(order,), queue="process")
+```
+
+  </Tab>
+  <Tab value="Node worker">
+
+```ts
+import { CborSerializer, Queue } from "@byteveda/flexiq";
+
+const queue = new Queue({ dbPath: "flexiq.db", serializer: new CborSerializer() });
+
+queue.task("orders.process", (order: Order) => processOrder(order));
+queue.runWorker({ queues: ["process"], concurrency: 4 });
+```
+
+  </Tab>
+</Tabs>
+
+Two things make that work, and both are easy to miss:
+
+- **Set the serializer on both sides.** Each SDK's default is
+  same-language-only; [CBOR](/node/guides/extend/serializers#cborserializer) is
+  the cross-SDK format.
+- **Pass one object.** It is the payload shape every SDK can produce and
+  consume.
+
+A language with no SDK — a shell script, a Go service — enqueues over
+`flexiq-server`'s producer door instead of opening the database; see
+[server mode](/server). The
+[polyglot example](https://github.com/ByteVeda/flexiq/tree/master/examples/polyglot)
+chains a Python producer, a Node worker and a Java worker over one database.
+
+BullMQ reaches other languages through ports. They are official — Python,
+Elixir, Rust, .NET, and a PHP client that can only add jobs — and they run the
+Node library's own Redis scripts, so a job added from Python can run on a Node
+worker too. Each port is a separate client with its own coverage, though, and
+the Python one is marked alpha and lists the Node features it does not have
+yet. FlexiQ's scheduler, storage and retry rules are one implementation, not
+one per language.
+
+## No Redis, and no server
+
+BullMQ 5 runs on Redis and nothing else. BullMQ 6 added a PostgreSQL backend, so
+"no Redis" alone no longer tells the two apart. What does is that FlexiQ can run
+with no server at all: its default queue is a SQLite file the process opens
+itself — nothing to provision, size or keep from evicting keys. Postgres comes
+in when producers and workers are on different machines, and Redis only if you
+choose it.
+
+Keeping Redis is a fine choice, with a few things to know:
+
+- **FlexiQ does not read BullMQ's keys.** Nothing migrates; see
+  [moving incrementally](#moving-incrementally). Give it its own `prefix`.
+- **It connects to one Redis endpoint.** There is no Redis Cluster mode, where
+  BullMQ runs on a cluster with a hash-tagged prefix.
+- **It needs Redis 7.0 or later**, for `SINTERCARD`; BullMQ runs on 6.2.
+- **Dispatch order is FIFO only** — `dispatchOrder: "lifo"` is ignored.
+
+Workers poll storage rather than blocking on it — every 50 ms while there is
+work, backing off to 200 ms when idle — so an idle worker can take up to about
+200 ms to pick up a new job, where a blocked BullMQ worker wakes at once. The
+`pushDispatch` worker option removes that floor, but needs a native build with
+the `push-dispatch` feature, which the published package does not include.
+
+## What you lose
+
+Everything BullMQ does that FlexiQ does not:
+
+- **Your own job ids.** FlexiQ mints them; `uniqueKey` deduplicates but is not
+  an id you can look a job up by.
+- **Editing a job after enqueue.** No `updateData`, `changePriority`,
+  `changeDelay` or `promote`. Cancel a pending job and enqueue a new one.
+- **Fixed and custom backoff.** Retries back off exponentially with full
+  jitter, configured per task — not per job, and not with a function.
+- **Count-based retention.** No "keep the last 1000"; retention is by age.
+- **A cross-process event stream.** No `QueueEvents`: in-process events,
+  webhooks and polling instead.
+- **Rich progress.** A number from 0 to 100, with no progress event.
+- **Sandboxed processors.** No child process or worker thread per worker.
+- **Rate limiting from inside a processor.** No `queue.rateLimit()` or
+  `RateLimitError`.
+- **Limits you can change on a live queue.** Changes apply at the next worker
+  start.
+- **Throttling, interval and bounded repeats.** No deduplication `ttl` on its
+  own, no `every`, and no `limit`, `startDate` or `endDate`.
+- **Retries and a timeout per schedule.** A periodic job always gets 3 retries
+  and five minutes.
+- **Results flowing up a flow.** No `getChildrenValues()`; only a fan-in step
+  receives other steps' results.
+- **A draining close.** `worker.stop()` does not wait for running handlers.
+- **Redis Cluster**, and **immediate pickup** on an idle worker.
+- **Queue housekeeping in one call.** No `drain()` or `obliterate()`.
+- **BullMQ Pro's groups and batches.** No per-key limits, and no handler that
+  receives a batch of jobs.
+- **Years in production.** BullMQ, and Bull before it, have run at scale for a
+  long time, with an ecosystem — Bull Board, Taskforce.sh, a large community —
+  that a younger project does not have yet.
+
+## Moving incrementally
+
+FlexiQ cannot take over BullMQ's jobs, so a migration is a cutover per task, not
+a data move:
+
+1. Register the task in FlexiQ and start a worker for its queue.
+2. Register the same task, options included, in the producer, and point its
+   `queue.add(...)` at `queue.enqueue(...)`. New work now lands in FlexiQ.
+3. Keep the BullMQ worker running until `getJobCounts()` shows nothing waiting,
+   prioritized, delayed or active on its queue — it counts the whole queue, not
+   one job name — then remove it.
+4. For a repeatable job, remove the BullMQ scheduler in the same deploy that
+   registers the periodic task, or both will fire.
+
+Nothing in FlexiQ needs BullMQ, or its Redis, to be gone first.
+
+### Checklist
+
+- [ ] Every task registered, options included, in every process that enqueues
+      it
+- [ ] `timeoutMs` raised on every task that can run longer than five minutes
+- [ ] `maxRetries: 0` on every task that must not repeat, or its side effects
+      behind durable steps
+- [ ] `concurrency` set on every worker, started from your own entrypoint
+- [ ] `retention` set if finished jobs must outlive seven days
+- [ ] `attempts` converted to `maxRetries` — subtract one
+- [ ] Priorities negated
+- [ ] Cron patterns given a seconds field, and a `timezone` where the host's
+      local time was assumed
+- [ ] Every queue polled by a worker that registers every task sent to it
+- [ ] BullMQ repeatable jobs removed as their periodic tasks go live
