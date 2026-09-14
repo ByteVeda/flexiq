@@ -1,49 +1,58 @@
-# Durable steps in the Go executor client (#929)
+# A BullMQ migration guide (#863)
 
-Design: `tasks/specs/2026-09-13-go-executor-steps-design.md`
-Plan: `tasks/plans/2026-09-13-go-executor-steps.md`
+Plan: `tasks/plans/2026-09-14-bullmq-migration-guide.md`
 
-PR #928 shipped the Go executor with `lease` and `side_channel` and left
-`steps` out on purpose: it is the one capability that fails rather than
-degrades. Go links no Rust, so the rules the other shells hand to
-`flexiq_core::step` across their FFI have to be reimplemented here and stay
-byte-compatible with the original.
+`node/operate/migration.mdx` already exists, titled "Migrating from BullMQ", but
+it is a 65-line concept table: no job options, no `QueueEvents`, no flows beyond
+one row, no sandbox, and no list of what is lost. The issue asks for the
+concrete version. Rewrite that page in place — the nav, the skeleton, the
+`operate` landing card and `about/comparison`'s `SdkLink` all already point at
+it, so nothing else moves.
 
-- [x] 1. `internal/step`: identity and caps
-- [x] 2. `internal/step`: the snapshot codec, strict in every direction
-- [x] 3. `internal/step`: the sequence walk, its keys and the run key
-- [x] 4. The executor wiring: the surface, the ack registry, the settlement
-- [x] 5. The bufconn round trip, five assertions mutation-checked
-- [x] 6. E2E against a real server
-- [x] 7. Docs: the Go README and the `/server` executor page
+- [x] 1. Verify every FlexiQ claim against a native build (probes, not reading)
+- [x] 2. Verify every BullMQ claim against the BullMQ 5 and 6 packages and docs
+- [x] 3. Write the guide: Queue/Worker, job options, the processor, results,
+      events, periodic, flows, limits, sandbox, steps, languages, what is lost
+- [x] 4. Run every snippet on the page — FlexiQ ones against the build, BullMQ
+      ones through `tsc` against bullmq 5.81.5 and 6.3.6
+- [x] 5. Fix the neighbouring pages the guide contradicts, one commit each
+- [x] 6. `check:parity`, `check:search`, `lint`, `typecheck`, `build`,
+      `version.mjs --check`
 
 ## Review
 
-`executor.Step` / `executor.StepKeyed` are package functions because a Go method
-cannot have a type parameter, and `job.Sleep` / `job.SleepUntil` are methods
-because they return no value. The body is handed its downstream idempotency key
-rather than being offered an accessor for it — memoization closes the replay
-window and only that key closes the crash window, so the signature is where it
-belongs.
+Two premises in the issue were out of date by the time it was picked up, and
+the page says so rather than repeating them:
 
-Three things this cost more thought than expected:
+- **"BullMQ is Redis by definition."** BullMQ 6 (2026-07-30) ships a PostgreSQL
+  backend. "No Redis" no longer separates the two; "no server at all" — the
+  SQLite default — does.
+- **"A BullMQ job cannot be produced from Python."** BullMQ has official ports
+  (Python, Elixir, Rust, .NET, a producer-only PHP client) that share its Lua
+  scripts, so it can. The honest contrast is one implementation versus one
+  client per language.
 
-- **A Go body can swallow an error**, and the first cut latched every refusal
-  for it. The governing design is narrower: §7.7 of
-  `tasks/specs/2026-08-22-durable-steps-design.md` says the latch exists for a
-  **sleep and a divergence**, and the Node plan spells out that it only *bites*
-  on a swallowed divergence. So an ordinary refusal the body caught and returned
-  past is taken at its word — only that code knows whether the work is done —
-  while a divergence fails the attempt whatever the body does. Superseded still
-  sends **no frame at all**, and a swallowed sleep still writes `slept`, because
-  the claim is gone either way.
-- **`seq` is the number of rows already stored, not the walk's position.** A
-  keyed hit claims a row out of order and leaves the cursor behind. Mutating it
-  to the cursor reddens exactly one test, which is the point of having it.
-- **A damaged snapshot is retryable; a hole in the recorded `seq` is not.** The
-  first is a fact about this dispatch, the second about rows that will not heal.
-  Neither may ever read as "no steps recorded" — that answer re-runs a charge.
+Behaviour the probes found that no page stated correctly:
 
-The wait for an ack is bounded by the caller's context, the *job's* context and
-`WithStepAckTimeout`, whichever comes first, and the waiter is registered before
-the commit is sent. A stream ending closes every waiter at once.
+- A Node timeout neither stops the handler nor aborts `currentJob().signal`,
+  and it frees the slot, so a `concurrency: 1` worker ran three timed-out
+  handlers at once. Three pages promised the signal aborts.
+- `runWorker({ concurrency })` exists and defaults to unbounded; the workers
+  page said `runWorker()` takes no concurrency.
+- `purgeCompleted` / `purgeDead` take a Unix-ms cutoff, not an age, despite the
+  `olderThanMs` name.
+- Rate-limit buckets are keyed by queue or task name without the namespace.
+- `maxRetries` / `timeoutMs` are stamped at enqueue from the *enqueuing*
+  process's registry, so a producer that never registered the task stamps
+  3 / 5 min; periodic jobs are hard-coded to 3 / 5 min whatever the task says.
+- The Node addon installs no `log` logger, so the core's warnings (the default
+  retention announcement among them) never print in Node.
+
+The last four are reported, not fixed here; the guide states the behaviour as
+it is. A second-reader review caught the enqueue-time stamping, `job.failed`
+not firing on a timeout, `job.enqueued` firing on a dedup, and the
+namespace-wide `uniqueKey`; each was confirmed by a probe or the source before
+the page changed.
+
+The guide pushed the search index to 322 KB against a 320 KB budget that
+content alone had already reached; the budget moved to 330 in its own commit.
