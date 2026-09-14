@@ -21,15 +21,40 @@ job is re-enqueued. When the budget is exhausted the job dead-letters with
 a timeout apart from any other error.
 
 <Callout type="warning">
-  For `async` tasks, the timeout aborts the task's
-  [`AbortSignal`](/node/guides/core/cancellation); honor it (e.g. pass `signal`
-  to `fetch`) so the underlying work actually stops, not just the bookkeeping.
+  A timeout ends the attempt, not the task. JavaScript cannot interrupt a
+  promise, so the handler keeps running after its attempt is marked failed, and
+  the worker frees its slot, so the next job can start beside it — this job's
+  own retry included, which repeats whatever side effects the first handler is
+  still performing. The task's
+  [`AbortSignal`](/node/guides/core/cancellation) does not abort on a timeout —
+  only on a cancel request. Give the work its own deadline, shorter than
+  `timeoutMs` so the handler stops and cleans up before the attempt is failed,
+  and keep its side effects idempotent.
 </Callout>
+
+Combine that deadline with the task's signal, so a cancel request still reaches
+the work:
+
+```ts
+queue.task(
+  "scrape",
+  async (url: string) => {
+    const { signal } = currentJob()!;
+    // Stops on a cancel request or after 25s, whichever comes first.
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(25_000)]);
+    const res = await fetch(url, { signal: deadline });
+    return res.text();
+  },
+  { timeoutMs: 30_000 },
+);
+```
+
+`AbortSignal.any` needs Node 20.3 or later.
 
 Always set a timeout on production tasks — without one, a wedged task can hold a
 worker slot indefinitely.
 
-> **Coming from BullMQ?** BullMQ has no first-class per-job timeout option —
-> processors typically race their own work against a manual `Promise.race` (or
-> rely on `lockDuration` as an indirect signal). flexiq's `timeoutMs` is
-> enforced by the dispatcher directly, no manual race needed.
+> **Coming from BullMQ?** BullMQ has no per-job timeout option; its docs
+> suggest an `AbortController` inside the processor. flexiq's `timeoutMs` fails
+> the attempt without one, but as above it does not stop the handler, so keep
+> the deadline on the work itself.

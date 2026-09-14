@@ -359,7 +359,7 @@ queue.run_worker()
   <Tab sdk="node">
 
 ```ts
-queue.runWorker({ channelCapacity: 256, batchSize: 16 }); // dispatch buffer + poll batch, not a thread count
+queue.runWorker({ concurrency: 16, batchSize: 16 }); // jobs at once on this worker + claimed per poll
 ```
 
   </Tab>
@@ -402,20 +402,23 @@ on a dedicated event loop instead of the thread pool.
 <SdkOnly sdk="node">
 
 There's no worker-level thread count — handlers run concurrently on the
-single event loop, each an independent async invocation. `channelCapacity`
-bounds in-flight dispatch and `batchSize` controls how many jobs are claimed
-per poll; real concurrency caps come from per-task/queue `maxConcurrent`. See
+single event loop, each an independent async invocation. `concurrency` caps how
+many attempts run at once on this worker; unset, it is unbounded, and the worker
+claims jobs faster than it runs them, stranding them `running` where other
+workers cannot take them. It counts attempts, not live handlers — a
+<SdkLink to="guides/reliability/timeouts">timed-out</SdkLink> attempt frees its
+slot while its handler may still be running. `batchSize` controls how many jobs are claimed per poll, and
+per-task/queue `maxConcurrent` caps a task or queue across every worker. See
 <SdkLink to="guides/core/execution-model">Execution model</SdkLink>.
 
 <Callout type="info" title="Coming from BullMQ?">
   BullMQ's `new Worker(queueName, processor, { concurrency: N })` runs `N`
-  jobs at once **per worker process** — concurrency scales with how many
-  workers you start. flexiq's `runWorker()` takes no processor or
-  concurrency argument (handlers come from `queue.task()`); simultaneous
-  execution is bounded by per-task/per-queue
-  <SdkLink to="guides/reliability/concurrency">maxConcurrent</SdkLink>,
-  enforced by the scheduler across *all* workers on shared storage, not per
-  process.
+  jobs at once **per worker process**, and so does flexiq's
+  `runWorker({ concurrency: N })` — it just takes no processor (handlers come
+  from `queue.task()`). Unlike BullMQ's default of 1, it is unbounded until you
+  set it. For a cap that holds across *all* workers on shared storage, use
+  per-task/per-queue
+  <SdkLink to="guides/reliability/concurrency">maxConcurrent</SdkLink>.
 </Callout>
 
 </SdkOnly>

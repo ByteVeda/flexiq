@@ -17,7 +17,7 @@ Returns the running task's context, or `undefined` outside a task. Backed by
 | Member | Type | Description |
 |---|---|---|
 | `jobId` | `string` | The running job's id. |
-| `signal` | `AbortSignal` | Aborted on cancel or timeout — pass to `fetch`/streams. |
+| `signal` | `AbortSignal` | Aborted on a cancel request (not on a timeout) — pass to `fetch`/streams. |
 | `setProgress(n)` | `(0–100) => void` | Report progress for inspection / dashboard. |
 | `publish(value)` | `(unknown) => void` | Emit a partial result for [`queue.stream`](/node/guides/core/streaming) (JSON-serializable). |
 

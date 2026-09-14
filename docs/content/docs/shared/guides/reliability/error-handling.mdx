@@ -169,10 +169,16 @@ triggers the retry/DLQ logic above.
 <SdkOnly sdk="node">
 
 The dispatcher races the task against the timeout (`tokio::time::timeout`).
-For `async` tasks, the timeout aborts the task's
-<SdkLink to="guides/core/cancellation">`AbortSignal`</SdkLink> — honor it
-(e.g. pass `signal` to `fetch`) so the underlying work actually stops, not
-just the bookkeeping.
+A timeout fails the attempt but cannot stop the handler, which keeps running —
+and the job's retry can start beside it and repeat its side effects. It does
+not abort the task's
+<SdkLink to="guides/core/cancellation">`AbortSignal`</SdkLink> either — that
+fires only on a cancel request. Give the work its own deadline, shorter than
+`timeoutMs`, and combine it with the task's signal —
+`AbortSignal.any([signal, AbortSignal.timeout(ms)])`, on Node 20.3 or later —
+so it stops on a cancel too and cleans up before the attempt is failed. Keep its
+side effects idempotent. See
+<SdkLink to="guides/reliability/timeouts">Timeouts</SdkLink> for an example.
 
 </SdkOnly>
 
