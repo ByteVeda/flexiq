@@ -33,7 +33,7 @@ queue.enqueue("send_email", [user], {
 > (inverted direction — see [queues](/node/guides/core/queues)), and an
 > explicit custom `opts.jobId` (BullMQ's usual dedup trick) → `uniqueKey`.
 > flexiq's `uniqueKey` dedup is automatic and scoped to "while the first job
-> is pending/running" — it frees up once that job finishes, where a BullMQ
+> is pending/running" — it frees up once that job finishes, whereas a BullMQ
 > `jobId` stays taken until the finished job is removed.
 
 ## Idempotency
