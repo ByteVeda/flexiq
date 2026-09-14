@@ -14,8 +14,10 @@ Jobs run **concurrently**, not one at a time. Each dispatched job is an
 independent async invocation, so while one handler awaits I/O another can run.
 In-flight work is bounded by:
 
-- `concurrency` — how many jobs this worker runs at once. Unset, it is
-  unbounded; set it on any worker that shares a database.
+- `concurrency` — how many attempts this worker runs at once. Unset, it is
+  unbounded; set it on any worker that shares a database. It counts attempts,
+  not live handlers: a [timed-out](/node/guides/reliability/timeouts) attempt
+  frees its slot while its handler may still be running.
 - per-task `maxConcurrent` and queue concurrency — explicit
   [caps](/node/guides/reliability/concurrency) across every worker.
 - per-task / per-queue [rate limits](/node/guides/reliability/rate-limiting).

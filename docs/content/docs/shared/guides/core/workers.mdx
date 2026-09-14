@@ -403,9 +403,11 @@ on a dedicated event loop instead of the thread pool.
 
 There's no worker-level thread count — handlers run concurrently on the
 single event loop, each an independent async invocation. `concurrency` caps how
-many run at once on this worker; unset, it is unbounded, and the worker claims
-jobs faster than it runs them, stranding them `running` where other workers
-cannot take them. `batchSize` controls how many jobs are claimed per poll, and
+many attempts run at once on this worker; unset, it is unbounded, and the worker
+claims jobs faster than it runs them, stranding them `running` where other
+workers cannot take them. It counts attempts, not live handlers — a
+<SdkLink to="guides/reliability/timeouts">timed-out</SdkLink> attempt frees its
+slot while its handler may still be running. `batchSize` controls how many jobs are claimed per poll, and
 per-task/queue `maxConcurrent` caps a task or queue across every worker. See
 <SdkLink to="guides/core/execution-model">Execution model</SdkLink>.
 
