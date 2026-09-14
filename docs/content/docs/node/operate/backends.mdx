@@ -7,11 +7,11 @@ The queue stores everything — jobs, results, schedules, locks, rate-limit stat
 — in one backend. The API is identical across all three; only the constructor
 differs.
 
-Unlike BullMQ, there's no separate broker (message-routing middleman process)
-to run — SQLite and Postgres need nothing beyond a database, and even the Redis
-backend is just a data store here, not a required dependency of the queue
-itself. Start on SQLite with zero infrastructure and move to Postgres or Redis
-later without changing task code.
+There's no separate broker (message-routing middleman process) to run — SQLite
+needs nothing beyond a file, Postgres nothing beyond a database, and Redis is
+one backend of three here, not a dependency of the queue itself. Start on
+SQLite with zero infrastructure and move to Postgres or Redis later without
+changing task code.
 
 ```ts
 new Queue({ dbPath: "flexiq.db" });                                   // SQLite (default)

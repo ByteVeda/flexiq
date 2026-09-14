@@ -147,15 +147,15 @@ async and already have Redis/Nats.
 
 ## How flexiq compares
 
-Most Node task queues — **BullMQ**, **Bee-Queue**, **Bull** — require a running
-Redis instance as the broker, and **Agenda** requires MongoDB. flexiq embeds
-the queue in a Rust core with a pluggable backend (SQLite, Postgres, or Redis),
-so you can start with **zero infrastructure** and add Redis only when you scale
-out.
+Most Node task queues need a server beside your app: **Bee-Queue** and **Bull**
+require Redis, **BullMQ** requires Redis (or, since version 6, PostgreSQL), and
+**Agenda** requires MongoDB. flexiq embeds the queue in a Rust core with a
+pluggable backend (SQLite, Postgres, or Redis), so you can start with **zero
+infrastructure** and add a server only when you scale out.
 
 |  | flexiq | BullMQ / Bee-Queue | Agenda |
 |---|---|---|---|
-| **Broker** | None (SQLite) — optional Postgres/Redis | Redis required | MongoDB required |
+| **Server** | None (SQLite) — optional Postgres/Redis | Redis; BullMQ 6 also PostgreSQL | MongoDB required |
 | **Core** | Rust scheduler | JS + Redis Lua | JS + Mongo |
 | **Priorities / rate limits / DLQ** | Built-in | Priorities + rate limits (BullMQ); no built-in DLQ | Limited |
 | **Workflows** | Builder DAG, fan-out, sub-workflows, sagas | Flows (BullMQ) | No |
