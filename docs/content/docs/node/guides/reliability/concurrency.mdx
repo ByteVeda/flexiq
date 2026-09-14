@@ -27,6 +27,7 @@ queue.configureQueue("video", { maxConcurrent: 4 });
 </Callout>
 
 > **Coming from BullMQ?** See the note on [workers](/node/guides/core/workers)
-> — BullMQ's `concurrency` option scales with worker-process count; flexiq's
-> `maxConcurrent` is a single global cap the scheduler enforces no matter how
-> many workers are running.
+> — BullMQ's `concurrency` option is per worker process, and its flexiq
+> equivalent is `runWorker({ concurrency })`. `maxConcurrent` is the other
+> kind: a single global cap the scheduler enforces no matter how many workers
+> are running.
