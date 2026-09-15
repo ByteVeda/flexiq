@@ -80,7 +80,11 @@ pub(super) async fn fetch(
     let response = request
         .send()
         .await
-        .map_err(|error| AuthError::Transport(error.to_string()))?;
+        // `without_url`, never the bare `Display`: reqwest interpolates the
+        // URL it was dialling, and the operator's token URL may carry a
+        // credential in its query. See `AuthError::Transport`'s own doc —
+        // the invariant is the variant's, not this call site's.
+        .map_err(|error| AuthError::Transport(error.without_url().to_string()))?;
 
     let status = response.status();
     if !status.is_success() {
@@ -384,7 +388,10 @@ mod tests {
             .next()
             .expect("stub base url has a port")
             .to_string();
-        let disallowed_url = format!("http://localhost:{port}/token");
+        // The query is the threat model for the `without_url` assertion
+        // below: RFC 6749 has no place for one, but nothing refuses it, and
+        // an operator who puts a tenant key there must not find it in a log.
+        let disallowed_url = format!("http://localhost:{port}/token?tenant=q1w2e3r4");
 
         // A policy that permits nothing at all — not even loopback.
         let policy = Arc::new(EgressPolicy::new(
@@ -421,6 +428,14 @@ mod tests {
             .await
             .expect_err("a policy that disallows loopback must refuse the token fetch");
         assert!(matches!(error, AuthError::Transport(_)));
+        // `AuthError::Transport`'s invariant, guarded where it is built: this
+        // string reaches `cache.rs`'s refresh `warn!` and — through the push
+        // dispatcher's `Refusal::Signing` — a stored job error.
+        let rendered = error.to_string();
+        assert!(
+            !rendered.contains("q1w2e3r4"),
+            "the token URL's query must not survive into the error: {rendered}"
+        );
         assert_eq!(
             stub.request_count(),
             0,

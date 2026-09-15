@@ -141,6 +141,15 @@ pub enum AuthError {
         reason: &'static str,
     },
     /// The credential fetch never got a response.
+    ///
+    /// **Invariant every construction site must keep: build this from
+    /// [`reqwest::Error::without_url`], never from the bare `Display`.**
+    /// reqwest interpolates the URL it was dialling, query string included,
+    /// and an operator's token URL is a URL nothing here promised was free
+    /// of a credential. This value reaches a log — `cache.rs` prints it on a
+    /// refresh that failed inside the window — and a stored job error, via
+    /// the push dispatcher's `Refusal::Signing`. `OidcConfig`'s userinfo
+    /// check guards one half of the same hole; this guards the other.
     #[error("credential fetch failed: {0}")]
     Transport(String),
 }

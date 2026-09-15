@@ -241,7 +241,9 @@ impl MetadataClient {
             .headers(build_headers(headers)?)
             .send()
             .await
-            .map_err(|error| AuthError::Transport(error.to_string()))?;
+            // `without_url` for the same reason the query above is built
+            // separately from the endpoint: see `AuthError::Transport`'s doc.
+            .map_err(|error| AuthError::Transport(error.without_url().to_string()))?;
 
         let status = response.status();
         if !status.is_success() {
