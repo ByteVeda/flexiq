@@ -238,38 +238,54 @@ fn resolve_region_and_service(
         return Ok((region.to_string(), service.to_string()));
     }
 
-    let (inferred_region, inferred_service) = infer_region_and_service(target)?;
-    Ok((
-        region_override
-            .map(str::to_string)
-            .unwrap_or(inferred_region),
-        service_override
-            .map(str::to_string)
-            .unwrap_or(inferred_service),
-    ))
+    if let Some((inferred_region, inferred_service)) = infer_region_and_service(target) {
+        return Ok((
+            region_override
+                .map(str::to_string)
+                .unwrap_or(inferred_region),
+            service_override
+                .map(str::to_string)
+                .unwrap_or(inferred_service),
+        ));
+    }
+
+    // At least one of the two has nothing to fall back on. Name only what is
+    // actually still missing: an operator who already set one should not be
+    // told to set it again, which a message naming both unconditionally
+    // would do every time only the other one was left out.
+    let host = target.host_str().unwrap_or("<no host>");
+    let (what, hint) = match (region_override.is_some(), service_override.is_some()) {
+        (true, false) => ("a service", "SigV4Config::service"),
+        (false, true) => ("a region", "SigV4Config::region"),
+        // `(true, true)` is handled by the early return above and never
+        // reaches here; falling back to naming both, rather than panicking,
+        // costs nothing and keeps this function total.
+        (false, false) | (true, true) => (
+            "a region and service",
+            "SigV4Config::region and SigV4Config::service",
+        ),
+    };
+    Err(AuthError::Config(format!(
+        "sigv4 could not infer {what} from host '{host}'; set {hint} explicitly"
+    )))
 }
 
 /// Recognises exactly two host shapes: Lambda function URLs and API Gateway.
-/// Anything else is refused: a wrong region or service yields an opaque 403
-/// from AWS, so guessing beyond these two named, unambiguous patterns would
-/// trade a clear configuration error now for a confusing one in production
-/// later.
-fn infer_region_and_service(target: &url::Url) -> Result<(String, String), AuthError> {
-    let host = target.host_str().ok_or_else(|| {
-        AuthError::Config("sigv4 target has no host to infer a region and service from".to_string())
-    })?;
+/// `None` for anything else, including a URL with no host at all — refused
+/// rather than guessed at, by [`resolve_region_and_service`]: a wrong region
+/// or service yields an opaque 403 from AWS, so guessing beyond these two
+/// named, unambiguous patterns would trade a clear configuration error now
+/// for a confusing one in production later.
+fn infer_region_and_service(target: &url::Url) -> Option<(String, String)> {
+    let host = target.host_str()?;
 
     if let Some(region) = region_between(host, "lambda-url", "on.aws") {
-        return Ok((region, "lambda".to_string()));
+        return Some((region, "lambda".to_string()));
     }
     if let Some(region) = region_between(host, "execute-api", "amazonaws.com") {
-        return Ok((region, "execute-api".to_string()));
+        return Some((region, "execute-api".to_string()));
     }
-
-    Err(AuthError::Config(format!(
-        "sigv4 could not infer a region and service from host '{host}'; \
-         set SigV4Config::region and SigV4Config::service explicitly"
-    )))
+    None
 }
 
 /// `<anything>.<marker>.<region>.<suffix>` → `Some(<region>)`, when `host`
@@ -321,6 +337,21 @@ mod tests {
             url::Url::parse("https://example.amazonaws.com/").expect("test url parses"),
             HeaderMap::new(),
         )
+    }
+
+    /// The `SignedHeaders=` field out of a rendered `Authorization` value,
+    /// as a list — shared so a test that must check *which* headers were
+    /// signed always discriminates the field itself, never a substring
+    /// match against the whole header that a coincidental hit elsewhere in
+    /// the value could satisfy for the wrong reason.
+    fn signed_header_names(authz: &str) -> Vec<&str> {
+        authz
+            .split("SignedHeaders=")
+            .nth(1)
+            .and_then(|rest| rest.split(',').next())
+            .expect("SignedHeaders field present")
+            .split(';')
+            .collect()
     }
 
     #[test]
@@ -378,6 +409,51 @@ mod tests {
     }
 
     #[test]
+    fn a_partial_override_on_an_unrecognised_host_names_only_what_is_still_missing() {
+        let target = url::Url::parse("https://example.com/hook").expect("test url parses");
+
+        let region_only = SigV4Config {
+            source: test_source(),
+            region: Some("us-east-1".to_string()),
+            service: None,
+        };
+        match SigV4Signer::new(region_only, &target) {
+            Ok(_) => panic!("an unrecognised host with only region set must still be refused"),
+            Err(AuthError::Config(message)) => {
+                assert!(
+                    message.contains("service"),
+                    "error must name the still-missing service: {message}"
+                );
+                assert!(
+                    !message.contains("region"),
+                    "region was already given and must not be named as missing: {message}"
+                );
+            }
+            Err(other) => panic!("expected Config, got {other:?}"),
+        }
+
+        let service_only = SigV4Config {
+            source: test_source(),
+            region: None,
+            service: Some("custom-service".to_string()),
+        };
+        match SigV4Signer::new(service_only, &target) {
+            Ok(_) => panic!("an unrecognised host with only service set must still be refused"),
+            Err(AuthError::Config(message)) => {
+                assert!(
+                    message.contains("region"),
+                    "error must name the still-missing region: {message}"
+                );
+                assert!(
+                    !message.contains("service"),
+                    "service was already given and must not be named as missing: {message}"
+                );
+            }
+            Err(other) => panic!("expected Config, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn an_explicit_region_and_service_override_the_host() {
         let config = SigV4Config {
             source: test_source(),
@@ -425,16 +501,10 @@ mod tests {
             .expect("authorization header present")
             .to_str()
             .expect("header is ascii");
-        let signed_headers_field = authz
-            .split("SignedHeaders=")
-            .nth(1)
-            .and_then(|rest| rest.split(',').next())
-            .expect("SignedHeaders field present");
+        let signed_headers = signed_header_names(authz);
         assert!(
-            signed_headers_field
-                .split(';')
-                .any(|name| name == "x-amz-security-token"),
-            "x-amz-security-token missing from SignedHeaders: {signed_headers_field}"
+            signed_headers.contains(&"x-amz-security-token"),
+            "x-amz-security-token missing from SignedHeaders: {signed_headers:?}"
         );
     }
 
@@ -474,9 +544,10 @@ mod tests {
             .expect("authorization header present")
             .to_str()
             .expect("header is ascii");
+        let signed_headers = signed_header_names(authz);
         assert!(
-            authz.contains("x-amz-content-sha256"),
-            "x-amz-content-sha256 missing from SignedHeaders: {authz}"
+            signed_headers.contains(&"x-amz-content-sha256"),
+            "x-amz-content-sha256 missing from SignedHeaders: {signed_headers:?}"
         );
     }
 
@@ -630,5 +701,37 @@ mod tests {
              SignedHeaders=host;x-amz-content-sha256;x-amz-date, \
              Signature=726c5c4879a6b4ccbbd3b24edbd6b8826d34f87450fbbf4e85546fc7ba9c1642"
         );
+    }
+
+    #[test]
+    fn the_config_never_reaches_a_formatter() {
+        // Same technique as `auth/mod.rs`'s and `oidc/mod.rs`'s own tests of
+        // this name: alternating letter/digit, so every 4-character window
+        // carries a digit and cannot coincide with a purely alphabetic run
+        // elsewhere in the rendered `Debug`.
+        let secret_value = "m1n2o3p4q5r6s7t8";
+        let config = SigV4Config {
+            source: AwsCredentialSource::Static {
+                access_key_id: "AKIDEXAMPLE".to_string(),
+                secret_access_key: Secret::new(secret_value),
+                session_token: None,
+            },
+            region: Some("us-east-1".to_string()),
+            service: Some("service".to_string()),
+        };
+        let rendered = format!("{config:?}");
+
+        assert!(!rendered.contains(secret_value));
+        for window in secret_value.as_bytes().windows(4) {
+            let fragment = std::str::from_utf8(window).expect("secret is ascii");
+            assert!(
+                !rendered.contains(fragment),
+                "rendered debug leaked fragment {fragment:?}: {rendered}"
+            );
+        }
+        // The access key id is not itself secret and must still print, or a
+        // redaction that swallowed the whole struct would not be caught by
+        // the assertions above alone.
+        assert!(rendered.contains("AKIDEXAMPLE"));
     }
 }

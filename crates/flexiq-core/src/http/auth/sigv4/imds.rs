@@ -96,26 +96,12 @@ async fn fetch_role_name(metadata: &MetadataClient, token: &str) -> Result<Strin
         })
 }
 
-/// `role`'s URL, joined onto the security-credentials listing's own path.
-/// The label used on a join failure below must match
-/// [`MetadataEndpoint::AwsImdsRoleCredentials`]'s own `label()` — there is no
-/// endpoint value yet to read it from at this point, since the join has not
-/// produced a URL to build one with.
-fn role_credentials_url(role: &str) -> Result<url::Url, AuthError> {
-    let built = format!("http://169.254.169.254/latest/meta-data/iam/security-credentials/{role}");
-    url::Url::parse(&built).map_err(|_| AuthError::CredentialShape {
-        endpoint: "aws imds role credentials",
-        reason: "role name is not usable in a URL",
-    })
-}
-
 async fn fetch_role_credentials(
     metadata: &MetadataClient,
     token: &str,
     role: &str,
 ) -> Result<Expiring<AwsCredentials>, AuthError> {
-    let url = role_credentials_url(role)?;
-    let endpoint = MetadataEndpoint::AwsImdsRoleCredentials(url);
+    let endpoint = MetadataEndpoint::aws_imds_role_credentials(role)?;
     let headers = token_header_entries(token);
 
     let body = metadata

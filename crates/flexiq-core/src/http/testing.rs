@@ -72,10 +72,6 @@ impl StubServer {
     }
 
     /// Answer each request from the queue in turn, then repeat the last.
-    // No caller yet: this commit's own tests only need `start`'s fixed
-    // response. The OIDC and SigV4 commits are the first to script a
-    // sequence — e.g. a 429 followed by a 200, to exercise a retry.
-    #[allow(dead_code)]
     pub(crate) async fn start_scripted(responses: Vec<(u16, String)>) -> Self {
         assert!(
             !responses.is_empty(),

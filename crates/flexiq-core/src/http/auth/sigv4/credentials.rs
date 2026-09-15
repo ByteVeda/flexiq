@@ -588,6 +588,22 @@ mod tests {
         assert_eq!(received[0].method, "PUT");
         assert_eq!(received[1].method, "GET");
         assert_eq!(received[2].method, "GET");
+        // Both real GETs, not just the shared header-building helper in
+        // isolation, actually carry the session token the PUT returned —
+        // closing the gap `imds::tests::the_session_token_is_sent_sensitive_on_both_gets`
+        // cannot: that test can only prove the helper is sensitive, not that
+        // both call sites still route through it.
+        for (index, request) in received[1..].iter().enumerate() {
+            assert!(
+                request
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name == "x-aws-ec2-metadata-token"
+                        && value == "imds-session-token"),
+                "GET #{index} ({}) is missing the session token header",
+                request.target
+            );
+        }
     }
 
     #[test]
@@ -598,13 +614,30 @@ mod tests {
         // with a purely alphabetic run elsewhere in the rendered `Debug`.
         let secret_value = "z9y8x7w6v5u4t3s2";
         let token_value = "r1q2p3o4n5m6l7k8";
+
         let credentials = AwsCredentials {
             access_key_id: "AKIDEXAMPLE".to_string(),
             secret_access_key: Secret::new(secret_value),
             session_token: Some(Secret::new(token_value)),
         };
-        let rendered = format!("{credentials:?}");
+        assert_redacted(&format!("{credentials:?}"), secret_value, token_value);
 
+        // The public config variant carrying the same two fields must redact
+        // identically: it derives `Debug` too, relying entirely on
+        // `Secret`'s own redaction, exactly like `AwsCredentials` above.
+        let source = AwsCredentialSource::Static {
+            access_key_id: "AKIDEXAMPLE".to_string(),
+            secret_access_key: Secret::new(secret_value),
+            session_token: Some(Secret::new(token_value)),
+        };
+        assert_redacted(&format!("{source:?}"), secret_value, token_value);
+    }
+
+    /// Every sliding 4-byte window of both secrets absent from `rendered`,
+    /// and the (non-secret) access key id still present — the shared body
+    /// of `credentials_never_reach_a_formatter`'s two assertions, so a
+    /// change to one can't accidentally skip checking the other.
+    fn assert_redacted(rendered: &str, secret_value: &str, token_value: &str) {
         for secret in [secret_value, token_value] {
             assert!(!rendered.contains(secret));
             for window in secret.as_bytes().windows(4) {

@@ -50,13 +50,31 @@ pub(crate) struct MetadataClient {
     base_override: Option<url::Url>,
 }
 
+/// The label used for [`MetadataEndpoint::AwsImdsRoleCredentials`], both in
+/// [`MetadataEndpoint::label`] and in the one error
+/// [`MetadataEndpoint::aws_imds_role_credentials`] can raise before a value
+/// of that variant exists to read the label from. One constant so the two
+/// can never drift apart.
+const AWS_IMDS_ROLE_CREDENTIALS_LABEL: &str = "aws imds role credentials";
+
 /// The closed set of places a credential may be fetched from.
 ///
 /// A variant rather than a URL: there is no parameter on this API through
 /// which an operator-supplied host could arrive. Five of these are
-/// compile-time constants; the two read from the process environment carry
-/// their already-vetted [`url::Url`], produced by [`accept_env_endpoint`],
-/// which refuses everything the egress guard accepts.
+/// compile-time constants; three carry an owned [`url::Url`] built at fetch
+/// time — two of them, [`Self::AzureAppServiceToken`] and
+/// [`Self::AwsContainerCredentials`], from an environment variable already
+/// vetted by [`accept_env_endpoint`], which refuses everything the egress
+/// guard accepts. The third, [`Self::AwsImdsRoleCredentials`], is not
+/// environment-derived at all: [`Self::aws_imds_role_credentials`] builds it
+/// from the link-local constant every other AWS/Azure variant here already
+/// uses, plus a role name that arrives over the network in IMDS's own
+/// response body. That role name cannot move the request off this host —
+/// the scheme and authority are fixed before it is ever interpolated, so a
+/// hostile value can only choose a different path on the same link-local
+/// address — but it is still not an operator- or environment-vetted value,
+/// and a reader relying on this doc to answer "can an untrusted host reach
+/// this client" should not come away thinking all three are.
 pub(crate) enum MetadataEndpoint {
     /// GCE/GKE's identity token endpoint, by name.
     GoogleIdentity,
@@ -100,13 +118,32 @@ impl MetadataEndpoint {
             Self::AwsImdsSecurityCredentials => "aws imds security credentials",
             Self::AzureAppServiceToken(_) => "azure app service token",
             Self::AwsContainerCredentials(_) => "aws container credentials",
-            Self::AwsImdsRoleCredentials(_) => "aws imds role credentials",
+            Self::AwsImdsRoleCredentials(_) => AWS_IMDS_ROLE_CREDENTIALS_LABEL,
         }
     }
 
+    /// Build the per-role IMDSv2 credentials endpoint from a role name that
+    /// arrived over the network in IMDS's security-credentials listing.
+    ///
+    /// Kept here rather than in `sigv4/imds.rs`, alongside
+    /// [`CLOUD_METADATA_IP`] and [`AWS_IMDS_ROLE_CREDENTIALS_LABEL`]: the
+    /// host, the path and the label all belong to this type, so a change to
+    /// any of the three can never leave the others behind.
+    pub(crate) fn aws_imds_role_credentials(role: &str) -> Result<Self, AuthError> {
+        let built =
+            format!("http://{CLOUD_METADATA_IP}/latest/meta-data/iam/security-credentials/{role}");
+        url::Url::parse(&built)
+            .map(Self::AwsImdsRoleCredentials)
+            .map_err(|_| AuthError::CredentialShape {
+                endpoint: AWS_IMDS_ROLE_CREDENTIALS_LABEL,
+                reason: "role name is not usable in a URL",
+            })
+    }
+
     /// The URL this variant fetches from: a freshly parsed constant for the
-    /// five built-in variants, or the already-vetted URL carried by the two
-    /// environment-derived ones.
+    /// five built-in variants, or the owned [`url::Url`] carried by the
+    /// three that build one at fetch time — see this enum's own doc for how
+    /// those three differ from each other.
     fn url(&self) -> Result<url::Url, AuthError> {
         let built = match self {
             Self::GoogleIdentity => format!(
