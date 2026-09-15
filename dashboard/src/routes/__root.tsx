@@ -1,11 +1,12 @@
 import type { QueryClient } from "@tanstack/react-query";
+import type { ErrorComponentProps } from "@tanstack/react-router";
 import { createRootRouteWithContext, Link, Outlet, useLocation } from "@tanstack/react-router";
 import { AlertTriangle, ArrowLeft, Home } from "lucide-react";
 import { AppShell, BackendOffline } from "@/components/layout";
 import { Button, buttonVariants } from "@/components/ui";
 import { AuthGate } from "@/features/auth";
 import { cn } from "@/lib/cn";
-import { isBackendUnreachable } from "@/lib/errors";
+import { asError, isBackendUnreachable } from "@/lib/errors";
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -44,7 +45,10 @@ function RootLayout() {
  * actionable steps. Everything else falls through to the generic error
  * view — usually a programming bug the user can't fix on their own.
  */
-function ErrorView({ error }: { error: Error }) {
+function ErrorView({ error: caught }: ErrorComponentProps) {
+  // `asError` is identity for real Errors, so the ApiError/TypeError checks
+  // inside `isBackendUnreachable` still see the original instance.
+  const error = asError(caught);
   if (isBackendUnreachable(error)) {
     return (
       <AppShell>
