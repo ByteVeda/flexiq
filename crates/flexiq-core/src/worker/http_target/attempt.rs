@@ -6,6 +6,10 @@
 //! permit, and every path out of [`run_one`] either sends exactly one
 //! [`JobResult`] or is dropped by the lease re-check — see the module doc on
 //! the parent for why that invariant is the whole design.
+//!
+//! The invariant is about a job that *reaches* [`run_one`]. The parent's doc
+//! names the three shutdown-only cases where one does not, each of which
+//! leaves a lease to the stale-job reap.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -14,7 +18,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use crossbeam_channel::Sender;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use tokio::sync::{Notify, OwnedSemaphorePermit};
+use tokio::sync::{watch, Notify, OwnedSemaphorePermit};
 
 use super::contract::{
     self, Outcome, Refusal, ENVELOPE_CONTENT_TYPE, HDR_ATTEMPT, HDR_DEADLINE_MS,
@@ -22,7 +26,7 @@ use super::contract::{
     HDR_METADATA, HDR_NAMESPACE, HDR_OUTCOME, HDR_PROTOCOL_VERSION, HDR_QUEUE, HDR_RETRY, HDR_TASK,
 };
 use super::Shared;
-use crate::http::{read_bounded, AuthError, SigningRequest};
+use crate::http::{read_bounded, SigningRequest};
 use crate::job::{now_millis, Job};
 use crate::scheduler::JobResult;
 use crate::worker::protocol::{Dispatch, PROTOCOL_VERSION};
@@ -83,19 +87,32 @@ pub(super) async fn run_one(
     let _permit = permit;
     let started = Instant::now();
 
-    // Installed before anything that can await, so a cancel arriving while
-    // the toggle list is still being resolved has somewhere to land.
+    // Both established before the first `.await`, and deliberately: they are
+    // what bound everything below. A cancel arriving while the toggle list is
+    // still being resolved has somewhere to land, and an abandon signalled
+    // before this attempt reached the `select!` is still observed — a
+    // `watch` receiver sees the value it subscribed to, not only later
+    // changes.
     let notify = shared.register_cancel(&job.id);
+    let abandon = shared.abandon_signal();
 
-    let disabled_middleware = resolve_toggles(&shared, &job.task_name).await;
+    // Read synchronously, before anything can suspend: the lease this
+    // dispatch was made under has to be known even on a path that gives up
+    // before a request is built, because the re-check below needs it.
     let lease = shared.lease_book().and_then(|book| book.current(&job.id));
+    let budget = request_budget(&job, now_millis(), shared.config.request_timeout);
     let mut dispatch = Dispatch {
         job,
-        disabled_middleware,
+        disabled_middleware: Vec::new(),
         lease,
     };
 
-    let settled = attempt(&shared, &mut dispatch, &notify).await;
+    let settled = match budget {
+        // Not dialled at all: the reaper is about to take this job, and a
+        // request started now would answer into a claim somebody else holds.
+        None => Err(Refusal::NoBudget),
+        Some(budget) => guarded_attempt(&shared, &mut dispatch, &notify, abandon, budget).await,
+    };
     shared.unregister_cancel(&dispatch.job.id, &notify);
 
     let wall_time_ns = i64::try_from(started.elapsed().as_nanos()).unwrap_or(i64::MAX);
@@ -147,20 +164,50 @@ async fn resolve_toggles(shared: &Shared, task_name: &str) -> Vec<String> {
         })
 }
 
-/// Everything between "there is a dispatch to make" and "there is something to
-/// settle", in the order the brief fixes: budget, size, headers, signature,
-/// then the race between the response, the deadline and the cancel.
-async fn attempt(
+/// Race the whole attempt against the budget, the cancel and the abandon
+/// signal.
+///
+/// Every suspension point the attempt has is inside this `select!`, and that
+/// is the point. Resolving the toggle list is a settings read, and signing
+/// dials a credential endpoint through a client that carries a *connect*
+/// timeout and deliberately no request timeout — so an endpoint that completes
+/// the handshake and then goes quiet would, if either ran outside the race,
+/// suspend this attempt for the life of the process: no `JobResult`, the
+/// semaphore permit never released, and the shutdown drain waiting on a task
+/// that will never finish. A hang is strictly worse than a failure.
+async fn guarded_attempt(
     shared: &Shared,
     dispatch: &mut Dispatch,
     notify: &Notify,
+    mut abandon: watch::Receiver<bool>,
+    budget: Duration,
 ) -> Result<(Outcome, Vec<u8>), Refusal> {
-    let Some(budget) = request_budget(&dispatch.job, now_millis(), shared.config.request_timeout)
-    else {
-        // Not dialled at all: the reaper is about to take this job, and a
-        // request started now would answer into a claim somebody else holds.
-        return Err(Refusal::NoBudget);
-    };
+    tokio::select! {
+        // Biased, with the attempt first: when the target has already
+        // answered, that answer is real information and beats a deadline or a
+        // cancel that became ready in the same poll.
+        biased;
+        attempted = attempt(shared, dispatch, budget) => attempted,
+        () = notify.notified() => Ok((Outcome::Cancelled, Vec::new())),
+        // The drain budget expired. Settled, not aborted: an aborted task
+        // emits nothing, and a job with no result is a lease nobody retires.
+        _ = abandon.wait_for(|abandoned| *abandoned) => Err(Refusal::Abandoned),
+        () = tokio::time::sleep(budget) => Err(Refusal::Deadline(budget)),
+    }
+}
+
+/// Everything between "there is a dispatch to make" and "there is something to
+/// settle", in the order the brief fixes: toggles, size, headers, signature,
+/// then the exchange.
+///
+/// Every `.await` below is bounded by [`guarded_attempt`]'s `select!`, which
+/// is the only reason it is safe for any of them to have no timeout of its own.
+async fn attempt(
+    shared: &Shared,
+    dispatch: &mut Dispatch,
+    budget: Duration,
+) -> Result<(Outcome, Vec<u8>), Refusal> {
+    dispatch.disabled_middleware = resolve_toggles(shared, &dispatch.job.task_name).await;
 
     let len = dispatch.job.payload.len();
     let cap = shared.config.max_request_bytes;
@@ -185,9 +232,12 @@ async fn attempt(
             })
             .await
             .map_err(|error| {
-                // The full error goes to the log, where an operator debugging
-                // their credential source will look; only `signing_reason`'s
-                // narrowed form reaches the job.
+                // Safe to render whole, here and in the job error below:
+                // `AuthError` carries no URL and no endpoint response body —
+                // its `Transport` variant is built from
+                // `reqwest::Error::without_url`, which is that variant's
+                // documented invariant, and every other variant is built from
+                // a closed set of literals.
                 log::warn!(
                     "[flexiq] push target {}: {} could not sign the dispatch for job {}: {error}",
                     shared.target,
@@ -197,7 +247,7 @@ async fn attempt(
                 Refusal::Signing {
                     scheme: signer.scheme(),
                     retryable: error.retryable(),
-                    reason: signing_reason(&error),
+                    reason: error.to_string(),
                 }
             })?;
         headers.extend(signed);
@@ -214,36 +264,7 @@ async fn attempt(
         .headers(headers)
         .body(body);
 
-    let mut abandon = shared.abandon_signal();
-    tokio::select! {
-        // Biased, with the exchange first: when the target has already
-        // answered, that answer is real information and beats a deadline or a
-        // cancel that became ready in the same poll.
-        biased;
-        exchanged = exchange(shared, request) => exchanged,
-        () = notify.notified() => Ok((Outcome::Cancelled, Vec::new())),
-        // The drain budget expired. Settled, not aborted: an aborted task
-        // emits nothing, and a job with no result is a lease nobody retires.
-        _ = abandon.wait_for(|abandoned| *abandoned) => Err(Refusal::Abandoned),
-        () = tokio::time::sleep(budget) => Err(Refusal::Deadline(budget)),
-    }
-}
-
-/// What a signing failure is allowed to say in a *stored* job error.
-///
-/// Every [`AuthError`] variant but [`AuthError::Transport`] is built from a
-/// closed set of literals by design — see `AuthError::retryable`'s doc for the
-/// argument. `Transport` is the exception: it carries a `reqwest` error's
-/// `Display`, which interpolates the URL it was dialling, and an operator's
-/// OAuth2 token URL is a URL nothing in this crate promised was free of a
-/// credential. A refusal's message lands in `job_errors` and the dead-letter
-/// queue, so that one variant gets a fixed phrase and the detail goes to the
-/// log instead.
-fn signing_reason(error: &AuthError) -> String {
-    match error {
-        AuthError::Transport(_) => "the credential fetch got no response".to_string(),
-        other => other.to_string(),
-    }
+    exchange(shared, request).await
 }
 
 /// Send the request and read the answer back.
@@ -484,25 +505,6 @@ mod tests {
                 "timeout_ms {timeout_ms} leaves nothing for the reaper to fire on"
             );
         }
-    }
-
-    #[test]
-    fn a_transport_signing_failure_never_stores_what_it_was_dialling() {
-        // A `reqwest` error's `Display` interpolates the URL it was dialling,
-        // and an operator's OAuth2 token URL can carry a credential in its
-        // query. What lands in `job_errors` must not.
-        let dialled = "https://issuer.example.com/token?client_secret=a1b2c3d4";
-        let error = AuthError::Transport(format!("error sending request for url ({dialled})"));
-
-        let stored = signing_reason(&error);
-
-        assert!(!stored.contains("issuer.example.com"), "{stored}");
-        assert!(!stored.contains("a1b2c3d4"), "{stored}");
-
-        // Every other variant is built from a closed set of literals, so it
-        // survives into the job error intact.
-        let config = AuthError::Config("bearer token must not be empty".to_string());
-        assert_eq!(signing_reason(&config), config.to_string());
     }
 
     #[test]
