@@ -3,11 +3,13 @@
 //! GitHub issue #844: a push target reachable from the scheduler is reachable
 //! by anything else that can reach it too, so the scheduler has to prove who
 //! it is. [`Signer`] is the seam HMAC, OIDC and SigV4 each plug into, one
-//! commit apiece; this commit ships the seam itself, plus the one scheme that
-//! needs no machinery — a static bearer token, in the private `bearer`
-//! submodule.
+//! commit apiece. Two are shipped so far: a static bearer token needing no
+//! machinery, in the private `bearer` submodule, and HMAC-SHA256 — the
+//! replay-resistant scheme issue #844 names by "works everywhere" — in the
+//! private `hmac` submodule.
 
 mod bearer;
+mod hmac;
 
 use std::sync::Arc;
 
@@ -16,6 +18,12 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::worker::Secret;
 use bearer::BearerSigner;
+use hmac::HmacSigner;
+
+pub use hmac::{
+    string_to_sign, verify, HmacConfig, HmacRejection, DEFAULT_MAX_SKEW, HDR_KEY_ID, HDR_NONCE,
+    HDR_SIGNATURE, HDR_TIMESTAMP,
+};
 
 /// Everything a signer may see, and nothing it may change.
 ///
@@ -125,6 +133,10 @@ pub enum OutboundAuth {
     None,
     /// A static `Authorization: Bearer <secret>`.
     Bearer(Secret),
+    /// HMAC-SHA256 over the method, target, body digest, timestamp and
+    /// nonce — the scheme with replay defence, for a target reachable from
+    /// anywhere but the scheduler.
+    Hmac(HmacConfig),
 }
 
 impl OutboundAuth {
@@ -148,6 +160,18 @@ impl OutboundAuth {
                     ));
                 }
                 Ok(Some(Arc::new(BearerSigner::new(secret))))
+            }
+            OutboundAuth::Hmac(config) => {
+                // Same reasoning and the same place as the bearer's check
+                // above: an empty key signs nothing meaningful, and failing
+                // here beats every dispatch being refused by the target with
+                // no explanation on our side.
+                if config.secret.is_empty() {
+                    return Err(AuthError::Config(
+                        "hmac secret must not be empty".to_string(),
+                    ));
+                }
+                Ok(Some(Arc::new(HmacSigner::new(config)?)))
             }
         }
     }
@@ -176,6 +200,16 @@ mod tests {
         // `Arc<dyn Signer>` carries no `Debug`, so `expect_err` cannot be
         // used here; `matches!` needs none.
         let result = OutboundAuth::Bearer(Secret::new("")).signer();
+        assert!(matches!(result, Err(AuthError::Config(_))));
+    }
+
+    #[test]
+    fn an_empty_hmac_secret_is_refused_at_construction() {
+        let result = OutboundAuth::Hmac(HmacConfig {
+            key_id: None,
+            secret: Secret::new(""),
+        })
+        .signer();
         assert!(matches!(result, Err(AuthError::Config(_))));
     }
 

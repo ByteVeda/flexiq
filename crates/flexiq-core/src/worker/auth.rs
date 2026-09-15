@@ -71,7 +71,11 @@ impl fmt::Display for Secret {
 
 /// Compare two byte strings without short-circuiting on the first difference.
 /// Length is allowed to short-circuit — it is already observable.
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+///
+/// `pub(crate)`: the HMAC dispatch verifier (`http::auth::hmac`) compares a
+/// presented signature against a computed one and must not do it with `==`
+/// either, so it reuses this rather than growing a second copy.
+pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;
     }
