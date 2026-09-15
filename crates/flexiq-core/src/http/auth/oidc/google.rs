@@ -38,7 +38,9 @@ pub(super) async fn fetch(
     audience: &str,
 ) -> Result<Expiring<String>, AuthError> {
     let query = [("audience", audience), ("format", FORMAT_FULL)];
-    let headers = [(METADATA_FLAVOR_HEADER, METADATA_FLAVOR_VALUE)];
+    // Not sensitive: `Metadata-Flavor: Google` is a fixed literal, not
+    // credential material.
+    let headers = [(METADATA_FLAVOR_HEADER, METADATA_FLAVOR_VALUE, false)];
 
     let body = match metadata
         .fetch(
@@ -63,6 +65,19 @@ pub(super) async fn fetch(
         Err(other) => return Err(other),
     };
 
+    // `MetadataClient::fetch` silently truncates at its own cap (16 KiB;
+    // see `metadata.rs`'s `MAX_BODY_BYTES`) and gives this caller no way to
+    // tell a truncated body from a complete one. That is safe for the
+    // structured JSON responses the other three sources read — truncation
+    // there almost always breaks JSON parsing outright — but this is the
+    // one source whose whole response *is* the credential: a body cut off
+    // partway through the signature segment would still split into three
+    // syntactically valid parts, still carry a readable `exp`, and still
+    // look like success here, only to be refused by the receiver's
+    // signature check with nothing in this process's own logs pointing at
+    // truncation as the cause. Accepted rather than guarded against: a
+    // GCE/Cloud Run identity token, even with `format=full`, is nowhere
+    // near 16 KiB in practice.
     let token = body.trim().to_string();
     let expires_at_ms = jwt::expiry_ms(&token)?;
     Ok(super::expiring_from_expiry_ms(token, expires_at_ms))

@@ -52,10 +52,15 @@ impl DispatchClient {
         Ok(Self { client })
     }
 
-    /// The underlying client, for the dispatcher that builds requests on it.
-    // No caller yet: the dispatcher that builds requests on this client
-    // arrives in a later commit.
-    #[allow(dead_code)]
+    /// The underlying client, for a caller that must dial through the same
+    /// guard without building a fresh `reqwest::Client` of its own.
+    ///
+    /// `oidc::oauth2`'s OAuth2 token fetch is the first such caller — it
+    /// clones the client out via this method rather than holding a whole
+    /// `DispatchClient`, because the operator's token URL needs exactly the
+    /// same egress guard the dispatch target does (see `oidc/oauth2.rs`'s
+    /// module doc). The dispatcher that builds the operator's own
+    /// push-dispatch requests on this client is still a later commit.
     pub(crate) fn inner(&self) -> &reqwest::Client {
         &self.client
     }

@@ -77,13 +77,31 @@ pub(super) async fn fetch_imds(
     if let Some(value) = msi_res_id {
         query.push(("msi_res_id", value));
     }
-    let headers = [("Metadata", "true")];
+    // Not sensitive: `Metadata: true` is a fixed literal, not credential
+    // material.
+    let headers = [("Metadata", "true", false)];
 
     let body = metadata
         .fetch(&endpoint, Method::GET, &query, &headers)
         .await?;
     let (token, expires_in_seconds) = parse_response(&endpoint, &body)?;
     Ok(super::expiring_from_ttl_seconds(token, expires_in_seconds))
+}
+
+/// The one header entry `fetch_app_service` sends, marked sensitive so
+/// `MetadataClient::fetch` never lets it reach a `Debug` of the outgoing
+/// request — the per-instance sidecar secret is exactly the kind of value
+/// that must not round-trip into a log unexamined.
+///
+/// Extracted from `fetch_app_service` so a test can assert the sensitivity
+/// flag directly, with no network round trip: see
+/// `the_identity_header_entry_is_marked_sensitive` below.
+fn app_service_header_entries(identity_header: &Secret) -> [(&'static str, String, bool); 1] {
+    // Unwrapped only at the point of use and held nowhere else, the same
+    // discipline `BearerSigner::sign` applies to its own token: `Secret` is
+    // always built from a `String`, so this is never lossy in practice.
+    let header_value = String::from_utf8_lossy(identity_header.expose_secret()).into_owned();
+    [(IDENTITY_HEADER_NAME, header_value, true)]
 }
 
 /// Fetch a fresh token from the App Service / Functions / Container Apps
@@ -101,11 +119,11 @@ pub(super) async fn fetch_app_service(
         ("api-version", API_VERSION_APP_SERVICE),
     ];
 
-    // Unwrapped only at the point of use and held nowhere else, the same
-    // discipline `BearerSigner::sign` applies to its own token: `Secret` is
-    // always built from a `String`, so this is never lossy in practice.
-    let header_value = String::from_utf8_lossy(identity_header.expose_secret()).into_owned();
-    let headers = [(IDENTITY_HEADER_NAME, header_value.as_str())];
+    let entries = app_service_header_entries(identity_header);
+    let headers: Vec<(&str, &str, bool)> = entries
+        .iter()
+        .map(|(name, value, sensitive)| (*name, value.as_str(), *sensitive))
+        .collect();
 
     let body = metadata
         .fetch(&endpoint, Method::GET, &query, &headers)
@@ -267,6 +285,25 @@ mod tests {
 
         assert!(!error.to_string().contains(secret_value));
         assert!(!format!("{error:?}").contains(secret_value));
+    }
+
+    #[test]
+    fn the_identity_header_entry_is_marked_sensitive() {
+        // The regression this guards: `fetch_app_service` handing
+        // `MetadataClient::fetch` a `sensitive: false` entry for a
+        // per-instance secret, which would render in cleartext in any
+        // `Debug` of the outgoing request headers.
+        let secret_value = "sidecar-secret-9f8e7d6c";
+        let entries = app_service_header_entries(&Secret::new(secret_value));
+
+        assert_eq!(entries.len(), 1);
+        let (name, value, sensitive) = &entries[0];
+        assert_eq!(*name, IDENTITY_HEADER_NAME);
+        assert_eq!(value, secret_value);
+        assert!(
+            sensitive,
+            "the identity header entry must be marked sensitive"
+        );
     }
 
     #[test]

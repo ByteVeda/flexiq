@@ -90,12 +90,9 @@ pub(super) async fn fetch(
         });
     }
 
-    let text = response
-        .text()
-        .await
-        .map_err(|error| AuthError::Transport(error.to_string()))?;
+    let body = read_capped(response).await;
     let parsed: TokenResponse =
-        serde_json::from_str(&text).map_err(|_| AuthError::CredentialShape {
+        serde_json::from_slice(&body).map_err(|_| AuthError::CredentialShape {
             endpoint: LABEL,
             reason: "not valid JSON",
         })?;
@@ -104,6 +101,39 @@ pub(super) async fn fetch(
         parsed.access_token,
         parsed.expires_in,
     ))
+}
+
+/// A token response comfortably fits in this many bytes — the same limit
+/// `metadata.rs`'s own credential fetch enforces (`MAX_BODY_BYTES`), and for
+/// an analogous reason: `response.text()` alone would buffer whatever the
+/// token endpoint chose to send with no cap at all, and this is still a
+/// credential document, not a dispatch payload with its own
+/// operator-configured cap.
+const MAX_BODY_BYTES: usize = 16 * 1024;
+
+/// Reads at most [`MAX_BODY_BYTES`] of `response`'s body and drops the rest.
+///
+/// A separate copy of `metadata.rs`'s own `read_capped` rather than a shared
+/// one: that one is private to `MetadataClient`, and this path reaches an
+/// operator's token URL through the guarded `DispatchClient` instead — a
+/// different trust boundary, sharing only the cap's rationale, not its
+/// implementation.
+async fn read_capped(response: reqwest::Response) -> Vec<u8> {
+    let mut response = response;
+    let mut buffered = Vec::new();
+    while buffered.len() < MAX_BODY_BYTES {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                let room = MAX_BODY_BYTES - buffered.len();
+                buffered.extend_from_slice(&chunk[..chunk.len().min(room)]);
+            }
+            // A clean end of body and a broken connection are both "stop
+            // reading" here, mirroring `metadata.rs`'s own `read_capped`:
+            // this function only ever returns the bytes gathered so far.
+            _ => break,
+        }
+    }
+    buffered
 }
 
 /// The client-credentials form body: `grant_type` always, `client_id` and
@@ -157,8 +187,10 @@ fn basic_auth_header(client_id: &str, client_secret: &Secret) -> String {
 
 #[cfg(test)]
 mod tests {
+    use reqwest::header::HeaderMap;
+
     use super::*;
-    use crate::http::auth::Signer;
+    use crate::http::auth::{Signer, SigningRequest};
     use crate::http::testing::StubServer;
     use crate::http::{DispatchClient, EgressPolicy};
     use crate::net::Allowlist;
@@ -167,6 +199,22 @@ mod tests {
 
     fn token_url(stub: &StubServer) -> url::Url {
         url::Url::parse(&format!("{}/token", stub.base_url())).expect("stub url parses")
+    }
+
+    fn permissive_dispatch_client() -> DispatchClient {
+        let policy = Arc::new(EgressPolicy::new(
+            Allowlist::parse("0.0.0.0/0,::/0").expect("test allowlist parses"),
+            true,
+        ));
+        DispatchClient::new(policy, Duration::from_secs(5))
+            .expect("a permissive policy and a timeout are enough to build a client")
+    }
+
+    fn empty_request() -> (url::Url, HeaderMap) {
+        (
+            url::Url::parse("https://push.example.com/hook").expect("test url parses"),
+            HeaderMap::new(),
+        )
     }
 
     #[tokio::test]
@@ -270,40 +318,52 @@ mod tests {
         );
     }
 
+    /// Built through the public constructor, not `fetch` directly: an empty
+    /// `audience` on an `OAuth2ClientCredentials` source is exactly what
+    /// `OidcSigner::new` is supposed to allow (see `OidcConfig::audience`'s
+    /// doc for the three-way asymmetry), so this exercises that the
+    /// omission is actually reachable from the public API, not merely true
+    /// of `fetch` in isolation.
     #[tokio::test]
     async fn the_audience_is_sent_only_when_configured() {
-        let stub = StubServer::start(200, r#"{"access_token":"tok","expires_in":3600}"#).await;
+        // Each call gets its own stub, so the body it reads back is
+        // unambiguously the request this call's signer sent.
+        async fn sign_once(audience: &str) -> Vec<u8> {
+            let stub = StubServer::start(200, r#"{"access_token":"tok","expires_in":3600}"#).await;
+            let dispatch = permissive_dispatch_client();
+            let config = super::super::OidcConfig {
+                source: super::super::OidcSource::OAuth2ClientCredentials {
+                    token_url: format!("{}/token", stub.base_url()),
+                    client_id: "id".to_string(),
+                    client_secret: Secret::new("secret"),
+                    scope: None,
+                    style: ClientAuthStyle::ClientSecretBasic,
+                },
+                audience: audience.to_string(),
+            };
+            let signer =
+                super::super::OidcSigner::new(config, &dispatch).expect("construction succeeds");
 
-        fetch(
-            &reqwest::Client::new(),
-            &token_url(&stub),
-            "id",
-            &Secret::new("secret"),
-            None,
-            ClientAuthStyle::ClientSecretBasic,
-            "",
-        )
-        .await
-        .expect("a well-formed response succeeds");
-        let without_audience =
-            String::from_utf8(stub.received()[0].body.clone()).expect("body is utf8");
+            let (url, headers) = empty_request();
+            let request = SigningRequest {
+                method: "POST",
+                url: &url,
+                body: b"",
+                headers: &headers,
+            };
+            signer
+                .sign(&request)
+                .await
+                .expect("a well-formed response succeeds");
+
+            stub.received()[0].body.clone()
+        }
+
+        let without_audience = String::from_utf8(sign_once("").await).expect("body is utf8");
         assert!(!without_audience.contains("audience"));
 
-        let stub_with_audience =
-            StubServer::start(200, r#"{"access_token":"tok","expires_in":3600}"#).await;
-        fetch(
-            &reqwest::Client::new(),
-            &token_url(&stub_with_audience),
-            "id",
-            &Secret::new("secret"),
-            None,
-            ClientAuthStyle::ClientSecretBasic,
-            "https://push.example.com",
-        )
-        .await
-        .expect("a well-formed response succeeds");
         let with_audience =
-            String::from_utf8(stub_with_audience.received()[0].body.clone()).expect("body is utf8");
+            String::from_utf8(sign_once("https://push.example.com").await).expect("body is utf8");
         assert_eq!(
             with_audience,
             "grant_type=client_credentials&audience=https%3A%2F%2Fpush.example.com"

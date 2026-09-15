@@ -25,10 +25,6 @@ pub(crate) const REFRESH_SKEW_MS: i64 = 5 * 60 * 1000;
 ///
 /// A pure function of its two arguments, with no clock read, so it can be
 /// tested without one.
-// No caller yet outside this file's tests: the OIDC and SigV4 commits are the
-// first to build an `Expiring` value, and this is how they compute its
-// `refresh_at_ms`.
-#[allow(dead_code)]
 pub(crate) fn refresh_at_ms(issued_at_ms: i64, expires_at_ms: i64) -> i64 {
     let lifetime_ms = expires_at_ms - issued_at_ms;
     if lifetime_ms < 2 * REFRESH_SKEW_MS {
@@ -39,9 +35,6 @@ pub(crate) fn refresh_at_ms(issued_at_ms: i64, expires_at_ms: i64) -> i64 {
 }
 
 /// A credential and the two instants that govern it.
-// No caller yet outside this file's tests: built by whichever fetch closure
-// the OIDC and SigV4 commits hand to `CredentialCache::get_or_refresh`.
-#[allow(dead_code)]
 pub(crate) struct Expiring<T> {
     pub(crate) value: T,
     /// When to start trying to replace it.
@@ -58,8 +51,6 @@ pub(crate) struct Expiring<T> {
 /// [`Mutex`] is a single-flight gate so only one task at a time ever calls
 /// the caller's `fetch`. See the module doc for why that gate is not
 /// optional.
-// No caller yet: the OIDC and SigV4 commits are the first to hold one.
-#[allow(dead_code)]
 pub(crate) struct CredentialCache<T: Clone + Send + Sync> {
     value: RwLock<Option<Expiring<T>>>,
     /// Held for the duration of one fetch. Its value carries nothing; it
@@ -68,8 +59,6 @@ pub(crate) struct CredentialCache<T: Clone + Send + Sync> {
 }
 
 impl<T: Clone + Send + Sync> CredentialCache<T> {
-    // No caller yet: see the struct's doc.
-    #[allow(dead_code)]
     pub(crate) fn new() -> Self {
         Self {
             value: RwLock::new(None),
@@ -78,8 +67,6 @@ impl<T: Clone + Send + Sync> CredentialCache<T> {
     }
 
     /// The cached value, refreshing it first if it is due.
-    // No caller yet: see the struct's doc.
-    #[allow(dead_code)]
     pub(crate) async fn get_or_refresh<F, Fut>(&self, fetch: F) -> Result<T, AuthError>
     where
         F: Fn() -> Fut,

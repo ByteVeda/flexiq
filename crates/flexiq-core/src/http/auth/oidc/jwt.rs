@@ -65,8 +65,8 @@ pub(crate) fn expiry_ms(token: &str) -> Result<i64, AuthError> {
     // `as_i64` rather than a typed `Claims { exp: Option<i64> }` struct: a
     // present-but-wrong-shaped `exp` (a string, a float, absent entirely)
     // must fall back exactly like a missing one, not turn into a shape
-    // error — the brief is explicit that only the *segment* and *JSON*
-    // shapes are fatal.
+    // error — only the segment count and the JSON parse above are fatal;
+    // a malformed or missing `exp` is not.
     match claims.get("exp").and_then(serde_json::Value::as_i64) {
         Some(exp_seconds) => Ok(exp_seconds.saturating_mul(1000)),
         None => Ok(now_millis().saturating_add(FALLBACK_TTL_MS)),
@@ -131,9 +131,11 @@ mod tests {
         let result = expiry_ms(&token).expect("a missing exp is not an error");
 
         let after = now_millis();
+        // The literal, not `FALLBACK_TTL_MS`: asserting against the constant
+        // under test would let a change to its value pass silently.
         assert!(
-            result >= before + FALLBACK_TTL_MS && result <= after + FALLBACK_TTL_MS,
-            "expected roughly now + FALLBACK_TTL_MS, got {result}"
+            result >= before + 60_000 && result <= after + 60_000,
+            "expected roughly now + 60_000ms, got {result}"
         );
     }
 

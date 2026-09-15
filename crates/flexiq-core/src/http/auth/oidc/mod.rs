@@ -9,8 +9,10 @@
 //!
 //! - [`OidcSource::GoogleMetadata`], [`OidcSource::AzureImds`] and
 //!   [`OidcSource::AzureAppService`] each reach a host that is either a
-//!   compile-time constant or an environment-supplied link-local address —
-//!   never a value an operator typed in — so all three fetch through
+//!   compile-time constant or an environment-supplied loopback or
+//!   link-local address — App Service's `IDENTITY_ENDPOINT` is ordinarily
+//!   loopback, IMDS is the link-local `169.254.169.254` — never a value an
+//!   operator typed in, so all three fetch through
 //!   [`MetadataClient`], the type that is structurally incapable of being
 //!   pointed at an arbitrary host (see `metadata.rs`'s module doc).
 //! - [`OidcSource::OAuth2ClientCredentials`] dials a token URL the operator
@@ -34,6 +36,7 @@
 //! it correctly.
 
 mod azure;
+mod file;
 mod google;
 mod jwt;
 mod oauth2;
@@ -114,11 +117,17 @@ pub struct OidcConfig {
     /// The value the receiver will check the token's `aud` against — for
     /// Cloud Run, the target's base URL.
     ///
-    /// Required for every source but [`OidcSource::File`]: a projected
-    /// token was already minted, `aud` and all, by whoever issues it, and
-    /// there is no wire request here for this field to attach to. That
-    /// asymmetry is deliberate — enforced in `OidcSigner::new` rather than
-    /// allowed silently for every source.
+    /// Required for [`OidcSource::GoogleMetadata`] and both Azure sources —
+    /// their endpoints reject a request with no `audience`/`resource` at
+    /// all. Optional for the other two, for two different reasons:
+    /// [`OidcSource::File`] has no wire request of its own to attach it to
+    /// (a projected token was already minted, `aud` and all, by whoever
+    /// issues it), and [`OidcSource::OAuth2ClientCredentials`] sends
+    /// `audience` only as the Auth0/Okta convention it is, not an RFC 6749
+    /// field — a standards-compliant authorization server may reject an
+    /// unrecognised parameter, so a target we could not otherwise reach at
+    /// all must stay reachable with none sent. This three-way asymmetry is
+    /// enforced in `OidcSigner::new`, not allowed silently by every source.
     pub audience: String,
 }
 
@@ -180,7 +189,20 @@ impl OidcSigner {
     pub(super) fn new(config: OidcConfig, dispatch: &DispatchClient) -> Result<Self, AuthError> {
         let OidcConfig { source, audience } = config;
 
-        if !matches!(source, OidcSource::File { .. }) && audience.is_empty() {
+        // `audience` is required for Google and Azure — their endpoints
+        // reject a request with no `audience`/`resource` outright — but
+        // optional for the other two sources, for two different reasons:
+        // `File` has no wire request of its own to attach it to, and
+        // `OAuth2ClientCredentials` sends `audience` only as the
+        // Auth0/Okta extension it is, not an RFC 6749 field, so a
+        // standards-compliant authorization server that rejects an
+        // unrecognised parameter must still be reachable with none sent at
+        // all.
+        let audience_required = !matches!(
+            source,
+            OidcSource::File { .. } | OidcSource::OAuth2ClientCredentials { .. }
+        );
+        if audience_required && audience.is_empty() {
             return Err(AuthError::Config(
                 "oidc audience must not be empty".to_string(),
             ));
@@ -236,6 +258,20 @@ impl OidcSigner {
                 let token_url = url::Url::parse(&token_url).map_err(|_| {
                     AuthError::Config("oauth2 token_url is not a valid URL".to_string())
                 })?;
+                // RFC 6749 §2.3.1 has no place for credentials in the URL
+                // itself. Refused here, not merely discouraged, because a
+                // `Transport` error on a failed fetch carries reqwest's
+                // `Display` of the request URL verbatim — including
+                // userinfo — into `AuthError`, and from there into whatever
+                // logs that error. The credential is never actually put on
+                // the wire this way (reqwest does not turn URL userinfo
+                // into an `Authorization` header), so this is a log-leak
+                // guard, not a transport-security one.
+                if !token_url.username().is_empty() || token_url.password().is_some() {
+                    return Err(AuthError::Config(
+                        "oauth2 token_url must not carry userinfo".to_string(),
+                    ));
+                }
                 Resolved::OAuth2(Box::new(OAuth2Resolved {
                     client: dispatch.inner().clone(),
                     token_url,
@@ -292,7 +328,7 @@ impl OidcSigner {
                 )
                 .await
             }
-            Resolved::File { path } => fetch_file(path).await,
+            Resolved::File { path } => file::fetch(path).await,
         }
     }
 }
@@ -314,22 +350,6 @@ impl Signer for OidcSigner {
     fn scheme(&self) -> &'static str {
         "oidc"
     }
-}
-
-/// Read the file at `path`, trimming trailing whitespace — a kubelet's
-/// projected token file ends in a newline — and re-reading it in full on
-/// every refresh: the kubelet rotates the file in place, so a token cached
-/// from the first read would outlive its own file.
-async fn fetch_file(path: &std::path::Path) -> Result<Expiring<String>, AuthError> {
-    let raw = tokio::fs::read_to_string(path).await.map_err(|error| {
-        AuthError::Config(format!(
-            "could not read projected token at {}: {error}",
-            path.display()
-        ))
-    })?;
-    let token = raw.trim_end().to_string();
-    let expires_at_ms = jwt::expiry_ms(&token)?;
-    Ok(expiring_from_expiry_ms(token, expires_at_ms))
 }
 
 /// Build an [`Expiring`] from a token and a TTL in seconds, measuring the
@@ -522,6 +542,55 @@ mod tests {
     }
 
     #[test]
+    fn a_token_url_with_userinfo_is_refused_at_construction() {
+        let dispatch = permissive_dispatch_client();
+
+        for token_url in [
+            "https://id:s3cret@issuer.example.com/token",
+            "https://id@issuer.example.com/token",
+        ] {
+            let config = OidcConfig {
+                source: OidcSource::OAuth2ClientCredentials {
+                    token_url: token_url.to_string(),
+                    client_id: "id".to_string(),
+                    client_secret: Secret::new("secret"),
+                    scope: None,
+                    style: ClientAuthStyle::ClientSecretPost,
+                },
+                audience: "https://push.example.com".to_string(),
+            };
+            // `OidcSigner` carries no `Debug`, so `expect_err` cannot be
+            // used here; `matches!` needs none.
+            let result = OidcSigner::new(config, &dispatch);
+            assert!(
+                matches!(result, Err(AuthError::Config(_))),
+                "{token_url} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn two_azure_imds_selectors_are_refused_through_oidc_signer_new() {
+        // `azure::validate_imds_selector` has its own direct test; this one
+        // guards the call site at `OidcSigner::new` itself — a refactor
+        // that dropped that call would still pass the direct test but must
+        // fail this one.
+        let dispatch = permissive_dispatch_client();
+        let config = OidcConfig {
+            source: OidcSource::AzureImds {
+                client_id: Some("client-id".to_string()),
+                object_id: Some("object-id".to_string()),
+                msi_res_id: None,
+            },
+            audience: "https://management.azure.com/".to_string(),
+        };
+        // `OidcSigner` carries no `Debug`, so `expect_err` cannot be used
+        // here; `matches!` needs none.
+        let result = OidcSigner::new(config, &dispatch);
+        assert!(matches!(result, Err(AuthError::Config(_))));
+    }
+
+    #[test]
     fn an_empty_audience_is_allowed_for_the_file_source() {
         let dispatch = permissive_dispatch_client();
         let config = OidcConfig {
@@ -533,69 +602,12 @@ mod tests {
         assert!(OidcSigner::new(config, &dispatch).is_ok());
     }
 
-    #[tokio::test]
-    async fn a_file_source_rereads_on_refresh() {
-        let mut file = tempfile::NamedTempFile::new().expect("temp file creates");
-        write!(file, "{}", expired_jwt("first")).expect("temp file writes");
-
-        let dispatch = permissive_dispatch_client();
-        let config = OidcConfig {
-            source: OidcSource::File {
-                path: file.path().to_path_buf(),
-            },
-            audience: String::new(),
-        };
-        let signer = OidcSigner::new(config, &dispatch).expect("construction succeeds");
-
-        let (url, headers) = empty_request();
-        let request = SigningRequest {
-            method: "POST",
-            url: &url,
-            body: b"",
-            headers: &headers,
-        };
-
-        let first = signer
-            .sign(&request)
-            .await
-            .expect("first sign reads the file");
-        let first_header = first
-            .get(AUTHORIZATION)
-            .expect("authorization header present")
-            .to_str()
-            .expect("header value is ascii")
-            .to_string();
-        assert!(first_header.contains(&expired_jwt("first")));
-
-        // The token above is already expired (`exp` is in the past), so the
-        // cache is due for refresh on the very next call — no sleep needed.
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(file.path())
-            .expect("temp file reopens for overwrite");
-        write!(file, "{}", expired_jwt("second")).expect("temp file overwrites");
-
-        let second = signer
-            .sign(&request)
-            .await
-            .expect("second sign re-reads the file");
-        let second_header = second
-            .get(AUTHORIZATION)
-            .expect("authorization header present")
-            .to_str()
-            .expect("header value is ascii")
-            .to_string();
-        assert!(second_header.contains(&expired_jwt("second")));
-        assert_ne!(first_header, second_header);
-    }
-
     /// A sanity check on the fixture technique
-    /// `the_authorization_header_is_bearer_and_sensitive` and
-    /// `a_file_source_rereads_on_refresh` both rely on: without this, a
-    /// change to `expired_jwt` that stopped producing an already-expired
-    /// token would make `a_file_source_rereads_on_refresh` flaky rather than
-    /// fail outright.
+    /// `the_authorization_header_is_bearer_and_sensitive` relies on: without
+    /// this, a change to `expired_jwt` that stopped producing a parseable
+    /// token would make that test fail somewhere unrelated to what it means
+    /// to check. `file.rs`'s own test module keeps an independent copy of
+    /// this same check, guarding its own separate `expired_jwt`.
     #[test]
     fn the_expired_jwt_fixture_is_actually_expired() {
         assert!(jwt::expiry_ms(&expired_jwt("x")).expect("fixture parses") < now_millis());

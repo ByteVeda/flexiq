@@ -37,8 +37,6 @@ const MAX_BODY_BYTES: usize = 16 * 1024;
 /// parameter — so an operator-supplied host has no way in, and a job payload
 /// has no way out. That separation is what lets `DispatchClient` refuse the
 /// metadata addresses unconditionally while a credential still reaches them.
-// No caller yet: the OIDC and SigV4 commits are the first to hold one.
-#[allow(dead_code)]
 pub(crate) struct MetadataClient {
     client: reqwest::Client,
     /// Set only by [`Self::with_base_url`]: redirects every [`Self::fetch`]'s
@@ -59,7 +57,9 @@ pub(crate) struct MetadataClient {
 /// compile-time constants; the two read from the process environment carry
 /// their already-vetted [`url::Url`], produced by [`accept_env_endpoint`],
 /// which refuses everything the egress guard accepts.
-// No caller yet: the OIDC and SigV4 commits are the first to construct one.
+// SigV4 is the only remaining commit to construct `AwsImdsApiToken`,
+// `AwsImdsSecurityCredentials` and `AwsContainerCredentials`; the other four
+// variants are already built by the OIDC sources in `oidc/`.
 #[allow(dead_code)]
 pub(crate) enum MetadataEndpoint {
     /// GCE/GKE's identity token endpoint, by name.
@@ -89,8 +89,6 @@ impl MetadataEndpoint {
     /// The string that goes into [`AuthError::CredentialEndpoint`]'s
     /// `endpoint` field: safe to log, and independent of whatever the
     /// endpoint answered.
-    // No caller yet: see the enum's doc.
-    #[allow(dead_code)]
     pub(crate) fn label(&self) -> &'static str {
         match self {
             Self::GoogleIdentity => "gce metadata identity",
@@ -137,8 +135,6 @@ impl MetadataEndpoint {
 
 impl MetadataClient {
     /// Build the client credential fetches use.
-    // No caller yet: see the struct's doc.
-    #[allow(dead_code)]
     pub(crate) fn new() -> Result<Self, AuthError> {
         Ok(Self {
             client: build_client()?,
@@ -166,14 +162,20 @@ impl MetadataClient {
 
     /// No host parameter and no body parameter, deliberately: see the
     /// struct's doc for why.
-    // No caller yet: see the struct's doc.
-    #[allow(dead_code)]
+    ///
+    /// `headers` carries a sensitivity flag per entry, routed through the
+    /// shared [`insert_header`](super::insert_header) helper exactly like a
+    /// signer's own output headers: a credential source that must send a
+    /// secret to its metadata endpoint (Azure App Service's
+    /// `X-IDENTITY-HEADER`, for one) needs that value kept out of a
+    /// `Debug` render of the outgoing request, not just out of this
+    /// module's own errors.
     pub(crate) async fn fetch(
         &self,
         endpoint: &MetadataEndpoint,
         method: reqwest::Method,
         query: &[(&str, &str)],
-        headers: &[(&str, &str)],
+        headers: &[(&str, &str, bool)],
     ) -> Result<String, AuthError> {
         let real = endpoint.url()?;
         let mut url = match &self.base_override {
@@ -193,12 +195,10 @@ impl MetadataClient {
             url.query_pairs_mut().extend_pairs(query);
         }
 
-        let mut request = self.client.request(method, url);
-        for (name, value) in headers {
-            request = request.header(*name, *value);
-        }
-
-        let response = request
+        let response = self
+            .client
+            .request(method, url)
+            .headers(build_headers(headers)?)
             .send()
             .await
             .map_err(|error| AuthError::Transport(error.to_string()))?;
@@ -216,6 +216,22 @@ impl MetadataClient {
         let body = read_capped(response, MAX_BODY_BYTES).await;
         Ok(String::from_utf8_lossy(&body).into_owned())
     }
+}
+
+/// Build the `HeaderMap` [`MetadataClient::fetch`] sends: one call to
+/// [`insert_header`](super::insert_header) per entry, so an entry marked
+/// sensitive here renders as `Sensitive` in any `Debug` of the outgoing
+/// request — the same guarantee a signer's own output headers get.
+/// Extracted from `fetch` itself so a test can assert on the built
+/// `HeaderMap` directly, with no network round trip.
+fn build_headers(headers: &[(&str, &str, bool)]) -> Result<reqwest::header::HeaderMap, AuthError> {
+    let mut header_map = reqwest::header::HeaderMap::new();
+    for (name, value, sensitive) in headers {
+        let header_name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| AuthError::InvalidHeaderValue((*name).to_string()))?;
+        super::insert_header(&mut header_map, header_name, value, *sensitive)?;
+    }
+    Ok(header_map)
 }
 
 /// The `reqwest::Client` shared by both of [`MetadataClient`]'s constructors.
@@ -271,10 +287,6 @@ async fn read_capped(response: reqwest::Response, cap: usize) -> Vec<u8> {
 /// and EKS pod identity, `169.254.169.254` for IMDS, and a loopback high port
 /// for Azure App Service. Anything routable is refused: an `IDENTITY_ENDPOINT`
 /// pointing at the internet is not a credential endpoint.
-// No caller yet: the OIDC and SigV4 commits are the first to read
-// `IDENTITY_ENDPOINT` / `AWS_CONTAINER_CREDENTIALS_FULL_URI` and hand the
-// result here.
-#[allow(dead_code)]
 pub(crate) fn accept_env_endpoint(raw: &str) -> Result<url::Url, AuthError> {
     let url = url::Url::parse(raw)
         .map_err(|_| AuthError::Config("credential endpoint is not a URL".to_string()))?;
@@ -555,7 +567,7 @@ mod tests {
                     ("api-version", "2018-02-01"),
                     ("resource", "https://example.com"),
                 ],
-                &[("metadata", "true")],
+                &[("metadata", "true", false)],
             )
             .await
             .expect("a 200 succeeds");
@@ -577,5 +589,28 @@ mod tests {
             .headers
             .iter()
             .any(|(name, value)| name == "metadata" && value == "true"));
+    }
+
+    #[test]
+    fn a_sensitive_header_entry_is_marked_sensitive_and_a_plain_one_is_not() {
+        let map = build_headers(&[
+            ("x-identity-header", "super-secret-value", true),
+            ("metadata", "true", false),
+        ])
+        .expect("headers build");
+
+        let sensitive_value = map.get("x-identity-header").expect("header present");
+        assert!(sensitive_value.is_sensitive());
+
+        let plain_value = map.get("metadata").expect("header present");
+        assert!(!plain_value.is_sensitive());
+
+        // The `Debug` impl, not the accessor above: this is what actually
+        // guards a request-headers dump, and it is the assertion that would
+        // catch a caller passing `sensitive: false` for a credential by
+        // mistake.
+        let rendered = format!("{map:?}");
+        assert!(rendered.contains("Sensitive"));
+        assert!(!rendered.contains("super-secret-value"));
     }
 }

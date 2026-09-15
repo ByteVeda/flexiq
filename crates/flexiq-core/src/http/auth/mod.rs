@@ -3,12 +3,12 @@
 //! GitHub issue #844: a push target reachable from the scheduler is reachable
 //! by anything else that can reach it too, so the scheduler has to prove who
 //! it is. [`Signer`] is the seam HMAC, OIDC and SigV4 each plug into, one
-//! commit apiece. Two shipped so far: a static bearer token needing no
-//! machinery, in the private `bearer` submodule, and HMAC-SHA256 — the
+//! commit apiece. Three shipped so far: a static bearer token needing no
+//! machinery, in the private `bearer` submodule; HMAC-SHA256 — the
 //! replay-resistant scheme issue #844 names by "works everywhere" — in the
-//! private `hmac` submodule. This commit adds the third: OIDC identity
-//! tokens, five credential sources deep, in the private `oidc` submodule —
-//! Cloud Run's and Azure Functions' native answer to the same question.
+//! private `hmac` submodule; and OIDC identity tokens, five credential
+//! sources deep, in the private `oidc` submodule — Cloud Run's and Azure
+//! Functions' native answer to the same question.
 
 mod bearer;
 mod cache;
