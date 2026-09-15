@@ -8,13 +8,6 @@
 //! middleware, metadata — travels as a header instead: HTTP already has a
 //! place for it, and there is no frame to carry it in.
 
-// `classify`, `into_result`, and `refusal_result` are not re-exported by
-// `super` — only the wire constants and `idempotency_key` are — because the
-// dispatcher that calls them arrives in a later commit. Until then this
-// file's own tests are their only caller, which rustc's dead-code analysis
-// does not treat as a live root for the non-test build.
-#![allow(dead_code)]
-
 use std::time::Duration;
 
 use crate::job::Job;
@@ -113,6 +106,9 @@ pub enum Refusal {
     /// The target answered 2xx but sent no [`HDR_OUTCOME`] header.
     MissingOutcome,
     /// The target's [`HDR_OUTCOME`] value is not one this build recognizes.
+    /// Bounded to a small, fixed length — this lands in `job_errors` and the
+    /// dead-letter queue, and a header value is not capped by anything
+    /// upstream of here.
     UnknownOutcome(String),
     /// The target answered with outcome `slept`; a push dispatch has no step
     /// session for it to resume.
@@ -215,7 +211,29 @@ fn parse_retry(retry: Option<&str>) -> Option<bool> {
     }
 }
 
+/// Longest `x-flexiq-outcome` value echoed back in a [`Refusal::UnknownOutcome`].
+/// Nothing upstream of `classify` bounds the header, and the value lands in
+/// `job_errors` and the dead-letter queue — 64 characters is plenty to spot a
+/// typo without storing an operator's misconfigured multi-kilobyte header.
+const MAX_ECHOED_OUTCOME_CHARS: usize = 64;
+
+/// Bound `value` to [`MAX_ECHOED_OUTCOME_CHARS`] characters, marking the
+/// point of the cut so a truncated echo never reads as the header's full
+/// value. Counts characters, not bytes, so a multi-byte UTF-8 sequence at the
+/// boundary is never split.
+fn bound_outcome_value(value: &str) -> String {
+    if value.chars().count() <= MAX_ECHOED_OUTCOME_CHARS {
+        return value.to_string();
+    }
+    let mut bounded: String = value.chars().take(MAX_ECHOED_OUTCOME_CHARS).collect();
+    bounded.push_str("...(truncated)");
+    bounded
+}
+
 /// Read a response's status and outcome header into an outcome or a refusal.
+// No caller yet: the dispatcher that reads a response arrives in a later
+// commit. This file's own tests are the only caller until then.
+#[allow(dead_code)]
 pub fn classify(
     status: u16,
     outcome: Option<&str>,
@@ -227,20 +245,17 @@ pub fn classify(
         return Err(Refusal::Accepted202);
     }
     if (200..300).contains(&status) {
-        let trimmed = outcome.map(str::trim);
-        return match trimmed.map(str::to_ascii_lowercase).as_deref() {
-            Some("success") => Ok(Outcome::Success),
-            Some("failure") => Ok(Outcome::Failure {
-                should_retry: parse_retry(retry),
-            }),
-            Some("cancelled") => Ok(Outcome::Cancelled),
-            Some("slept") => Err(Refusal::SleptRefused),
+        return match outcome.map(str::trim) {
             None => Err(Refusal::MissingOutcome),
-            Some(_) => Err(Refusal::UnknownOutcome(
-                trimmed
-                    .expect("Some(_) above implies trimmed is Some")
-                    .to_string(),
-            )),
+            Some(value) => match value.to_ascii_lowercase().as_str() {
+                "success" => Ok(Outcome::Success),
+                "failure" => Ok(Outcome::Failure {
+                    should_retry: parse_retry(retry),
+                }),
+                "cancelled" => Ok(Outcome::Cancelled),
+                "slept" => Err(Refusal::SleptRefused),
+                _ => Err(Refusal::UnknownOutcome(bound_outcome_value(value))),
+            },
         };
     }
     if (300..400).contains(&status) {
@@ -256,13 +271,15 @@ pub fn classify(
 
 /// Convert a frame this module just built into its settled [`JobResult`].
 ///
-/// Every call site here builds `Success`, `Failure`, or `Cancelled` — the
-/// three variants [`ExecutorMessage::into_job_result`] always resolves — so
-/// its `None` arm (the handshake and side-channel frames) never fires.
+/// `into_job_result` returns `Some` for exactly `Success`, `Failure`, and
+/// `Cancelled` — the only three variants this module ever builds — and
+/// `None` only for the handshake and side-channel frames, none of which
+/// originates here. The `expect` below rests on that invariant, not on
+/// anything the caller controls.
 fn settle(message: ExecutorMessage, payload: Vec<u8>) -> JobResult {
     message
         .into_job_result(payload)
-        .expect("push dispatch only ever builds a frame that settles a job here")
+        .expect("into_job_result returns None only for frames this module never builds")
 }
 
 /// Build the settled result for a target that answered.
@@ -271,6 +288,9 @@ fn settle(message: ExecutorMessage, payload: Vec<u8>) -> JobResult {
 /// a `JobResult` directly: the push path and the attach path settle a job the
 /// same way, and a second construction site is a second place for the two to
 /// drift.
+// No caller yet: the dispatcher that reads a response arrives in a later
+// commit. This file's own tests are the only caller until then.
+#[allow(dead_code)]
 pub fn into_result(job: &Job, outcome: Outcome, body: Vec<u8>, wall_time_ns: i64) -> JobResult {
     match outcome {
         Outcome::Success => {
@@ -337,6 +357,9 @@ pub fn into_result(job: &Job, outcome: Outcome, body: Vec<u8>, wall_time_ns: i64
 }
 
 /// Build the settled result for a response that was not an outcome.
+// No caller yet: the dispatcher that reads a response arrives in a later
+// commit. This file's own tests are the only caller until then.
+#[allow(dead_code)]
 pub fn refusal_result(job: &Job, refusal: &Refusal, target: &str, wall_time_ns: i64) -> JobResult {
     settle(
         ExecutorMessage::Failure {
@@ -446,6 +469,24 @@ mod tests {
         let error = classify(200, Some("exploded"), None).unwrap_err();
         assert_eq!(error, Refusal::UnknownOutcome("exploded".to_string()));
         assert!(error.message("http://target").contains("exploded"));
+    }
+
+    #[test]
+    fn an_unknown_outcome_longer_than_the_cap_is_truncated() {
+        // Nothing upstream of `classify` bounds the header, and the echoed
+        // value lands in `job_errors` and the dead-letter queue.
+        let long_value = "x".repeat(500);
+        let error = classify(200, Some(&long_value), None).unwrap_err();
+        match &error {
+            Refusal::UnknownOutcome(echoed) => {
+                assert!(
+                    echoed.chars().count() < long_value.chars().count(),
+                    "a 500-character header value must not be stored whole"
+                );
+                assert!(echoed.contains("truncated"));
+            }
+            other => panic!("expected UnknownOutcome, got {other:?}"),
+        }
     }
 
     #[test]
@@ -590,11 +631,12 @@ mod tests {
     }
 
     #[test]
-    fn a_refusal_message_never_carries_a_response_body() {
+    fn a_refusal_message_names_the_status_or_cap_it_is_complaining_about() {
         // `Refusal` carries no response body at all, and neither `message`
-        // nor `refusal_result` takes one as an argument — the signature is
-        // the guarantee. This checks what the settled error carries instead:
-        // the number it is complaining about.
+        // nor `refusal_result` takes one as an argument — that's a property
+        // of the type signature, not something a test can exercise. What
+        // this checks is what the settled error carries instead: the number
+        // it is complaining about, and the target.
         let job = a_job();
         let cases: [(Refusal, &str); 3] = [
             (Refusal::ServerError(503), "503"),
