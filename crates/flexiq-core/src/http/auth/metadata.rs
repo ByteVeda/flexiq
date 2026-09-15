@@ -14,7 +14,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use super::AuthError;
-use crate::net::{is_loopback_address, is_never_routable};
+use crate::net::{is_link_local_address, is_loopback_address};
 
 /// The name Google blesses for its metadata server, resolvable only inside
 /// GCE/GKE.
@@ -41,10 +41,12 @@ const MAX_BODY_BYTES: usize = 16 * 1024;
 #[allow(dead_code)]
 pub(crate) struct MetadataClient {
     client: reqwest::Client,
-    /// Set only by [`Self::with_base_url`]: redirects every [`Self::fetch`]
-    /// to a test stub instead of the endpoint's real host. Always `None` in
-    /// any build an operator runs — `with_base_url` is `#[cfg(test)]`, so it
-    /// is the only place that can ever produce `Some`. Kept as a plain field
+    /// Set only by [`Self::with_base_url`]: redirects every [`Self::fetch`]'s
+    /// scheme, host and port to a test stub, while keeping the endpoint's
+    /// real path — so a test can still assert *which* endpoint a call
+    /// reached, not just that some request landed. Always `None` in any
+    /// build an operator runs — `with_base_url` is `#[cfg(test)]`, so it is
+    /// the only place that can ever produce `Some`. Kept as a plain field
     /// rather than a `#[cfg(test)]` one so `fetch` needs no conditional
     /// compilation of its own to read it.
     base_override: Option<url::Url>,
@@ -173,9 +175,18 @@ impl MetadataClient {
         query: &[(&str, &str)],
         headers: &[(&str, &str)],
     ) -> Result<String, AuthError> {
+        let real = endpoint.url()?;
         let mut url = match &self.base_override {
-            Some(base) => base.clone(),
-            None => endpoint.url()?,
+            // Scheme, host and port come from the stub; the path comes from
+            // the endpoint's real URL, or a test could never tell one
+            // endpoint's request apart from another's — every variant would
+            // resolve to the override's bare `/`.
+            Some(base) => {
+                let mut overridden = base.clone();
+                overridden.set_path(real.path());
+                overridden
+            }
+            None => real,
         };
 
         if !query.is_empty() {
@@ -299,14 +310,15 @@ pub(crate) fn accept_env_endpoint(raw: &str) -> Result<url::Url, AuthError> {
         }
     };
 
-    // `is_never_routable` already covers loopback; `is_loopback_address` is
-    // named here too so the code reads as the two shapes the doc above
-    // names, rather than silently folding one into the other. Anything this
-    // rejects is rejected for being routable — the metadata literals and the
-    // rest of `is_never_routable`'s set (multicast, broadcast, unspecified)
-    // are accepted too, but no variant in this file ever puts one of those
-    // in the environment.
-    if is_loopback_address(address) || is_never_routable(address) {
+    // Exactly the two shapes the doc above names — not `is_never_routable`,
+    // which is a broader set that also accepts the Alibaba and EC2-v6
+    // metadata literals (CGNAT and unique-local respectively, both
+    // reachable, not just link-local), multicast, broadcast and
+    // unspecified. This function's caller is untrusted input (an operator's
+    // environment variable), and accepting any of those would hand a
+    // container-network-adjacent host a route to whatever credential this
+    // client fetches.
+    if is_loopback_address(address) || is_link_local_address(address) {
         Ok(url)
     } else {
         Err(AuthError::Config(format!(
@@ -366,9 +378,39 @@ mod tests {
 
     #[test]
     fn an_env_endpoint_on_a_routable_address_is_refused() {
-        let error = accept_env_endpoint("http://93.184.216.34/token")
-            .expect_err("a public address is not a credential endpoint");
-        assert!(matches!(error, AuthError::Config(_)));
+        for raw in [
+            "http://93.184.216.34/token",
+            "http://10.0.0.5/token",
+            "http://192.168.1.1/token",
+        ] {
+            let error = accept_env_endpoint(raw)
+                .expect_err("a routable address is not a credential endpoint");
+            assert!(matches!(error, AuthError::Config(_)));
+        }
+    }
+
+    #[test]
+    fn an_env_endpoint_on_a_never_routable_but_non_link_local_address_is_refused() {
+        // `is_never_routable` is a *broader* set than "loopback or
+        // link-local": it also refuses the Alibaba and EC2-v6 metadata
+        // literals (CGNAT and unique-local respectively — both reachable,
+        // not just link-local), multicast, broadcast and unspecified. None
+        // of those is a credential endpoint. Pinned here so a narrowing of
+        // `accept_env_endpoint` back to `is_never_routable` alone — which
+        // reads as a harmless simplification, since loopback is already
+        // inside it — is caught immediately rather than silently widening
+        // what an operator's environment variable can point at.
+        for raw in [
+            "http://100.100.100.200/token",
+            "http://[fd00:ec2::254]/token",
+            "http://0.0.0.0/token",
+            "http://224.0.0.1/token",
+            "http://255.255.255.255/token",
+        ] {
+            let error = accept_env_endpoint(raw)
+                .expect_err(&format!("{raw} is neither loopback nor link-local"));
+            assert!(matches!(error, AuthError::Config(_)));
+        }
     }
 
     #[test]
@@ -394,39 +436,75 @@ mod tests {
     }
 
     #[test]
-    fn the_guards_are_inverses() {
-        // Permissive on the allowlist dimension (every address, both
-        // families), but not on the loopback relaxation: this is the "an
-        // operator would allow anything" policy the invariant below is
-        // measured against.
+    fn an_accepted_credential_endpoint_is_never_egress_permitted() {
+        // One-directional and non-circular: every address this function
+        // accepts as a credential source must be refused by the egress
+        // guard an operator's dispatch target goes through, even under a
+        // maximally permissive allowlist. This does not assert the converse
+        // — see `an_env_endpoints_accepted_set_matches_the_briefs_enumeration`
+        // below for that half, checked against an independently written
+        // table rather than against this function's own predicate. (An
+        // earlier version of this test asserted "exactly one of the two
+        // succeeds" both ways; that is false in general — `https://127.0.0.1/`
+        // is refused by both guards — and the false symmetry is what let
+        // `accept_env_endpoint` accept more than the doc above promises
+        // without this test catching it.)
         let permissive = EgressPolicy::new(
             Allowlist::parse("0.0.0.0/0,::/0").expect("test allowlist parses"),
             false,
         );
 
-        // IP-literal hosts only: a name is refused by both functions for
-        // different reasons (one has no allowlist rule that matches a bare
-        // name, the other refuses DNS outright), which would make both sides
-        // false and break the invariant below. That combination is already
-        // covered by `an_env_endpoint_that_is_a_name_is_refused`.
-        let rows = [
+        for raw in [
             "http://127.0.0.1:9000/token",
             "http://[::1]:9000/token",
             "http://169.254.169.254/latest/api/token",
             "http://169.254.170.2/v2/credentials/abc",
             "http://169.254.170.23/v1/credentials",
-            "http://93.184.216.34/token",
-            "https://93.184.216.34/token",
-            "http://8.8.8.8/token",
+        ] {
+            let url = url::Url::parse(raw).expect("test url parses");
+            assert!(
+                accept_env_endpoint(raw).is_ok(),
+                "{raw} is expected to be an accepted credential endpoint"
+            );
+            assert!(
+                !permissive.permits_host(&host_string(&url)),
+                "{raw}: accepted as a credential source but also egress-permitted"
+            );
+        }
+    }
+
+    #[test]
+    fn an_env_endpoints_accepted_set_matches_the_briefs_enumeration() {
+        // Independently written against the brief's stated set (loopback ∪
+        // link-local) rather than against `accept_env_endpoint`'s own
+        // predicate — the point is to catch the implementation accepting a
+        // broader or narrower set than the doc comment above promises, not
+        // to restate whatever the implementation already does.
+        let cases: &[(&str, bool)] = &[
+            // Accept: the real credential endpoints this crate's variants
+            // resolve to.
+            ("http://127.0.0.1:40000/token", true),
+            ("http://169.254.169.254/latest/api/token", true),
+            ("http://169.254.170.2/v2/credentials/abc", true),
+            ("http://169.254.170.23/v1/credentials", true),
+            // Refuse: routable and private.
+            ("http://10.0.0.5/token", false),
+            ("http://192.168.1.1/token", false),
+            // Refuse: routable and public.
+            ("http://93.184.216.34/token", false),
+            // Refuse: never-routable, but neither loopback nor link-local.
+            ("http://100.100.100.200/token", false),
+            ("http://[fd00:ec2::254]/token", false),
+            ("http://0.0.0.0/token", false),
+            ("http://224.0.0.1/token", false),
+            ("http://255.255.255.255/token", false),
         ];
 
-        for raw in rows {
-            let url = url::Url::parse(raw).expect("test url parses");
-            let egress_permits = permissive.permits_host(&host_string(&url));
-            let credential_accepts = accept_env_endpoint(raw).is_ok();
-            assert_ne!(
-                egress_permits, credential_accepts,
-                "{raw}: egress permits={egress_permits}, credential accepts={credential_accepts} — exactly one must be true"
+        for (raw, should_accept) in cases {
+            let accepted = accept_env_endpoint(raw).is_ok();
+            assert_eq!(
+                accepted, *should_accept,
+                "{raw}: expected accept={should_accept}, got {accepted}"
             );
         }
     }
@@ -487,6 +565,12 @@ mod tests {
         assert_eq!(received.len(), 1);
         let request = &received[0];
         assert_eq!(request.method, "GET");
+        // The endpoint's real path, not the override base's bare `/` — this
+        // is what lets a test tell `AzureImdsToken` apart from any other
+        // variant under the test seam.
+        assert!(request
+            .target
+            .starts_with("/metadata/identity/oauth2/token?"));
         assert!(request.target.contains("api-version=2018-02-01"));
         assert!(request.target.contains("resource=https"));
         assert!(request

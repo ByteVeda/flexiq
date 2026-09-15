@@ -85,9 +85,7 @@ impl<T: Clone + Send + Sync> CredentialCache<T> {
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<Expiring<T>, AuthError>>,
     {
-        let now = now_millis();
-
-        if let Some(value) = self.fresh(now).await {
+        if let Some(value) = self.fresh(now_millis()).await {
             return Ok(value);
         }
 
@@ -98,7 +96,11 @@ impl<T: Clone + Send + Sync> CredentialCache<T> {
         // already refreshed while this one waited for the mutex above.
         // Skipping it would mean every waiter refetches the instant it gets
         // the mutex, which is exactly the stampede the mutex exists to stop.
-        if let Some(value) = self.fresh(now).await {
+        // The clock is read again here rather than reused from above: the
+        // wait for the mutex is unbounded from this task's point of view,
+        // and comparing against a "now" from before a long wait is the same
+        // mistake as not re-checking at all.
+        if let Some(value) = self.fresh(now_millis()).await {
             return Ok(value);
         }
 
@@ -111,7 +113,12 @@ impl<T: Clone + Send + Sync> CredentialCache<T> {
             Err(error) => {
                 // A fetch that failed inside the refresh window is not a
                 // reason to fail a dispatch that has a working credential —
-                // only a value that is now past its hard expiry is.
+                // only a value that is now past its hard expiry is. The
+                // clock is read again here too: `fetch().await` can itself
+                // run for as long as the caller's own network timeout, and
+                // the still-usable check has to reflect the time the
+                // decision is actually made at.
+                let now = now_millis();
                 let guard = self.value.read().await;
                 match guard.as_ref() {
                     Some(existing) if now < existing.expires_at_ms => {

@@ -11,7 +11,6 @@
 //! reach for this module to test anything that needs more than "receive a
 //! request, answer with a scripted status and body."
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -51,7 +50,11 @@ impl Script {
 
 struct Inner {
     script: Script,
-    next_index: AtomicUsize,
+    /// The response index and this list's length must agree: under
+    /// concurrent connections, a response chosen from a separately
+    /// incremented counter could pair with the wrong recorded request.
+    /// Deriving the index from `received.len()` while holding this same
+    /// lock is what keeps the two atomic with each other.
     received: Mutex<Vec<Received>>,
 }
 
@@ -94,7 +97,6 @@ impl StubServer {
 
         let inner = Arc::new(Inner {
             script,
-            next_index: AtomicUsize::new(0),
             received: Mutex::new(Vec::new()),
         });
 
@@ -130,8 +132,8 @@ impl StubServer {
         self.inner.received.lock().expect("stub lock").clone()
     }
 
-    /// How many requests have arrived. The single-flight assertion needs
-    /// this to be readable without cloning every body received so far.
+    /// How many requests have arrived, without cloning every body received
+    /// so far the way [`Self::received`] does.
     pub(crate) fn request_count(&self) -> usize {
         self.inner.received.lock().expect("stub lock").len()
     }
@@ -172,10 +174,7 @@ async fn serve_one(mut socket: TcpStream, inner: Arc<Inner>) {
     }
     body.truncate(content_length);
 
-    let index = inner.next_index.fetch_add(1, Ordering::SeqCst);
-    let (status, response_body) = inner.script.response_for(index);
-
-    inner.received.lock().expect("stub lock").push(Received {
+    let received = Received {
         method,
         target,
         headers: headers
@@ -183,7 +182,18 @@ async fn serve_one(mut socket: TcpStream, inner: Arc<Inner>) {
             .map(|(name, value)| (name.to_ascii_lowercase(), value))
             .collect(),
         body,
-    });
+    };
+
+    // The index the script answers from and this request's position in
+    // `received` are read and written under the same lock, so the two can
+    // never disagree about which request a scripted response belongs to.
+    let (status, response_body) = {
+        let mut guard = inner.received.lock().expect("stub lock");
+        let index = guard.len();
+        let response = inner.script.response_for(index);
+        guard.push(received);
+        response
+    };
 
     let head = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n",

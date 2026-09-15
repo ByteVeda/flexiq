@@ -90,6 +90,26 @@ pub fn is_loopback_address(address: IpAddr) -> bool {
     }
 }
 
+/// Whether `address` is link-local, reading an IPv4-mapped IPv6 address as
+/// the IPv4 address it is.
+///
+/// Split out from [`is_never_routable`] for the same reason
+/// [`is_loopback_address`] was: a caller vetting a *credential source*
+/// (rather than an operator's dispatch target) needs loopback and
+/// link-local specifically, not the whole never-routable set — which also
+/// contains the Alibaba and EC2-v6 metadata literals, multicast, broadcast
+/// and unspecified, none of which is a shape a credential endpoint takes.
+pub fn is_link_local_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(v4) => v4.is_link_local(),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(mapped) => mapped.is_link_local(),
+            // fe80::/10, the same mask `is_never_routable_v6` matches.
+            None => (v6.segments()[0] & 0xffc0) == 0xfe80,
+        },
+    }
+}
+
 fn is_never_routable_v4(address: Ipv4Addr) -> bool {
     address.is_loopback()
         // 169.254.0.0/16, which is where CLOUD_METADATA_V4 lives.
@@ -239,5 +259,43 @@ mod tests {
             assert!(is_never_routable(address), "{literal} is never routable");
             assert!(!is_loopback_address(address), "{literal} is not loopback");
         }
+    }
+
+    #[test]
+    fn is_link_local_address_is_true_for_link_local_and_false_elsewhere_in_never_routable() {
+        // 169.254.0.0/16 and fe80::/10, including the IMDS literal, which
+        // lives inside the v4 range.
+        for literal in ["169.254.169.254", "169.254.1.1", "fe80::1"] {
+            let address = parse(literal);
+            assert!(is_never_routable(address), "{literal} is never routable");
+            assert!(is_link_local_address(address), "{literal} is link-local");
+        }
+        // Never-routable for other reasons: loopback, the metadata literals
+        // outside 169.254.0.0/16, multicast, broadcast, unspecified. None of
+        // these is link-local, however the caller reads them — this is the
+        // narrower predicate a credential-source guard needs and
+        // `is_never_routable` alone cannot provide.
+        for literal in [
+            "127.0.0.1",
+            "::1",
+            "100.100.100.200",
+            "fd00:ec2::254",
+            "0.0.0.0",
+            "224.0.0.1",
+            "255.255.255.255",
+        ] {
+            let address = parse(literal);
+            assert!(is_never_routable(address), "{literal} is never routable");
+            assert!(
+                !is_link_local_address(address),
+                "{literal} is not link-local"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ipv4_mapped_link_local_address_is_read_as_ipv4() {
+        assert!(is_link_local_address(parse("::ffff:169.254.169.254")));
+        assert!(!is_link_local_address(parse("::ffff:93.184.216.34")));
     }
 }

@@ -60,9 +60,10 @@ url = { version = "2", optional = true }
 # The outbound HTTP client for push dispatch. `default-features = false` drops
 # charset, http2 and the system-proxy probe; `rustls-tls` because the server
 # image carries no system OpenSSL. `json` because the credential endpoints in
-# `http::auth::metadata` answer JSON, and this is the commit that parses one.
-# Same feature set flexiq-server already resolves, so a workspace build gains
-# an edge and not a node.
+# `http::auth::metadata` answer JSON — added in this commit, which only reads
+# the raw body, so the OIDC and SigV4 commits that actually parse it don't
+# each need their own `reqwest` feature edit. Same feature set flexiq-server
+# already resolves, so a workspace build gains an edge and not a node.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 # HMAC-SHA256 for the outbound dispatch signature. Same versions
 # flexiq-server already resolves for its webhook signing, so the workspace
