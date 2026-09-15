@@ -23,8 +23,6 @@ const PATH_ENCODE_SET: &AsciiSet = &UNRESERVED_ENCODE_SET.remove(b'/');
 ///
 /// Returns `(canonical_request, signed_headers)` — the second is needed
 /// twice: once inside the first, once again in the `Authorization` header.
-// Unused until the SigV4 signer commit builds a request to sign with it.
-#[allow(dead_code)]
 pub(crate) fn canonical_request(
     method: &str,
     url: &url::Url,
@@ -48,8 +46,6 @@ pub(crate) fn canonical_request(
 }
 
 /// `AWS4-HMAC-SHA256\n<amz-date>\n<scope>\n<sha256 hex of the canonical request>`.
-// Unused until the SigV4 signer commit has a canonical request to hash.
-#[allow(dead_code)]
 pub(crate) fn string_to_sign(amz_date: &str, scope: &str, canonical_request: &str) -> String {
     format!(
         "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
@@ -60,8 +56,6 @@ pub(crate) fn string_to_sign(amz_date: &str, scope: &str, canonical_request: &st
 /// The `Authorization` header value:
 /// `AWS4-HMAC-SHA256 Credential=<akid>/<scope>, SignedHeaders=<a;b;c>, Signature=<hex>`
 /// — one space after the algorithm, `", "` between fields.
-// Unused until the SigV4 signer commit has a signature to render.
-#[allow(dead_code)]
 pub(crate) fn authorization_header(
     access_key_id: &str,
     scope: &str,
@@ -80,8 +74,6 @@ pub(crate) fn authorization_header(
 /// `Utc::now()` twice can straddle midnight and produce a scope whose date
 /// disagrees with `x-amz-date`, which AWS rejects with an error naming
 /// neither.
-// Unused until the SigV4 signer commit has one clock read to pass in.
-#[allow(dead_code)]
 pub(crate) fn timestamps(now: chrono::DateTime<chrono::Utc>) -> (String, String) {
     (
         now.format("%Y%m%dT%H%M%SZ").to_string(),

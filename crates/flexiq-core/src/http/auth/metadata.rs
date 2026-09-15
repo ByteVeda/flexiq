@@ -57,10 +57,6 @@ pub(crate) struct MetadataClient {
 /// compile-time constants; the two read from the process environment carry
 /// their already-vetted [`url::Url`], produced by [`accept_env_endpoint`],
 /// which refuses everything the egress guard accepts.
-// SigV4 is the only remaining commit to construct `AwsImdsApiToken`,
-// `AwsImdsSecurityCredentials` and `AwsContainerCredentials`; the other four
-// variants are already built by the OIDC sources in `oidc/`.
-#[allow(dead_code)]
 pub(crate) enum MetadataEndpoint {
     /// GCE/GKE's identity token endpoint, by name.
     GoogleIdentity,
@@ -83,6 +79,12 @@ pub(crate) enum MetadataEndpoint {
     /// resolved against `169.254.170.2`) and vetted by
     /// [`accept_env_endpoint`].
     AwsContainerCredentials(url::Url),
+    /// AWS IMDSv2's per-role credentials call — the third of `imds.rs`'s
+    /// three requests. Its path embeds the role name the second request just
+    /// returned, so — like the two variants directly above — it carries an
+    /// owned [`url::Url`] built at fetch time rather than a compile-time
+    /// constant.
+    AwsImdsRoleCredentials(url::Url),
 }
 
 impl MetadataEndpoint {
@@ -98,6 +100,7 @@ impl MetadataEndpoint {
             Self::AwsImdsSecurityCredentials => "aws imds security credentials",
             Self::AzureAppServiceToken(_) => "azure app service token",
             Self::AwsContainerCredentials(_) => "aws container credentials",
+            Self::AwsImdsRoleCredentials(_) => "aws imds role credentials",
         }
     }
 
@@ -119,9 +122,9 @@ impl MetadataEndpoint {
             Self::AwsImdsSecurityCredentials => {
                 format!("http://{CLOUD_METADATA_IP}/latest/meta-data/iam/security-credentials/")
             }
-            Self::AzureAppServiceToken(url) | Self::AwsContainerCredentials(url) => {
-                return Ok(url.clone())
-            }
+            Self::AzureAppServiceToken(url)
+            | Self::AwsContainerCredentials(url)
+            | Self::AwsImdsRoleCredentials(url) => return Ok(url.clone()),
         };
         // Every built variant above is a fixed, crate-authored string, so
         // this can never actually fail; propagated through `Result` rather

@@ -6,9 +6,6 @@ use super::super::digest::hmac_sha256;
 ///
 /// Four chained HMACs, each step's **raw** output keying the next:
 /// `HMAC(HMAC(HMAC(HMAC("AWS4" + secret, datestamp), region), service), "aws4_request")`.
-// Unused until the SigV4 signer commit calls it to derive the key it signs
-// with; pinned here against AWS's own worked example in the meantime.
-#[allow(dead_code)]
 pub(crate) fn signing_key(secret: &[u8], datestamp: &str, region: &str, service: &str) -> [u8; 32] {
     let mut prefixed_secret = Vec::with_capacity(4 + secret.len());
     prefixed_secret.extend_from_slice(b"AWS4");
@@ -22,8 +19,6 @@ pub(crate) fn signing_key(secret: &[u8], datestamp: &str, region: &str, service:
 
 /// The credential scope a signature is bound to:
 /// `<datestamp>/<region>/<service>/aws4_request`.
-// Unused until the SigV4 signer commit builds a `Credential=` value with it.
-#[allow(dead_code)]
 pub(crate) fn credential_scope(datestamp: &str, region: &str, service: &str) -> String {
     format!("{datestamp}/{region}/{service}/aws4_request")
 }

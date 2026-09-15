@@ -3,12 +3,14 @@
 //! GitHub issue #844: a push target reachable from the scheduler is reachable
 //! by anything else that can reach it too, so the scheduler has to prove who
 //! it is. [`Signer`] is the seam HMAC, OIDC and SigV4 each plug into, one
-//! commit apiece. Three shipped so far: a static bearer token needing no
-//! machinery, in the private `bearer` submodule; HMAC-SHA256 — the
-//! replay-resistant scheme issue #844 names by "works everywhere" — in the
-//! private `hmac` submodule; and OIDC identity tokens, five credential
+//! commit apiece. All four named in #844 are shipped: a static bearer token
+//! needing no machinery, in the private `bearer` submodule; HMAC-SHA256 —
+//! the replay-resistant scheme issue #844 names by "works everywhere" — in
+//! the private `hmac` submodule; OIDC identity tokens, five credential
 //! sources deep, in the private `oidc` submodule — Cloud Run's and Azure
-//! Functions' native answer to the same question.
+//! Functions' native answer to the same question; and AWS SigV4, its own
+//! credential chain four sources deep, in the private `sigv4` submodule —
+//! Lambda function URLs' and API Gateway's native answer.
 
 mod bearer;
 mod cache;
@@ -28,12 +30,14 @@ use crate::worker::Secret;
 use bearer::BearerSigner;
 use hmac::HmacSigner;
 use oidc::OidcSigner;
+use sigv4::SigV4Signer;
 
 pub use hmac::{
     string_to_sign, verify, HmacConfig, HmacRejection, DEFAULT_MAX_SKEW, HDR_KEY_ID, HDR_NONCE,
     HDR_SIGNATURE, HDR_TIMESTAMP,
 };
 pub use oidc::{ClientAuthStyle, OidcConfig, OidcSource};
+pub use sigv4::{AwsCredentialSource, SigV4Config};
 
 /// Everything a signer may see, and nothing it may change.
 ///
@@ -195,6 +199,9 @@ pub enum OutboundAuth {
     /// and Azure Functions' native answer, verified by the receiver's own
     /// platform at the door.
     Oidc(OidcConfig),
+    /// AWS Signature Version 4 — Lambda function URLs' and API Gateway's
+    /// native answer, verified by AWS itself at the door.
+    SigV4(SigV4Config),
 }
 
 impl OutboundAuth {
@@ -207,7 +214,16 @@ impl OutboundAuth {
     /// other operator-configured destination does — see `oidc/oauth2.rs`'s
     /// module doc for the full argument. Every other scheme, including
     /// every other OIDC source, ignores this parameter entirely.
-    pub fn signer(self, dispatch: &DispatchClient) -> Result<Option<Arc<dyn Signer>>, AuthError> {
+    ///
+    /// Takes `target` for the same kind of reason, added by the SigV4
+    /// commit: [`SigV4Config`]'s region and service inference reads the
+    /// dispatch target's own host, which `signer` had no way to see before.
+    /// Every other scheme ignores it entirely.
+    pub fn signer(
+        self,
+        dispatch: &DispatchClient,
+        target: &url::Url,
+    ) -> Result<Option<Arc<dyn Signer>>, AuthError> {
         match self {
             OutboundAuth::None => Ok(None),
             OutboundAuth::Bearer(secret) => {
@@ -235,6 +251,7 @@ impl OutboundAuth {
                 Ok(Some(Arc::new(HmacSigner::new(config)?)))
             }
             OutboundAuth::Oidc(config) => Ok(Some(Arc::new(OidcSigner::new(config, dispatch)?))),
+            OutboundAuth::SigV4(config) => Ok(Some(Arc::new(SigV4Signer::new(config, target)?))),
         }
     }
 }
@@ -258,16 +275,23 @@ mod tests {
         DispatchClient::new(policy, Duration::from_secs(5)).expect("test client builds")
     }
 
+    /// A target for schemes that ignore it entirely — every one but SigV4's,
+    /// which has its own dedicated tests in `sigv4/mod.rs`.
+    fn test_target() -> url::Url {
+        url::Url::parse("https://push.example.com/hook").expect("test url parses")
+    }
+
     #[test]
     fn a_configured_scheme_yields_a_signer_and_none_yields_nothing() {
         let dispatch = test_dispatch_client();
+        let target = test_target();
         assert!(OutboundAuth::None
-            .signer(&dispatch)
+            .signer(&dispatch, &target)
             .expect("None never fails to build")
             .is_none());
 
         let signer = OutboundAuth::Bearer(Secret::new("token-value"))
-            .signer(&dispatch)
+            .signer(&dispatch, &target)
             .expect("a non-empty secret builds")
             .expect("Bearer always yields a signer");
         assert_eq!(signer.scheme(), "bearer");
@@ -278,7 +302,7 @@ mod tests {
         // `Arc<dyn Signer>` carries no `Debug`, so `expect_err` cannot be
         // used here; `matches!` needs none.
         let dispatch = test_dispatch_client();
-        let result = OutboundAuth::Bearer(Secret::new("")).signer(&dispatch);
+        let result = OutboundAuth::Bearer(Secret::new("")).signer(&dispatch, &test_target());
         assert!(matches!(result, Err(AuthError::Config(_))));
     }
 
@@ -289,7 +313,7 @@ mod tests {
             key_id: None,
             secret: Secret::new(""),
         })
-        .signer(&dispatch);
+        .signer(&dispatch, &test_target());
         assert!(matches!(result, Err(AuthError::Config(_))));
     }
 
@@ -302,7 +326,7 @@ mod tests {
             },
             audience: String::new(),
         })
-        .signer(&dispatch)
+        .signer(&dispatch, &test_target())
         .expect("a File source needs no audience and no network to construct")
         .expect("Oidc always yields a signer");
         assert_eq!(signer.scheme(), "oidc");
@@ -315,7 +339,7 @@ mod tests {
             source: OidcSource::GoogleMetadata,
             audience: String::new(),
         })
-        .signer(&dispatch);
+        .signer(&dispatch, &test_target());
         assert!(matches!(result, Err(AuthError::Config(_))));
     }
 

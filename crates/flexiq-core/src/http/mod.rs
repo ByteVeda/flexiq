@@ -5,8 +5,8 @@
 //! dispatch, later the settle callback — which is why it lives here rather
 //! than inside `worker/`.
 
-/// Outbound authentication: the signing seam every scheme — bearer today,
-/// HMAC/OIDC/SigV4 in later commits — plugs into.
+/// Outbound authentication: the signing seam bearer, HMAC, OIDC and SigV4
+/// each plug into.
 pub mod auth;
 mod client;
 mod egress;
