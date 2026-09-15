@@ -99,7 +99,14 @@ pub(crate) fn timestamps(now: chrono::DateTime<chrono::Utc>) -> (String, String)
 /// `uri_path_normalization.rs` takes (split on `/`, drop empty and `.`
 /// segments, pop the output on `..`, rejoin, re-add a leading and, if the
 /// input had one, trailing `/`) — cross-checked by hand against six of the
-/// suite's `normalize-path` cases, four of which are pinned as tests below.
+/// suite's `normalize-path` cases, all six pinned directly against this
+/// function in `normalize_path_directly_matches_all_six_suite_cases` below.
+/// Two of those six are *also* pinned end to end through `canonical_request`
+/// (`normalize_path_pops_two_dot_dot_segments` and
+/// `normalize_path_drops_a_pointless_leading_dot_segment`), but only through
+/// `url::Url::parse`, which strips dot segments itself before `.path()` is
+/// ever read — so those two alone would leave this function's own `".."`
+/// and `"."` arms unexercised by anything but the direct-call test.
 fn normalize_path(path: &str) -> String {
     if path.is_empty() {
         return "/".to_string();
@@ -164,10 +171,19 @@ fn double_encode_path(normalized_path: &str) -> String {
 /// sort key is the encoded byte sequence AWS actually verifies against, not
 /// the decoded text. Sorting decoded pairs first and encoding afterward can
 /// reorder two names whose encodings compare differently than their decoded
-/// forms do; `get-vanilla-query-order-key-case` below is the published-suite
-/// case that would catch getting this backwards. A value-less parameter
-/// decodes to an empty string, which needs no special case: joining with
-/// `=` still yields `name=` (rule 3), the empty string after it.
+/// forms do — but no published-suite case can catch getting this backwards:
+/// `get-vanilla-query-order-key-case`'s two names, `Param1`/`Param2`, contain
+/// no character that encoding touches, so encode-then-sort and
+/// sort-then-encode produce byte-identical output there; it distinguishes
+/// sorted from unsorted, not the sort key. Same situation as the canonical
+/// URI's double-encoding above: the published suite cannot discriminate this
+/// property, so `a_query_names_encoding_can_reorder_it` below is a synthetic
+/// case built specifically to. A value-less parameter decodes to an empty
+/// string, which needs no special case: joining with `=` still yields
+/// `name=` (rule 3), the empty string after it — asserted by
+/// `a_valueless_query_parameter_keeps_its_equals_sign` below, since no
+/// published case covers that either (`get-vanilla-empty-query-key`, despite
+/// its name, has a value: `Param1=value1`).
 fn canonical_query_string(url: &url::Url) -> String {
     let mut pairs: Vec<(String, String)> = url
         .query_pairs()
@@ -195,7 +211,13 @@ fn sigv4_encode(value: &str) -> String {
 ///
 /// `host` is synthesised from `url` rather than read out of `headers` — see
 /// [`canonical_host`] — and overrides any `host` entry a caller supplied, so
-/// the signed value can never drift from the connection actually made.
+/// the signed value can never drift from the URL reqwest dials. That is not
+/// the same guarantee as matching the connection: a caller-supplied `Host`
+/// header in `headers` would still reach the wire as reqwest's own, sending
+/// one value while this function signs another — the exact
+/// nothing-explains-it 403 this module exists to avoid. Whether such a
+/// header should be rejected outright is the signer commit's call, not this
+/// one's; this function only guarantees the signed value tracks the URL.
 /// Every other header comes from `headers` as-is: this crate does not
 /// special-case `x-amz-content-sha256` or `x-amz-security-token` (rule 9) —
 /// whatever the caller put in the map for either gets canonicalised and
@@ -389,7 +411,7 @@ mod tests {
             &empty_body_hash,
             "GET\n/\n\nhost:example.amazonaws.com\nx-amz-date:20150830T123600Z\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "AWS4-HMAC-SHA256\n20150830T123600Z\n20150830/us-east-1/service/aws4_request\nbb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63",
-            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31",
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31", // signature not asserted here — see double_url_encode
         );
     }
 
@@ -409,7 +431,7 @@ mod tests {
             &empty_body_hash,
             "GET\n/\nParam1=value1&Param2=value2\nhost:example.amazonaws.com\nx-amz-date:20150830T123600Z\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "AWS4-HMAC-SHA256\n20150830T123600Z\n20150830/us-east-1/service/aws4_request\n816cd5b414d056048ba4f7c5386d6e0533120fb1fcfa93762cf0fc39e2cf19e0",
-            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500",
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500", // signature not asserted here — see double_url_encode
         );
     }
 
@@ -433,7 +455,7 @@ mod tests {
             &empty_body_hash,
             "GET\n/\n\nhost:example.amazonaws.com\nmy-header1:value1\nmy-header2:\"a b c\"\nx-amz-date:20150830T123600Z\n\nhost;my-header1;my-header2;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "AWS4-HMAC-SHA256\n20150830T123600Z\n20150830/us-east-1/service/aws4_request\na726db9b0df21c14f559d0a978e563112acb1b9e05476f0a6a1c7d68f28605c7",
-            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;my-header1;my-header2;x-amz-date, Signature=acc3ed3afb60bb290fc8d2dd0098b9911fcaa05412b367055dee359757a9c736",
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;my-header1;my-header2;x-amz-date, Signature=acc3ed3afb60bb290fc8d2dd0098b9911fcaa05412b367055dee359757a9c736", // signature not asserted here — see double_url_encode
         );
     }
 
@@ -456,7 +478,7 @@ mod tests {
             &empty_body_hash,
             "GET\n/-._~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\n\nhost:example.amazonaws.com\nx-amz-date:20150830T123600Z\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "AWS4-HMAC-SHA256\n20150830T123600Z\n20150830/us-east-1/service/aws4_request\n6a968768eefaa713e2a6b16b589a8ea192661f098f37349f4e2c0082757446f9",
-            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=07ef7494c76fa4850883e2b006601f940f8a34d404d0cfa977f52a65bbf5f24f",
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=07ef7494c76fa4850883e2b006601f940f8a34d404d0cfa977f52a65bbf5f24f", // signature not asserted here — see double_url_encode
         );
     }
 
@@ -485,7 +507,7 @@ mod tests {
             &body_hash,
             "POST\n/\n\ncontent-length:13\ncontent-type:application/x-www-form-urlencoded\nhost:example.amazonaws.com\nx-amz-date:20150830T123600Z\n\ncontent-length;content-type;host;x-amz-date\n9095672bbd1f56dfc5b65f3e153adc8731a4a654192329106275f4c7b24d0b6e",
             "AWS4-HMAC-SHA256\n20150830T123600Z\n20150830/us-east-1/service/aws4_request\na1a6cdc48a69eabac00524b1103e18f2655960c25a3c2e8de6f180e59238c68a",
-            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=content-length;content-type;host;x-amz-date, Signature=fec50118d90ecf934441dd37fb9a49bd7f5adb6450802ca3a0977623bbb7c27f",
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=content-length;content-type;host;x-amz-date, Signature=fec50118d90ecf934441dd37fb9a49bd7f5adb6450802ca3a0977623bbb7c27f", // signature not asserted here — see double_url_encode
         );
     }
 
@@ -510,14 +532,19 @@ mod tests {
             &empty_body_hash,
             "GET\n/\n\nhost:example.amazonaws.com\nmy-header1:value2,value2,value1\nx-amz-date:20150830T123600Z\n\nhost;my-header1;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "AWS4-HMAC-SHA256\n20150830T123600Z\n20150830/us-east-1/service/aws4_request\ndc7f04a3abfde8d472b0ab1a418b741b7c67174dad1551b4117b15527fbe966c",
-            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;my-header1;x-amz-date, Signature=c9d5ea9f3f72853aea855b47ea873832890dbdd183b4468f858259531a5138ea",
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;my-header1;x-amz-date, Signature=c9d5ea9f3f72853aea855b47ea873832890dbdd183b4468f858259531a5138ea", // signature not asserted here — see double_url_encode
         );
     }
 
     #[test]
     fn normalize_path_pops_two_dot_dot_segments() {
         // aws-sig-v4-test-suite/normalize-path/get-relative-relative:
-        // `/example1/example2/../..` normalises to `/`.
+        // `/example1/example2/../..` normalises to `/`. End to end, through
+        // `url::Url::parse` — which strips dot segments itself, so this
+        // pins the pipeline's output against the vector but does not itself
+        // exercise `normalize_path`'s own `".."` arm; see
+        // `normalize_path_directly_matches_all_six_suite_cases` below for
+        // that, and this function's doc for why both exist.
         let target = url("https://example.amazonaws.com/example1/example2/../..");
         let request_headers = headers(&[("X-Amz-Date", DATE)]);
         let empty_body_hash = sha256_hex(b"");
@@ -529,14 +556,17 @@ mod tests {
             &empty_body_hash,
             "GET\n/\n\nhost:example.amazonaws.com\nx-amz-date:20150830T123600Z\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "AWS4-HMAC-SHA256\n20150830T123600Z\n20150830/us-east-1/service/aws4_request\nbb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63",
-            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31",
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31", // signature not asserted here — see double_url_encode
         );
     }
 
     #[test]
     fn normalize_path_drops_a_pointless_leading_dot_segment() {
         // aws-sig-v4-test-suite/normalize-path/get-slash-pointless-dot:
-        // `/./example` normalises to `/example`.
+        // `/./example` normalises to `/example`. Same caveat as
+        // `normalize_path_pops_two_dot_dot_segments` above: end to end
+        // through `url::Url::parse`, which does not exercise
+        // `normalize_path`'s own `"."` arm.
         let creq = canonical_request(
             "GET",
             &url("https://example.amazonaws.com/./example"),
@@ -548,6 +578,30 @@ mod tests {
             creq.starts_with("GET\n/example\n"),
             "expected normalized path /example, got: {creq}"
         );
+    }
+
+    #[test]
+    fn normalize_path_directly_matches_all_six_suite_cases() {
+        // Called directly with the suite's raw paths, not through
+        // `url::Url::parse` — which strips dot segments itself during
+        // WHATWG parsing, before `.path()` is ever read, so the two tests
+        // above never actually reach `normalize_path`'s `".."`/`"."` arms.
+        // This is the test that does; the empty-segment cases (`get-slash`,
+        // `get-slashes`) are included too, for the same directness, even
+        // though they exercise the split/filter step rather than a dot arm.
+        //
+        // aws-sig-v4-test-suite/normalize-path/get-relative:
+        assert_eq!(normalize_path("/example/.."), "/");
+        // aws-sig-v4-test-suite/normalize-path/get-relative-relative:
+        assert_eq!(normalize_path("/example1/example2/../.."), "/");
+        // aws-sig-v4-test-suite/normalize-path/get-slash-dot-slash:
+        assert_eq!(normalize_path("/./"), "/");
+        // aws-sig-v4-test-suite/normalize-path/get-slash-pointless-dot:
+        assert_eq!(normalize_path("/./example"), "/example");
+        // aws-sig-v4-test-suite/normalize-path/get-slash:
+        assert_eq!(normalize_path("//"), "/");
+        // aws-sig-v4-test-suite/normalize-path/get-slashes:
+        assert_eq!(normalize_path("//example//"), "/example/");
     }
 
     #[test]
@@ -679,6 +733,17 @@ mod tests {
     }
 
     #[test]
+    fn an_ipv6_host_keeps_its_brackets() {
+        // `host_str()` keeps the brackets `canonical_host`'s doc claims it
+        // does — `url`'s own behaviour, pinned here because rule 6 depends
+        // on it.
+        assert_eq!(
+            canonical_host(&url("https://[2001:db8::1]:8443/")),
+            "[2001:db8::1]:8443"
+        );
+    }
+
+    #[test]
     fn a_security_token_is_signed_when_present() {
         // Rule 9: this commit does not handle credentials, but whatever the
         // caller puts in `headers` gets signed like any other header — no
@@ -707,6 +772,39 @@ mod tests {
         // space as `%20`, never leaving a literal `+` in the output.
         let target = url("https://example.amazonaws.com/?key=a+b");
         assert_eq!(canonical_query_string(&target), "key=a%20b");
+    }
+
+    #[test]
+    fn a_query_names_encoding_can_reorder_it() {
+        // No published-suite case can distinguish "sort on encoded bytes"
+        // from "sort on decoded text, then encode": every suite case's
+        // names are untouched by encoding, so both orderings agree there —
+        // see `canonical_query_string`'s doc. This case is built to differ:
+        // decoded, `.b` sorts before `:a` (`.` is 0x2E, `:` is 0x3A); their
+        // encoded forms, `.b` and `%3Aa`, sort the other way (`%` is 0x25).
+        // Independently verified before pinning:
+        //
+        //   python3 -c "
+        //   from urllib.parse import quote
+        //   def enc(s): return quote(s, safe='-._~')
+        //   pairs = [('.b', '1'), (':a', '2')]
+        //   print('encode-then-sort:', '&'.join(f'{enc(n)}={enc(v)}' for n, v in sorted(pairs, key=lambda p: (enc(p[0]), enc(p[1])))))
+        //   "
+        //
+        // printed: encode-then-sort: %3Aa=2&.b=1
+        //
+        // A decoded-sort-then-encode implementation would instead produce
+        // `.b=1&%3Aa=2` — the decoded order, `.b` then `:a`, encoded after.
+        let target = url("https://example.amazonaws.com/?.b=1&:a=2");
+        assert_eq!(canonical_query_string(&target), "%3Aa=2&.b=1");
+    }
+
+    #[test]
+    fn a_valueless_query_parameter_keeps_its_equals_sign() {
+        // Rule 3: no published case covers this — `get-vanilla-empty-query-key`,
+        // despite its name, has a value (`Param1=value1`).
+        let target = url("https://example.amazonaws.com/?key");
+        assert_eq!(canonical_query_string(&target), "key=");
     }
 
     #[test]
