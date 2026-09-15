@@ -141,10 +141,10 @@ pub enum Refusal {
     /// The dispatcher stopped waiting: the request was still in flight when
     /// the shutdown drain budget expired.
     ///
-    /// Distinct from [`Refusal::Deadline`], which is the *job's* execution
-    /// timeout and is recorded as one. Nothing timed out here — the
-    /// scheduler went away — so the job is retried without a timeout in its
-    /// history.
+    /// Distinct from [`Refusal::Deadline`], which is the *attempt's* own
+    /// deadline — `min(request ceiling, job timeout less the reap margin)` —
+    /// and is recorded as an execution timeout. Nothing timed out here; the
+    /// scheduler went away. The job is retried with no timeout in its history.
     Abandoned,
     /// A value the dispatch has to carry is not a legal HTTP header value —
     /// a task, queue or namespace name with a control character in it, say.
