@@ -1113,7 +1113,16 @@ mod tests {
         let (tx, _rx) = make_channel(16);
         let mut counters = TickCounters::default();
         scheduler.tick(&tx, &mut counters);
-        scheduler.storage.get_job(&job.id, None).unwrap().unwrap()
+        let dispatched = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
+        // A tick claims one job (`batch_size` is 1), so another ready job can
+        // take the slot and leave this one Pending. Finalizing it then fails as
+        // `JobNotFound`, which names the wrong thing; say it here instead.
+        assert_eq!(
+            dispatched.status,
+            JobStatus::Running,
+            "the tick dispatched some other job, not {task_name}"
+        );
+        dispatched
     }
 
     #[test]
@@ -1141,6 +1150,11 @@ mod tests {
         // Shells report a job's duration off the outcome, so the worker's
         // measurement has to survive handle_result — on every variant, and on
         // the batch path that finalizes successes together.
+        //
+        // A scheduler per variant, because the retry below puts its job back to
+        // Pending at a full-jitter delay that can land at 0 ms: shared, the next
+        // variant's tick would spend its single claim on that older job and
+        // finalize one still Pending.
         let scheduler = test_scheduler();
 
         let ok = enqueue_and_run(&scheduler, "timed_ok");
@@ -1160,6 +1174,7 @@ mod tests {
             }
         ));
 
+        let scheduler = test_scheduler();
         let retried = enqueue_and_run(&scheduler, "timed_retry");
         let outcome = scheduler
             .handle_result(JobResult::Failure {
@@ -1181,6 +1196,7 @@ mod tests {
             }
         ));
 
+        let scheduler = test_scheduler();
         let dead = enqueue_and_run(&scheduler, "timed_dead");
         let outcome = scheduler
             .handle_result(JobResult::Failure {
@@ -1202,6 +1218,7 @@ mod tests {
             }
         ));
 
+        let scheduler = test_scheduler();
         let cancelled = enqueue_and_run(&scheduler, "timed_cancel");
         let outcome = scheduler
             .handle_result(JobResult::Cancelled {
@@ -1218,6 +1235,7 @@ mod tests {
             }
         ));
 
+        let scheduler = test_scheduler();
         let batched = enqueue_and_run(&scheduler, "timed_batch");
         let outcomes = scheduler.handle_results(vec![JobResult::Success {
             job_id: batched.id.clone(),
