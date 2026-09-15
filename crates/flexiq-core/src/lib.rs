@@ -12,6 +12,8 @@ pub mod error;
 pub mod job;
 /// The lease on one dispatch of one job: [`Lease`], [`LeaseBook`].
 pub mod lease;
+/// Facts about IP space, shared by every outbound guard in the workspace.
+pub mod net;
 /// Periodic (cron) task scheduling helpers.
 pub mod periodic;
 pub mod pubsub;

@@ -6,7 +6,9 @@
 //! again immediately before each send: a name that resolved publicly at
 //! registration can be rebound later.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+use std::net::{IpAddr, ToSocketAddrs};
+
+use flexiq_core::net::is_private_address;
 
 /// Escape hatch for local development against `http://localhost`, read once
 /// into configuration rather than per call.
@@ -86,7 +88,7 @@ pub fn validate_webhook_url(url: &str, allow_private: bool) -> Result<(), Unsafe
 }
 
 fn refuse_if_private(address: IpAddr, host: &str) -> Result<(), UnsafeWebhookUrl> {
-    if is_private(address) {
+    if is_private_address(address) {
         return Err(refuse(format!(
             "URL host '{host}' resolves to private address {address}"
         )));
@@ -116,48 +118,6 @@ fn resolve(host: &str) -> Result<Vec<IpAddr>, UnsafeWebhookUrl> {
         .to_socket_addrs()
         .map(|addresses| addresses.map(|address| address.ip()).collect())
         .map_err(|error| refuse(format!("could not resolve '{host}': {error}")))
-}
-
-/// Everything `ipaddress.is_private` covers on the Python side, plus the
-/// ranges that are never a legitimate webhook target.
-fn is_private(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(v4) => is_private_v4(v4),
-        // An IPv4-mapped address is an IPv4 destination; checking only the v6
-        // predicates would let `::ffff:127.0.0.1` through.
-        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(mapped) => is_private_v4(mapped),
-            None => is_private_v6(v6),
-        },
-    }
-}
-
-fn is_private_v4(address: Ipv4Addr) -> bool {
-    let [first, second, ..] = address.octets();
-    address.is_private()
-        || address.is_loopback()
-        || address.is_link_local()
-        || address.is_multicast()
-        || address.is_broadcast()
-        || address.is_unspecified()
-        || address.is_documentation()
-        // 100.64.0.0/10 carrier-grade NAT, 198.18.0.0/15 benchmarking,
-        // 192.0.0.0/24 IETF protocol assignments, 240.0.0.0/4 reserved.
-        || (first == 100 && (64..128).contains(&second))
-        || (first == 198 && (18..20).contains(&second))
-        || (first == 192 && second == 0 && address.octets()[2] == 0)
-        || first >= 240
-}
-
-fn is_private_v6(address: Ipv6Addr) -> bool {
-    let segments = address.segments();
-    address.is_loopback()
-        || address.is_multicast()
-        || address.is_unspecified()
-        // fc00::/7 unique-local, fe80::/10 link-local, 2001:db8::/32 docs.
-        || (segments[0] & 0xfe00) == 0xfc00
-        || (segments[0] & 0xffc0) == 0xfe80
-        || (segments[0] == 0x2001 && segments[1] == 0x0db8)
 }
 
 fn refuse(message: impl Into<String>) -> UnsafeWebhookUrl {
