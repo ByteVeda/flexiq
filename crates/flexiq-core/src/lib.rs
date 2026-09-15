@@ -52,6 +52,8 @@ pub use contract::{
 };
 pub use error::{QueueError, Result, StepDivergence};
 #[cfg(feature = "http-target")]
+pub use http::auth::{AuthError, OutboundAuth, Signer, SigningRequest};
+#[cfg(feature = "http-target")]
 pub use http::{DispatchClient, EgressPolicy, EgressRefusal};
 pub use job::{now_millis, Job, JobCompletion, JobStatus, NewJob};
 pub use lease::{mint_claim_epoch, Lease, LeaseBook};
