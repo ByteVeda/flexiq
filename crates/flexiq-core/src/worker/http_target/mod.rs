@@ -14,7 +14,7 @@
 //!
 //! # Exactly one result per job
 //!
-//! Every job handed to [`WorkerDispatcher::run`] produces **exactly one**
+//! Every job that reaches an **attempt** produces **exactly one**
 //! [`JobResult`], or is dropped by the lease re-check because someone else
 //! already settled it. Never zero by accident, never two. Every path out of
 //! the private `attempt` module's `run_one` settles: no budget, an oversized
@@ -22,6 +22,21 @@
 //! failure, a deadline, a cancel, a refusal, an outcome — and an abandonment
 //! at the shutdown drain deadline, which settles as a retryable failure
 //! rather than orphaning the lease.
+//!
+//! Three cases never reach an attempt, all three are shutdown-only, and each
+//! leaves a lease for the stale-job reap. Stated rather than hidden:
+//!
+//! - a job `run` has already taken off the channel when it observes the
+//!   shutdown flag;
+//! - a job it has already taken when the semaphore turns out to be closed;
+//! - an attempt still unable to settle a full drain budget *after* the abandon
+//!   signal, which `run` aborts rather than hang. See `run`'s own comment for
+//!   the one condition that reaches it.
+//!
+//! The first two windows are one job wide each. Closing them means settling a
+//! job that was never dispatched, which changes the shape of a dispatch loop
+//! [`NativeDispatcher`](crate::worker::NativeDispatcher) shares — so it
+//! belongs with the commit that wires a target into a scheduler, not here.
 //!
 //! # Why a late target cannot corrupt FlexiQ state
 //!
@@ -307,8 +322,12 @@ struct Shared {
     shutdown: AtomicBool,
     /// Set once the drain budget expires, so every attempt still in flight
     /// gives up and settles rather than being aborted with nothing emitted.
-    /// Never cleared — by the time it is set, `run` has already stopped
-    /// spawning attempts that could observe it.
+    ///
+    /// Written with `send_replace`, never `send`: `send` returns `Err` **and
+    /// leaves the value unchanged** when no receiver is currently subscribed,
+    /// and an attempt suspended before it subscribes would then never see the
+    /// give-up at all. Never cleared — by the time it is set, `run` has
+    /// stopped spawning attempts.
     abandon: watch::Sender<bool>,
     /// The scheduler's lease book, once a worker has installed one.
     leases: Mutex<Option<Arc<LeaseBook>>>,
@@ -522,12 +541,35 @@ impl WorkerDispatcher for HttpDispatchTarget {
             // job handed in with no result is a lease nobody retires until
             // the reaper gets to it. Each attempt drops its request and
             // settles instead.
-            let _ = self.shared.abandon.send(true);
-            // Unbounded, like `RemoteDispatcher::drain_and_close`'s final
-            // reader join: what is left is a settle and a channel send, and
-            // a crossbeam send to a dropped receiver returns `Err` rather
-            // than parking. The budget above is what bounds the *requests*.
-            join_all(&mut tasks).await;
+            //
+            // `send_replace`, not `send`: `send` fails and leaves the value
+            // `false` when nothing is subscribed right now, and an attempt
+            // suspended between its spawn and its `select!` would then miss
+            // the give-up permanently and settle on its own budget instead —
+            // recording a timeout for a shutdown that was not one.
+            self.shared.abandon.send_replace(true);
+            // Bounded again, because settling is not unconditionally quick:
+            // it ends in a blocking send on a bounded channel, which parks
+            // while a receiver is alive but no longer draining. A caller that
+            // drops the result receiver before awaiting `run` never reaches
+            // this arm.
+            if tokio::time::timeout(drain, join_all(&mut tasks))
+                .await
+                .is_err()
+            {
+                log::error!(
+                    "[flexiq] push target {} still has {} attempt(s) unable to settle after \
+                     the abandon signal; aborting them — their leases are the reaper's. The \
+                     usual cause is a result receiver that is alive but no longer draining.",
+                    self.shared.target,
+                    tasks.len()
+                );
+                // The third of the module doc's three exceptions, and the
+                // last resort: a permanent hang would take the whole worker
+                // down with it, and a reaped lease is recoverable where a
+                // wedged shutdown is not.
+                tasks.shutdown().await;
+            }
         }
     }
 
