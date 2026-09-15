@@ -8,16 +8,21 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 use super::egress::{EgressPolicy, EgressRefusal};
 
-/// The resolver every dispatch client resolves through.
+/// The resolver every dispatch client resolves through, for a *name*.
 ///
-/// Vetting inside resolution is what closes the rebinding window: the
-/// addresses the connector receives are the addresses that passed, so there
-/// is no second lookup between the check and the socket.
+/// Vetting inside resolution is what closes the rebinding window for a name:
+/// the addresses the connector receives for it are the addresses that just
+/// passed, so there is no second lookup between the check and the socket.
+/// This has nothing to say about an IP-literal host — the connector dials
+/// that directly without ever calling a `Resolve` impl — which is why
+/// [`EgressPolicy::permits_host`] applies the unconditional refusals itself
+/// rather than leaving every case to this resolver.
 pub(crate) struct PinnedResolver {
     policy: Arc<EgressPolicy>,
 }
 
 impl PinnedResolver {
+    /// Resolve through `policy`, which every lookup is vetted against.
     pub(crate) fn new(policy: Arc<EgressPolicy>) -> Self {
         Self { policy }
     }
@@ -103,10 +108,11 @@ mod tests {
 
         let refusal = expect_refusal(resolver.resolve(name).await);
 
-        assert!(matches!(
-            refusal,
-            EgressRefusal::NeverRoutable { .. } | EgressRefusal::NotAllowed { .. }
-        ));
+        // `allow_loopback` is false, so loopback is refused unconditionally
+        // and deterministically — asserting the specific variant (rather
+        // than also accepting `NotAllowed`) is itself a regression test for
+        // the taxonomy `EgressPolicy::refusal_for` computes.
+        assert!(matches!(refusal, EgressRefusal::NeverRoutable { .. }));
     }
 
     #[tokio::test]
@@ -133,9 +139,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_name_that_does_not_resolve_reports_a_resolve_error() {
-        // `.invalid` is reserved by RFC 6761 as guaranteed not to resolve, so
-        // this needs no network and cannot flake against a wildcard DNS
-        // provider.
+        // `.invalid` is reserved by RFC 6761 as guaranteed not to resolve —
+        // this still sends a real query (this is not the loopback-only
+        // shortcut the other two tests get), but the assertion holds however
+        // it fails: NXDOMAIN, a timeout, or any other lookup error all reach
+        // this same `EgressRefusal::Resolve` arm. Do not "fix" a slow run in
+        // a network-isolated sandbox by weakening this to a lighter check —
+        // a slow failure here is still a correct one.
         let resolver = PinnedResolver::new(policy("93.184.216.0/24", false));
         let name = "nothing.invalid"
             .parse::<Name>()

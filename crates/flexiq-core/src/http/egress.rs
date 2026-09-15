@@ -74,21 +74,63 @@ impl EgressPolicy {
     }
 
     /// Whether the name alone is permitted, before anything is resolved.
+    ///
+    /// An IP-literal host (`"127.0.0.1"`, not a domain name) never reaches a
+    /// resolver: the connector recognizes it as an address and dials it
+    /// directly (verified against `hyper-util`'s connector, which special-cases
+    /// exactly this). The unconditional refusals have no other gate to pass
+    /// through for a literal, so they are applied here rather than left to
+    /// `Allowlist::permits_host`, which — by design, so it stays one rule
+    /// instead of two — knows nothing about them.
     pub fn permits_host(&self, host: &str) -> bool {
+        // Mirrors the normalization `Allowlist::permits_host` applies before
+        // its own `IpAddr` parse: without it, `"127.0.0.1."` would miss this
+        // fast path and fall through to the allowlist-only check below,
+        // disagreeing with `permits_address("127.0.0.1")` on the same address.
+        let normalized = host.strip_suffix('.').unwrap_or(host);
+        if let Ok(address) = normalized.parse::<IpAddr>() {
+            return self.permits_address(address);
+        }
         self.allow.permits_host(host)
     }
 
     /// Whether this address may be dialled.
     pub fn permits_address(&self, address: IpAddr) -> bool {
-        if is_never_routable(address) {
-            // The one relaxation: a target on this host is a real case. It
-            // still has to be named by the allowlist — the knob widens what
-            // may be reached, it does not replace the list.
-            if !(self.allow_loopback && is_loopback_address(address)) {
-                return false;
-            }
+        if self.refused_unconditionally(address) {
+            return false;
         }
         self.allow.permits_address(address)
+    }
+
+    /// Whether `address` is refused by the unconditional rule — loopback,
+    /// link-local, the metadata literals, multicast, broadcast — once the
+    /// loopback relaxation is applied.
+    ///
+    /// The one fact both [`Self::permits_address`] and [`Self::vet`] (via
+    /// [`Self::refusal_for`]) read, so a change to the rule cannot update the
+    /// boolean without updating which variant `vet` reports for it.
+    fn refused_unconditionally(&self, address: IpAddr) -> bool {
+        is_never_routable(address) && !(self.allow_loopback && is_loopback_address(address))
+    }
+
+    /// Why `address` may not be dialled, or `None` when it may.
+    fn refusal_for(&self, host: &str, address: IpAddr) -> Option<EgressRefusal> {
+        if self.permits_address(address) {
+            return None;
+        }
+        // Which of the two rules refused it matters to the operator: only
+        // one of them is theirs to change.
+        Some(if self.refused_unconditionally(address) {
+            EgressRefusal::NeverRoutable {
+                host: host.to_string(),
+                address,
+            }
+        } else {
+            EgressRefusal::NotAllowed {
+                host: host.to_string(),
+                address,
+            }
+        })
     }
 
     /// Vet a resolution: every address, or none.
@@ -109,24 +151,9 @@ impl EgressPolicy {
         }
 
         for socket in &resolved {
-            let address = socket.ip();
-            if self.permits_address(address) {
-                continue;
+            if let Some(refusal) = self.refusal_for(host, socket.ip()) {
+                return Err(refusal);
             }
-            // Which of the two rules refused it matters to the operator: only
-            // one of them is theirs to change.
-            let loopback_relaxed = self.allow_loopback && is_loopback_address(address);
-            return Err(if is_never_routable(address) && !loopback_relaxed {
-                EgressRefusal::NeverRoutable {
-                    host: host.to_string(),
-                    address,
-                }
-            } else {
-                EgressRefusal::NotAllowed {
-                    host: host.to_string(),
-                    address,
-                }
-            });
         }
 
         Ok(resolved)
@@ -158,6 +185,47 @@ mod tests {
     }
 
     #[test]
+    fn from_target_carries_the_configs_allowlist_and_loopback_setting() {
+        let mut config = HttpTargetConfig::new(
+            "http://api.example.com/hook",
+            1,
+            allow("api.example.com,127.0.0.0/8"),
+        );
+        config.allow_loopback = true;
+
+        let policy = EgressPolicy::from_target(&config);
+
+        assert!(policy.permits_host("api.example.com"));
+        assert!(policy.permits_address(addr("127.0.0.1")));
+    }
+
+    #[test]
+    fn permits_host_matches_a_domain_through_the_allowlist() {
+        let policy = EgressPolicy::new(allow("api.example.com"), false);
+        assert!(policy.permits_host("api.example.com"));
+        assert!(!policy.permits_host("evil.example.com"));
+    }
+
+    #[test]
+    fn permits_host_applies_the_unconditional_refusals_to_an_ip_literal() {
+        // An IP-literal host never reaches the resolver, so `permits_host` is
+        // the only gate it passes through — it must agree with
+        // `permits_address` on the same address rather than deferring to the
+        // raw allowlist, which knows nothing about the unconditional rule.
+        let policy = EgressPolicy::new(allow("127.0.0.0/8"), false);
+        assert!(!policy.permits_host("127.0.0.1"));
+
+        let relaxed = EgressPolicy::new(allow("127.0.0.0/8"), true);
+        assert!(relaxed.permits_host("127.0.0.1"));
+    }
+
+    #[test]
+    fn permits_host_reads_a_trailing_dot_before_parsing_an_ip_literal() {
+        let policy = EgressPolicy::new(allow("127.0.0.0/8"), true);
+        assert!(policy.permits_host("127.0.0.1."));
+    }
+
+    #[test]
     fn loopback_is_refused_even_when_the_allowlist_names_it() {
         // This is the test the whole design turns on: naming loopback on the
         // allowlist is not, on its own, permission to reach it.
@@ -182,6 +250,22 @@ mod tests {
         let policy =
             EgressPolicy::new(allow("169.254.169.254,fd00:ec2::254,100.100.100.200"), true);
         for literal in ["169.254.169.254", "fd00:ec2::254", "100.100.100.200"] {
+            assert!(
+                !policy.permits_address(addr(literal)),
+                "{literal} must be refused however the policy is configured"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_unconditional_refusals_are_refused_at_every_setting() {
+        // Same rule as the metadata literals above, extended to the rest of
+        // `is_never_routable`'s set: ordinary link-local, multicast,
+        // broadcast and unspecified are none of them what an operator meant,
+        // however the policy is configured.
+        let policy =
+            EgressPolicy::new(allow("169.254.1.1,224.0.0.1,255.255.255.255,0.0.0.0"), true);
+        for literal in ["169.254.1.1", "224.0.0.1", "255.255.255.255", "0.0.0.0"] {
             assert!(
                 !policy.permits_address(addr(literal)),
                 "{literal} must be refused however the policy is configured"

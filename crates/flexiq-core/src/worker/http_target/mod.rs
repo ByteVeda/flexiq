@@ -15,6 +15,7 @@
 
 use std::time::Duration;
 
+use crate::http::EgressPolicy;
 use crate::net::Allowlist;
 
 mod contract;
@@ -146,18 +147,21 @@ pub enum HttpTargetError {
 }
 
 /// Parse and vet a target URL: absolute, `http`/`https`, a host, no userinfo,
-/// and a host the allowlist names.
+/// and a host `policy` permits.
 ///
 /// Name-based rules are settled here; the addresses a name resolves to are
-/// vetted at connect time by a later commit's resolver, because a name that
-/// resolves publicly now can be rebound before the socket opens.
+/// vetted at connect time by the resolver in `crate::http`, because a name
+/// that resolves publicly now can be rebound before the socket opens. An
+/// IP-literal host never reaches that resolver — the connector dials it
+/// directly — so `EgressPolicy::permits_host` applies the unconditional
+/// refusals to it right here instead.
 // `pub(crate)` with no caller yet: the dispatcher that builds a target from
 // `HttpTargetConfig` arrives in a later commit. This file's own tests are
 // the only caller until then.
 #[allow(dead_code)]
 pub(crate) fn validate_target_url(
     url: &str,
-    allow: &Allowlist,
+    policy: &EgressPolicy,
 ) -> Result<url::Url, HttpTargetError> {
     if url.trim().is_empty() {
         return Err(HttpTargetError::MissingUrl);
@@ -178,8 +182,9 @@ pub(crate) fn validate_target_url(
     }
 
     // Read through `url::Host` rather than `Url::host_str`: the latter keeps
-    // an IPv6 literal's brackets, but `Allowlist::permits_host` expects the
-    // unbracketed form every other caller gives it.
+    // an IPv6 literal's brackets, but `EgressPolicy::permits_host` (like
+    // `Allowlist::permits_host` underneath it) expects the unbracketed form
+    // every other caller gives it.
     let host = match parsed.host() {
         Some(url::Host::Domain(domain)) => domain.to_string(),
         Some(url::Host::Ipv4(v4)) => v4.to_string(),
@@ -191,7 +196,7 @@ pub(crate) fn validate_target_url(
         return Err(HttpTargetError::Userinfo);
     }
 
-    if !allow.permits_host(&host) {
+    if !policy.permits_host(&host) {
         return Err(HttpTargetError::HostRefused(host));
     }
 
@@ -206,38 +211,44 @@ mod tests {
         Allowlist::parse(entries).expect("test allowlist parses")
     }
 
+    /// `allow_loopback: false` — every test below that wants the relaxation
+    /// builds its own policy explicitly, so the default here cannot mask it.
+    fn policy(entries: &str) -> EgressPolicy {
+        EgressPolicy::new(allow(entries), false)
+    }
+
     #[test]
     fn a_url_off_the_allowlist_is_refused_naming_the_host() {
-        let allow = allow("api.example.com");
-        let error = validate_target_url("https://evil.example.com/hook", &allow).unwrap_err();
+        let policy = policy("api.example.com");
+        let error = validate_target_url("https://evil.example.com/hook", &policy).unwrap_err();
         assert!(matches!(error, HttpTargetError::HostRefused(host) if host == "evil.example.com"));
     }
 
     #[test]
     fn a_non_http_scheme_is_refused() {
-        let allow = allow("files.example.com");
-        let error = validate_target_url("ftp://files.example.com/hook", &allow).unwrap_err();
+        let policy = policy("files.example.com");
+        let error = validate_target_url("ftp://files.example.com/hook", &policy).unwrap_err();
         assert!(matches!(error, HttpTargetError::Scheme(scheme) if scheme == "ftp"));
     }
 
     #[test]
     fn an_empty_url_is_refused() {
-        let allow = allow("api.example.com");
+        let policy = policy("api.example.com");
         assert!(matches!(
-            validate_target_url("", &allow),
+            validate_target_url("", &policy),
             Err(HttpTargetError::MissingUrl)
         ));
         assert!(matches!(
-            validate_target_url("   ", &allow),
+            validate_target_url("   ", &policy),
             Err(HttpTargetError::MissingUrl)
         ));
     }
 
     #[test]
     fn userinfo_in_the_authority_is_refused() {
-        let allow = allow("api.example.com");
+        let policy = policy("api.example.com");
         let error =
-            validate_target_url("https://user:pw@api.example.com/hook", &allow).unwrap_err();
+            validate_target_url("https://user:pw@api.example.com/hook", &policy).unwrap_err();
         assert!(matches!(error, HttpTargetError::Userinfo));
     }
 
@@ -248,15 +259,15 @@ mod tests {
         // host `"nohost"` rather than an empty one. An empty authority with
         // nothing after it is what actually triggers `url`'s own
         // `EmptyHost`, which this module reads as `NoHost`.
-        let allow = allow("api.example.com");
-        let error = validate_target_url("https:///", &allow).unwrap_err();
+        let policy = policy("api.example.com");
+        let error = validate_target_url("https:///", &policy).unwrap_err();
         assert!(matches!(error, HttpTargetError::NoHost));
     }
 
     #[test]
     fn a_permitted_host_round_trips_with_its_path_and_query() {
-        let allow = allow("api.example.com");
-        let parsed = validate_target_url("https://api.example.com/hook?job=1", &allow)
+        let policy = policy("api.example.com");
+        let parsed = validate_target_url("https://api.example.com/hook?job=1", &policy)
             .expect("permitted host must be accepted");
         assert_eq!(parsed.path(), "/hook");
         assert_eq!(parsed.query(), Some("job=1"));
@@ -264,13 +275,26 @@ mod tests {
 
     #[test]
     fn an_ip_literal_host_is_matched_through_the_allowlist_address_path() {
-        let permitted = allow("10.0.0.0/8");
+        let permitted = policy("10.0.0.0/8");
         let parsed = validate_target_url("http://10.1.2.3:8080/hook", &permitted)
             .expect("an address inside the CIDR must be accepted");
         assert_eq!(parsed.host_str(), Some("10.1.2.3"));
 
-        let elsewhere = allow("9.0.0.0/8");
+        let elsewhere = policy("9.0.0.0/8");
         let refused = validate_target_url("http://10.1.2.3:8080/hook", &elsewhere);
         assert!(matches!(refused, Err(HttpTargetError::HostRefused(_))));
+    }
+
+    #[test]
+    fn a_literal_loopback_host_is_refused_even_when_the_allowlist_names_it() {
+        // The URL-layer regression test for the same finding
+        // `http::egress::tests::loopback_is_refused_even_when_the_allowlist_names_it`
+        // covers at the policy layer: naming `127.0.0.0/8` on the allowlist
+        // is not, on its own, permission to reach `127.0.0.1` — and an
+        // IP-literal host has no resolver to catch what this URL-parsing
+        // layer lets through.
+        let policy = policy("127.0.0.0/8");
+        let error = validate_target_url("http://127.0.0.1:8080/hook", &policy).unwrap_err();
+        assert!(matches!(error, HttpTargetError::HostRefused(host) if host == "127.0.0.1"));
     }
 }
