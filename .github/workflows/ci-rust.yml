@@ -133,6 +133,13 @@ jobs:
       - name: Check push-dispatch build with the listener-backed backends
         run: cargo check --workspace --features push-dispatch,postgres,redis
 
+      # Off in every shipped artifact, so only CI keeps the HTTP push target
+      # compiling and its contract tests running.
+      - name: Check build with the http-target feature
+        run: cargo test --workspace --features http-target
+      - name: Check http-target against the other backends
+        run: cargo check --workspace --features http-target,postgres,redis
+
   rust-test-postgres:
     name: Rust Tests (PostgreSQL)
     runs-on: ubuntu-latest

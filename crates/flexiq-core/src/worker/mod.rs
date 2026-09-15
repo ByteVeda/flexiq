@@ -9,6 +9,10 @@ pub mod executor;
 // `BINDING_CONTRACT.md`, which pins the algorithm and its vectors.
 pub mod fingerprint;
 pub mod frame_transport;
+/// Push dispatch over HTTP: [`HttpTargetConfig`](http_target::HttpTargetConfig)
+/// and its wire contract. The dispatcher that actually POSTs arrives later.
+#[cfg(feature = "http-target")]
+pub mod http_target;
 pub mod protocol;
 pub mod registry;
 pub mod remote;
