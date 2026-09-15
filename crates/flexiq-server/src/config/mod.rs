@@ -9,6 +9,7 @@ pub mod backend;
 pub mod dashboard;
 pub mod grpc;
 pub mod listen;
+pub mod push;
 pub mod webhook;
 
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ use anyhow::{bail, Context, Result};
 use crate::config::dashboard::DashboardConfig;
 use crate::config::grpc::GrpcConfig;
 use crate::config::listen::AttachConfig;
+use crate::config::push::PushTargetConfig;
 use crate::config::webhook::WebhookConfig;
 
 /// Environment variables as a lookup map.
@@ -50,6 +52,9 @@ pub struct Config {
     pub webhook: Option<WebhookConfig>,
     /// Where the `flexiq.v1` gRPC door listens. `None` disables it.
     pub grpc: Option<GrpcConfig>,
+    /// The endpoint the scheduler POSTs claimed jobs to. `None` disables push
+    /// dispatch. Config only until the next commit wires it into `Worker`.
+    pub push: Option<PushTargetConfig>,
     /// Whether opening storage applies pending schema changes. Off for a
     /// deployment whose database credentials do not permit DDL at runtime; the
     /// schema must then be applied out of band before the server starts.
@@ -80,6 +85,7 @@ impl Config {
             dashboard: dashboard::from_env(env, allow_insecure)?,
             webhook: webhook::from_env(env)?,
             grpc: grpc::from_env(env, namespace.as_deref())?,
+            push: push::from_env(env)?,
             namespace,
         };
 
@@ -87,21 +93,38 @@ impl Config {
             && config.dashboard.is_none()
             && config.webhook.is_none()
             && config.grpc.is_none()
+            && config.push.is_none()
         {
             bail!(
                 "nothing to run: set FLEXIQ_LISTEN (executor attach), \
                  FLEXIQ_DASHBOARD (dashboard), FLEXIQ_WEBHOOK_LISTEN (sidecar \
-                 injection), FLEXIQ_GRPC_LISTEN (the gRPC door), or any combination"
+                 injection), FLEXIQ_GRPC_LISTEN (the gRPC door), \
+                 FLEXIQ_PUSH_TARGET_URL (push dispatch), or any combination"
             );
         }
         // The webhook is the one role that touches no storage — it rewrites pod
         // specs and never reads a job — so it alone may run without a DSN.
         if config.dsn.is_none()
-            && (config.attach.is_some() || config.dashboard.is_some() || config.grpc.is_some())
+            && (config.attach.is_some()
+                || config.dashboard.is_some()
+                || config.grpc.is_some()
+                || config.push.is_some())
         {
             bail!(
                 "FLEXIQ_DSN is required — the storage connection string. Only a \
                  webhook-only deployment (FLEXIQ_WEBHOOK_LISTEN alone) can omit it."
+            );
+        }
+        // `Worker` holds exactly one dispatcher: attach waits for an executor to
+        // connect in, push dispatch calls out. Running both would race two
+        // dispatchers for the same queues — a routing policy that has to be
+        // designed, not defaulted.
+        if config.push.is_some() && config.attach.is_some() {
+            bail!(
+                "FLEXIQ_PUSH_TARGET_URL and FLEXIQ_LISTEN cannot both be set — a \
+                 Worker holds exactly one dispatcher, and running both would race \
+                 two dispatchers for the same queues. Choose push dispatch or \
+                 executor attach for this process."
             );
         }
         Ok(config)
@@ -275,5 +298,64 @@ mod tests {
         ]))
         .expect_err("must reject a missing DSN");
         assert!(error.to_string().contains("FLEXIQ_DSN"));
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_push_only_deployment_is_a_deployment() {
+        let config = Config::from_map(&env(&[
+            ("FLEXIQ_DSN", ":memory:"),
+            ("FLEXIQ_PUSH_TARGET_URL", "https://push.example.com/hook"),
+            ("FLEXIQ_PUSH_TARGET_CAPACITY", "10"),
+            ("FLEXIQ_PUSH_TARGET_ALLOW", "push.example.com"),
+        ]))
+        .expect("a push-only deployment is a deployment");
+        assert!(config.push.is_some());
+        assert!(config.attach.is_none());
+        assert!(config.dashboard.is_none());
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_push_target_still_needs_a_dsn() {
+        let error = Config::from_map(&env(&[
+            ("FLEXIQ_PUSH_TARGET_URL", "https://push.example.com/hook"),
+            ("FLEXIQ_PUSH_TARGET_CAPACITY", "10"),
+            ("FLEXIQ_PUSH_TARGET_ALLOW", "push.example.com"),
+        ]))
+        .expect_err("must reject a missing DSN");
+        assert!(error.to_string().contains("FLEXIQ_DSN"));
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn push_and_attach_cannot_share_one_process() {
+        let error = Config::from_map(&env(&[
+            ("FLEXIQ_DSN", ":memory:"),
+            ("FLEXIQ_PUSH_TARGET_URL", "https://push.example.com/hook"),
+            ("FLEXIQ_PUSH_TARGET_CAPACITY", "10"),
+            ("FLEXIQ_PUSH_TARGET_ALLOW", "push.example.com"),
+            ("FLEXIQ_LISTEN", "127.0.0.1:7777"),
+        ]))
+        .expect_err("must reject two dispatchers in one process");
+        let message = error.to_string();
+        assert!(message.contains("FLEXIQ_PUSH_TARGET_URL"), "{message}");
+        assert!(message.contains("FLEXIQ_LISTEN"), "{message}");
+    }
+
+    #[cfg(all(feature = "http-target", feature = "grpc"))]
+    #[test]
+    fn a_push_target_beside_the_grpc_role_is_allowed() {
+        let config = Config::from_map(&env(&[
+            ("FLEXIQ_DSN", ":memory:"),
+            ("FLEXIQ_NAMESPACE", "prod"),
+            ("FLEXIQ_PUSH_TARGET_URL", "https://push.example.com/hook"),
+            ("FLEXIQ_PUSH_TARGET_CAPACITY", "10"),
+            ("FLEXIQ_PUSH_TARGET_ALLOW", "push.example.com"),
+            ("FLEXIQ_GRPC_LISTEN", "127.0.0.1:50051"),
+        ]))
+        .expect("push dispatch and the gRPC producer door may run together");
+        assert!(config.push.is_some());
+        assert!(config.grpc.is_some());
     }
 }

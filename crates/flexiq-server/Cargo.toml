@@ -41,6 +41,11 @@ grpc = [
   "dep:async-trait",
   "dep:chrono",
 ]
+# Push-based dispatch (#843/#844). Off by default so a build that does not
+# want it does not compile flexiq-core's dispatcher, egress guard and
+# outbound-auth signers; FLEXIQ_PUSH_TARGET_URL is refused outright by a
+# binary built without it, rather than silently ignored.
+http-target = ["flexiq-core/http-target"]
 
 [dependencies]
 flexiq-core = { workspace = true }

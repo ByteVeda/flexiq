@@ -3,7 +3,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use flexiq_server::config::{
-    dashboard::scrub_bootstrap_password, listen::scrub_attach_token, Config,
+    dashboard::scrub_bootstrap_password, listen::scrub_attach_token,
+    push::scrub_push_target_secrets, Config,
 };
 use flexiq_server::runtime;
 use flexiq_server::tokens::cli::TokenCommand;
@@ -60,10 +61,59 @@ Configuration (environment only):
                                  attach stream (default: 30; 0 is unbounded)
   FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS  calls one connection may have in flight
                                  (default: 256; 0 is unlimited)
+  FLEXIQ_PUSH_TARGET_URL        where the scheduler POSTs a claimed job, e.g.
+                                 https://executor.internal/run (default: off).
+                                 Requires a build with the `http-target` cargo
+                                 feature; mutually exclusive with FLEXIQ_LISTEN
+  FLEXIQ_PUSH_TARGET_CAPACITY   jobs the target may run at once (required — a
+                                 push target announces no slots of its own)
+  FLEXIQ_PUSH_TARGET_ALLOW      comma-separated hosts and CIDRs the target's
+                                 resolved address must match (required);
+                                 loopback, link-local and cloud metadata are
+                                 refused however this is set
+  FLEXIQ_PUSH_TARGET_TIMEOUT    seconds one dispatch may take before it is
+                                 abandoned as failed (default: 60)
+  FLEXIQ_PUSH_TARGET_CONNECT_TIMEOUT  seconds the connection may take to establish
+                                 (default: 5)
+  FLEXIQ_PUSH_TARGET_DRAIN      seconds shutdown waits for in-flight
+                                 dispatches before abandoning them (default:
+                                 30)
+  FLEXIQ_PUSH_TARGET_MAX_REQUEST_BYTES  ceiling on one job's request body (default:
+                                 8388608, i.e. 8 MiB)
+  FLEXIQ_PUSH_TARGET_MAX_RESPONSE_BYTES  ceiling on one response body read back
+                                 (default: 1048576, i.e. 1 MiB)
+  FLEXIQ_PUSH_TARGET_AUTH       none | bearer | hmac | oidc | sigv4 (default:
+                                 none)
+  FLEXIQ_PUSH_TARGET_TOKEN      bearer secret; required for
+                                 FLEXIQ_PUSH_TARGET_AUTH=bearer
+  FLEXIQ_PUSH_TARGET_HMAC_SECRET  HMAC-SHA256 signing secret; required for
+                                 FLEXIQ_PUSH_TARGET_AUTH=hmac
+  FLEXIQ_PUSH_TARGET_HMAC_KEY_ID  key identifier sent alongside an HMAC
+                                 signature (optional)
+  FLEXIQ_PUSH_TARGET_OIDC_SOURCE  google | azure-imds | azure-app-service;
+                                 required for FLEXIQ_PUSH_TARGET_AUTH=oidc
+  FLEXIQ_PUSH_TARGET_OIDC_AUDIENCE  the aud claim the receiver checks; required
+                                 for FLEXIQ_PUSH_TARGET_AUTH=oidc
+  FLEXIQ_PUSH_TARGET_AZURE_CLIENT_ID  a user-assigned identity's client id, for
+                                 FLEXIQ_PUSH_TARGET_OIDC_SOURCE=azure-imds (at
+                                 most one of this, ..._AZURE_OBJECT_ID and
+                                 ..._AZURE_MSI_RES_ID may be set)
+  FLEXIQ_PUSH_TARGET_AZURE_OBJECT_ID  a user-assigned identity's object id; see
+                                 FLEXIQ_PUSH_TARGET_AZURE_CLIENT_ID
+  FLEXIQ_PUSH_TARGET_AZURE_MSI_RES_ID  a user-assigned identity's Azure resource id;
+                                 see FLEXIQ_PUSH_TARGET_AZURE_CLIENT_ID
+  FLEXIQ_PUSH_TARGET_AWS_SOURCE  default-chain | environment | container | imds
+                                 (default: default-chain); for
+                                 FLEXIQ_PUSH_TARGET_AUTH=sigv4
+  FLEXIQ_PUSH_TARGET_AWS_REGION  overrides the region inferred from the target
+                                 URL
+  FLEXIQ_PUSH_TARGET_AWS_SERVICE  overrides the service inferred from the target
+                                 URL
 
-At least one of FLEXIQ_LISTEN, FLEXIQ_DASHBOARD, FLEXIQ_WEBHOOK_LISTEN or
-FLEXIQ_GRPC_LISTEN must be set. FLEXIQ_DSN is required for all but a
-webhook-only deployment.";
+At least one of FLEXIQ_LISTEN, FLEXIQ_DASHBOARD, FLEXIQ_WEBHOOK_LISTEN,
+FLEXIQ_GRPC_LISTEN or FLEXIQ_PUSH_TARGET_URL must be set. FLEXIQ_DSN is
+required for all but a webhook-only deployment. FLEXIQ_PUSH_TARGET_URL and
+FLEXIQ_LISTEN are mutually exclusive — a Worker holds exactly one dispatcher.";
 
 #[derive(Parser)]
 #[command(
@@ -100,5 +150,6 @@ fn main() -> Result<()> {
     let config = Config::from_env()?;
     scrub_bootstrap_password();
     scrub_attach_token();
+    scrub_push_target_secrets();
     runtime::run(config)
 }
