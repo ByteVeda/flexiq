@@ -3,7 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::spanned::Spanned;
-use syn::{Error, FnArg, Ident, ItemFn, Pat, Result, Type};
+use syn::{Error, FnArg, Ident, ItemFn, Pat, Result, Safety, Type};
 
 use crate::attrs::TaskAttrs;
 
@@ -286,7 +286,9 @@ fn reject_unsupported(item: &ItemFn) -> Result<()> {
              `flexiq_core::Worker::register_async` directly",
         ));
     }
-    if let Some(token) = item.sig.unsafety {
+    // syn 3 folds `unsafe` into a `Safety` enum that also carries `safe fn`,
+    // which only an extern block can spell — `Unsafe` is the arm a task can hit.
+    if let Safety::Unsafe(token) = item.sig.safety {
         return Err(Error::new(
             token.span(),
             "an unsafe task is not supported: the expansion would emit a safe `run` and call \
