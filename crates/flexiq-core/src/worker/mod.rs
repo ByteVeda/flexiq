@@ -9,8 +9,9 @@ pub mod executor;
 // `BINDING_CONTRACT.md`, which pins the algorithm and its vectors.
 pub mod fingerprint;
 pub mod frame_transport;
-/// Push dispatch over HTTP: [`HttpTargetConfig`](http_target::HttpTargetConfig)
-/// and its wire contract. The dispatcher that actually POSTs arrives later.
+// Documented by its own module header, like every sibling above: an outer doc
+// comment here would merge with that header and make rustdoc resolve the
+// module's own intra-doc links in *this* module's scope instead of its own.
 #[cfg(feature = "http-target")]
 pub mod http_target;
 pub mod protocol;

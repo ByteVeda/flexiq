@@ -2,22 +2,71 @@
 //! to, for platforms that start a process from an inbound request (Cloud Run,
 //! Lambda, and similar).
 //!
-//! A push target is a [`WorkerDispatcher`](crate::worker::WorkerDispatcher),
+//! A push target is a [`WorkerDispatcher`],
 //! deliberately not a [`Transport`](crate::worker::transport::Transport): an
 //! HTTP request/response pair has no duplex stream to split and sends no
 //! `hello` frame, so it announces no slots — its capacity is configuration,
 //! not negotiation. `HttpTargetConfig`'s `capacity` field is that number.
 //!
-//! This module is the configuration and URL validation half of the contract;
-//! the private `contract` submodule is what actually goes on the wire. The
-//! dispatcher itself — the `WorkerDispatcher` that POSTs — arrives in a
-//! later commit.
+//! This module is the configuration, the URL validation and the dispatcher
+//! itself; the `contract` submodule is what actually goes on the wire, and
+//! `attempt` is the per-attempt state machine.
+//!
+//! # Exactly one result per job
+//!
+//! Every job handed to [`WorkerDispatcher::run`] produces **exactly one**
+//! [`JobResult`], or is dropped by the lease re-check because someone else
+//! already settled it. Never zero by accident, never two. Every path out of
+//! the private `attempt` module's `run_one` settles: no budget, an oversized
+//! payload, a header that will not render, a signing failure, a transport
+//! failure, a deadline, a cancel, a refusal, an outcome — and an abandonment
+//! at the shutdown drain deadline, which settles as a retryable failure
+//! rather than orphaning the lease.
+//!
+//! # Why a late target cannot corrupt FlexiQ state
+//!
+//! The budget expires, so the response future is dropped and one
+//! `Failure { should_retry, timed_out }` is emitted. `release_in_flight`
+//! retires the lease; `authorize_attempt` says `Authorized`, because nothing
+//! has superseded the attempt yet; the retry bumps `retry_count` and revokes
+//! the claim in its own transaction. The next dispatch wins a *new* claim
+//! under a new epoch, so a new lease is issued and the old one is stale, and
+//! the original target eventually finishes into a closed connection.
+//!
+//! Duplicate **side effects** are real, and they are the target's to dedupe —
+//! which is what [`idempotency_key`] is for. Duplicate **FlexiQ state** is
+//! impossible.
+//!
+//! # What `cancel()` promises, per topology
+//!
+//! | Topology | What `cancel()` promises |
+//! |---|---|
+//! | Native | The handler observes the storage flag and stops. |
+//! | Attach | The scheduler sends a `cancel` frame; the executor stops. |
+//! | **Push** | The request is abandoned, the attempt settles `Cancelled`, the target keeps running and its side effects still happen, and its result is fenced out on arrival. |
+//!
+//! There is deliberately no storage-polling cancel loop here: reaching the
+//! target's own process is issue #846's design, and a second cancel path
+//! invented now would have to be unwound when it lands.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use crate::http::EgressPolicy;
-use crate::net::Allowlist;
+use async_trait::async_trait;
+use crossbeam_channel::Sender;
+use tokio::sync::{watch, Notify, Semaphore};
+use tokio::task::JoinSet;
 
+use crate::http::{DispatchClient, EgressPolicy, OutboundAuth, Signer};
+use crate::job::Job;
+use crate::lease::{Lease, LeaseBook};
+use crate::net::Allowlist;
+use crate::scheduler::JobResult;
+use crate::worker::{Capacity, SideChannel, WorkerDispatcher};
+
+mod attempt;
 mod contract;
 pub use contract::{
     idempotency_key, Outcome, Refusal, ACCEPTED_NOT_SETTLED, ENVELOPE_CONTENT_TYPE, HDR_ATTEMPT,
@@ -59,6 +108,13 @@ pub struct HttpTargetConfig {
     pub max_metadata_header_bytes: usize,
     /// `User-Agent` sent with every dispatch.
     pub user_agent: String,
+    /// How the scheduler proves to the target that it is the scheduler.
+    pub auth: OutboundAuth,
+    /// Where per-dispatch middleware toggles are resolved from.
+    ///
+    /// `None` dispatches with an empty disable list, which is what an embedder
+    /// with no dashboard wants.
+    pub side_channel: Option<std::sync::Arc<dyn SideChannel>>,
 }
 
 impl HttpTargetConfig {
@@ -92,12 +148,24 @@ impl HttpTargetConfig {
             // header caps common proxies enforce.
             max_metadata_header_bytes: 8 * 1024,
             user_agent: format!("flexiq-core/{}", env!("CARGO_PKG_VERSION")),
+            // Send nothing until an operator says what to send. A target
+            // that needs no credential is the only one this is correct for,
+            // and it is the only default that cannot be a wrong guess.
+            auth: OutboundAuth::None,
+            // No dashboard, no toggles: an embedder that installs one gets
+            // the resolved disable list on every dispatch, and one that does
+            // not dispatches with an empty one.
+            side_channel: None,
         }
     }
 }
 
-/// Hand-written because none of these fields is a secret in this commit —
-/// unlike `RemoteConfig::auth_token`, there is nothing here to redact.
+/// Hand-written for two reasons: a `dyn SideChannel` is not `Debug`, and
+/// requiring it would push the bound onto every implementation for the sake
+/// of a log line; and [`Self::auth`] holds credential material, so it is
+/// rendered through its own already-redacted `Debug` rather than skipped —
+/// which scheme is configured is worth seeing, and the secret behind it is
+/// not.
 impl std::fmt::Debug for HttpTargetConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpTargetConfig")
@@ -112,6 +180,8 @@ impl std::fmt::Debug for HttpTargetConfig {
             .field("max_response_bytes", &self.max_response_bytes)
             .field("max_metadata_header_bytes", &self.max_metadata_header_bytes)
             .field("user_agent", &self.user_agent)
+            .field("auth", &self.auth)
+            .field("side_channel", &self.side_channel.is_some())
             .finish()
     }
 }
@@ -144,6 +214,9 @@ pub enum HttpTargetError {
     /// The HTTP client could not be built.
     #[error("push target client could not be built: {0}")]
     Client(String),
+    /// The configured outbound auth scheme could not be turned into a signer.
+    #[error("push target auth could not be configured: {0}")]
+    Auth(#[from] crate::http::AuthError),
 }
 
 /// Parse and vet a target URL: absolute, `http`/`https`, a host, no userinfo,
@@ -155,10 +228,6 @@ pub enum HttpTargetError {
 /// IP-literal host never reaches that resolver — the connector dials it
 /// directly — so `EgressPolicy::permits_host` applies the unconditional
 /// refusals to it right here instead.
-// `pub(crate)` with no caller yet: the dispatcher that builds a target from
-// `HttpTargetConfig` arrives in a later commit. This file's own tests are
-// the only caller until then.
-#[allow(dead_code)]
 pub(crate) fn validate_target_url(
     url: &str,
     policy: &EgressPolicy,
@@ -201,6 +270,305 @@ pub(crate) fn validate_target_url(
     }
 
     Ok(parsed)
+}
+
+/// Recover a guard from a poisoned lock instead of cascading the panic.
+///
+/// The same choice `remote.rs` makes for the same reason: the state behind
+/// these locks is plain bookkeeping — a cancel channel and a lease book
+/// handle — so reading it after a panic elsewhere stays safe, and a second
+/// panic here would take down a dispatch loop that is otherwise fine.
+fn recover<T>(poisoned: PoisonError<T>) -> T {
+    poisoned.into_inner()
+}
+
+/// Everything one attempt needs, shared by the dispatch loop and every task
+/// it spawns.
+struct Shared {
+    /// Target configuration, minus the credential: [`HttpDispatchTarget::new`]
+    /// moves `auth` into the signer and leaves [`OutboundAuth::None`] behind,
+    /// so nothing that renders this config later can reprint the material.
+    config: HttpTargetConfig,
+    /// The validated, parsed target. The `url::Url` rather than the string,
+    /// because the signer has to canonicalise the same parse the client
+    /// resolves with.
+    url: url::Url,
+    /// Origin of [`Self::url`], for logs and for the error a refusal stores.
+    target: String,
+    /// The guarded client every dispatch is dialled through.
+    client: DispatchClient,
+    /// The configured scheme, or `None` for [`OutboundAuth::None`].
+    signer: Option<Arc<dyn Signer>>,
+    /// Slots. Lives here rather than inside `run` because
+    /// [`HttpDispatchTarget::capacity`] has to answer before `run` starts and
+    /// `shutdown` has to be able to close it.
+    semaphore: Arc<Semaphore>,
+    /// Set by `shutdown`; stops `run` taking another job off the channel.
+    shutdown: AtomicBool,
+    /// Set once the drain budget expires, so every attempt still in flight
+    /// gives up and settles rather than being aborted with nothing emitted.
+    /// Never cleared — by the time it is set, `run` has already stopped
+    /// spawning attempts that could observe it.
+    abandon: watch::Sender<bool>,
+    /// The scheduler's lease book, once a worker has installed one.
+    leases: Mutex<Option<Arc<LeaseBook>>>,
+    /// One wake-up channel per in-flight job, for [`WorkerDispatcher::notify_cancel`].
+    cancels: Mutex<HashMap<String, Arc<Notify>>>,
+}
+
+impl Shared {
+    /// The lease book, once a worker has installed one.
+    fn lease_book(&self) -> Option<Arc<LeaseBook>> {
+        self.leases.lock().unwrap_or_else(recover).clone()
+    }
+
+    /// Register a wake-up channel for `job_id`, replacing any earlier one.
+    ///
+    /// Installed before the request is built, so a cancel that arrives while
+    /// the side channel is still being consulted is stored rather than lost —
+    /// [`Notify::notify_one`] leaves a permit behind for a waiter that has
+    /// not parked yet.
+    fn register_cancel(&self, job_id: &str) -> Arc<Notify> {
+        let notify = Arc::new(Notify::new());
+        self.cancels
+            .lock()
+            .unwrap_or_else(recover)
+            .insert(job_id.to_string(), Arc::clone(&notify));
+        notify
+    }
+
+    /// Forget `job_id`'s wake-up channel, but only when it is still the one
+    /// this attempt registered.
+    ///
+    /// Guarded the way [`LeaseBook::retire`] is guarded, and for the same
+    /// reason: a straggler tidying up after itself must not evict the channel
+    /// a newer dispatch of the same id just installed.
+    fn unregister_cancel(&self, job_id: &str, notify: &Arc<Notify>) {
+        let mut cancels = self.cancels.lock().unwrap_or_else(recover);
+        if cancels
+            .get(job_id)
+            .is_some_and(|held| Arc::ptr_eq(held, notify))
+        {
+            cancels.remove(job_id);
+        }
+    }
+
+    /// A receiver that resolves once the drain budget has expired.
+    fn abandon_signal(&self) -> watch::Receiver<bool> {
+        self.abandon.subscribe()
+    }
+
+    /// Whether the dispatch this attempt made is still the current one.
+    ///
+    /// The same disagreement test as `Shared::frame_is_current` in
+    /// `remote.rs`, with the same three absences answering "current" without
+    /// comparing anything:
+    ///
+    /// - no book — this dispatcher was never given one, so it mints no leases;
+    /// - no entry for the job — nothing was dispatched under a lease, or the
+    ///   dispatch has already settled, and in both cases the storage fence is
+    ///   what still decides;
+    /// - no lease on this dispatch — the book held nothing for the job when
+    ///   the request went out, so there is nothing to disagree with.
+    fn dispatch_is_current(&self, job_id: &str, lease: Option<&Lease>) -> bool {
+        let Some(book) = self.lease_book() else {
+            return true;
+        };
+        let Some(current) = book.current(job_id) else {
+            return true;
+        };
+        match lease {
+            Some(lease) => *lease == current,
+            None => true,
+        }
+    }
+}
+
+/// A dispatch target the scheduler calls, rather than one that calls in.
+///
+/// A sibling of [`NativeDispatcher`](crate::worker::NativeDispatcher) and
+/// [`RemoteDispatcher`](crate::worker::RemoteDispatcher), deliberately **not**
+/// a [`Transport`](crate::worker::Transport): an HTTP request/response pair
+/// has no duplex stream to split, no `hello` frame, and therefore announces no
+/// slots — its capacity is configuration.
+pub struct HttpDispatchTarget {
+    shared: Arc<Shared>,
+}
+
+impl HttpDispatchTarget {
+    /// Validate the target URL, build the guarded client, and build the signer.
+    ///
+    /// A misconfigured target fails here, at construction, rather than at the
+    /// first job — an operator sees it at boot instead of in a dead-letter
+    /// queue an hour later.
+    pub fn new(config: HttpTargetConfig) -> Result<Self, HttpTargetError> {
+        let mut config = config;
+        if config.capacity == 0 {
+            return Err(HttpTargetError::ZeroCapacity);
+        }
+
+        let policy = Arc::new(EgressPolicy::from_target(&config));
+        let url = validate_target_url(&config.url, &policy)?;
+        let client = DispatchClient::new(Arc::clone(&policy), config.connect_timeout)?;
+
+        // Moved out rather than cloned: the credential belongs to the signer
+        // from here on, and the config this target keeps is one a log line
+        // can render without a second redaction rule to get right.
+        let auth = std::mem::replace(&mut config.auth, OutboundAuth::None);
+        let signer = auth.signer(&client, &url)?;
+
+        let capacity = config.capacity as usize;
+        let (abandon, _) = watch::channel(false);
+        Ok(Self {
+            shared: Arc::new(Shared {
+                // The origin, not the whole URL: this value lands in
+                // `job_errors`, in the dead-letter queue and in every log
+                // line about the target, and an operator's path or query is
+                // exactly where a capability token would sit. `contract.rs`
+                // already promises a refusal "carries the target's origin".
+                target: url.origin().ascii_serialization(),
+                url,
+                config,
+                client,
+                signer,
+                semaphore: Arc::new(Semaphore::new(capacity)),
+                shutdown: AtomicBool::new(false),
+                abandon,
+                leases: Mutex::new(None),
+                cancels: Mutex::new(HashMap::new()),
+            }),
+        })
+    }
+
+    /// Total and free slots.
+    ///
+    /// A concrete method, not a trait one: putting it on [`WorkerDispatcher`]
+    /// would make four other dispatchers invent a number, and a defaulted zero
+    /// is the same silent no-op [`WorkerDispatcher::set_lease_book`]'s default
+    /// already demonstrates the cost of.
+    pub fn capacity(&self) -> Capacity {
+        Capacity {
+            // One target is one endpoint. Zero would read as slots coming
+            // from nowhere; nothing is *attached*, but something is there.
+            executors: 1,
+            total_slots: self.shared.config.capacity,
+            free_slots: self.shared.semaphore.available_permits() as u32,
+        }
+    }
+
+    /// The configured target, for a log line. Carries no credential: userinfo
+    /// is refused at construction and this is the origin, without the path or
+    /// query an operator may have put a token in.
+    pub fn target(&self) -> &str {
+        &self.shared.target
+    }
+}
+
+/// Drive `tasks` to completion.
+async fn join_all(tasks: &mut JoinSet<()>) {
+    while tasks.join_next().await.is_some() {}
+}
+
+#[async_trait]
+impl WorkerDispatcher for HttpDispatchTarget {
+    async fn run(
+        &self,
+        mut job_rx: tokio::sync::mpsc::Receiver<Job>,
+        result_tx: Sender<JobResult>,
+    ) {
+        // Once, at the top: forgetting `set_lease_book` is a silent no-op
+        // with no compile-time signal, and the cost is that a straggler's
+        // answer cannot be told from the current dispatch's.
+        if self.shared.lease_book().is_none() {
+            log::warn!(
+                "[flexiq] push target {} is dispatching without a lease book; call \
+                 WorkerDispatcher::set_lease_book so a late target's answer can be fenced out",
+                self.shared.target
+            );
+        }
+
+        let mut tasks: JoinSet<()> = JoinSet::new();
+        while let Some(job) = job_rx.recv().await {
+            if self.shared.shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            // Parks only at real capacity — unlike `RemoteDispatcher::place`,
+            // which serializes placement because it has to pick an executor.
+            let permit = match Arc::clone(&self.shared.semaphore).acquire_owned().await {
+                Ok(permit) => permit,
+                // Closed by `shutdown`, which is the only closer.
+                Err(_) => break,
+            };
+            tasks.spawn(attempt::run_one(
+                Arc::clone(&self.shared),
+                job,
+                permit,
+                result_tx.clone(),
+            ));
+        }
+
+        let drain = self.shared.config.shutdown_drain;
+        if tokio::time::timeout(drain, join_all(&mut tasks))
+            .await
+            .is_err()
+        {
+            log::warn!(
+                "[flexiq] push target {} did not drain {} request(s) within the shutdown \
+                 budget; abandoning them — each settles as a retryable failure",
+                self.shared.target,
+                tasks.len()
+            );
+            // Signalled, not aborted: an aborted task emits nothing, and a
+            // job handed in with no result is a lease nobody retires until
+            // the reaper gets to it. Each attempt drops its request and
+            // settles instead.
+            let _ = self.shared.abandon.send(true);
+            // Unbounded, like `RemoteDispatcher::drain_and_close`'s final
+            // reader join: what is left is a settle and a channel send, and
+            // a crossbeam send to a dropped receiver returns `Err` rather
+            // than parking. The budget above is what bounds the *requests*.
+            join_all(&mut tasks).await;
+        }
+    }
+
+    fn shutdown(&self) {
+        self.shared.shutdown.store(true, Ordering::SeqCst);
+        // Wakes a `run` parked on `acquire_owned` at full capacity; held
+        // permits are unaffected, so in-flight attempts still drain.
+        self.shared.semaphore.close();
+    }
+
+    fn notify_cancel(&self, job_id: &str) {
+        let notify = self
+            .shared
+            .cancels
+            .lock()
+            .unwrap_or_else(recover)
+            .get(job_id)
+            .cloned();
+        if let Some(notify) = notify {
+            // `notify_one`, not `notify_waiters`: a cancel that arrives
+            // between registration and the `select!` leaves a permit behind
+            // instead of being dropped on the floor.
+            notify.notify_one();
+        }
+        // A job still waiting for a slot has registered no channel yet, so its
+        // cancel is dropped: there is no request to abandon. Stated rather
+        // than papered over — the same race every pool that keys a cancel on
+        // an in-flight job has.
+    }
+
+    fn set_lease_book(&self, leases: Arc<LeaseBook>) {
+        *self.shared.leases.lock().unwrap_or_else(recover) = Some(leases);
+    }
+
+    /// Deliberately empty rather than left to the trait default.
+    ///
+    /// A push target performs no fenced write on the scheduler's behalf — no
+    /// step commits, no side-channel writes originate here — so the claim
+    /// owner has nowhere to go. Written out so the skip is visible at this
+    /// dispatcher rather than inherited silently.
+    fn set_claim_owner(&self, _owner: &str) {}
 }
 
 #[cfg(test)]
@@ -296,5 +664,70 @@ mod tests {
         let policy = policy("127.0.0.0/8");
         let error = validate_target_url("http://127.0.0.1:8080/hook", &policy).unwrap_err();
         assert!(matches!(error, HttpTargetError::HostRefused(host) if host == "127.0.0.1"));
+    }
+
+    #[test]
+    fn the_configs_debug_names_the_scheme_without_the_credential() {
+        // Same technique as `http::auth`'s own `the_config_never_reaches_a_
+        // formatter`: alternating letter/digit, so every 4-character window
+        // carries a digit and cannot coincide with a purely alphabetic run
+        // elsewhere in the rendered `Debug`.
+        let secret_value = "a1b2c3d4e5f6g7h8";
+        let mut config =
+            HttpTargetConfig::new("https://api.example.com/hook", 4, allow("api.example.com"));
+        config.auth = OutboundAuth::Bearer(crate::worker::Secret::new(secret_value));
+
+        let rendered = format!("{config:?}");
+
+        assert!(!rendered.contains(secret_value));
+        for window in secret_value.as_bytes().windows(4) {
+            let fragment = std::str::from_utf8(window).expect("ascii");
+            assert!(
+                !rendered.contains(fragment),
+                "{fragment} leaked into the rendered config"
+            );
+        }
+        assert!(
+            rendered.contains("Bearer"),
+            "which scheme is configured is worth seeing: {rendered}"
+        );
+        assert!(
+            rendered.contains("side_channel: false"),
+            "a `dyn SideChannel` renders as whether there is one: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_target_reports_the_capacity_it_was_configured_with() {
+        let target = HttpDispatchTarget::new(HttpTargetConfig::new(
+            "https://api.example.com/hook",
+            3,
+            allow("api.example.com"),
+        ))
+        .expect("an allowlisted https target builds");
+
+        let capacity = target.capacity();
+
+        assert_eq!(capacity.total_slots, 3);
+        assert_eq!(
+            capacity.free_slots, 3,
+            "nothing is in flight before `run` starts"
+        );
+        assert_eq!(capacity.executors, 1, "one target is one endpoint");
+    }
+
+    #[test]
+    fn the_targets_label_is_the_origin_and_drops_the_query() {
+        // `target()` is interpolated into every stored job error and every log
+        // line about this dispatcher, and an operator's query string is
+        // exactly where a capability token would sit.
+        let target = HttpDispatchTarget::new(HttpTargetConfig::new(
+            "https://api.example.com/hook?token=a1b2c3d4",
+            1,
+            allow("api.example.com"),
+        ))
+        .expect("an allowlisted https target builds");
+
+        assert_eq!(target.target(), "https://api.example.com");
     }
 }

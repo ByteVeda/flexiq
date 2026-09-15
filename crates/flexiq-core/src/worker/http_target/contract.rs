@@ -32,7 +32,13 @@ pub const HDR_NAMESPACE: &str = "x-flexiq-namespace";
 pub const HDR_LEASE: &str = "x-flexiq-lease";
 /// [`idempotency_key`]'s value, for a target that dedupes on it.
 pub const HDR_IDEMPOTENCY_KEY: &str = "x-flexiq-idempotency-key";
-/// Milliseconds until the job's own execution deadline, at dispatch time.
+/// Milliseconds this dispatch will wait for an answer.
+///
+/// The request budget, not the job's raw remaining timeout: it is the job's
+/// own execution deadline less the reaper's margin, capped by the target's
+/// configured request ceiling. Sending the raw deadline would promise a
+/// target more time than the scheduler will actually wait for it, and an
+/// answer that arrives after this is fenced out on arrival.
 pub const HDR_DEADLINE_MS: &str = "x-flexiq-deadline-ms";
 /// Comma-separated middleware the operator has disabled for this task.
 pub const HDR_DISABLED_MIDDLEWARE: &str = "x-flexiq-disabled-middleware";
@@ -132,19 +138,63 @@ pub enum Refusal {
     Transport(String),
     /// No retry budget remained for this dispatch.
     NoBudget,
+    /// The dispatcher stopped waiting: the request was still in flight when
+    /// the shutdown drain budget expired.
+    ///
+    /// Distinct from [`Refusal::Deadline`], which is the *job's* execution
+    /// timeout and is recorded as one. Nothing timed out here — the
+    /// scheduler went away — so the job is retried without a timeout in its
+    /// history.
+    Abandoned,
+    /// A value the dispatch has to carry is not a legal HTTP header value —
+    /// a task, queue or namespace name with a control character in it, say.
+    /// Names the header, never the value: the value is exactly the thing
+    /// that could not be rendered safely.
+    Header {
+        /// Which header could not be built, from this module's own constants.
+        name: &'static str,
+    },
+    /// The request could not be signed.
+    ///
+    /// Carries [`AuthError::retryable`](crate::http::AuthError::retryable)'s
+    /// answer rather than re-deriving one: whether a credential failure is
+    /// worth another attempt is the auth layer's decision, and a second
+    /// decision here is a second place for the two to disagree.
+    Signing {
+        /// The scheme that refused, from `Signer::scheme` — a fixed literal,
+        /// never interpolated from a credential endpoint's response.
+        scheme: &'static str,
+        /// The `AuthError`'s own message.
+        reason: String,
+        /// Whether signing is worth attempting again.
+        retryable: bool,
+    },
 }
 
 impl Refusal {
     /// Whether the job should be retried on the existing backoff.
+    ///
+    /// Matched exhaustively rather than through a `matches!` with a wildcard:
+    /// a refusal added later has to state its retry decision here, in code,
+    /// instead of inheriting a silent `false`.
     pub fn should_retry(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Refusal::ServerError(_)
-                | Refusal::Deadline(_)
-                | Refusal::Transport(_)
-                | Refusal::NoBudget
-                | Refusal::ClientError(408 | 425 | 429)
-        )
+            | Refusal::Deadline(_)
+            | Refusal::Transport(_)
+            | Refusal::NoBudget
+            | Refusal::Abandoned => true,
+            Refusal::ClientError(status) => matches!(status, 408 | 425 | 429),
+            Refusal::Signing { retryable, .. } => *retryable,
+            Refusal::Accepted202
+            | Refusal::Redirect(_)
+            | Refusal::MissingOutcome
+            | Refusal::UnknownOutcome(_)
+            | Refusal::SleptRefused
+            | Refusal::RequestTooLarge { .. }
+            | Refusal::ResponseTooLarge { .. }
+            | Refusal::Header { .. } => false,
+        }
     }
 
     /// Whether this was an execution timeout, which the job's history records
@@ -197,6 +247,16 @@ impl Refusal {
             Refusal::NoBudget => {
                 format!("target {target}: no retry budget remained for this dispatch")
             }
+            Refusal::Abandoned => format!(
+                "target {target} was still working when the dispatcher's shutdown drain \
+                 expired; the request was abandoned and the job will be retried"
+            ),
+            Refusal::Header { name } => {
+                format!("target {target}: '{name}' could not be rendered as a header value")
+            }
+            Refusal::Signing { scheme, reason, .. } => {
+                format!("target {target}: {scheme} could not sign the dispatch: {reason}")
+            }
         }
     }
 }
@@ -231,9 +291,6 @@ fn bound_outcome_value(value: &str) -> String {
 }
 
 /// Read a response's status and outcome header into an outcome or a refusal.
-// No caller yet: the dispatcher that reads a response arrives in a later
-// commit. This file's own tests are the only caller until then.
-#[allow(dead_code)]
 pub fn classify(
     status: u16,
     outcome: Option<&str>,
@@ -288,9 +345,6 @@ fn settle(message: ExecutorMessage, payload: Vec<u8>) -> JobResult {
 /// a `JobResult` directly: the push path and the attach path settle a job the
 /// same way, and a second construction site is a second place for the two to
 /// drift.
-// No caller yet: the dispatcher that reads a response arrives in a later
-// commit. This file's own tests are the only caller until then.
-#[allow(dead_code)]
 pub fn into_result(job: &Job, outcome: Outcome, body: Vec<u8>, wall_time_ns: i64) -> JobResult {
     match outcome {
         Outcome::Success => {
@@ -357,9 +411,6 @@ pub fn into_result(job: &Job, outcome: Outcome, body: Vec<u8>, wall_time_ns: i64
 }
 
 /// Build the settled result for a response that was not an outcome.
-// No caller yet: the dispatcher that reads a response arrives in a later
-// commit. This file's own tests are the only caller until then.
-#[allow(dead_code)]
 pub fn refusal_result(job: &Job, refusal: &Refusal, target: &str, wall_time_ns: i64) -> JobResult {
     settle(
         ExecutorMessage::Failure {
@@ -658,6 +709,46 @@ mod tests {
                 }
                 _ => panic!("expected a failure"),
             }
+        }
+    }
+
+    #[test]
+    fn an_abandoned_request_retries_without_recording_a_timeout() {
+        // The job's own timeout is untouched by a scheduler shutting down, so
+        // `timed_out` must stay false — a `Deadline` here would write a
+        // timeout into the job's history that never happened.
+        let refusal = Refusal::Abandoned;
+        assert!(refusal.should_retry());
+        assert!(!refusal.timed_out());
+        assert!(refusal
+            .message("https://push.example.com/handler")
+            .contains("shutdown drain"));
+    }
+
+    #[test]
+    fn a_header_refusal_names_the_header_and_never_retries() {
+        // A task name that cannot be rendered as a header value does not
+        // become renderable on a retry, so the job is failed outright rather
+        // than dialled max_retries more times.
+        let refusal = Refusal::Header { name: HDR_TASK };
+        assert!(!refusal.should_retry());
+        assert!(!refusal.timed_out());
+        let message = refusal.message("https://push.example.com/handler");
+        assert!(message.contains(HDR_TASK), "{message} must name the header");
+    }
+
+    #[test]
+    fn a_signing_refusal_carries_the_auth_layers_retry_decision() {
+        for retryable in [true, false] {
+            let refusal = Refusal::Signing {
+                scheme: "oidc",
+                reason: "credential fetch failed".to_string(),
+                retryable,
+            };
+            assert_eq!(refusal.should_retry(), retryable);
+            let message = refusal.message("https://push.example.com/handler");
+            assert!(message.contains("oidc"), "{message} must name the scheme");
+            assert!(message.contains("credential fetch failed"));
         }
     }
 

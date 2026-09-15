@@ -55,12 +55,12 @@ impl DispatchClient {
     /// The underlying client, for a caller that must dial through the same
     /// guard without building a fresh `reqwest::Client` of its own.
     ///
-    /// `oidc::oauth2`'s OAuth2 token fetch is the first such caller — it
-    /// clones the client out via this method rather than holding a whole
-    /// `DispatchClient`, because the operator's token URL needs exactly the
-    /// same egress guard the dispatch target does (see `oidc/oauth2.rs`'s
-    /// module doc). The dispatcher that builds the operator's own
-    /// push-dispatch requests on this client is still a later commit.
+    /// Two callers: `oidc::oauth2`'s OAuth2 token fetch, which clones the
+    /// client out rather than holding a whole `DispatchClient` because the
+    /// operator's token URL needs exactly the same egress guard the dispatch
+    /// target does (see `oidc/oauth2.rs`'s module doc); and
+    /// `worker::http_target::attempt`, which builds the push dispatch itself
+    /// on it.
     pub(crate) fn inner(&self) -> &reqwest::Client {
         &self.client
     }
@@ -70,9 +70,6 @@ impl DispatchClient {
 ///
 /// `bytes()` would buffer whatever the endpoint chose to send before any cap
 /// applied. Streaming stops as soon as the budget is spent.
-// No caller yet: the dispatcher that reads a target's response arrives in a
-// later commit. Covered directly by this file's tests in the meantime.
-#[allow(dead_code)]
 pub(crate) async fn read_bounded(response: reqwest::Response, cap: usize) -> (Vec<u8>, bool) {
     let mut response = response;
     let mut buffered: Vec<u8> = Vec::new();

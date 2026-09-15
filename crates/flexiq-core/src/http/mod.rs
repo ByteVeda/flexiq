@@ -15,5 +15,8 @@ mod resolver;
 mod testing;
 
 pub use auth::{AuthError, OutboundAuth, Signer, SigningRequest};
+/// Crate-internal: the response reader is a detail of how this crate dials
+/// out, not part of the surface an embedder configures.
+pub(crate) use client::read_bounded;
 pub use client::DispatchClient;
 pub use egress::{EgressPolicy, EgressRefusal};
