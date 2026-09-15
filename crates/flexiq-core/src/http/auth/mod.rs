@@ -3,29 +3,35 @@
 //! GitHub issue #844: a push target reachable from the scheduler is reachable
 //! by anything else that can reach it too, so the scheduler has to prove who
 //! it is. [`Signer`] is the seam HMAC, OIDC and SigV4 each plug into, one
-//! commit apiece. Two are shipped so far: a static bearer token needing no
+//! commit apiece. Two shipped so far: a static bearer token needing no
 //! machinery, in the private `bearer` submodule, and HMAC-SHA256 — the
 //! replay-resistant scheme issue #844 names by "works everywhere" — in the
-//! private `hmac` submodule.
+//! private `hmac` submodule. This commit adds the third: OIDC identity
+//! tokens, five credential sources deep, in the private `oidc` submodule —
+//! Cloud Run's and Azure Functions' native answer to the same question.
 
 mod bearer;
 mod cache;
 mod hmac;
 mod metadata;
+mod oidc;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
+use super::DispatchClient;
 use crate::worker::Secret;
 use bearer::BearerSigner;
 use hmac::HmacSigner;
+use oidc::OidcSigner;
 
 pub use hmac::{
     string_to_sign, verify, HmacConfig, HmacRejection, DEFAULT_MAX_SKEW, HDR_KEY_ID, HDR_NONCE,
     HDR_SIGNATURE, HDR_TIMESTAMP,
 };
+pub use oidc::{ClientAuthStyle, OidcConfig, OidcSource};
 
 /// Everything a signer may see, and nothing it may change.
 ///
@@ -183,16 +189,23 @@ pub enum OutboundAuth {
     /// nonce — the scheme with replay defence, for a target reachable from
     /// anywhere but the scheduler.
     Hmac(HmacConfig),
+    /// A signed identity token, refreshed before it expires — Cloud Run's
+    /// and Azure Functions' native answer, verified by the receiver's own
+    /// platform at the door.
+    Oidc(OidcConfig),
 }
 
 impl OutboundAuth {
     /// Build the signer, or `None` when there is nothing to sign with.
     ///
-    /// Takes no client: nothing this commit ships needs one. A later commit
-    /// adds a parameter when the generic OAuth2 source dials an
-    /// operator-supplied token URL, which has to go through the same guarded
-    /// client every other destination does.
-    pub fn signer(self) -> Result<Option<Arc<dyn Signer>>, AuthError> {
+    /// Takes `dispatch`, deferred from the commit that introduced this
+    /// method precisely so it would arrive with the caller that needs it:
+    /// [`OidcConfig`]'s generic OAuth2 source dials an operator-supplied
+    /// token URL, and that has to go through the same guarded client every
+    /// other operator-configured destination does — see `oidc/oauth2.rs`'s
+    /// module doc for the full argument. Every other scheme, including
+    /// every other OIDC source, ignores this parameter entirely.
+    pub fn signer(self, dispatch: &DispatchClient) -> Result<Option<Arc<dyn Signer>>, AuthError> {
         match self {
             OutboundAuth::None => Ok(None),
             OutboundAuth::Bearer(secret) => {
@@ -219,23 +232,40 @@ impl OutboundAuth {
                 }
                 Ok(Some(Arc::new(HmacSigner::new(config)?)))
             }
+            OutboundAuth::Oidc(config) => Ok(Some(Arc::new(OidcSigner::new(config, dispatch)?))),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use crate::http::EgressPolicy;
+    use crate::net::Allowlist;
+
+    /// A permissive client for tests that need one only to satisfy
+    /// `signer`'s parameter — every scheme but `Oidc`'s OAuth2 source
+    /// ignores it entirely, so what the policy allows is irrelevant here.
+    fn test_dispatch_client() -> DispatchClient {
+        let policy = Arc::new(EgressPolicy::new(
+            Allowlist::parse("0.0.0.0/0,::/0").expect("test allowlist parses"),
+            true,
+        ));
+        DispatchClient::new(policy, Duration::from_secs(5)).expect("test client builds")
+    }
 
     #[test]
     fn a_configured_scheme_yields_a_signer_and_none_yields_nothing() {
+        let dispatch = test_dispatch_client();
         assert!(OutboundAuth::None
-            .signer()
+            .signer(&dispatch)
             .expect("None never fails to build")
             .is_none());
 
         let signer = OutboundAuth::Bearer(Secret::new("token-value"))
-            .signer()
+            .signer(&dispatch)
             .expect("a non-empty secret builds")
             .expect("Bearer always yields a signer");
         assert_eq!(signer.scheme(), "bearer");
@@ -245,17 +275,45 @@ mod tests {
     fn an_empty_bearer_secret_is_refused_at_construction() {
         // `Arc<dyn Signer>` carries no `Debug`, so `expect_err` cannot be
         // used here; `matches!` needs none.
-        let result = OutboundAuth::Bearer(Secret::new("")).signer();
+        let dispatch = test_dispatch_client();
+        let result = OutboundAuth::Bearer(Secret::new("")).signer(&dispatch);
         assert!(matches!(result, Err(AuthError::Config(_))));
     }
 
     #[test]
     fn an_empty_hmac_secret_is_refused_at_construction() {
+        let dispatch = test_dispatch_client();
         let result = OutboundAuth::Hmac(HmacConfig {
             key_id: None,
             secret: Secret::new(""),
         })
-        .signer();
+        .signer(&dispatch);
+        assert!(matches!(result, Err(AuthError::Config(_))));
+    }
+
+    #[test]
+    fn an_oidc_config_yields_a_signer_through_the_same_seam() {
+        let dispatch = test_dispatch_client();
+        let signer = OutboundAuth::Oidc(OidcConfig {
+            source: OidcSource::File {
+                path: std::path::PathBuf::from("/tmp/does-not-need-to-exist-for-this-check.jwt"),
+            },
+            audience: String::new(),
+        })
+        .signer(&dispatch)
+        .expect("a File source needs no audience and no network to construct")
+        .expect("Oidc always yields a signer");
+        assert_eq!(signer.scheme(), "oidc");
+    }
+
+    #[test]
+    fn an_empty_oidc_audience_is_refused_at_construction() {
+        let dispatch = test_dispatch_client();
+        let result = OutboundAuth::Oidc(OidcConfig {
+            source: OidcSource::GoogleMetadata,
+            audience: String::new(),
+        })
+        .signer(&dispatch);
         assert!(matches!(result, Err(AuthError::Config(_))));
     }
 

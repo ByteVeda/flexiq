@@ -1,0 +1,370 @@
+//! Generic OAuth2 client-credentials — the only off-cloud OIDC source, and
+//! the reason [`OutboundAuth::signer`](crate::http::auth::OutboundAuth::signer)
+//! grew a `&DispatchClient` parameter in this commit.
+//!
+//! Google, Azure IMDS and Azure App Service all reach a host that is either a
+//! compile-time constant (`metadata.google.internal`, `169.254.169.254`) or
+//! read from a trusted environment variable and vetted by
+//! [`accept_env_endpoint`](crate::http::auth::metadata::accept_env_endpoint).
+//! This source's `token_url` is neither: it is a value the *operator* typed
+//! into their push-dispatch configuration, exactly the same kind of input
+//! the dispatch target's own URL is. It therefore goes through the same
+//! guarded [`DispatchClient`](crate::http::DispatchClient) and the same
+//! egress allowlist as the dispatch target — never through
+//! [`MetadataClient`](crate::http::auth::metadata::MetadataClient), which by
+//! design cannot be pointed at an arbitrary host at all. That asymmetry,
+//! three sources on `MetadataClient` and this one on `DispatchClient`, is
+//! the load-bearing design decision in this commit.
+
+use url::form_urlencoded;
+
+use crate::http::auth::cache::Expiring;
+use crate::http::auth::AuthError;
+use crate::worker::Secret;
+
+/// The label every [`AuthError::CredentialEndpoint`]/[`AuthError::CredentialShape`]
+/// produced here carries. Not a [`MetadataEndpoint`](crate::http::auth::metadata::MetadataEndpoint)
+/// variant — there is no closed set of operator-supplied token URLs to
+/// enumerate — so this is a fixed literal rather than the URL itself, which
+/// would otherwise put an operator-chosen value into a log line.
+const LABEL: &str = "oidc oauth2 token endpoint";
+
+/// How the client authenticates itself to the token endpoint, per RFC 6749
+/// §2.3.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClientAuthStyle {
+    /// `client_id`/`client_secret` in the form body.
+    ClientSecretPost,
+    /// `Authorization: Basic base64(urlencode(id) + ":" + urlencode(secret))`;
+    /// the form body carries neither.
+    ClientSecretBasic,
+}
+
+#[derive(serde::Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    /// A number here, unlike Azure's quoted `expires_in` — see `azure.rs`'s
+    /// `AzureTokenResponse` for the contrast this module deliberately does
+    /// not share a type with.
+    expires_in: i64,
+}
+
+/// POST a client-credentials grant to `token_url` through `client` — the
+/// guarded client's own `reqwest::Client`, per this module's doc — and
+/// return the access token it answers with.
+pub(super) async fn fetch(
+    client: &reqwest::Client,
+    token_url: &url::Url,
+    client_id: &str,
+    client_secret: &Secret,
+    scope: Option<&str>,
+    style: ClientAuthStyle,
+    audience: &str,
+) -> Result<Expiring<String>, AuthError> {
+    let body = build_form(style, client_id, client_secret, scope, audience);
+
+    let mut request = client
+        .post(token_url.clone())
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .body(body);
+    if style == ClientAuthStyle::ClientSecretBasic {
+        request = request.header(
+            reqwest::header::AUTHORIZATION,
+            basic_auth_header(client_id, client_secret),
+        );
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|error| AuthError::Transport(error.to_string()))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(AuthError::CredentialEndpoint {
+            endpoint: LABEL,
+            status: status.as_u16(),
+        });
+    }
+
+    let text = response
+        .text()
+        .await
+        .map_err(|error| AuthError::Transport(error.to_string()))?;
+    let parsed: TokenResponse =
+        serde_json::from_str(&text).map_err(|_| AuthError::CredentialShape {
+            endpoint: LABEL,
+            reason: "not valid JSON",
+        })?;
+
+    Ok(super::expiring_from_ttl_seconds(
+        parsed.access_token,
+        parsed.expires_in,
+    ))
+}
+
+/// The client-credentials form body: `grant_type` always, `client_id` and
+/// `client_secret` only under [`ClientAuthStyle::ClientSecretPost`] — RFC
+/// 6749 §2.3.1 is explicit that a client authenticating with `Basic` must
+/// not also present the secret in the body — `scope` when configured, and
+/// `audience` when configured (the Auth0/Okta convention for an aud-bound
+/// token, sent only when the caller asked for one).
+fn build_form(
+    style: ClientAuthStyle,
+    client_id: &str,
+    client_secret: &Secret,
+    scope: Option<&str>,
+    audience: &str,
+) -> String {
+    let mut serializer = form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("grant_type", "client_credentials");
+    if style == ClientAuthStyle::ClientSecretPost {
+        // Unwrapped only for the duration of this call, the same discipline
+        // `BearerSigner::sign` applies to its own token.
+        let secret = String::from_utf8_lossy(client_secret.expose_secret());
+        serializer.append_pair("client_id", client_id);
+        serializer.append_pair("client_secret", secret.as_ref());
+    }
+    if let Some(scope) = scope {
+        serializer.append_pair("scope", scope);
+    }
+    if !audience.is_empty() {
+        serializer.append_pair("audience", audience);
+    }
+    serializer.finish()
+}
+
+/// `Basic base64(urlencode(id) + ":" + urlencode(secret))`.
+///
+/// Both halves are form-urlencoded *before* concatenation and base64, per
+/// RFC 6749 §2.3.1 — skipping the urlencode step only breaks for a secret
+/// containing a byte outside the unreserved set (`+`, `/`, and friends),
+/// which is exactly why `basic_form_urlencodes_both_halves_before_base64`
+/// below uses one that does.
+fn basic_auth_header(client_id: &str, client_secret: &Secret) -> String {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+
+    let encoded_id: String = form_urlencoded::byte_serialize(client_id.as_bytes()).collect();
+    let encoded_secret: String =
+        form_urlencoded::byte_serialize(client_secret.expose_secret()).collect();
+    let credentials = format!("{encoded_id}:{encoded_secret}");
+    format!("Basic {}", STANDARD.encode(credentials))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::auth::Signer;
+    use crate::http::testing::StubServer;
+    use crate::http::{DispatchClient, EgressPolicy};
+    use crate::net::Allowlist;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn token_url(stub: &StubServer) -> url::Url {
+        url::Url::parse(&format!("{}/token", stub.base_url())).expect("stub url parses")
+    }
+
+    #[tokio::test]
+    async fn the_form_body_is_client_credentials() {
+        let stub = StubServer::start(200, r#"{"access_token":"tok","expires_in":3600}"#).await;
+
+        fetch(
+            &reqwest::Client::new(),
+            &token_url(&stub),
+            "my-client-id",
+            &Secret::new("my-client-secret"),
+            Some("push:dispatch"),
+            ClientAuthStyle::ClientSecretPost,
+            "",
+        )
+        .await
+        .expect("a well-formed response succeeds");
+
+        let received = stub.received();
+        assert_eq!(received.len(), 1);
+        let request = &received[0];
+        assert_eq!(request.target, "/token");
+        assert_eq!(
+            String::from_utf8(request.body.clone()).expect("body is utf8"),
+            "grant_type=client_credentials&client_id=my-client-id&client_secret=my-client-secret&scope=push%3Adispatch"
+        );
+        assert!(request
+            .headers
+            .iter()
+            .any(|(name, value)| name == "content-type"
+                && value == "application/x-www-form-urlencoded"));
+    }
+
+    #[tokio::test]
+    async fn client_secret_basic_sends_a_basic_header_and_no_secret_in_the_body() {
+        let stub = StubServer::start(200, r#"{"access_token":"tok","expires_in":3600}"#).await;
+
+        fetch(
+            &reqwest::Client::new(),
+            &token_url(&stub),
+            "basic-client-id",
+            &Secret::new("basic-client-secret"),
+            None,
+            ClientAuthStyle::ClientSecretBasic,
+            "",
+        )
+        .await
+        .expect("a well-formed response succeeds");
+
+        let received = stub.received();
+        assert_eq!(received.len(), 1);
+        let request = &received[0];
+        let body = String::from_utf8(request.body.clone()).expect("body is utf8");
+        assert_eq!(body, "grant_type=client_credentials");
+        assert!(!body.contains("basic-client-secret"));
+        assert!(!body.contains("client_secret"));
+
+        let auth_header = request
+            .headers
+            .iter()
+            .find(|(name, _)| name == "authorization")
+            .map(|(_, value)| value.clone())
+            .expect("authorization header present");
+        assert!(auth_header.starts_with("Basic "));
+    }
+
+    #[tokio::test]
+    async fn basic_form_urlencodes_both_halves_before_base64() {
+        // Contains both `+` and `/` — neither is in the unreserved set, so an
+        // implementation that skips the urlencode step and only base64s the
+        // raw bytes produces a different (and wrong) header value.
+        let stub = StubServer::start(200, r#"{"access_token":"tok","expires_in":3600}"#).await;
+
+        fetch(
+            &reqwest::Client::new(),
+            &token_url(&stub),
+            "cli+ent/id",
+            &Secret::new("sec+ret/val"),
+            None,
+            ClientAuthStyle::ClientSecretBasic,
+            "",
+        )
+        .await
+        .expect("a well-formed response succeeds");
+
+        let received = stub.received();
+        let auth_header = received[0]
+            .headers
+            .iter()
+            .find(|(name, _)| name == "authorization")
+            .map(|(_, value)| value.clone())
+            .expect("authorization header present");
+
+        // Computed independently: urlencode("cli+ent/id") = "cli%2Bent%2Fid",
+        // urlencode("sec+ret/val") = "sec%2Bret%2Fval", joined with ':' and
+        // base64-standard-encoded — cross-checked with Python's
+        // `urllib.parse.quote_plus` + `base64.b64encode` outside this crate.
+        assert_eq!(
+            auth_header,
+            "Basic Y2xpJTJCZW50JTJGaWQ6c2VjJTJCcmV0JTJGdmFs"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_audience_is_sent_only_when_configured() {
+        let stub = StubServer::start(200, r#"{"access_token":"tok","expires_in":3600}"#).await;
+
+        fetch(
+            &reqwest::Client::new(),
+            &token_url(&stub),
+            "id",
+            &Secret::new("secret"),
+            None,
+            ClientAuthStyle::ClientSecretBasic,
+            "",
+        )
+        .await
+        .expect("a well-formed response succeeds");
+        let without_audience =
+            String::from_utf8(stub.received()[0].body.clone()).expect("body is utf8");
+        assert!(!without_audience.contains("audience"));
+
+        let stub_with_audience =
+            StubServer::start(200, r#"{"access_token":"tok","expires_in":3600}"#).await;
+        fetch(
+            &reqwest::Client::new(),
+            &token_url(&stub_with_audience),
+            "id",
+            &Secret::new("secret"),
+            None,
+            ClientAuthStyle::ClientSecretBasic,
+            "https://push.example.com",
+        )
+        .await
+        .expect("a well-formed response succeeds");
+        let with_audience =
+            String::from_utf8(stub_with_audience.received()[0].body.clone()).expect("body is utf8");
+        assert_eq!(
+            with_audience,
+            "grant_type=client_credentials&audience=https%3A%2F%2Fpush.example.com"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oauth2_token_url_goes_through_the_guarded_client() {
+        let stub = StubServer::start(200, r#"{"access_token":"tok","expires_in":3600}"#).await;
+        // `127.0.0.1` is an IP literal and never reaches the pinned
+        // resolver at all (see `egress.rs`'s `permits_host` doc) — using
+        // `localhost` here is what actually exercises the guard, the same
+        // technique `resolver.rs`'s own
+        // `localhost_is_refused_by_a_policy_that_does_not_allow_it` uses.
+        let port = stub
+            .base_url()
+            .rsplit(':')
+            .next()
+            .expect("stub base url has a port")
+            .to_string();
+        let disallowed_url = format!("http://localhost:{port}/token");
+
+        // A policy that permits nothing at all — not even loopback.
+        let policy = Arc::new(EgressPolicy::new(
+            Allowlist::parse("93.184.216.34").expect("test allowlist parses"),
+            false,
+        ));
+        let dispatch = DispatchClient::new(policy, Duration::from_secs(1))
+            .expect("a policy and a timeout are enough to build a client");
+
+        let config = super::super::OidcConfig {
+            source: super::super::OidcSource::OAuth2ClientCredentials {
+                token_url: disallowed_url,
+                client_id: "id".to_string(),
+                client_secret: Secret::new("secret"),
+                scope: None,
+                style: ClientAuthStyle::ClientSecretPost,
+            },
+            audience: "https://push.example.com".to_string(),
+        };
+        let signer = super::super::OidcSigner::new(config, &dispatch)
+            .expect("construction does not need network access");
+
+        let target_url = url::Url::parse("https://push.example.com/hook").expect("test url parses");
+        let request_headers = reqwest::header::HeaderMap::new();
+        let request = crate::http::auth::SigningRequest {
+            method: "POST",
+            url: &target_url,
+            body: b"",
+            headers: &request_headers,
+        };
+
+        let error = signer
+            .sign(&request)
+            .await
+            .expect_err("a policy that disallows loopback must refuse the token fetch");
+        assert!(matches!(error, AuthError::Transport(_)));
+        assert_eq!(
+            stub.request_count(),
+            0,
+            "a refused fetch must never reach the stub at all"
+        );
+    }
+}
