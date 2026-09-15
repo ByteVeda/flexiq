@@ -30,3 +30,11 @@ export function isServerUnavailable(error: unknown): boolean {
 export function isBackendUnreachable(error: unknown): boolean {
   return isNetworkError(error) || isServerUnavailable(error);
 }
+
+/**
+ * Router error boundaries hand us `unknown` — a thrown non-Error (a string,
+ * an object) is legal. Normalize so the error views can read `.message`.
+ */
+export function asError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}

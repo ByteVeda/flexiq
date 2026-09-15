@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api-client";
-import { isBackendUnreachable, isNetworkError, isServerUnavailable } from "./errors";
+import { asError, isBackendUnreachable, isNetworkError, isServerUnavailable } from "./errors";
 
 describe("isNetworkError", () => {
   it("matches Chrome's 'Failed to fetch'", () => {
@@ -64,5 +64,21 @@ describe("isBackendUnreachable", () => {
 
   it("is false for plain errors", () => {
     expect(isBackendUnreachable(new Error("some other failure"))).toBe(false);
+  });
+});
+
+describe("asError", () => {
+  it("returns the same instance for an Error", () => {
+    const err = new ApiError("down", 503, null);
+    expect(asError(err)).toBe(err);
+  });
+
+  it("wraps a thrown string", () => {
+    expect(asError("boom").message).toBe("boom");
+  });
+
+  it("wraps a thrown non-Error object", () => {
+    expect(asError({ code: 42 })).toBeInstanceOf(Error);
+    expect(asError(undefined).message).toBe("undefined");
   });
 });
