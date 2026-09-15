@@ -140,6 +140,9 @@ pub enum HttpTargetError {
     /// [`HttpTargetConfig::capacity`] was `0`.
     #[error("push target capacity must be at least 1")]
     ZeroCapacity,
+    /// The HTTP client could not be built.
+    #[error("push target client could not be built: {0}")]
+    Client(String),
 }
 
 /// Parse and vet a target URL: absolute, `http`/`https`, a host, no userinfo,

@@ -73,6 +73,23 @@ pub fn is_never_routable(address: IpAddr) -> bool {
     }
 }
 
+/// Whether `address` is a loopback address, reading an IPv4-mapped IPv6
+/// address as the IPv4 address it is.
+///
+/// Split out from [`is_never_routable`] because loopback is the one entry in
+/// that set an embedder may legitimately want: a dispatch target on the same
+/// host, or a test server on an ephemeral port. Link-local, the metadata
+/// literals, multicast and broadcast have no such case and stay unconditional.
+pub fn is_loopback_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(v4) => v4.is_loopback(),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(mapped) => mapped.is_loopback(),
+            None => v6.is_loopback(),
+        },
+    }
+}
+
 fn is_never_routable_v4(address: Ipv4Addr) -> bool {
     address.is_loopback()
         // 169.254.0.0/16, which is where CLOUD_METADATA_V4 lives.
@@ -204,5 +221,23 @@ mod tests {
         assert!(is_never_routable(IpAddr::V4(CLOUD_METADATA_V4)));
         assert!(is_never_routable(IpAddr::V6(CLOUD_METADATA_V6)));
         assert!(is_never_routable(IpAddr::V4(ALIBABA_METADATA_V4)));
+    }
+
+    #[test]
+    fn is_loopback_address_agrees_with_never_routable_on_loopback_only() {
+        // Loopback is where the two predicates must agree...
+        for literal in ["127.0.0.1", "127.10.20.30", "::1", "::ffff:127.0.0.1"] {
+            let address = parse(literal);
+            assert!(is_never_routable(address), "{literal} is never routable");
+            assert!(is_loopback_address(address), "{literal} is loopback");
+        }
+        // ...and disagree everywhere else in the never-routable set: the
+        // metadata literals are never a loopback address, however the caller
+        // reads them.
+        for literal in ["169.254.169.254", "100.100.100.200"] {
+            let address = parse(literal);
+            assert!(is_never_routable(address), "{literal} is never routable");
+            assert!(!is_loopback_address(address), "{literal} is not loopback");
+        }
     }
 }

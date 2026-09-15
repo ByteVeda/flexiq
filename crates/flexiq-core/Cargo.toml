@@ -32,7 +32,7 @@ push-dispatch = []
 #
 # Unrelated to `push-dispatch` above, which is event-driven scheduler wakeups.
 # The two names are close; the features share nothing.
-http-target = ["dep:url"]
+http-target = ["dep:url", "dep:reqwest"]
 
 [dependencies]
 diesel = { workspace = true }
@@ -57,6 +57,11 @@ redis = { workspace = true, optional = true }
 # The same parser the HTTP client resolves the request with, so the egress
 # guard and the connect cannot disagree about where the host ends.
 url = { version = "2", optional = true }
+# The outbound HTTP client for push dispatch. `default-features = false` drops
+# charset, http2 and the system-proxy probe; `rustls-tls` because the server
+# image carries no system OpenSSL. Same backend flexiq-server already resolves,
+# so a workspace build gains an edge and not a node.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -1273,6 +1273,7 @@ dependencies = [
  "pq-sys",
  "rand 0.10.2",
  "redis",
+ "reqwest",
  "sea-query",
  "serde",
  "serde_json",

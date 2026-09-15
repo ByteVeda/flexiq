@@ -8,6 +8,9 @@
 pub mod contract;
 /// Error types: [`QueueError`] and the crate-wide [`Result`] alias.
 pub mod error;
+/// Outbound HTTP: the egress guard and the client every dialled URL goes through.
+#[cfg(feature = "http-target")]
+pub mod http;
 /// Core job model: [`Job`], [`JobStatus`], [`NewJob`], [`JobCompletion`].
 pub mod job;
 /// The lease on one dispatch of one job: [`Lease`], [`LeaseBook`].
@@ -48,6 +51,8 @@ pub use contract::{
     MIN_CONTRACT_VERSION,
 };
 pub use error::{QueueError, Result, StepDivergence};
+#[cfg(feature = "http-target")]
+pub use http::{DispatchClient, EgressPolicy, EgressRefusal};
 pub use job::{now_millis, Job, JobCompletion, JobStatus, NewJob};
 pub use lease::{mint_claim_epoch, Lease, LeaseBook};
 pub use resilience::circuit_breaker::{CircuitBreakerConfig, CircuitState};
