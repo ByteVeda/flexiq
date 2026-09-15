@@ -135,8 +135,9 @@ jobs:
 
       # Off in every shipped artifact, so only CI keeps the HTTP push target
       # compiling and its contract tests running.
-      - name: Check build with the http-target feature
-        run: cargo test --workspace --features http-target
+      - name: Run http-target tests
+        run: LD_LIBRARY_PATH="$pythonLocation/lib" cargo test --workspace --features http-target
+
       - name: Check http-target against the other backends
         run: cargo check --workspace --features http-target,postgres,redis
 
