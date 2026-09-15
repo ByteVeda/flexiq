@@ -76,18 +76,21 @@ pub trait Signer: Send + Sync + 'static {
     fn scheme(&self) -> &'static str;
 }
 
-/// Insert a header whose value is credential material.
+/// Insert a header, whose value may or may not be credential material.
 ///
-/// `set_sensitive` is not advisory here: it is what makes `{headers:?}` in a
-/// dispatch log print `Sensitive` instead of the token.
-pub(crate) fn insert_sensitive(
+/// One helper for both the sensitive and the plain case, rather than two
+/// near-identical functions, so the two header paths cannot drift apart.
+/// `sensitive` is not advisory when `true`: it is what makes `{headers:?}`
+/// in a dispatch log print `Sensitive` instead of the value.
+pub(crate) fn insert_header(
     map: &mut HeaderMap,
     name: HeaderName,
     value: &str,
+    sensitive: bool,
 ) -> Result<(), AuthError> {
     let mut header_value = HeaderValue::from_str(value)
         .map_err(|_| AuthError::InvalidHeaderValue(name.to_string()))?;
-    header_value.set_sensitive(true);
+    header_value.set_sensitive(sensitive);
     map.insert(name, header_value);
     Ok(())
 }

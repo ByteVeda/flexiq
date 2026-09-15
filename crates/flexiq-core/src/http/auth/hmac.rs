@@ -19,7 +19,7 @@ use hmac::{Hmac, Mac};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use sha2::{Digest, Sha256};
 
-use super::{insert_sensitive, AuthError, Signer, SigningRequest};
+use super::{insert_header, AuthError, Signer, SigningRequest};
 use crate::job::now_millis;
 use crate::worker::auth::constant_time_eq;
 use crate::worker::Secret;
@@ -55,7 +55,12 @@ pub const HDR_KEY_ID: &str = "x-flexiq-dispatch-key-id";
 #[derive(Clone, Debug)]
 pub struct HmacConfig {
     /// Sent as `x-flexiq-dispatch-key-id` so a receiver can hold two secrets
-    /// during a rotation. Public; it appears in logs on purpose.
+    /// during a rotation. Public; it appears in logs on purpose. Not itself
+    /// signed: a receiver reads it *before* verifying, to pick which secret
+    /// to check the signature against, so a tampered id just makes the
+    /// signature fail to match the wrong secret — the same
+    /// [`HmacRejection::Mismatch`] as any other forged request, not a
+    /// bypass.
     pub key_id: Option<String>,
     /// The shared secret the signature is computed with.
     pub secret: Secret,
@@ -72,16 +77,15 @@ impl HmacSigner {
     ///
     /// Empty-secret validation lives in [`super::OutboundAuth::signer`], the
     /// same place the bearer's does. What this constructor checks is that
-    /// the secret builds a usable HMAC key at all: `Result` rather than
-    /// `Self` because `Mac::new_from_slice` is fallible in general (some MACs
-    /// require a fixed key length); HMAC's own key length has no such limit,
-    /// so this cannot actually fail today. Checking it here rather than
-    /// lazily inside [`Self::sign_at`] means a problem — if this crate's HMAC
-    /// implementation ever grew one — surfaces at construction, before the
-    /// first dispatch attempt, not during it.
+    /// `key_id`, if set, is usable as a header value: a control character in
+    /// it would otherwise fail every dispatch attempt at [`Self::sign_at`]
+    /// instead of failing once, here, before the first one — the same
+    /// argument the empty-secret check upstream makes.
     pub fn new(config: HmacConfig) -> Result<Self, AuthError> {
-        hmac_sha256_hex(config.secret.expose_secret(), "")
-            .map_err(|_| AuthError::Config("hmac secret could not be used as a key".to_string()))?;
+        if let Some(key_id) = &config.key_id {
+            HeaderValue::from_str(key_id)
+                .map_err(|_| AuthError::InvalidHeaderValue(HDR_KEY_ID.to_string()))?;
+        }
         Ok(Self {
             key_id: config.key_id,
             secret: config.secret,
@@ -108,19 +112,31 @@ impl HmacSigner {
             .map_err(|_| AuthError::Config("hmac secret could not be used as a key".to_string()))?;
 
         let mut headers = HeaderMap::with_capacity(if self.key_id.is_some() { 4 } else { 3 });
-        insert_sensitive(
+        insert_header(
             &mut headers,
             HeaderName::from_static(HDR_SIGNATURE),
             &format!("v1={signature}"),
+            true,
         )?;
-        insert_plain(
+        insert_header(
             &mut headers,
             HeaderName::from_static(HDR_TIMESTAMP),
             &unix_seconds.to_string(),
+            false,
         )?;
-        insert_plain(&mut headers, HeaderName::from_static(HDR_NONCE), &nonce_hex)?;
+        insert_header(
+            &mut headers,
+            HeaderName::from_static(HDR_NONCE),
+            &nonce_hex,
+            false,
+        )?;
         if let Some(key_id) = &self.key_id {
-            insert_plain(&mut headers, HeaderName::from_static(HDR_KEY_ID), key_id)?;
+            insert_header(
+                &mut headers,
+                HeaderName::from_static(HDR_KEY_ID),
+                key_id,
+                false,
+            )?;
         }
         Ok(headers)
     }
@@ -141,19 +157,6 @@ impl Signer for HmacSigner {
     }
 }
 
-/// Insert a header whose value carries no credential material.
-///
-/// Mirrors [`super::insert_sensitive`] without marking the value sensitive:
-/// the timestamp, nonce and key id are not secrets — a signature is not a
-/// key — so leaving them visible in a `{headers:?}` dump is the useful
-/// default for whoever is diagnosing a mismatch.
-fn insert_plain(map: &mut HeaderMap, name: HeaderName, value: &str) -> Result<(), AuthError> {
-    let header_value = HeaderValue::from_str(value)
-        .map_err(|_| AuthError::InvalidHeaderValue(name.to_string()))?;
-    map.insert(name, header_value);
-    Ok(())
-}
-
 /// The origin-form request target a client actually sends: `url.path()`,
 /// plus `?` and `url.query()` when there is one. Not the full URL — the host
 /// is deliberately not signed (see [`verify`]'s doc for why).
@@ -165,6 +168,10 @@ fn request_target(url: &url::Url) -> String {
 }
 
 /// `sha256(body)`, lowercase hex.
+///
+/// A digest, not the body inline: it keeps the string to sign fixed-size and
+/// printable, so a mismatch is diagnosable — logged, pasted into an issue —
+/// without dumping a job payload anywhere.
 fn sha256_hex(body: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(body);
@@ -254,7 +261,12 @@ pub enum HmacRejection {
 /// The host is not part of what is checked, because it is not part of what
 /// is signed: proxies and ingress rewrite `Host`, and a per-target secret
 /// already binds target identity, so signing it would produce failures that
-/// look like key failures.
+/// look like key failures. That target-binding is an assumption this module
+/// takes on faith, not one it enforces: nothing here stops an operator from
+/// reusing one [`HmacConfig`]'s secret across two targets, and doing so
+/// would let a request valid for one be replayed at the other. Enforcing
+/// "one secret, one target" belongs to whatever loads `HmacConfig` from
+/// operator configuration, not to the signer or this verifier.
 pub fn verify(
     secret: &Secret,
     request: &SigningRequest<'_>,
@@ -269,7 +281,27 @@ pub fn verify(
     let presented_signature = signature_header
         .strip_prefix("v1=")
         .ok_or(HmacRejection::Version)?;
+    // Caught here rather than left to `constant_time_eq`'s length
+    // short-circuit: a wrong-shape value is a different failure than a
+    // wrong-value one, and folding it into `Mismatch` would hide that a
+    // presented header is not even well-formed.
+    if !is_lowercase_hex64(presented_signature) {
+        return Err(HmacRejection::Malformed(HDR_SIGNATURE));
+    }
 
+    // Digits only, no leading `+`/`-` and no leading zero (unless the value
+    // is exactly `0`): `i64::from_str` accepts all of those and would parse
+    // `+1735689600` or `01735689600` to the same integer as the canonical
+    // `1735689600` the signer emits. This verifier reconstructs the string
+    // to sign from the *parsed* integer, so accepting them would make it
+    // more permissive than a receiver comparing the header's raw bytes —
+    // exactly the kind of contract drift this scheme exists to avoid.
+    let is_canonical_decimal = !timestamp_header.is_empty()
+        && timestamp_header.bytes().all(|byte| byte.is_ascii_digit())
+        && (timestamp_header.len() == 1 || !timestamp_header.starts_with('0'));
+    if !is_canonical_decimal {
+        return Err(HmacRejection::Malformed(HDR_TIMESTAMP));
+    }
     let unix_seconds: i64 = timestamp_header
         .parse()
         .map_err(|_| HmacRejection::Malformed(HDR_TIMESTAMP))?;
@@ -306,6 +338,16 @@ pub fn verify(
     } else {
         Err(HmacRejection::Mismatch)
     }
+}
+
+/// Whether `value` is exactly 64 lowercase hex characters — the shape
+/// [`hmac_sha256_hex`] always produces and the only shape a genuine `v1`
+/// signature can have.
+fn is_lowercase_hex64(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Read one required header as `&str`, naming it in whichever way it failed.
@@ -382,10 +424,12 @@ mod tests {
         //
         // printed: ae8e04b171f581a8d602ac9b2c074c06993423f7ebf8932c70bd5af2bdc30933
         //
-        // Cross-checked with:
+        // Cross-checked with (note `printf '%s'`, not a `<<<` here-string —
+        // a here-string appends a newline, which would hash a different
+        // string and silently pin the wrong value):
         //
-        //   openssl dgst -sha256 -hmac 'pinned-test-secret-do-not-rotate'
-        //     <<< "$STS"
+        //   printf '%s' "$STS" \
+        //     | openssl dgst -sha256 -hmac 'pinned-test-secret-do-not-rotate'
         //
         // which printed the same digest.
         let target_url = url("https://push.example.com/dispatch/42?attempt=1");
@@ -651,7 +695,12 @@ mod tests {
         assert_eq!(
             verify(&secret, &request, &signed, unix_seconds + 60, max_skew),
             Ok(()),
-            "exactly the skew boundary must be accepted"
+            "exactly the positive skew boundary must be accepted"
+        );
+        assert_eq!(
+            verify(&secret, &request, &signed, unix_seconds - 60, max_skew),
+            Ok(()),
+            "exactly the negative skew boundary must be accepted"
         );
     }
 
@@ -708,10 +757,11 @@ mod tests {
             nonce,
         );
         let presented_hex = extract_signature(&signed);
-        insert_plain(
+        insert_header(
             &mut signed,
             HeaderName::from_static(HDR_SIGNATURE),
             &format!("v2={presented_hex}"),
+            false,
         )
         .expect("test header value is legal");
 
@@ -760,6 +810,97 @@ mod tests {
                 verify(&secret, &request, &signed, unix_seconds, DEFAULT_MAX_SKEW),
                 Err(HmacRejection::Missing(missing)),
                 "removing {missing} must be reported by name"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_timestamp_is_refused() {
+        let secret = Secret::new("malformed-timestamp-secret");
+        let target_url = url("https://push.example.com/dispatch/21");
+        let body: &[u8] = b"payload";
+        let unix_seconds = 1_700_000_400;
+        let nonce = [0x0au8; NONCE_BYTES];
+
+        let request_headers = HeaderMap::new();
+        let request = SigningRequest {
+            method: "POST",
+            url: &target_url,
+            body,
+            headers: &request_headers,
+        };
+
+        // Each parses to the same `i64` as the canonical form the signer
+        // emits, so if `verify` compared raw bytes only after parsing it
+        // would accept all three — the guard has to run before the parse.
+        for malformed in ["+1700000400", "01700000400", "not-a-number"] {
+            let mut signed = sign_fixture(
+                "malformed-timestamp-secret",
+                "POST",
+                &target_url,
+                body,
+                unix_seconds,
+                nonce,
+            );
+            insert_header(
+                &mut signed,
+                HeaderName::from_static(HDR_TIMESTAMP),
+                malformed,
+                false,
+            )
+            .expect("test header value is legal");
+
+            assert_eq!(
+                verify(&secret, &request, &signed, unix_seconds, DEFAULT_MAX_SKEW),
+                Err(HmacRejection::Malformed(HDR_TIMESTAMP)),
+                "{malformed:?} must be refused as malformed, not parsed loosely"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_signature_is_refused() {
+        let secret = Secret::new("malformed-signature-secret");
+        let target_url = url("https://push.example.com/dispatch/23");
+        let body: &[u8] = b"payload";
+        let unix_seconds = 1_700_000_500;
+        let nonce = [0x0bu8; NONCE_BYTES];
+
+        let request_headers = HeaderMap::new();
+        let request = SigningRequest {
+            method: "POST",
+            url: &target_url,
+            body,
+            headers: &request_headers,
+        };
+
+        // Too short, and uppercase hex: both are the wrong shape for a v1
+        // signature and must be refused before ever reaching a comparison,
+        // not folded into `Mismatch`.
+        for malformed in [
+            "v1=abcd",
+            "v1=AE8E04B171F581A8D602AC9B2C074C06993423F7EBF8932C70BD5AF2BDC30933",
+        ] {
+            let mut signed = sign_fixture(
+                "malformed-signature-secret",
+                "POST",
+                &target_url,
+                body,
+                unix_seconds,
+                nonce,
+            );
+            insert_header(
+                &mut signed,
+                HeaderName::from_static(HDR_SIGNATURE),
+                malformed,
+                false,
+            )
+            .expect("test header value is legal");
+
+            assert_eq!(
+                verify(&secret, &request, &signed, unix_seconds, DEFAULT_MAX_SKEW),
+                Err(HmacRejection::Malformed(HDR_SIGNATURE)),
+                "{malformed:?} must be refused as malformed, not compared"
             );
         }
     }
@@ -817,8 +958,12 @@ mod tests {
     fn a_url_path_cannot_contain_a_newline() {
         // The delimiter-injection assumption `string_to_sign`'s doc relies
         // on, asserted against the `url` crate rather than merely commented.
-        let parsed = url::Url::parse("https://h/a\nb")
+        // The signed target is `path` plus `?query`, so both halves are
+        // checked — one clean and one with an embedded newline would leave
+        // the other half untested.
+        let parsed = url::Url::parse("https://h/a\nb?c\nd=e")
             .expect("url::Url strips control characters rather than rejecting them");
         assert!(!parsed.path().contains('\n'));
+        assert!(!parsed.query().unwrap_or_default().contains('\n'));
     }
 }

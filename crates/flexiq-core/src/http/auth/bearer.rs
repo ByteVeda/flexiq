@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, AUTHORIZATION};
 
-use super::{insert_sensitive, AuthError, Signer, SigningRequest};
+use super::{insert_header, AuthError, Signer, SigningRequest};
 use crate::worker::Secret;
 
 /// A static bearer token, sent unchanged on every dispatch.
@@ -36,7 +36,12 @@ impl Signer for BearerSigner {
         // invariant rather than a panic if it is ever wrong.
         let token = String::from_utf8_lossy(self.token.expose_secret());
         let mut headers = HeaderMap::with_capacity(1);
-        insert_sensitive(&mut headers, AUTHORIZATION, &format!("Bearer {token}"))?;
+        insert_header(
+            &mut headers,
+            AUTHORIZATION,
+            &format!("Bearer {token}"),
+            true,
+        )?;
         Ok(headers)
     }
 
@@ -103,7 +108,8 @@ mod tests {
         assert!(value.is_sensitive());
         // The `Debug` impl, not the accessor above: this is what actually
         // guards a dispatch log, and it is the assertion that would catch
-        // `insert_sensitive` being swapped for a plain `insert` later.
+        // `insert_header`'s `sensitive` argument being flipped to `false`
+        // later.
         let rendered = format!("{signed:?}");
         assert!(rendered.contains("Sensitive"));
         assert!(!rendered.contains("tok-abc123"));
