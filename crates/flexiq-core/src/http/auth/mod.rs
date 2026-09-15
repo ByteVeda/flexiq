@@ -12,9 +12,11 @@
 
 mod bearer;
 mod cache;
+mod digest;
 mod hmac;
 mod metadata;
 mod oidc;
+mod sigv4;
 
 use std::sync::Arc;
 

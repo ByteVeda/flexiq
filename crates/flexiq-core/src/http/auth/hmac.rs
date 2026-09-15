@@ -15,10 +15,9 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use hmac::{Hmac, Mac};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use sha2::{Digest, Sha256};
 
+use super::digest::{hex_lower, hmac_sha256_hex, sha256_hex};
 use super::{insert_header, AuthError, Signer, SigningRequest};
 use crate::job::now_millis;
 use crate::worker::auth::constant_time_eq;
@@ -165,40 +164,6 @@ fn request_target(url: &url::Url) -> String {
         Some(query) => format!("{}?{}", url.path(), query),
         None => url.path().to_string(),
     }
-}
-
-/// `sha256(body)`, lowercase hex.
-///
-/// A digest, not the body inline: it keeps the string to sign fixed-size and
-/// printable, so a mismatch is diagnosable — logged, pasted into an issue —
-/// without dumping a job payload anywhere.
-fn sha256_hex(body: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(body);
-    hex_lower(&hasher.finalize())
-}
-
-/// Lowercase hex, the same `format!("{byte:02x}")` fold
-/// `flexiq-server`'s `webhook_sender.rs` uses for its own HMAC digest.
-fn hex_lower(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-/// `hex(HMAC-SHA256(secret, message))`, lowercase — used by both the signer
-/// and the reference verifier, so the two can never compute the digest two
-/// different ways.
-///
-/// `Hmac::<Sha256>::new_from_slice` returns a `Result` only because the
-/// `Mac` trait also covers MACs that require a fixed key length; HMAC itself
-/// accepts a key of any length, so the `Err` arm is unreachable here. It is
-/// still propagated through `Result` rather than `expect`-ed: this repo
-/// already carries one `expect` resting on that exact fact
-/// (`flexiq-server/src/dashboard/webhook_sender.rs`'s `sign`), and library
-/// code in this crate does not add a second instance of it.
-fn hmac_sha256_hex(secret: &[u8], message: &str) -> Result<String, ()> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret).map_err(|_| ())?;
-    mac.update(message.as_bytes());
-    Ok(hex_lower(&mac.finalize().into_bytes()))
 }
 
 /// The string a signature covers, exposed so the contract has one definition

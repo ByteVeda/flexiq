@@ -1271,6 +1271,7 @@ dependencies = [
  "libsqlite3-sys",
  "log",
  "openssl-sys",
+ "percent-encoding",
  "pq-sys",
  "rand 0.10.2",
  "redis",
