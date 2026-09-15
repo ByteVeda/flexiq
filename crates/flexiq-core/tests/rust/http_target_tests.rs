@@ -29,7 +29,7 @@ use flexiq_core::worker::http_target::{
     HDR_IDEMPOTENCY_KEY, HDR_JOB_ID, HDR_LEASE, HDR_MAX_ATTEMPTS, HDR_METADATA, HDR_NAMESPACE,
     HDR_OUTCOME, HDR_PROTOCOL_VERSION, HDR_QUEUE, HDR_RETRY, HDR_TASK,
 };
-use flexiq_core::worker::WorkerDispatcher;
+use flexiq_core::worker::{SideChannel, WorkerDispatcher};
 
 // ── The stub ────────────────────────────────────────────────────────
 
@@ -99,9 +99,9 @@ struct StubState {
 
 /// A scriptable HTTP/1.1 server on an ephemeral loopback port.
 ///
-/// One request per connection, answered and closed — the dispatch client
-/// sends `Connection: close`-shaped traffic anyway, and pipelining is not
-/// something a push target ever sees.
+/// One request per connection: every reply it writes carries
+/// `Connection: close`, so the client never gets to reuse the socket and the
+/// stub never has to implement keep-alive or pipelining.
 struct Stub {
     state: Arc<StubState>,
     base_url: String,
@@ -436,6 +436,41 @@ fn describe(result: &JobResult) -> &'static str {
     }
 }
 
+/// A side channel that answers a toggle lookup with `disabled`, after `delay`.
+///
+/// The delay is the point of one of the two tests below: resolving the disable
+/// list runs on the blocking pool *before* any request is built, so it is the
+/// cheapest way to stall an attempt somewhere the request budget has to reach
+/// but a per-request HTTP timeout never would.
+struct Toggles {
+    disabled: Vec<String>,
+    delay: Duration,
+}
+
+impl SideChannel for Toggles {
+    fn update_progress(&self, _job_id: &str, _progress: i32, _namespace: Option<&str>) {}
+
+    fn write_task_log(
+        &self,
+        _job_id: &str,
+        _task_name: &str,
+        _level: &str,
+        _message: &str,
+        _extra: Option<&str>,
+        _namespace: Option<&str>,
+    ) {
+    }
+
+    fn disabled_middleware(&self, _task_name: &str) -> Vec<String> {
+        // `std::thread::sleep`, not `tokio::time::sleep`: this runs on the
+        // blocking pool, exactly as a real settings read would.
+        if !self.delay.is_zero() {
+            std::thread::sleep(self.delay);
+        }
+        self.disabled.clone()
+    }
+}
+
 fn failure_of(result: &JobResult) -> (&str, bool, bool) {
     match result {
         JobResult::Failure {
@@ -482,7 +517,12 @@ async fn a_dispatch_carries_the_envelope_unchanged() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_dispatch_carries_the_job_the_attempt_and_the_lease() {
     let stub = Stub::always(Reply::outcome(200, "success")).await;
-    let harness = Harness::start(config_for(stub.base_url(), 1));
+    let mut config = config_for(stub.base_url(), 1);
+    // A ceiling well under the job's 30s timeout, so the budget is exactly the
+    // ceiling and the deadline header has one correct value rather than a
+    // range the raw job deadline would also satisfy.
+    config.request_timeout = Duration::from_secs(5);
+    let harness = Harness::start(config);
 
     let lease = Lease::from_epoch(987_654_321);
     let token = String::from_utf8_lossy(lease.as_bytes()).into_owned();
@@ -515,14 +555,11 @@ async fn a_dispatch_carries_the_job_the_attempt_and_the_lease() {
         request.header(HDR_PROTOCOL_VERSION).is_some(),
         "a target has to be told which protocol it is answering"
     );
-    let deadline: i64 = request
-        .header(HDR_DEADLINE_MS)
-        .expect("a deadline is always sent")
-        .parse()
-        .expect("the deadline is an integer");
-    assert!(
-        deadline > 0 && deadline <= 30_000,
-        "the deadline ({deadline}ms) must be positive and no longer than the job's timeout"
+    assert_eq!(
+        request.header(HDR_DEADLINE_MS),
+        Some("5000"),
+        "the header carries the request budget the dispatcher will actually wait — the \
+         5s ceiling here, not the job's ~30s remaining timeout"
     );
     assert!(
         request.header(HDR_DISABLED_MIDDLEWARE).is_none(),
@@ -588,6 +625,138 @@ async fn a_failure_body_settles_the_job_retryably() {
     assert!(should_retry);
     assert!(!timed_out, "a task that raised did not time out");
     assert_eq!(error, r#"{"errtype":"ValueError","message":"bad input"}"#);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_attempt_that_stalls_before_the_request_still_settles_on_its_budget() {
+    // The budget has to bound the *whole* attempt, not just the exchange.
+    // Everything before the request — the toggle lookup here, and signing,
+    // which dials a credential endpoint through a client that carries no
+    // request timeout at all — would otherwise suspend the attempt with no
+    // deadline over it: no result, and the semaphore permit held forever.
+    let stub = Stub::always(Reply::outcome(200, "success")).await;
+    let mut config = config_for(stub.base_url(), 1);
+    config.request_timeout = Duration::from_millis(300);
+    config.side_channel = Some(Arc::new(Toggles {
+        disabled: Vec::new(),
+        delay: Duration::from_secs(2),
+    }));
+    let harness = Harness::start(config);
+
+    harness.dispatch(a_job("job-stalled")).await;
+
+    let started = Instant::now();
+    let result = harness.expect_result(Duration::from_millis(1_500)).await;
+    let (_, should_retry, timed_out) = failure_of(&result);
+    assert!(should_retry, "a stalled attempt is worth retrying");
+    assert!(timed_out, "it ended on the attempt's own deadline");
+    assert!(
+        started.elapsed() < Duration::from_millis(1_500),
+        "the attempt settled on its 300ms budget, not on the 2s stall"
+    );
+    assert_eq!(
+        stub.request_count(),
+        0,
+        "the budget expired before a request was ever built"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_side_channels_disable_list_rides_the_dispatch() {
+    let stub = Stub::always(Reply::outcome(200, "success")).await;
+    let mut config = config_for(stub.base_url(), 1);
+    config.side_channel = Some(Arc::new(Toggles {
+        disabled: vec!["otel".to_string(), "sentry".to_string()],
+        delay: Duration::ZERO,
+    }));
+    let harness = Harness::start(config);
+
+    harness.dispatch(a_job("job-toggles")).await;
+    harness.expect_result(Duration::from_secs(5)).await;
+
+    assert_eq!(
+        stub.received()[0].header(HDR_DISABLED_MIDDLEWARE),
+        Some("otel,sentry"),
+        "the operator's disable list is resolved by the scheduler and carried as a header"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_redirect_is_refused_rather_than_followed() {
+    // `DispatchClient` sets `redirect::Policy::none()`: a 3xx could carry a
+    // signed body to a host that never passed the egress guard.
+    let stub =
+        Stub::always(Reply::status(302).header("location", "https://elsewhere.example.com/")).await;
+    let harness = Harness::start(config_for(stub.base_url(), 1));
+
+    harness.dispatch(a_job("job-3xx")).await;
+
+    let result = harness.expect_result(Duration::from_secs(5)).await;
+    let (error, should_retry, _) = failure_of(&result);
+    assert!(
+        !should_retry,
+        "a redirect does not resolve itself on a retry"
+    );
+    assert!(
+        error.contains("302 redirect"),
+        "{error} must say it refused to follow"
+    );
+    assert_eq!(
+        stub.request_count(),
+        1,
+        "exactly one request: the redirect was refused, not chased"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slept_outcome_is_refused_because_push_has_no_step_session() {
+    let stub = Stub::always(Reply::outcome(200, "slept")).await;
+    let harness = Harness::start(config_for(stub.base_url(), 1));
+
+    harness.dispatch(a_job("job-slept")).await;
+
+    let result = harness.expect_result(Duration::from_secs(5)).await;
+    let (error, should_retry, _) = failure_of(&result);
+    assert!(!should_retry);
+    assert!(error.contains("slept"), "{error}");
+    assert!(
+        error.contains("step session"),
+        "{error} must say why a push dispatch cannot honour it"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_target_that_cannot_be_dialled_fails_retryably_without_naming_the_url() {
+    // A port nothing is listening on: bound to learn a free one, then dropped.
+    // This is the only refusal built from a live `reqwest::Error`, so it is the
+    // only end-to-end exercise of the `without_url()` stripping — without which
+    // reqwest's own `Display` would put the full target URL, path and query
+    // included, into a stored job error.
+    let closed = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("loopback listener binds");
+    let address = closed.local_addr().expect("listener has a local address");
+    drop(closed);
+
+    let mut config = config_for(&format!("http://{address}"), 1);
+    config.connect_timeout = Duration::from_secs(2);
+    let harness = Harness::start(config);
+
+    harness.dispatch(a_job("job-refused")).await;
+
+    let result = harness.expect_result(Duration::from_secs(10)).await;
+    let (error, should_retry, timed_out) = failure_of(&result);
+    assert!(should_retry, "a connection failure is worth retrying");
+    assert!(!timed_out, "nothing timed out; the connection was refused");
+    assert!(
+        error.contains("could not be reached"),
+        "{error} must say what happened"
+    );
+    assert!(
+        !error.contains("/handler"),
+        "the dialled URL must be stripped — `target` is the origin, and the path \
+         reaching a stored job error means reqwest's own Display got through: {error}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
