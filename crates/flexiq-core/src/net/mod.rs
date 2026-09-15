@@ -16,6 +16,9 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+pub mod allowlist;
+pub use allowlist::{AllowRule, Allowlist, AllowlistError};
+
 /// The IMDS address every major cloud answers on.
 ///
 /// Inside `169.254.0.0/16`, so [`is_never_routable`] already covers it; named
