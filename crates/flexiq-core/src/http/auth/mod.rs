@@ -9,7 +9,9 @@
 //! private `hmac` submodule.
 
 mod bearer;
+mod cache;
 mod hmac;
+mod metadata;
 
 use std::sync::Arc;
 
@@ -104,20 +106,61 @@ pub enum AuthError {
     /// A credential could not be rendered as a header value.
     #[error("outbound auth could not set header '{0}'")]
     InvalidHeaderValue(String),
+    /// No credential source in the chain produced one.
+    #[error("no usable credential: {0}")]
+    NoCredentials(&'static str),
+    /// A credential endpoint answered non-2xx.
+    #[error("{endpoint} answered HTTP {status}")]
+    CredentialEndpoint {
+        /// Which endpoint, from `MetadataEndpoint::label` — never
+        /// interpolated from anything the endpoint sent.
+        endpoint: &'static str,
+        /// The HTTP status it answered with.
+        status: u16,
+    },
+    /// A credential endpoint answered 2xx with something this build cannot
+    /// read.
+    #[error("{endpoint} returned a response this build cannot read: {reason}")]
+    CredentialShape {
+        /// Which endpoint, from `MetadataEndpoint::label`.
+        endpoint: &'static str,
+        /// Why the response could not be read, from a closed set of literals
+        /// (`"not valid JSON"`, `"expires_in is not an integer"`, and so on).
+        reason: &'static str,
+    },
+    /// The credential fetch never got a response.
+    #[error("credential fetch failed: {0}")]
+    Transport(String),
 }
 
 impl AuthError {
     /// Whether signing is worth attempting again.
     ///
-    /// Both variants today are `false`: a misconfiguration and a value that is
-    /// not a legal header do not become true on a retry. The method exists
-    /// because the dispatcher has to route a signing failure through the same
-    /// retry decision as every other failure, and later variants — a metadata
-    /// endpoint answering 429, a connection that never landed — are genuinely
-    /// transient.
+    /// `endpoint` and `reason` above are `&'static str`, not `String`, and
+    /// that is the point: there is no interpolation site through which a
+    /// credential endpoint's response body could reach an error that lands
+    /// in a log. A response body is exactly the kind of thing that should
+    /// never round-trip into a log line unexamined — it might carry a
+    /// partial credential, or just be large — so `CredentialEndpoint` and
+    /// `CredentialShape` can only ever say *which* endpoint and *which*
+    /// closed-set reason, never *what the endpoint sent*.
+    ///
+    /// `Transport` is retryable: the request never got a response, and
+    /// trying again is exactly what a transient network failure calls for.
+    /// `CredentialEndpoint` is retryable for 404, 410, 429 and any 5xx —
+    /// Microsoft's own IMDS guidance names exactly those as transient.
+    /// `NoCredentials`, `CredentialShape`, `Config` and `InvalidHeaderValue`
+    /// stay non-retryable: none of them becomes true on a retry alone.
     pub fn retryable(&self) -> bool {
         match self {
-            AuthError::Config(_) | AuthError::InvalidHeaderValue(_) => false,
+            AuthError::Config(_)
+            | AuthError::InvalidHeaderValue(_)
+            | AuthError::NoCredentials(_)
+            | AuthError::CredentialShape { .. } => false,
+            AuthError::Transport(_) => true,
+            AuthError::CredentialEndpoint { status, .. } => {
+                matches!(status, 404 | 410 | 429) || (500..=599).contains(status)
+            }
         }
     }
 }
@@ -244,8 +287,40 @@ mod tests {
     }
 
     #[test]
-    fn neither_error_is_retryable_yet() {
+    fn config_and_invalid_header_are_never_retryable() {
         assert!(!AuthError::Config("bad config".to_string()).retryable());
         assert!(!AuthError::InvalidHeaderValue("authorization".to_string()).retryable());
+    }
+
+    #[test]
+    fn credential_fetch_errors_are_retryable_by_a_closed_set_of_codes() {
+        assert!(AuthError::Transport("connection reset".to_string()).retryable());
+        assert!(!AuthError::NoCredentials("no source configured").retryable());
+        assert!(!AuthError::CredentialShape {
+            endpoint: "gce metadata identity",
+            reason: "not valid JSON",
+        }
+        .retryable());
+
+        for status in [404, 410, 429, 500, 503, 599] {
+            assert!(
+                AuthError::CredentialEndpoint {
+                    endpoint: "gce metadata identity",
+                    status,
+                }
+                .retryable(),
+                "{status} must be retryable"
+            );
+        }
+        for status in [400, 401, 403, 451] {
+            assert!(
+                !AuthError::CredentialEndpoint {
+                    endpoint: "gce metadata identity",
+                    status,
+                }
+                .retryable(),
+                "{status} must not be retryable"
+            );
+        }
     }
 }
