@@ -38,6 +38,23 @@ template time instead of letting the pod CrashLoopBackOff on it.
 {{- if not .Values.push.allow -}}
 {{- fail "flexiq-server: push.enabled requires push.allow — a guard whose default is derived from the value it guards is not a guard. List every host and CIDR the scheduler may dispatch a job to." -}}
 {{- end -}}
+{{/*
+A push shutdown spends push.drain twice — once waiting for in-flight
+dispatches, again for each to settle once abandoned — so anything at or under
+2 × push.drain lets Kubernetes SIGKILL the pod mid-abandonment, and every lease
+still open at that instant goes to the stale-job reaper instead of settling.
+An unset value is left alone here: deployment.yaml computes a safe one. 0 is
+also left alone: it is a deliberate "kill immediately" override, not a
+mistaken guess at a sufficient number, and the chart already lets it through.
+*/}}
+{{- if eq (include "flexiq-server.terminationGraceIsSet" .) "true" -}}
+{{- $drain := .Values.push.drain | int64 -}}
+{{- $minGrace := mul 2 $drain -}}
+{{- $grace := .Values.terminationGracePeriodSeconds | int64 -}}
+{{- if and (ne $grace 0) (not (gt $grace $minGrace)) -}}
+{{- fail (printf "flexiq-server: terminationGracePeriodSeconds=%d does not clear push's shutdown budget — a push shutdown spends push.drain (%ds) twice before Kubernetes sends SIGKILL, so terminationGracePeriodSeconds must be greater than 2 × push.drain (%ds) while push.enabled. Raise terminationGracePeriodSeconds past %ds, or lower push.drain so 2 × it fits under the value you set." $grace $drain $minGrace $minGrace) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

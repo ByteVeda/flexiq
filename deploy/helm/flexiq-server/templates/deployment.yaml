@@ -47,7 +47,9 @@ spec:
       # Rendered exactly as set, including 0 — kill immediately, no grace. An
       # explicit nil/"" test rather than `with`, which is falsey on 0 too: an
       # operator asking for immediate kill must not silently get Kubernetes'
-      # 30s default back.
+      # 30s default back. _validate.tpl already refused this above if it is a
+      # positive value too low to clear push's own shutdown budget; 0 is a
+      # deliberate override, not a guess, and always passes through.
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | int64 }}
       {{- else if .Values.push.enabled }}
       # Unset, but push.enabled spends push.drain twice during shutdown —

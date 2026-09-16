@@ -157,10 +157,11 @@ jobs:
       # `with` would have swallowed: 0 is a grace period Kubernetes accepts and
       # means "kill immediately", so an operator asking for it must not
       # silently get the 30s default back. Push is the role that needs this at
-      # all: push.drain is spent twice, so a push shutdown runs to 2 × it,
+      # all: push.drain is spent twice, so a push shutdown runs to 2 × it —
       # which is also why an unset value now computes one instead of leaving
-      # Kubernetes' 30s in place.
-      - name: terminationGracePeriodSeconds computes a safe push default
+      # Kubernetes' 30s in place, and why a positive value too low to cover
+      # that budget is refused rather than rendered.
+      - name: terminationGracePeriodSeconds covers push's shutdown budget
         run: |
           set -euo pipefail
           grace() {
@@ -197,9 +198,22 @@ jobs:
           [ "$computed_follows_drain" = "30" ] \
             || { echo "::error::the computed default must track push.drain, not the chart's default of it"; exit 1; }
           [ "$zero" = "0" ] \
-            || { echo "::error::terminationGracePeriodSeconds=0 must render, not fall back to the default"; exit 1; }
+            || { echo "::error::terminationGracePeriodSeconds=0 must render, not fall back to the default or be refused"; exit 1; }
           [ "$seventy_five" = "75" ] \
             || { echo "::error::terminationGracePeriodSeconds must reach the pod spec"; exit 1; }
+
+          # A positive value that does not clear 2 x push.drain (60 at the
+          # chart's default) is refused, not rendered — Kubernetes could
+          # SIGKILL mid-abandonment and every open lease goes to the
+          # stale-job reaper instead of settling.
+          if error="$(grace --set terminationGracePeriodSeconds=10 2>&1)"; then
+            echo "::error::terminationGracePeriodSeconds=10 rendered but should have been refused"
+            exit 1
+          fi
+          case "$error" in
+            *"must be greater than 2 × push.drain"*) echo "refused: terminationGracePeriodSeconds=10" ;;
+            *) echo "::error::refusal message missing the two-drain reason: $error"; exit 1 ;;
+          esac
 
       # The regression this exists for: `genCA` is random, so a helper called
       # once per template would hand the MutatingWebhookConfiguration a CA that

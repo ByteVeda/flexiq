@@ -170,8 +170,9 @@ push:
   # Seconds shutdown waits for in-flight dispatches, and then again for each
   # to settle once abandoned — a shutdown runs to at most twice this. Minimum
   # 1; zero is refused at boot. With push.enabled, an unset
-  # terminationGracePeriodSeconds (bottom of this file) is computed from
-  # this value rather than left at Kubernetes' 30s default.
+  # terminationGracePeriodSeconds (bottom of this file) is computed from this
+  # value rather than left at Kubernetes' 30s default; an explicit one there
+  # is refused unless it clears 2 × this (0 excepted — see its own comment).
   drain: 30
   # Ceiling on one job's request body, in bytes. Minimum 1; zero is refused at
   # boot — a cap nothing fits under refuses every dispatch as oversized, and
@@ -235,7 +236,10 @@ podLabels: {}
 # push.drain default of 30.
 #
 # An explicit value always wins over the computed one, 0 included — a
-# deliberate "kill immediately, no grace".
+# deliberate "kill immediately, no grace". Any other explicit value is
+# refused at template time unless it clears 2 × push.drain: at or under that,
+# Kubernetes can SIGKILL mid-abandonment and the lease goes to the stale-job
+# reaper instead of settling. Lower push.drain if the value you need is fixed.
 terminationGracePeriodSeconds: ""
 
 # The image already runs as nonroot:65532 and needs no write access to its own
