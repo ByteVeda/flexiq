@@ -70,6 +70,23 @@ impl DispatchClient {
 ///
 /// `bytes()` would buffer whatever the endpoint chose to send before any cap
 /// applied. Streaming stops as soon as the budget is spent.
+///
+/// # Two constraints the loop has to satisfy at once
+///
+/// 1. **Never buffer past `cap`.** The cap is the memory bound; a loop that
+///    appended a whole chunk and trimmed afterwards would have already held
+///    `cap + chunk` bytes at once.
+/// 2. **Never report `truncated: false` without having seen the end of the
+///    body.** A body that exactly fills `cap` is indistinguishable from the
+///    first `cap` bytes of a longer one until something further is read, and
+///    the caller turns this flag into a refusal, so guessing is not available.
+///
+/// They pull opposite ways, and the resolution is that the loop reads *one
+/// byte* past the cap and keeps none of it: a chunk longer than the remaining
+/// room is appended only up to that room, and its existence is what sets
+/// `truncated`. So a body of exactly `cap` costs one extra `chunk()` await
+/// that comes back `Ok(None)` and reports `false`, and a body of `cap + 1`
+/// reports `true` having buffered exactly `cap`.
 pub(crate) async fn read_bounded(response: reqwest::Response, cap: usize) -> (Vec<u8>, bool) {
     let mut response = response;
     let mut buffered: Vec<u8> = Vec::new();
@@ -79,17 +96,19 @@ pub(crate) async fn read_bounded(response: reqwest::Response, cap: usize) -> (Ve
             Ok(Some(chunk)) => {
                 let room = cap.saturating_sub(buffered.len());
                 if chunk.len() > room {
+                    // Keep what fits and drop the rest unexamined: the
+                    // overflow is evidence that the body continues past the
+                    // cap, and evidence is the only use it has. `room` is `0`
+                    // once the budget is already spent, so this appends
+                    // nothing and the slice is still in bounds.
+                    buffered.extend_from_slice(&chunk[..room]);
                     truncated = true;
-                }
-                buffered.extend_from_slice(&chunk[..chunk.len().min(room)]);
-                // Checked against the length just written, not the `room`
-                // computed above it: a chunk that exactly fills the
-                // remaining budget must stop here, not await one more
-                // `chunk()` call to discover there is no room left.
-                if buffered.len() == cap {
                     break;
                 }
+                buffered.extend_from_slice(&chunk);
             }
+            // The one answer that proves nothing follows, and so the only one
+            // that may leave `truncated` false.
             Ok(None) => break,
             // Whatever arrived is still useful (mirrors `flexiq-server`'s
             // `webhook_sender::read_bounded`), but unlike a clean end of
@@ -164,6 +183,44 @@ mod tests {
 
         assert_eq!(bytes.len(), 10);
         assert!(truncated);
+    }
+
+    /// Regression: the loop used to stop the moment `buffered.len() == cap`,
+    /// so a body that exactly filled the cap reported `truncated: false`
+    /// whether or not more followed. The caller turns that flag into a
+    /// refusal, so the two cases below must not be reported the same way.
+    #[tokio::test]
+    async fn read_bounded_distinguishes_a_body_that_exactly_fills_the_cap() {
+        let exact = serve_once(vec![b'x'; 10]).await;
+        let response = reqwest::Client::new()
+            .get(exact)
+            .send()
+            .await
+            .expect("the local server answers");
+
+        let (bytes, truncated) = read_bounded(response, 10).await;
+
+        assert_eq!(bytes.len(), 10);
+        assert!(
+            !truncated,
+            "the body ended at the cap, which is a complete answer"
+        );
+
+        let one_more = serve_once(vec![b'x'; 11]).await;
+        let response = reqwest::Client::new()
+            .get(one_more)
+            .send()
+            .await
+            .expect("the local server answers");
+
+        let (bytes, truncated) = read_bounded(response, 10).await;
+
+        assert_eq!(
+            bytes.len(),
+            10,
+            "the overflow byte is evidence, never something to buffer"
+        );
+        assert!(truncated, "one byte past the cap is still past the cap");
     }
 
     #[tokio::test]
