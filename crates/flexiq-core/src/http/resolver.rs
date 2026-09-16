@@ -17,6 +17,18 @@ use super::egress::{EgressPolicy, EgressRefusal};
 /// that directly without ever calling a `Resolve` impl — which is why
 /// [`EgressPolicy::permits_host`] applies the unconditional refusals itself
 /// rather than leaving every case to this resolver.
+///
+/// **A lookup in flight can outlast a shutdown drain.** `getaddrinfo` runs on
+/// the blocking pool, and a blocking task cannot be cancelled once it has
+/// started; the worker's runtime is dropped without a shutdown timeout, so
+/// dropping it waits for that task. A wedged lookup therefore holds shutdown
+/// open past `HttpTargetConfig::shutdown_drain`. It is still bounded, just
+/// not here: the platform resolver's own configuration is the ceiling —
+/// `resolv.conf`'s `timeout` × `attempts`, across each nameserver listed. A
+/// timeout on the resolution future would buy nothing, since the blocking
+/// task keeps running behind it; removing the bound needs either an async
+/// resolver or a bounded runtime shutdown, and neither is this path's alone
+/// to change.
 pub(crate) struct PinnedResolver {
     policy: Arc<EgressPolicy>,
 }
