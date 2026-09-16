@@ -242,7 +242,16 @@ pub(super) async fn fetch(
 /// operator-configured cap.
 const MAX_BODY_BYTES: usize = 16 * 1024;
 
-/// Reads at most [`MAX_BODY_BYTES`] of `response`'s body and drops the rest.
+/// The `reason` a body past [`MAX_BODY_BYTES`] carries.
+///
+/// A literal, not a `format!`: [`AuthError::CredentialShape`]'s `reason` is
+/// `&'static str` by design, so the number cannot be interpolated at run
+/// time. `the_oversize_reason_names_the_real_cap` below pins it to the
+/// constant so the two cannot drift.
+const OVERSIZED_BODY_REASON: &str = "response body exceeds the 16384-byte cap";
+
+/// Reads `response`'s body in full, or refuses it for exceeding
+/// [`MAX_BODY_BYTES`].
 ///
 /// A separate copy of `metadata.rs`'s own `read_capped` rather than a shared
 /// one: that one is private to `MetadataClient`, and this path reaches an
@@ -250,21 +259,36 @@ const MAX_BODY_BYTES: usize = 16 * 1024;
 /// different trust boundary, sharing only the cap's rationale, not its
 /// implementation.
 ///
-/// **A clean end of body and a broken connection are not the same thing
-/// here**, mirroring `metadata.rs`'s own `read_capped` for the same reason:
-/// returning the bytes gathered so far would let a half-read token response
-/// be parsed as if it were whole, and would report a retryable network
-/// failure as a permanent [`AuthError::CredentialShape`].
+/// **A clean end of body, a broken connection and a body past the cap are
+/// three different things here**, mirroring `metadata.rs`'s own `read_capped`
+/// for the same reason: returning the bytes gathered so far would let a
+/// half-read token response be parsed as if it were whole. A broken
+/// connection is a retryable [`AuthError::Transport`] rather than a permanent
+/// [`AuthError::CredentialShape`]; a body past the cap is the reverse, since
+/// the endpoint answered in full and no retry makes its answer smaller.
 async fn read_capped(response: reqwest::Response) -> Result<Vec<u8>, AuthError> {
     let mut response = response;
     let mut buffered = Vec::new();
-    while buffered.len() < MAX_BODY_BYTES {
+    loop {
         match response.chunk().await {
             Ok(Some(chunk)) => {
-                let room = MAX_BODY_BYTES - buffered.len();
-                buffered.extend_from_slice(&chunk[..chunk.len().min(room)]);
+                // Nothing of an overflowing chunk is kept: the overflow is
+                // evidence the body runs past the cap, and evidence is the
+                // only use it has. `LABEL` names the refusal, never the
+                // operator's token URL.
+                if chunk.len() > MAX_BODY_BYTES.saturating_sub(buffered.len()) {
+                    return Err(AuthError::CredentialShape {
+                        endpoint: LABEL,
+                        reason: OVERSIZED_BODY_REASON,
+                    });
+                }
+                buffered.extend_from_slice(&chunk);
             }
-            Ok(None) => break,
+            // The one answer that proves nothing follows, and so the only one
+            // that may report a complete body: a loop that stopped as soon as
+            // it held `MAX_BODY_BYTES` could not tell a body ending exactly
+            // there from one continuing past it.
+            Ok(None) => return Ok(buffered),
             // `without_url`, never the bare `Display`, for the reason
             // `AuthError::Transport`'s own doc gives: the operator's token
             // URL may carry a credential in its query.
@@ -273,7 +297,6 @@ async fn read_capped(response: reqwest::Response) -> Result<Vec<u8>, AuthError> 
             }
         }
     }
-    Ok(buffered)
 }
 
 /// The client-credentials form body: `grant_type` always, `client_id` and
@@ -538,6 +561,96 @@ mod tests {
         assert!(
             error.retryable(),
             "a broken connection is worth another attempt"
+        );
+    }
+
+    #[test]
+    fn the_oversize_reason_names_the_real_cap() {
+        assert_eq!(
+            OVERSIZED_BODY_REASON,
+            format!("response body exceeds the {MAX_BODY_BYTES}-byte cap")
+        );
+    }
+
+    const TOKEN_PREFIX: &str = r#"{"access_token":""#;
+    const TOKEN_SUFFIX: &str = r#"","expires_in":3600}"#;
+
+    /// A well-formed token response padded to exactly `total` bytes, so a
+    /// test can sit on either side of the cap without the JSON itself being
+    /// what decides the outcome. Every padding byte lands in `access_token`,
+    /// so the parsed token's length is `total` less the envelope's.
+    fn token_body_of_length(total: usize) -> String {
+        let padding = total
+            .checked_sub(TOKEN_PREFIX.len() + TOKEN_SUFFIX.len())
+            .expect("the requested length has room for the envelope");
+        format!("{TOKEN_PREFIX}{}{TOKEN_SUFFIX}", "t".repeat(padding))
+    }
+
+    #[tokio::test]
+    async fn a_token_body_that_ends_exactly_at_the_cap_is_read_whole() {
+        let body = token_body_of_length(MAX_BODY_BYTES);
+        assert_eq!(body.len(), MAX_BODY_BYTES);
+        let stub = StubServer::start(200, body).await;
+
+        let result = fetch(
+            &reqwest::Client::new(),
+            &token_url(&stub),
+            "id",
+            &Secret::new("secret"),
+            None,
+            ClientAuthStyle::ClientSecretPost,
+            "",
+        )
+        .await;
+
+        // `Expiring<String>` carries no `Debug` — it holds a credential — so
+        // the `Ok` arm is unwrapped by hand here too.
+        let token = match result {
+            Ok(token) => token,
+            Err(error) => panic!("a body that ends at the cap is a complete answer: {error:?}"),
+        };
+        assert_eq!(
+            token.value.len(),
+            MAX_BODY_BYTES - TOKEN_PREFIX.len() - TOKEN_SUFFIX.len()
+        );
+    }
+
+    /// Regression, the twin of `metadata.rs`'s own: the read loop exited as
+    /// soon as it had `MAX_BODY_BYTES` and returned them as if the body had
+    /// ended there, so an over-cap token response came back as a silently
+    /// truncated prefix instead of a refusal.
+    #[tokio::test]
+    async fn a_token_body_past_the_cap_is_refused_rather_than_truncated() {
+        let stub = StubServer::start(200, token_body_of_length(MAX_BODY_BYTES + 1)).await;
+
+        let result = fetch(
+            &reqwest::Client::new(),
+            &token_url(&stub),
+            "id",
+            &Secret::new("secret"),
+            None,
+            ClientAuthStyle::ClientSecretPost,
+            "",
+        )
+        .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a body past the cap is refused, not read in part"),
+        };
+
+        match &error {
+            AuthError::CredentialShape { endpoint, reason } => {
+                assert_eq!(*endpoint, LABEL);
+                assert!(
+                    reason.contains(&MAX_BODY_BYTES.to_string()),
+                    "the refusal must name the cap: {reason}"
+                );
+            }
+            other => panic!("expected CredentialShape, got {other:?}"),
+        }
+        assert!(
+            !error.retryable(),
+            "a response too large to read is no smaller on the next attempt"
         );
     }
 

@@ -29,6 +29,14 @@ const CLOUD_METADATA_IP: &str = "169.254.169.254";
 /// response larger than this is not one this client was built to read.
 const MAX_BODY_BYTES: usize = 16 * 1024;
 
+/// The `reason` a body past [`MAX_BODY_BYTES`] carries.
+///
+/// A literal, not a `format!`: [`AuthError::CredentialShape`]'s `reason` is
+/// `&'static str` by design, so the number cannot be interpolated at run
+/// time. `the_oversize_reason_names_the_real_cap` below pins it to the
+/// constant so the two cannot drift.
+const OVERSIZED_BODY_REASON: &str = "response body exceeds the 16384-byte cap";
+
 /// The client credential fetches use, and the only one in this crate that may
 /// reach a link-local address.
 ///
@@ -255,7 +263,7 @@ impl MetadataClient {
             });
         }
 
-        let body = read_capped(response, MAX_BODY_BYTES).await?;
+        let body = read_capped(response, endpoint.label()).await?;
         Ok(String::from_utf8_lossy(&body).into_owned())
     }
 }
@@ -298,37 +306,57 @@ fn build_client() -> Result<reqwest::Client, AuthError> {
     // design, not an oversight — see the module doc.
 }
 
-/// Reads at most `cap` bytes of `response`'s body and drops the rest.
+/// Reads `response`'s body in full, or refuses it for exceeding
+/// [`MAX_BODY_BYTES`].
 ///
 /// A cap of its own, separate from `client::read_bounded`'s: a credential
 /// document or a JWT is at most a few KB, and this module has no
 /// dispatcher-sized response to plan around.
 ///
-/// **A clean end of body and a broken connection are not the same thing
-/// here.** Returning the bytes gathered so far on a read error would hand
-/// `fetch` a partial credential document as if it were complete: a truncated
-/// JWT still has three dot-separated segments and a readable `exp`, so the
-/// caller would present a corrupt token rather than diagnose it, and would
-/// classify a retryable network failure as a permanent
-/// [`AuthError::CredentialShape`]. The error is
-/// [`AuthError::Transport`] instead, built from
-/// [`reqwest::Error::without_url`] per that variant's own invariant.
-async fn read_capped(response: reqwest::Response, cap: usize) -> Result<Vec<u8>, AuthError> {
+/// **A clean end of body, a broken connection and a body past the cap are
+/// three different things here.** Returning the bytes gathered so far for
+/// either of the last two would hand `fetch` a partial credential document as
+/// if it were complete: a truncated JWT still has three dot-separated segments
+/// and a readable `exp`, so the caller would present a corrupt token rather
+/// than diagnose it. A broken connection is [`AuthError::Transport`], built
+/// from [`reqwest::Error::without_url`] per that variant's own invariant, and
+/// retryable rather than a permanent [`AuthError::CredentialShape`]. A body
+/// past the cap is the reverse: the endpoint answered in full, this build
+/// simply will not read that much, and no retry makes the response smaller.
+///
+/// `endpoint` is the caller's [`MetadataEndpoint::label`], never a URL — the
+/// same thing every other error here is allowed to name.
+async fn read_capped(
+    response: reqwest::Response,
+    endpoint: &'static str,
+) -> Result<Vec<u8>, AuthError> {
     let mut response = response;
     let mut buffered = Vec::new();
-    while buffered.len() < cap {
+    loop {
         match response.chunk().await {
             Ok(Some(chunk)) => {
-                let room = cap - buffered.len();
-                buffered.extend_from_slice(&chunk[..chunk.len().min(room)]);
+                // Nothing of an overflowing chunk is kept: the overflow is
+                // evidence the body runs past the cap, and evidence is the
+                // only use it has. The shape `client::read_bounded` already
+                // uses for the dispatcher's own body.
+                if chunk.len() > MAX_BODY_BYTES.saturating_sub(buffered.len()) {
+                    return Err(AuthError::CredentialShape {
+                        endpoint,
+                        reason: OVERSIZED_BODY_REASON,
+                    });
+                }
+                buffered.extend_from_slice(&chunk);
             }
-            Ok(None) => break,
+            // The one answer that proves nothing follows, and so the only one
+            // that may report a complete body: a loop that stopped as soon as
+            // it held `MAX_BODY_BYTES` could not tell a body ending exactly
+            // there from one continuing past it.
+            Ok(None) => return Ok(buffered),
             Err(error) => {
                 return Err(AuthError::Transport(error.without_url().to_string()));
             }
         }
     }
-    Ok(buffered)
 }
 
 /// Accept an endpoint URL that arrived from the process environment.
@@ -635,6 +663,74 @@ mod tests {
         assert!(
             error.retryable(),
             "a broken connection is worth another attempt"
+        );
+    }
+
+    #[test]
+    fn the_oversize_reason_names_the_real_cap() {
+        assert_eq!(
+            OVERSIZED_BODY_REASON,
+            format!("response body exceeds the {MAX_BODY_BYTES}-byte cap")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_body_that_ends_exactly_at_the_cap_is_read_whole() {
+        let stub = crate::http::testing::StubServer::start(200, "c".repeat(MAX_BODY_BYTES)).await;
+        let client = MetadataClient::with_base_url(
+            url::Url::parse(&stub.base_url()).expect("stub url parses"),
+        )
+        .expect("test client builds");
+
+        let body = client
+            .fetch(
+                &MetadataEndpoint::GoogleIdentity,
+                reqwest::Method::GET,
+                &[],
+                &[],
+            )
+            .await
+            .expect("a body that ends at the cap is a complete answer");
+
+        assert_eq!(body.len(), MAX_BODY_BYTES);
+    }
+
+    /// Regression: the read loop exited as soon as it had `MAX_BODY_BYTES`
+    /// and returned them as if the body had ended there, so an over-cap
+    /// credential document was handed on as a silently truncated prefix —
+    /// exactly what the truncated-JWT argument above exists to prevent.
+    #[tokio::test]
+    async fn a_body_past_the_cap_is_refused_rather_than_truncated() {
+        let stub =
+            crate::http::testing::StubServer::start(200, "c".repeat(MAX_BODY_BYTES + 1)).await;
+        let client = MetadataClient::with_base_url(
+            url::Url::parse(&stub.base_url()).expect("stub url parses"),
+        )
+        .expect("test client builds");
+
+        let error = client
+            .fetch(
+                &MetadataEndpoint::GoogleIdentity,
+                reqwest::Method::GET,
+                &[],
+                &[],
+            )
+            .await
+            .expect_err("a body past the cap is refused, not read in part");
+
+        match &error {
+            AuthError::CredentialShape { endpoint, reason } => {
+                assert_eq!(*endpoint, MetadataEndpoint::GoogleIdentity.label());
+                assert!(
+                    reason.contains(&MAX_BODY_BYTES.to_string()),
+                    "the refusal must name the cap: {reason}"
+                );
+            }
+            other => panic!("expected CredentialShape, got {other:?}"),
+        }
+        assert!(
+            !error.retryable(),
+            "a response too large to read is no smaller on the next attempt"
         );
     }
 

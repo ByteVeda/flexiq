@@ -132,6 +132,10 @@ pub enum AuthError {
     },
     /// A credential endpoint answered 2xx with something this build cannot
     /// read.
+    ///
+    /// A body past the reader's own byte cap is this and not
+    /// [`Self::Transport`]: the response arrived whole, this build just will
+    /// not buffer that much, and no retry makes it smaller.
     #[error("{endpoint} returned a response this build cannot read: {reason}")]
     CredentialShape {
         /// Which endpoint, from `MetadataEndpoint::label`.
