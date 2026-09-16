@@ -43,10 +43,14 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "flexiq-server.serviceAccountName" . }}
-      {{- with .Values.terminationGracePeriodSeconds }}
+      {{- if not (or (kindIs "invalid" .Values.terminationGracePeriodSeconds) (eq (toString .Values.terminationGracePeriodSeconds) "")) }}
       # Rendered only when set, so an unset value leaves Kubernetes' own 30s
       # default in place rather than this chart restating it as its own.
-      terminationGracePeriodSeconds: {{ . | int64 }}
+      #
+      # An explicit nil/"" test rather than `with`: `with` is falsey on `0`
+      # too, and 0 is a value Kubernetes accepts — it means kill immediately,
+      # no grace. An operator who asks for that must not silently get 30s.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | int64 }}
       {{- end }}
       {{- with .Values.pullSecrets }}
       imagePullSecrets:

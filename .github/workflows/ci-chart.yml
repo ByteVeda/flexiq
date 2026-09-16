@@ -152,6 +152,39 @@ jobs:
           [ "$legacy" = "['tcpSocket'] ['tcpSocket'] False True" ] \
             || { echo "::error::grpc.healthProbe=false must fall readiness back to the socket"; exit 1; }
 
+      # Same reasoning as the gRPC tunables above — a chart value nothing emits
+      # is a knob an operator turns with no effect — plus the `0` case, which
+      # `with` would have swallowed: 0 is a grace period Kubernetes accepts and
+      # means "kill immediately", so an operator asking for it must not
+      # silently get the 30s default back. Push is the role that needs this at
+      # all: push.drain is spent twice, so a push shutdown runs to 2 × it.
+      - name: terminationGracePeriodSeconds renders when set, including zero
+        run: |
+          set -euo pipefail
+          grace() {
+            helm template t "$CHART" --set storage.dsn=postgres://u:p@db/x \
+              --set attach.enabled=false --set dashboard.enabled=false \
+              --set push.enabled=true --set push.url=https://executor.internal/hook \
+              --set push.capacity=4 --set push.allow=executor.internal "$@" \
+              | python3 -c '
+          import sys, yaml
+          for doc in yaml.safe_load_all(sys.stdin):
+              if doc and doc.get("kind") == "Deployment":
+                  print(doc["spec"]["template"]["spec"].get(
+                      "terminationGracePeriodSeconds", "ABSENT"))
+          '
+          }
+          unset_value="$(grace)"
+          zero="$(grace --set terminationGracePeriodSeconds=0)"
+          seventy_five="$(grace --set terminationGracePeriodSeconds=75)"
+          echo "unset: $unset_value / 0: $zero / 75: $seventy_five"
+          [ "$unset_value" = "ABSENT" ] \
+            || { echo "::error::unset must leave the field off so Kubernetes' own default applies"; exit 1; }
+          [ "$zero" = "0" ] \
+            || { echo "::error::terminationGracePeriodSeconds=0 must render, not fall back to the default"; exit 1; }
+          [ "$seventy_five" = "75" ] \
+            || { echo "::error::terminationGracePeriodSeconds must reach the pod spec"; exit 1; }
+
       # The regression this exists for: `genCA` is random, so a helper called
       # once per template would hand the MutatingWebhookConfiguration a CA that
       # does not sign the certificate the pod serves — and every admission call
