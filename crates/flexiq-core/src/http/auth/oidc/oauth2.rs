@@ -49,6 +49,83 @@ struct TokenResponse {
     expires_in: i64,
 }
 
+/// Parse and vet the operator-supplied token URL.
+///
+/// Every check here is a construction-time one, so a misconfiguration stops
+/// the process at boot rather than failing the first dispatch an hour later —
+/// the same argument [`OutboundAuth::signer`](crate::http::auth::OutboundAuth::signer)'s
+/// empty-secret checks make.
+///
+/// Three rules:
+///
+/// - **A URL at all.** Anything `url::Url` cannot parse is a typo.
+/// - **`https`, or `http` only to a loopback host.** The client secret goes to
+///   this endpoint in a form body (or base64 in an `Authorization: Basic`
+///   header, which is encoding, not encryption), and the access token comes
+///   back the same way, so cleartext to anywhere but the host this process is
+///   already running on puts a credential on the wire. This is the same rule
+///   the push dispatch target's own URL obeys, for the same reason, and it is
+///   deliberately *not* the rule
+///   [`accept_env_endpoint`](crate::http::auth::metadata::accept_env_endpoint)
+///   applies: that one vets a credential endpoint the *platform* placed in the
+///   environment, which is `http` on loopback or link-local by construction,
+///   whereas this is a URL an operator typed.
+/// - **No userinfo.** RFC 6749 §2.3.1 has no place for credentials in the URL
+///   itself. Refused rather than merely discouraged, because a `Transport`
+///   error on a failed fetch carries reqwest's `Display` of the request URL
+///   verbatim — userinfo included — into `AuthError`, and from there into
+///   whatever logs that error. The credential is never actually put on the
+///   wire this way (reqwest does not turn URL userinfo into an
+///   `Authorization` header), so this is a log-leak guard, not a
+///   transport-security one.
+///
+/// `localhost` counts as loopback without being resolved: RFC 6761 §6.3
+/// reserves the name for the loopback interface, and there is nothing to
+/// resolve at construction time. Errors name no part of the URL — an
+/// operator's token URL may carry a tenant key in its query — which is the
+/// same discipline [`LABEL`] exists for.
+pub(super) fn validate_token_url(raw: &str) -> Result<url::Url, AuthError> {
+    let url = url::Url::parse(raw)
+        .map_err(|_| AuthError::Config("oauth2 token_url is not a valid URL".to_string()))?;
+
+    match url.scheme() {
+        "https" => {}
+        "http" if is_loopback_host(&url) => {}
+        _ => {
+            return Err(AuthError::Config(
+                "oauth2 token_url must use https; http is accepted only for a loopback host \
+                 (127.0.0.0/8, ::1, or the name 'localhost')"
+                    .to_string(),
+            ))
+        }
+    }
+
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(AuthError::Config(
+            "oauth2 token_url must not carry userinfo".to_string(),
+        ));
+    }
+
+    Ok(url)
+}
+
+/// Whether `url`'s host is the loopback interface.
+///
+/// Read through `Url::host()` rather than `host_str()`: the typed accessor
+/// hands back an already-unbracketed address, and `"[::1]"` is not a shape
+/// `IpAddr::parse` accepts.
+fn is_loopback_host(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(v4)) => crate::net::is_loopback_address(std::net::IpAddr::V4(v4)),
+        Some(url::Host::Ipv6(v6)) => crate::net::is_loopback_address(std::net::IpAddr::V6(v6)),
+        Some(url::Host::Domain(name)) => {
+            let normalized = name.strip_suffix('.').unwrap_or(name);
+            normalized.eq_ignore_ascii_case("localhost")
+        }
+        None => false,
+    }
+}
+
 /// POST a client-credentials grant to `token_url` through `client` — the
 /// guarded client's own `reqwest::Client`, per this module's doc — and
 /// return the access token it answers with.
@@ -203,6 +280,50 @@ mod tests {
 
     fn token_url(stub: &StubServer) -> url::Url {
         url::Url::parse(&format!("{}/token", stub.base_url())).expect("stub url parses")
+    }
+
+    #[test]
+    fn a_cleartext_token_url_is_refused_unless_it_is_loopback() {
+        // The client secret goes to this endpoint in a form body and the
+        // access token comes back in the response; neither may cross a
+        // network in the clear.
+        for refused in [
+            "http://issuer.example.com/token",
+            "http://10.1.2.3:8080/token",
+            "http://[2606:4700::1111]/token",
+            "ftp://issuer.example.com/token",
+            "not a url",
+        ] {
+            assert!(
+                matches!(validate_token_url(refused), Err(AuthError::Config(_))),
+                "{refused} must be refused at construction"
+            );
+        }
+
+        for accepted in [
+            "https://issuer.example.com/token",
+            "http://127.0.0.1:8080/token",
+            "http://[::1]:8080/token",
+            "http://localhost:8080/token",
+            "http://LocalHost.:8080/token",
+        ] {
+            assert!(
+                validate_token_url(accepted).is_ok(),
+                "{accepted} is https or a loopback sidecar, both of which stay reachable"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_token_url_never_appears_in_the_error() {
+        // The same invariant `LABEL` exists for: an operator's token URL may
+        // carry a tenant key in its query, and this error reaches a log.
+        let error = validate_token_url("http://issuer.example.com/token?tenant=q1w2e3r4")
+            .expect_err("cleartext off loopback is refused");
+
+        let rendered = error.to_string();
+        assert!(!rendered.contains("q1w2e3r4"), "{rendered}");
+        assert!(!rendered.contains("issuer.example.com"), "{rendered}");
     }
 
     fn permissive_dispatch_client() -> DispatchClient {

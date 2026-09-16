@@ -250,28 +250,14 @@ impl OidcSigner {
                 scope,
                 style,
             } => {
-                // Parsed once, here, rather than on every fetch: an invalid
-                // URL is a configuration mistake, and failing at
-                // construction beats every dispatch being refused with no
-                // explanation on our side — the same argument
-                // `OutboundAuth::signer`'s empty-secret checks make.
-                let token_url = url::Url::parse(&token_url).map_err(|_| {
-                    AuthError::Config("oauth2 token_url is not a valid URL".to_string())
-                })?;
-                // RFC 6749 §2.3.1 has no place for credentials in the URL
-                // itself. Refused here, not merely discouraged, because a
-                // `Transport` error on a failed fetch carries reqwest's
-                // `Display` of the request URL verbatim — including
-                // userinfo — into `AuthError`, and from there into whatever
-                // logs that error. The credential is never actually put on
-                // the wire this way (reqwest does not turn URL userinfo
-                // into an `Authorization` header), so this is a log-leak
-                // guard, not a transport-security one.
-                if !token_url.username().is_empty() || token_url.password().is_some() {
-                    return Err(AuthError::Config(
-                        "oauth2 token_url must not carry userinfo".to_string(),
-                    ));
-                }
+                // Parsed and vetted once, here, rather than on every fetch: a
+                // bad URL, a cleartext one or one carrying userinfo are all
+                // configuration mistakes, and failing at construction beats
+                // every dispatch being refused with no explanation on our
+                // side — the same argument `OutboundAuth::signer`'s
+                // empty-secret checks make. The rules are `oauth2.rs`'s, next
+                // to the code that puts the client secret on the wire.
+                let token_url = oauth2::validate_token_url(&token_url)?;
                 Resolved::OAuth2(Box::new(OAuth2Resolved {
                     client: dispatch.inner().clone(),
                     token_url,
