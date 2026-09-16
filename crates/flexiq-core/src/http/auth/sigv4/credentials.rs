@@ -451,21 +451,55 @@ mod tests {
         assert_eq!(url.as_str(), "http://169.254.170.2/v2/credentials/abc-123");
     }
 
-    /// Regression: the relative branch used to skip `accept_env_endpoint`
-    /// entirely and accept anything `url::Url` would parse. Concatenating a
-    /// value onto an authority is not path joining — `@evil.example.com/`
-    /// joins to `http://169.254.170.2@evil.example.com/`, whose host is
-    /// `evil.example.com` and whose userinfo is the link-local address, so
-    /// the container authorization token would have gone to whoever answers
-    /// that name.
+    /// Regression, and the specific attack the leading-`/` check exists for.
+    ///
+    /// `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` is concatenated onto a fixed
+    /// authority, and **concatenating onto an authority is not path joining**.
+    /// A value beginning `@` ends the authority's userinfo and starts a new
+    /// host: `@evil.example.com/` joins to
+    /// `http://169.254.170.2@evil.example.com/`, which `url::Url` reads as host
+    /// `evil.example.com` with userinfo `169.254.170.2`. The relative branch
+    /// used to accept anything `url::Url` would parse, so that URL was dialled
+    /// — sending `AWS_CONTAINER_AUTHORIZATION_TOKEN` to whoever answers that
+    /// name. The fixed host does **not** make this safe; the leading-`/` check
+    /// is what does, with `accept_env_endpoint` catching it a second time
+    /// because the resulting host is a name rather than a link-local address.
+    ///
+    /// Assert on the *host* and not merely on the refusal: a future rewrite
+    /// that refuses `@…` for some unrelated reason would still leave the
+    /// hijack open for a shape nobody thought of.
     #[test]
-    fn a_relative_container_uri_that_rewrites_the_host_is_refused() {
-        for relative in [
-            "@evil.example.com/",
-            "evil.example.com/",
-            "v2/credentials",
-            "",
-        ] {
+    fn an_at_sign_in_the_relative_uri_cannot_hijack_the_host() {
+        let hijack = "@evil.example.com/";
+
+        // The joined string this would have produced, and what it parses as —
+        // stated here so the test fails loudly if `url`'s reading ever changes
+        // and the guard's reason quietly stops applying.
+        let joined = format!("http://{ECS_CONTAINER_CREDENTIALS_HOST}{hijack}");
+        let parsed = url::Url::parse(&joined).expect("the hijack is a parseable URL");
+        assert_eq!(
+            parsed.host_str(),
+            Some("evil.example.com"),
+            "if this no longer moves the host, say so in the guard's comment"
+        );
+        assert_eq!(parsed.username(), ECS_CONTAINER_CREDENTIALS_HOST);
+
+        let read = fixed_env(&[("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", hijack)]);
+        let error = container_credentials_endpoint(&read)
+            .expect_err("a value that moves the host must be refused");
+        assert!(matches!(error, AuthError::Config(_)), "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .contains("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"),
+            "the refusal must name the variable to fix: {error}"
+        );
+    }
+
+    /// The rest of the shapes that are not a path, refused by the same rule.
+    #[test]
+    fn a_relative_container_uri_that_is_not_a_path_is_refused() {
+        for relative in ["evil.example.com/", "v2/credentials", ""] {
             let read = fixed_env(&[("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", relative)]);
             let error = container_credentials_endpoint(&read)
                 .expect_err("a value that is not a path must be refused");
