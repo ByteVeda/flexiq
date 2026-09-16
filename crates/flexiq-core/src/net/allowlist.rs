@@ -346,6 +346,23 @@ mod tests {
         assert!(list.permits_address(addr("::ffff:10.0.0.1")));
     }
 
+    /// Regression: `validate_prefix` measures the prefix against the family the
+    /// entry was *written* in, so `::ffff:10.0.0.0/100` parses — /100 is inside
+    /// /128 — and then folds to a four-byte base at match time. The guard in
+    /// `octets_match` is what keeps that from slicing past the end, and the
+    /// entry is reachable straight from operator input (`flexiq-server` parses
+    /// `FLEXIQ_PUSH_TARGET_ALLOW` through this same `parse`).
+    #[test]
+    fn a_mapped_base_with_an_over_wide_prefix_refuses_rather_than_panicking() {
+        let list = allow("::ffff:10.0.0.0/100");
+        assert!(!list.permits_address(addr("10.0.0.1")));
+        assert!(!list.permits_address(addr("::ffff:10.0.0.1")));
+        assert!(!list.permits_host("10.0.0.1"));
+        // /32 is the widest a folded v4 base can satisfy; /33 is the first
+        // that cannot, so the guard is not only reached by extreme values.
+        assert!(!allow("::ffff:10.0.0.0/33").permits_address(addr("10.0.0.1")));
+    }
+
     #[test]
     fn families_do_not_cross() {
         let v4_only = allow("10.0.0.0/8");
