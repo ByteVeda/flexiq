@@ -79,7 +79,7 @@ budget starts running before the request is built and signed, so whatever
 that costs comes out of it: sub-millisecond usually, but hundreds of
 milliseconds when an auth scheme has to fetch an identity token it has not
 cached. Read it as a ceiling on the time a target has. An answer that arrives
-after the window has already been fenced out, so there is no value in a
+after the window is already fenced out, so there is no value in a
 target racing past it.
 
 `x-flexiq-metadata` is dropped, silently as far as the target is concerned,
@@ -144,7 +144,7 @@ notes that it retried for want of the header, so an operator sees why. A
 target that wants to say "do not retry this" **MUST** send `x-flexiq-retry:
 false` explicitly.
 
-A conforming target answers within the response `x-flexiq-deadline-ms`
+A conforming target answers within the window `x-flexiq-deadline-ms`
 promised; a slower answer is fenced out and the attempt already re-dispatched
 elsewhere. A response body over the operator's configured ceiling is refused
 as too large rather than read in truncated form — a partial body is not what
