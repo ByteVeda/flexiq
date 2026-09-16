@@ -137,6 +137,15 @@ scheme, and it runs whether or not you think you need it:
   environment variable that reopens this; the one that would ask for it,
   `FLEXIQ_PUSH_TARGET_ALLOW_PRIVATE`, is rejected outright at boot, naming
   itself, rather than silently ignored.
+- **`https` only.** Every dispatch carries the job payload, the lease and the
+  idempotency key, and a bearer token, an OIDC identity token or a SigV4
+  signature all put credential material in a header; HMAC signs a request
+  without encrypting it, so it is no exception. An `http://` target is refused
+  at boot rather than sent to in the clear. There is no relaxation on this
+  path: the one the library offers is for a loopback host under
+  `allow_loopback`, and `FLEXIQ_PUSH_TARGET_ALLOW_PRIVATE` — the variable that
+  would ask for it — is rejected outright, so a `flexiq-server` deployment has
+  no cleartext option at all.
 - **No redirects.** A `3xx` is a refusal, never a followed hop — a redirect is
   exactly the kind of indirection an allowlist cannot see through.
 - **Request and response ceilings.** `FLEXIQ_PUSH_TARGET_MAX_REQUEST_BYTES`

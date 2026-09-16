@@ -34,6 +34,15 @@ define it a second time here.
 
 `POST` to the configured URL, once per attempt.
 
+- **Transport**: `https`. The headers below carry a lease, an idempotency key
+  and — under `bearer`, `oidc` and `sigv4` — credential material, and the body
+  is the job's payload; `hmac` signs a request without encrypting it, so it is
+  no exception. A target configured with an `http` URL is refused at
+  construction. The one relaxation is a **loopback** host — an address in
+  `127.0.0.0/8` or `::1`, or the name `localhost` — and only when the embedder
+  has set `allow_loopback`, which is what a same-host sidecar and a local
+  development server use. `flexiq-server` never sets it, so a server
+  deployment has no cleartext path at all.
 - **Body**: the job's payload, verbatim — the same bytes an attached executor
   would receive as a `job` frame's payload. `Content-Type` names the envelope,
   not JSON: `application/vnd.flexiq.envelope`.

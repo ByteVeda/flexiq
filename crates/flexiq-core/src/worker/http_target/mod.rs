@@ -234,6 +234,20 @@ pub enum HttpTargetError {
     /// The URL's host is not named by [`HttpTargetConfig::allow`].
     #[error("push target host '{0}' is not on the allowlist")]
     HostRefused(String),
+    /// The URL is cleartext `http` to somewhere other than loopback, or
+    /// loopback without [`HttpTargetConfig::allow_loopback`].
+    ///
+    /// Every dispatch carries the job payload, the lease and the idempotency
+    /// key, and three of the four outbound-auth schemes put credential
+    /// material in a header. HMAC signs the request without encrypting it, so
+    /// it is no exception.
+    #[error(
+        "push target host '{0}' must be reached over https: cleartext http would put the job \
+         payload, the lease and any outbound credential on the wire in the clear. Only a \
+         loopback host — an address in 127.0.0.0/8 or ::1, or the name 'localhost' — may use \
+         http, and only with the loopback relaxation enabled"
+    )]
+    InsecureTransport(String),
     /// [`HttpTargetConfig::capacity`] was `0`.
     #[error("push target capacity must be at least 1")]
     ZeroCapacity,
@@ -246,7 +260,8 @@ pub enum HttpTargetError {
 }
 
 /// Parse and vet a target URL: absolute, `http`/`https`, a host, no userinfo,
-/// and a host `policy` permits.
+/// a host `policy` permits, and — unless that host is loopback and the
+/// loopback relaxation is on — `https` rather than cleartext `http`.
 ///
 /// Name-based rules are settled here; the addresses a name resolves to are
 /// vetted at connect time by the resolver in `crate::http`, because a name
@@ -295,7 +310,41 @@ pub(crate) fn validate_target_url(
         return Err(HttpTargetError::HostRefused(host));
     }
 
+    // After the allowlist, not before: a host that is refused outright should
+    // say so, rather than being told to fix its scheme first and then refused
+    // again for the reason that was always going to decide it.
+    if parsed.scheme() == "http" && !cleartext_permitted(&host, policy) {
+        return Err(HttpTargetError::InsecureTransport(host));
+    }
+
     Ok(parsed)
+}
+
+/// Whether cleartext `http` may be spoken to `host`.
+///
+/// `https` is the rule, and this is its one relaxation: a loopback host, and
+/// only when the same [`HttpTargetConfig::allow_loopback`] knob that lets the
+/// egress policy dial loopback at all is set. A same-host sidecar and a local
+/// development server keep working; nothing that leaves the host does.
+///
+/// `localhost` is taken at its name rather than resolved — RFC 6761 §6.3
+/// reserves the name for the loopback interface, and there is nothing to
+/// resolve at construction time anyway. A resolver that answers something
+/// else would get cleartext; that is accepted because reaching it needs
+/// `allow_loopback` deliberately set, which is a library-only knob for an
+/// embedder dispatching to its own host — `flexiq-server` never sets it and
+/// refuses the environment variable that asks for it.
+fn cleartext_permitted(host: &str, policy: &EgressPolicy) -> bool {
+    if !policy.allows_loopback() {
+        return false;
+    }
+    // The same normalization `EgressPolicy::permits_host` applies: one
+    // trailing dot is the root-relative form of the same name.
+    let normalized = host.strip_suffix('.').unwrap_or(host);
+    if let Ok(address) = normalized.parse::<std::net::IpAddr>() {
+        return crate::net::is_loopback_address(address);
+    }
+    normalized.eq_ignore_ascii_case("localhost")
 }
 
 /// Recover a guard from a poisoned lock instead of cascading the panic.
@@ -696,14 +745,69 @@ mod tests {
 
     #[test]
     fn an_ip_literal_host_is_matched_through_the_allowlist_address_path() {
+        // `https`, because a cleartext target off loopback is refused for a
+        // different reason entirely — see `cleartext_http_is_refused_off_loopback`.
         let permitted = policy("10.0.0.0/8");
-        let parsed = validate_target_url("http://10.1.2.3:8080/hook", &permitted)
+        let parsed = validate_target_url("https://10.1.2.3:8443/hook", &permitted)
             .expect("an address inside the CIDR must be accepted");
         assert_eq!(parsed.host_str(), Some("10.1.2.3"));
 
         let elsewhere = policy("9.0.0.0/8");
-        let refused = validate_target_url("http://10.1.2.3:8080/hook", &elsewhere);
+        let refused = validate_target_url("https://10.1.2.3:8443/hook", &elsewhere);
         assert!(matches!(refused, Err(HttpTargetError::HostRefused(_))));
+    }
+
+    #[test]
+    fn cleartext_http_is_refused_off_loopback() {
+        // Every dispatch carries the payload, the lease and the idempotency
+        // key, and bearer, OIDC and SigV4 all put credential material in a
+        // header; HMAC signs without encrypting. None of that may go out in
+        // the clear, however the allowlist is written.
+        let by_name = policy("api.example.com");
+        let error = validate_target_url("http://api.example.com/hook", &by_name).unwrap_err();
+        assert!(
+            matches!(error, HttpTargetError::InsecureTransport(ref host) if host == "api.example.com")
+        );
+
+        let by_cidr = policy("10.0.0.0/8");
+        let error = validate_target_url("http://10.1.2.3:8080/hook", &by_cidr).unwrap_err();
+        assert!(matches!(error, HttpTargetError::InsecureTransport(_)));
+
+        // The relaxation does not widen to a non-loopback host.
+        let relaxed = EgressPolicy::new(allow("api.example.com"), true);
+        let error = validate_target_url("http://api.example.com/hook", &relaxed).unwrap_err();
+        assert!(matches!(error, HttpTargetError::InsecureTransport(_)));
+    }
+
+    #[test]
+    fn cleartext_http_to_loopback_needs_the_relaxation() {
+        // Without the knob the host is refused as a destination first, which
+        // is the more specific answer; with it, cleartext to loopback is the
+        // one case that is allowed through.
+        let strict = policy("127.0.0.0/8,localhost");
+        let error = validate_target_url("http://127.0.0.1:8080/hook", &strict).unwrap_err();
+        assert!(matches!(error, HttpTargetError::HostRefused(_)));
+
+        let relaxed = EgressPolicy::new(allow("127.0.0.0/8,::1,localhost"), true);
+        for url in [
+            "http://127.0.0.1:8080/hook",
+            "http://[::1]:8080/hook",
+            "http://localhost:8080/hook",
+            "http://LocalHost.:8080/hook",
+        ] {
+            assert!(
+                validate_target_url(url, &relaxed).is_ok(),
+                "{url} is a same-host sidecar, which the relaxation exists for"
+            );
+        }
+    }
+
+    #[test]
+    fn https_is_accepted_wherever_the_allowlist_permits_the_host() {
+        // The mirror of the two tests above: the transport rule constrains
+        // `http` only, and never narrows what `https` may reach.
+        let policy = policy("api.example.com");
+        assert!(validate_target_url("https://api.example.com/hook", &policy).is_ok());
     }
 
     #[test]

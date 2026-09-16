@@ -67,6 +67,17 @@ impl EgressPolicy {
         Self::new(config.allow.clone(), config.allow_loopback)
     }
 
+    /// Whether the loopback relaxation is in force.
+    ///
+    /// Read by `worker::http_target`'s URL validation, which refuses a
+    /// cleartext `http` target unless this is set *and* the host is loopback
+    /// — the same relaxation this type applies to destinations, applied to
+    /// transport. An accessor rather than a second copy of the flag on the
+    /// caller's side, so the two answers cannot drift apart.
+    pub fn allows_loopback(&self) -> bool {
+        self.allow_loopback
+    }
+
     /// Whether the name alone is permitted, before anything is resolved.
     ///
     /// An IP-literal host (`"127.0.0.1"`, not a domain name) never reaches a
