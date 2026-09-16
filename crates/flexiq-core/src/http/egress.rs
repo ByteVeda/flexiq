@@ -53,8 +53,16 @@ pub enum EgressRefusal {
 }
 
 impl EgressPolicy {
-    /// `allow_loopback` relaxes exactly one of the unconditional refusals, and
-    /// only for an address the allowlist also names.
+    /// `allow_loopback` relaxes exactly one of the unconditional refusals —
+    /// loopback, and nothing else in [`is_never_routable`]'s set.
+    ///
+    /// It widens what may be reached; it does not replace the allowlist, which
+    /// still has to permit the destination by one of its two routes. For a
+    /// bare address that means a CIDR rule covering it ([`Self::permits_address`]);
+    /// inside a resolution it can instead be a *name* rule covering the host
+    /// ([`Self::vet`]), in which case no address rule is involved at all. The
+    /// two routes are why this is not stated as "an address the allowlist also
+    /// names".
     pub fn new(allow: Allowlist, allow_loopback: bool) -> Self {
         Self {
             allow,
@@ -397,6 +405,48 @@ mod tests {
                 "{literal} must stay refused however the name is allowlisted"
             );
         }
+    }
+
+    /// The widest configuration a name rule can be given — the name on the
+    /// allowlist *and* the loopback relaxation on — still stops at everything
+    /// the relaxation does not name.
+    ///
+    /// `refused_unconditionally` relaxes only `is_loopback_address`, so this
+    /// is the code being right rather than lucky; what was missing is a test
+    /// of it through `vet`. The existing "refused however configured" cases go
+    /// through `permits_address`, which a name rule never reaches, so none of
+    /// them covers this path.
+    #[test]
+    fn a_name_rule_plus_the_loopback_knob_still_refuses_the_rest_of_the_set() {
+        let policy = EgressPolicy::new(allow("api.example.com"), true);
+
+        for literal in [
+            "169.254.169.254",
+            "fd00:ec2::254",
+            "100.100.100.200",
+            "169.254.1.1",
+            "224.0.0.1",
+            "255.255.255.255",
+            "0.0.0.0",
+        ] {
+            let refusal = policy
+                .vet("api.example.com", vec![sock(literal)])
+                .unwrap_err();
+            assert!(
+                matches!(refusal, EgressRefusal::NeverRoutable { .. }),
+                "{literal} must stay refused: a name rule vouches for DNS, not for the \
+                 unconditional set, and allow_loopback widens only loopback"
+            );
+        }
+
+        // The one the knob does widen, to show the test above is not passing
+        // because the knob is being ignored altogether.
+        assert!(
+            policy
+                .vet("api.example.com", vec![sock("127.0.0.1")])
+                .is_ok(),
+            "loopback is exactly what allow_loopback relaxes"
+        );
     }
 
     #[test]
