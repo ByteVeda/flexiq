@@ -133,6 +133,21 @@ jobs:
       - name: Check push-dispatch build with the listener-backed backends
         run: cargo check --workspace --features push-dispatch,postgres,redis
 
+      # Off in every shipped wheel (Python, Node, Java SDK artifacts), so this
+      # is what keeps the core-side HTTP push target compiling and its
+      # contract tests running. The server image does build it.
+      - name: Run http-target tests
+        run: LD_LIBRARY_PATH="$pythonLocation/lib" cargo test --workspace --features http-target
+
+      # The only run that compiles both dispatch paths, so it is the only one
+      # where the test asserting push takes the gRPC executor door away can
+      # exist at all — it is `#[cfg(feature = "grpc")]`.
+      - name: Run push dispatch against the gRPC door
+        run: cargo test -p flexiq-server --features http-target,grpc
+
+      - name: Check http-target against the other backends
+        run: cargo check --workspace --features http-target,postgres,redis
+
   rust-test-postgres:
     name: Rust Tests (PostgreSQL)
     runs-on: ubuntu-latest

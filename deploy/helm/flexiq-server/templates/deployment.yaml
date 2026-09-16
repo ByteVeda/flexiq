@@ -43,6 +43,25 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "flexiq-server.serviceAccountName" . }}
+      {{- if eq (include "flexiq-server.terminationGraceIsSet" .) "true" }}
+      # Rendered exactly as set, including 0 — kill immediately, no grace. An
+      # explicit nil/"" test rather than `with`, which is falsey on 0 too: an
+      # operator asking for immediate kill must not silently get Kubernetes'
+      # 30s default back. _validate.tpl already refused this above if it is a
+      # positive value too low to clear push's own shutdown budget; 0 is a
+      # deliberate override, not a guess, and always passes through.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | int64 }}
+      {{- else if .Values.push.enabled }}
+      # Unset, but push.enabled spends push.drain twice during shutdown —
+      # once waiting for in-flight dispatches, again for each to settle once
+      # abandoned — before Kubernetes' own 30s default would otherwise send
+      # SIGKILL. Computed instead of left absent: 2 × push.drain plus a 10s
+      # margin for the pod's own teardown the two drains don't cover (SIGTERM
+      # delivery, the tokio runtime unwinding after the second drain
+      # returns, the container runtime's own stop overhead). An explicit
+      # value above always wins over this.
+      terminationGracePeriodSeconds: {{ add (mul 2 (.Values.push.drain | int64)) 10 }}
+      {{- end }}
       {{- with .Values.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -165,6 +184,33 @@ spec:
             - name: FLEXIQ_WEBHOOK_TLS_KEY
               value: /etc/flexiq/webhook-tls/tls.key
             {{- end }}
+            {{- if .Values.push.enabled }}
+            - name: FLEXIQ_PUSH_TARGET_URL
+              value: {{ .Values.push.url | quote }}
+            # int64 before quote on every number below: Helm decodes a
+            # values.yaml number as float64, and fmt's default formatting
+            # renders one this size in scientific notation —
+            # "8.388608e+06" fails FLEXIQ_PUSH_TARGET_*'s usize parse at boot
+            # instead of reading as bytes.
+            - name: FLEXIQ_PUSH_TARGET_CAPACITY
+              value: {{ .Values.push.capacity | int64 | quote }}
+            - name: FLEXIQ_PUSH_TARGET_ALLOW
+              value: {{ .Values.push.allow | quote }}
+            - name: FLEXIQ_PUSH_TARGET_TIMEOUT
+              value: {{ .Values.push.timeout | int64 | quote }}
+            - name: FLEXIQ_PUSH_TARGET_CONNECT_TIMEOUT
+              value: {{ .Values.push.connectTimeout | int64 | quote }}
+            - name: FLEXIQ_PUSH_TARGET_DRAIN
+              value: {{ .Values.push.drain | int64 | quote }}
+            - name: FLEXIQ_PUSH_TARGET_MAX_REQUEST_BYTES
+              value: {{ .Values.push.maxRequestBytes | int64 | quote }}
+            - name: FLEXIQ_PUSH_TARGET_MAX_RESPONSE_BYTES
+              value: {{ .Values.push.maxResponseBytes | int64 | quote }}
+            {{- if ne .Values.push.auth "none" }}
+            - name: FLEXIQ_PUSH_TARGET_AUTH
+              value: {{ .Values.push.auth | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -231,10 +277,18 @@ spec:
             {{- else }}
             tcpSocket: { port: grpc }
             {{- end }}
-          {{- else }}
+          {{- else if .Values.attach.enabled }}
           {{- $probe := dict "tcpSocket" (dict "port" "attach") }}
           livenessProbe: {{- toYaml $probe | nindent 12 }}
           readinessProbe: {{- toYaml $probe | nindent 12 }}
+          {{- else }}
+          {{/*
+          push.enabled with nothing else: a push target dials out and binds no
+          port, so there is nothing here for a kubelet to probe. The pod is
+          Ready once it is Running and restarts only on a process exit. Turn
+          dashboard.enabled on alongside push for a real liveness/readiness
+          signal.
+          */}}
           {{- end }}
           {{- with .Values.resources }}
           resources:

@@ -18,7 +18,7 @@ use flexiq_core::{
 };
 use flexiq_server::config::listen::ListenAddress;
 use flexiq_server::runtime::listener;
-use flexiq_server::runtime::scheduler::{SchedulerSettings, SchedulerSupervisor};
+use flexiq_server::runtime::scheduler::{DispatchPath, SchedulerSettings, SchedulerSupervisor};
 use flexiq_server::runtime::shutdown::Shutdown;
 
 use support::{poll_until, temp_storage};
@@ -191,7 +191,7 @@ impl Harness {
         });
         let supervisor = Arc::new(SchedulerSupervisor::new(
             storage.clone(),
-            dispatcher.clone(),
+            DispatchPath::Attach(dispatcher.clone()),
             SchedulerSettings {
                 queues: vec!["default".to_string()],
                 namespace: None,

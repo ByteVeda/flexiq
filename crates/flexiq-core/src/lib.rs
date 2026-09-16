@@ -8,10 +8,15 @@
 pub mod contract;
 /// Error types: [`QueueError`] and the crate-wide [`Result`] alias.
 pub mod error;
+/// Outbound HTTP: the egress guard and the client every dialled URL goes through.
+#[cfg(feature = "http-target")]
+pub mod http;
 /// Core job model: [`Job`], [`JobStatus`], [`NewJob`], [`JobCompletion`].
 pub mod job;
 /// The lease on one dispatch of one job: [`Lease`], [`LeaseBook`].
 pub mod lease;
+/// Facts about IP space, shared by every outbound guard in the workspace.
+pub mod net;
 /// Periodic (cron) task scheduling helpers.
 pub mod periodic;
 pub mod pubsub;
@@ -46,6 +51,10 @@ pub use contract::{
     MIN_CONTRACT_VERSION,
 };
 pub use error::{QueueError, Result, StepDivergence};
+#[cfg(feature = "http-target")]
+pub use http::auth::{AuthError, OutboundAuth, Signer, SigningRequest};
+#[cfg(feature = "http-target")]
+pub use http::{DispatchClient, EgressPolicy, EgressRefusal};
 pub use job::{now_millis, Job, JobCompletion, JobStatus, NewJob};
 pub use lease::{mint_claim_epoch, Lease, LeaseBook};
 pub use resilience::circuit_breaker::{CircuitBreakerConfig, CircuitState};
@@ -76,6 +85,8 @@ pub use storage::sqlite::SqliteStorage;
 pub use storage::Storage;
 pub use storage::StorageBackend;
 pub use storage::{DeadJob, QueueStats, SubscriptionBacklogStats};
+#[cfg(feature = "http-target")]
+pub use worker::http_target::{HttpDispatchTarget, HttpTargetConfig, HttpTargetError};
 pub use worker::registry_fingerprint;
 pub use worker::{
     AttachAddress, AttachError, AttachedExecutor, Capacity, Dispatch, ExecutorClient,

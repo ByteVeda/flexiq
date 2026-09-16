@@ -152,6 +152,69 @@ jobs:
           [ "$legacy" = "['tcpSocket'] ['tcpSocket'] False True" ] \
             || { echo "::error::grpc.healthProbe=false must fall readiness back to the socket"; exit 1; }
 
+      # Same reasoning as the gRPC tunables above — a chart value nothing emits
+      # is a knob an operator turns with no effect — plus the `0` case, which
+      # `with` would have swallowed: 0 is a grace period Kubernetes accepts and
+      # means "kill immediately", so an operator asking for it must not
+      # silently get the 30s default back. Push is the role that needs this at
+      # all: push.drain is spent twice, so a push shutdown runs to 2 × it —
+      # which is also why an unset value now computes one instead of leaving
+      # Kubernetes' 30s in place, and why a positive value too low to cover
+      # that budget is refused rather than rendered.
+      - name: terminationGracePeriodSeconds covers push's shutdown budget
+        run: |
+          set -euo pipefail
+          grace() {
+            helm template t "$CHART" --set storage.dsn=postgres://u:p@db/x \
+              --set attach.enabled=false --set dashboard.enabled=false \
+              --set push.enabled=true --set push.url=https://executor.internal/hook \
+              --set push.capacity=4 --set push.allow=executor.internal "$@" \
+              | python3 -c '
+          import sys, yaml
+          for doc in yaml.safe_load_all(sys.stdin):
+              if doc and doc.get("kind") == "Deployment":
+                  print(doc["spec"]["template"]["spec"].get(
+                      "terminationGracePeriodSeconds", "ABSENT"))
+          '
+          }
+          no_push_unset="$(helm template t "$CHART" --set storage.dsn=postgres://u:p@db/x \
+            --set attach.token="$TOKEN" \
+            | python3 -c '
+          import sys, yaml
+          for doc in yaml.safe_load_all(sys.stdin):
+              if doc and doc.get("kind") == "Deployment":
+                  print(doc["spec"]["template"]["spec"].get(
+                      "terminationGracePeriodSeconds", "ABSENT"))
+          ')"
+          computed_default="$(grace)"
+          computed_follows_drain="$(grace --set push.drain=10)"
+          zero="$(grace --set terminationGracePeriodSeconds=0)"
+          seventy_five="$(grace --set terminationGracePeriodSeconds=75)"
+          echo "no push, unset: $no_push_unset / push, unset: $computed_default / drain=10, unset: $computed_follows_drain / 0: $zero / 75: $seventy_five"
+          [ "$no_push_unset" = "ABSENT" ] \
+            || { echo "::error::unset without push.enabled must leave the field off so Kubernetes' own default applies"; exit 1; }
+          [ "$computed_default" = "70" ] \
+            || { echo "::error::unset with push.enabled must compute 2 x push.drain (30) plus the 10s teardown margin"; exit 1; }
+          [ "$computed_follows_drain" = "30" ] \
+            || { echo "::error::the computed default must track push.drain, not the chart's default of it"; exit 1; }
+          [ "$zero" = "0" ] \
+            || { echo "::error::terminationGracePeriodSeconds=0 must render, not fall back to the default or be refused"; exit 1; }
+          [ "$seventy_five" = "75" ] \
+            || { echo "::error::terminationGracePeriodSeconds must reach the pod spec"; exit 1; }
+
+          # A positive value that does not clear 2 x push.drain (60 at the
+          # chart's default) is refused, not rendered — Kubernetes could
+          # SIGKILL mid-abandonment and every open lease goes to the
+          # stale-job reaper instead of settling.
+          if error="$(grace --set terminationGracePeriodSeconds=10 2>&1)"; then
+            echo "::error::terminationGracePeriodSeconds=10 rendered but should have been refused"
+            exit 1
+          fi
+          case "$error" in
+            *"must be greater than 2 × push.drain"*) echo "refused: terminationGracePeriodSeconds=10" ;;
+            *) echo "::error::refusal message missing the two-drain reason: $error"; exit 1 ;;
+          esac
+
       # The regression this exists for: `genCA` is random, so a helper called
       # once per template would hand the MutatingWebhookConfiguration a CA that
       # does not sign the certificate the pod serves — and every admission call

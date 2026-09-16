@@ -25,6 +25,14 @@ redis = ["dep:redis"]
 # Event-driven scheduler wakeups. OFF by default — the shipped wheel keeps
 # polling. Opt-in for source builds that want lower dispatch latency.
 push-dispatch = []
+# HTTP push dispatch (#843): the scheduler dials an operator-configured target
+# per job, for platforms that start a process from an inbound request. OFF by
+# default and absent from every shipped wheel — a queue that never dials out
+# should not compile an HTTP client or a TLS stack.
+#
+# Unrelated to `push-dispatch` above, which is event-driven scheduler wakeups.
+# The two names are close; the features share nothing.
+http-target = ["dep:url", "dep:reqwest", "dep:hmac", "dep:sha2", "dep:percent-encoding"]
 
 [dependencies]
 diesel = { workspace = true }
@@ -46,6 +54,26 @@ log = { workspace = true }
 async-trait = { workspace = true }
 sea-query = { workspace = true }
 redis = { workspace = true, optional = true }
+# The same parser the HTTP client resolves the request with, so the egress
+# guard and the connect cannot disagree about where the host ends.
+url = { version = "2", optional = true }
+# The outbound HTTP client for push dispatch. `default-features = false` drops
+# charset, http2 and the system-proxy probe; `rustls-tls` because the server
+# image carries no system OpenSSL. `json` because the credential endpoints in
+# `http::auth::metadata` answer JSON — added in this commit, which only reads
+# the raw body, so the OIDC and SigV4 commits that actually parse it don't
+# each need their own `reqwest` feature edit. Same feature set flexiq-server
+# already resolves, so a workspace build gains an edge and not a node.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+# HMAC-SHA256 for the outbound dispatch signature. Same versions
+# flexiq-server already resolves for its webhook signing, so the workspace
+# keeps one copy of each.
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+# RFC 3986 percent-encoding against an explicit `AsciiSet`. SigV4's canonical
+# URI and query encode against the unreserved set and nothing else, which
+# `url`'s own encoder does not expose. Already compiled — `url` depends on it.
+percent-encoding = { version = "2", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

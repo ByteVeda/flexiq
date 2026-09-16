@@ -1,8 +1,9 @@
 # Default values for flexiq-server.
 #
-# The chart installs one Deployment that plays up to four roles — scheduler,
-# dashboard, sidecar injector, and gRPC door — because they are one binary and
-# one image. Turn off what you do not want; at least one role has to stay on.
+# The chart installs one Deployment that plays up to four roles — scheduler
+# (dispatching over attach or push, never both), dashboard, sidecar injector,
+# and gRPC door — because they are one binary and one image. Turn off what you
+# do not want; at least one role has to stay on.
 
 image:
   repository: ghcr.io/byteveda/flexiq-server
@@ -143,6 +144,53 @@ grpc:
   service:
     annotations: {}
 
+# Push dispatch (#843/#844): instead of an executor attaching, the scheduler
+# POSTs each claimed job straight to this URL — for a platform that starts a
+# container from an inbound request rather than running one continuously.
+# Additive, not a replacement for attach: the two cannot both be set, because
+# a Worker holds exactly one dispatcher.
+push:
+  enabled: false
+  # Where the scheduler POSTs a claimed job.
+  url: ""
+  # Jobs the target may run at once. Required — a push target announces no
+  # slots of its own, so nothing here can size it for you.
+  capacity: 1
+  # Comma-separated hosts and CIDRs the target's resolved address must match.
+  # Required — deny by default. Loopback, link-local and cloud metadata are
+  # refused whatever this names.
+  allow: ""
+  # Seconds one dispatch may take before it is abandoned as failed. Minimum 1;
+  # zero is refused at boot — it is a deadline that has already passed, not a
+  # way to say "no limit".
+  timeout: 60
+  # Seconds the connection may take to establish. Minimum 1; zero is refused at
+  # boot, for the same reason as timeout above.
+  connectTimeout: 5
+  # Seconds shutdown waits for in-flight dispatches, and then again for each
+  # to settle once abandoned — a shutdown runs to at most twice this. Minimum
+  # 1; zero is refused at boot. With push.enabled, an unset
+  # terminationGracePeriodSeconds (bottom of this file) is computed from this
+  # value rather than left at Kubernetes' 30s default; an explicit one there
+  # is refused unless it clears 2 × this (0 excepted — see its own comment).
+  drain: 30
+  # Ceiling on one job's request body, in bytes. Minimum 1; zero is refused at
+  # boot — a cap nothing fits under refuses every dispatch as oversized, and
+  # that refusal is not retryable.
+  maxRequestBytes: 8388608
+  # Ceiling on one response body read back, in bytes. Minimum 1; zero is
+  # refused at boot, for the same reason as maxRequestBytes above.
+  maxResponseBytes: 1048576
+  # none | bearer | hmac | oidc | sigv4. Every field a non-"none" scheme needs
+  # beyond this one — a bearer token, an HMAC secret, an OIDC audience, a
+  # SigV4 region override — is operator- and secret-specific enough that this
+  # chart does not give each one its own value. Set the matching
+  # FLEXIQ_PUSH_TARGET_* variable through extraEnv below, reading a
+  # secret-bearing one from a Secret you create via valueFrom.secretKeyRef.
+  auth: none
+  # No Service and no containerPort: a push target dials out, so this role has
+  # no listener for either to front.
+
 # Annotation-driven executor sidecar injection.
 webhook:
   enabled: false
@@ -174,6 +222,25 @@ topologySpreadConstraints: []
 
 podAnnotations: {}
 podLabels: {}
+
+# Seconds Kubernetes waits after SIGTERM before SIGKILL. Empty leaves the
+# field off the Deployment when push is disabled, which is Kubernetes' own
+# 30s default — nothing here needs more.
+#
+# With push.enabled, empty is computed instead: 2 × push.drain (the full
+# shutdown budget — push.drain is spent twice, once waiting for in-flight
+# dispatches and again for each to settle once abandoned) plus a fixed 10s
+# margin for the pod's own teardown that the two drains don't cover — SIGTERM
+# delivery, the tokio runtime unwinding once the second drain returns, the
+# container runtime's own stop overhead. That is 70s at the chart's
+# push.drain default of 30.
+#
+# An explicit value always wins over the computed one, 0 included — a
+# deliberate "kill immediately, no grace". Any other explicit value is
+# refused at template time unless it clears 2 × push.drain: at or under that,
+# Kubernetes can SIGKILL mid-abandonment and the lease goes to the stale-job
+# reaper instead of settling. Lower push.drain if the value you need is fixed.
+terminationGracePeriodSeconds: ""
 
 # The image already runs as nonroot:65532 and needs no write access to its own
 # filesystem.

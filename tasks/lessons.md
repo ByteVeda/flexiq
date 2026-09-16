@@ -85,3 +85,42 @@ The rules to carry forward:
   not-yet-committed file to a directory outside the tree first, then
   `git reset --hard` and replay. Pre-commit stashes unstaged *tracked* changes
   only, so anything untracked is at risk during a hook run anyway.
+
+## A here-string is not `printf`
+
+**2026-09-16, #844.** A commit on the push-dispatch branch documented reproducing a pinned HMAC
+signing vector with `openssl dgst -sha256 -hmac … <<< "$STS"`. A here-string appends a trailing
+newline to whatever it feeds a command's stdin, so that reproduction hashed a different string
+than the six-field, no-trailing-newline one the string-to-sign actually pins. Running both forms
+side by side against the same secret produced two different digests —
+`ae8e04b171f581a8d602ac9b2c074c06993423f7ebf8932c70bd5af2bdc30933` from `printf '%s'`, matching the
+pinned test vector, and a different one from the here-string. In a signing contract, that kind of
+mismatch reads as the scheme itself being broken, not as a shell quoting habit — the reader has no
+way to tell the two apart from the digest alone.
+
+The rules to carry forward:
+
+- **Never write a command into a comment or a doc without running exactly that command first.** A
+  reproduction step that has not been run is a guess wearing a code block.
+- **When a comment or doc asserts that two things produce the same output, produce both and diff
+  them.** Printing one and trusting the other by inspection is exactly the gap a here-string's
+  extra newline hides in.
+
+## Clippy cannot see a stale `#[allow]`
+
+**2026-09-16, #843/#844.** An `#[allow(dead_code)]` whose comment names the commit that will wire
+the item up is a good pattern while that commit is still pending — but a redundant `allow` is not
+a warning, so `-D warnings` passing on a later commit says nothing about whether the named commit
+actually landed and the marker was removed with it. Counting `git log -p` over the push-dispatch
+branch's twenty-seven commits: the attribute was added twenty-six times and removed twenty-five,
+in uneven bursts — one commit added twelve markers ahead of the code that would use them, and a
+different, later commit removed eleven. Every commit in between passed a fully green
+`cargo clippy --all-targets --all-features` carrying markers that had already gone redundant,
+because clippy has no lint for an `#[allow]` that permits a warning nothing triggers anymore.
+
+The rule to carry forward:
+
+- **When a commit wires up an item that was previously unused, grep for its `#[allow(dead_code)]`
+  marker and remove it in that same commit.** A green `cargo clippy --all-targets --all-features`
+  is not evidence the marker is gone — clippy has nothing to warn about an `allow` that permits a
+  warning which no longer fires either way.

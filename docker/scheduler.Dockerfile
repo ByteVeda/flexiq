@@ -41,7 +41,13 @@ COPY . .
 COPY --from=dashboard /src/dashboard/dist ./dashboard/dist
 # Postgres and Redis are compiled in so one image covers every backend; the DSN
 # picks at runtime. `grpc` too, so FLEXIQ_GRPC_LISTEN turns the role on rather
-# than being refused by a binary that has no gRPC server to start.
+# than being refused by a binary that has no gRPC server to start, and
+# `http-target` so FLEXIQ_PUSH_TARGET_URL is the same story. The reason that
+# one is off by default in flexiq-core — a queue that never dials out should
+# not compile an HTTP client or a TLS stack — is an argument about the language
+# wheels, not about this image: flexiq-server already links reqwest with
+# rustls-tls for webhook delivery, and `cargo tree` gains no crate from adding
+# the feature here.
 #
 # `fq` rides the same invocation rather than a second one. That is the whole
 # point of it living in this workspace: one cargo build means the CLI and the
@@ -56,7 +62,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
     FLEXIQ_DASHBOARD_ASSETS_DIR=/src/dashboard/dist \
     cargo build --release --locked -p flexiq-server -p flexiq-cli \
-      --features flexiq-server/postgres,flexiq-server/redis,flexiq-server/grpc \
+      --features flexiq-server/postgres,flexiq-server/redis,flexiq-server/grpc,flexiq-server/http-target \
     && cp target/release/flexiq-server /flexiq-server \
     && cp target/release/fq /fq \
     && for binary in /flexiq-server /fq; do \

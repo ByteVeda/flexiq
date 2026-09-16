@@ -9,13 +9,17 @@ pub mod upkeep;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+#[cfg(feature = "http-target")]
+use flexiq_core::{HttpDispatchTarget, HttpTargetConfig, StorageBackend};
 use flexiq_core::{RemoteConfig, RemoteDispatcher, StorageSideChannel};
 
 use crate::config::dashboard::{AuthMode, DashboardConfig};
+#[cfg(feature = "http-target")]
+use crate::config::push::PushTargetConfig;
 use crate::config::{backend, Config};
 use crate::dashboard::state::AppState;
 use crate::dashboard::static_assets::StaticAssets;
-use crate::runtime::scheduler::{SchedulerSettings, SchedulerSupervisor};
+use crate::runtime::scheduler::{DispatchPath, SchedulerSettings, SchedulerSupervisor};
 use crate::runtime::shutdown::{wait_for_signal, Shutdown};
 
 /// Create the configured admin, if the deployment asked for one.
@@ -26,6 +30,53 @@ fn prepare_auth(storage: &flexiq_core::StorageBackend, config: &DashboardConfig)
     if let Some((username, password)) = &config.admin_bootstrap {
         crate::dashboard::auth::bootstrap::admin_from_env(storage, username, password);
     }
+}
+
+/// Whether this deployment has a door an executor can attach through.
+///
+/// Either door counts — the gRPC one carries the same executors, and its gate
+/// is the token scope rather than a fourth environment variable. A push
+/// deployment has neither: it dials out, so there is nothing to attach to, and
+/// this is what leaves both the `RemoteDispatcher` and the gRPC executor door
+/// unbuilt rather than registered and never fed. `config.grpc` is `Some` only
+/// on a build with the feature — the parser refuses the variable outright
+/// otherwise, rather than ignoring it.
+pub fn executors_can_attach(config: &Config) -> bool {
+    config.push.is_none() && (config.attach.is_some() || config.grpc.is_some())
+}
+
+/// Build the push target this deployment dispatches through.
+///
+/// A target that will not construct — an unparseable URL, a host the
+/// allowlist refuses, a credential scheme that cannot build its signer — is a
+/// **startup** failure. `HttpDispatchTarget::new` does that validation once,
+/// here, so an operator sees it at boot instead of in a dead-letter queue an
+/// hour later.
+#[cfg(feature = "http-target")]
+pub fn push_target(
+    config: &PushTargetConfig,
+    storage: &StorageBackend,
+) -> Result<HttpDispatchTarget> {
+    let target = HttpTargetConfig {
+        request_timeout: config.request_timeout,
+        connect_timeout: config.connect_timeout,
+        shutdown_drain: config.shutdown_drain,
+        max_request_bytes: config.max_request_bytes,
+        max_response_bytes: config.max_response_bytes,
+        auth: config.auth.clone().into(),
+        // This process holds the database connection the target deliberately
+        // does not, so it is the one that resolves the target's per-dispatch
+        // middleware toggles — the same argument the attach path's side
+        // channel makes.
+        side_channel: Some(Arc::new(StorageSideChannel::new(storage.clone()))),
+        // Everything else takes the core default, `allow_loopback` among them:
+        // this path never turns it on, and the variable that asks for it is
+        // refused outright rather than honoured.
+        ..HttpTargetConfig::new(config.url.clone(), config.capacity, config.allow.clone())
+    };
+    HttpDispatchTarget::new(target)
+        .map_err(anyhow::Error::from)
+        .context("the push target named by FLEXIQ_PUSH_TARGET_URL could not be built")
 }
 
 /// Wait for every serving role, returning the first failure.
@@ -70,13 +121,10 @@ pub fn run(config: Config) -> Result<()> {
     let shutdown = Shutdown::default();
 
     // The dispatcher exists only when executors can reach us; without a door
-    // there is nothing to dispatch to and the scheduler stays off. Either door
-    // counts — the gRPC one carries the same executors, and its gate is the
-    // token scope rather than a fourth environment variable.
-    // `config.grpc` is `Some` only on a build with the feature: the parser
-    // refuses the variable outright otherwise, rather than ignoring it.
-    let executors_can_reach_us = config.attach.is_some() || config.grpc.is_some();
-    let dispatcher = match (executors_can_reach_us, &backend) {
+    // there is nothing to dispatch to and the scheduler stays off. See
+    // `executors_can_attach` for what counts as a door and why a push
+    // deployment has none.
+    let dispatcher = match (executors_can_attach(&config), &backend) {
         (true, Some(backend)) => Some(RemoteDispatcher::new(RemoteConfig {
             // Only the socket door has a frame credential to check. The gRPC
             // door's transport vouches for its own peer, so this is never
@@ -94,10 +142,45 @@ pub fn run(config: Config) -> Result<()> {
         _ => None,
     };
 
-    let supervisor = match (&dispatcher, &backend) {
-        (Some(dispatcher), Some(backend)) => Some(Arc::new(SchedulerSupervisor::new(
+    // Before anything is spawned: a target that will not construct stops the
+    // process here rather than dead-lettering every job it is handed.
+    #[cfg(feature = "http-target")]
+    let push = match (&config.push, &backend) {
+        (Some(push), Some(backend)) => {
+            let target = push_target(push, &backend.storage)?;
+            log::info!("[flexiq] push dispatch target is {}", target.target());
+            Some(Arc::new(target))
+        }
+        _ => None,
+    };
+
+    // `Worker` holds exactly one dispatcher, so this is a choice.
+    #[cfg(feature = "http-target")]
+    let path = match (dispatcher.clone(), push) {
+        (Some(dispatcher), None) => Some(DispatchPath::Attach(dispatcher)),
+        (None, Some(target)) => Some(DispatchPath::Push(target)),
+        (None, None) => None,
+        // Unreachable while `executors_can_attach` gates the dispatcher on
+        // `config.push.is_none()`, and an error rather than a silent
+        // preference precisely so that a refactor dropping that gate — or a
+        // regression in `Config::from_map`'s refusal of the pair — fails at
+        // boot instead of racing two dispatchers for the same queues.
+        (Some(_), Some(_)) => anyhow::bail!(
+            "this process built both an attach dispatcher and a push target, but a \
+             Worker holds exactly one. Set FLEXIQ_PUSH_TARGET_URL or FLEXIQ_LISTEN, \
+             not both."
+        ),
+    };
+    #[cfg(not(feature = "http-target"))]
+    let path = dispatcher.clone().map(DispatchPath::Attach);
+
+    // Read before `path` moves into the supervisor.
+    let starts_eagerly = path.as_ref().is_some_and(DispatchPath::starts_eagerly);
+
+    let supervisor = match (path, &backend) {
+        (Some(path), Some(backend)) => Some(Arc::new(SchedulerSupervisor::new(
             backend.storage.clone(),
-            dispatcher.clone(),
+            path,
             SchedulerSettings {
                 queues: config.queues.clone(),
                 namespace: config.namespace.clone(),
@@ -197,6 +280,17 @@ pub fn run(config: Config) -> Result<()> {
         }
         #[cfg(feature = "grpc")]
         if let (Some(grpc), Some(backend)) = (config.grpc.clone(), &backend) {
+            // Said out loud, because "the producer door answers and the
+            // executor door does not" is otherwise an hour of an operator's
+            // debugging. `dispatcher` is `None` under push — see
+            // `executors_can_attach` — so the `zip` below yields no door.
+            if config.push.is_some() {
+                log::info!(
+                    "[flexiq] the gRPC executor door is disabled: this process dispatches to a \
+                     push target, so there is nothing for an executor to attach to. The \
+                     producer door is unaffected."
+                );
+            }
             // Present whenever this process has somewhere to put an executor.
             // A deployment that wants none simply mints no `execute`-scoped
             // token, which is the gate the package already has.
@@ -222,13 +316,32 @@ pub fn run(config: Config) -> Result<()> {
             ));
         }
 
-        let result = if roles.is_empty() {
-            // Listener-only deployment: nothing to serve, just wait to be told
-            // to stop.
-            shutdown.wait().await;
-            Ok(())
-        } else {
-            drain(roles, &shutdown).await
+        // A push target is there by configuration, so the scheduler has no
+        // peer to wait for and no attach that would ever start it: it starts
+        // here, once the roles are up. The attach path stays lazy — see
+        // `DispatchPath::starts_eagerly` for the contrast.
+        let eager_start = match (starts_eagerly, &supervisor) {
+            (true, Some(supervisor)) => supervisor.ensure_started(),
+            _ => Ok(()),
+        };
+
+        let result = match eager_start {
+            Err(error) => {
+                // A push deployment whose scheduler will not start has nothing
+                // to do; wind the roles down rather than leave a producer door
+                // accepting enqueues onto a queue nothing drains.
+                shutdown.trigger();
+                let _ = drain(roles, &shutdown).await;
+                Err(error)
+            }
+            // No serving role at all — an attach listener on its own, or a
+            // push target on its own. Nothing to serve here, so just wait to
+            // be told to stop.
+            Ok(()) if roles.is_empty() => {
+                shutdown.wait().await;
+                Ok(())
+            }
+            Ok(()) => drain(roles, &shutdown).await,
         };
 
         signals.abort();

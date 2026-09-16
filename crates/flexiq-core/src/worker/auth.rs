@@ -41,6 +41,20 @@ impl Secret {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// The raw bytes, for a caller that must feed the secret to a MAC or a
+    /// header rather than compare it.
+    ///
+    /// `pub(crate)`: comparing is the public operation, reading is not.
+    ///
+    /// `http-target`-gated: every caller today is an outbound signer, which
+    /// exists only under that feature. Gating the method rather than adding
+    /// `#[allow(dead_code)]` is the accurate statement — a default build has
+    /// no legitimate caller, not merely no caller yet.
+    #[cfg(feature = "http-target")]
+    pub(crate) fn expose_secret(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
 }
 
 impl fmt::Debug for Secret {
@@ -57,7 +71,11 @@ impl fmt::Display for Secret {
 
 /// Compare two byte strings without short-circuiting on the first difference.
 /// Length is allowed to short-circuit — it is already observable.
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+///
+/// `pub(crate)`: the HMAC dispatch verifier (`http::auth::hmac`) compares a
+/// presented signature against a computed one and must not do it with `==`
+/// either, so it reuses this rather than growing a second copy.
+pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;
     }

@@ -97,6 +97,11 @@ pub async fn resume(
 ///
 /// `totalCapacity` is the execution capacity attached executors advertise; in
 /// this process there is no in-process worker pool to report instead.
+///
+/// Under push dispatch there is no attach dispatcher either — `state.dispatcher`
+/// is `None` — so it reports `0` and omits `workerUtilization`. An autoscaler
+/// cannot scale a push deployment on utilization; `metricValue` (queue depth)
+/// is read from storage and is the field that stays correct under both paths.
 pub async fn scaler(State(state): State<SharedState>, params: Params) -> ApiResult<Json<Value>> {
     let namespace = state.namespace.clone();
     let overall = {
