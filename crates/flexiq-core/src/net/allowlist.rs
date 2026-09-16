@@ -374,8 +374,10 @@ mod tests {
         assert!(!list.permits_address(addr("::ffff:10.0.0.1")));
         assert!(!list.permits_host("10.0.0.1"));
         // /32 is the widest a folded v4 base can satisfy; /33 is the first
-        // that cannot, so the guard is not only reached by extreme values.
-        assert!(!allow("::ffff:10.0.0.0/33").permits_address(addr("10.0.0.1")));
+        // that cannot. Matching the base address itself means every byte up
+        // to `whole_bytes` compares equal, so without the guard this indexes
+        // one past the end of the 4-byte base rather than returning early.
+        assert!(!allow("::ffff:10.0.0.0/33").permits_address(addr("10.0.0.0")));
     }
 
     #[test]
