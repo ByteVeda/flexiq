@@ -33,10 +33,13 @@
 //!   signal, which `run` aborts rather than hang. See `run`'s own comment for
 //!   the one condition that reaches it.
 //!
-//! The first two windows are one job wide each. Closing them means settling a
-//! job that was never dispatched, which changes the shape of a dispatch loop
-//! [`NativeDispatcher`](crate::worker::NativeDispatcher) shares — so it
-//! belongs with the commit that wires a target into a scheduler, not here.
+//! The first two windows are one job wide each, and both stay open. Closing
+//! them means settling a job that was never dispatched, which changes the
+//! shape of a dispatch loop [`NativeDispatcher`](crate::worker::NativeDispatcher)
+//! shares — one change for every dispatcher at once, not something a
+//! scheduler's wiring can do on this one's behalf. Until then the stale-job
+//! reap recovers the lease, which is the same path a worker that dies
+//! mid-dispatch already takes.
 //!
 //! # Why a late target cannot corrupt FlexiQ state
 //!

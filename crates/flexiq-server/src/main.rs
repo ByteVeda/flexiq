@@ -19,7 +19,9 @@ Configuration (environment only):
   FLEXIQ_NAMESPACE              tenant namespace scoping the scheduler and
                                  every dashboard view (unset = all namespaces)
   FLEXIQ_QUEUES                 comma-separated queues (default: default)
-  FLEXIQ_WORKERS                dispatch concurrency (default: attached slots)
+  FLEXIQ_WORKERS                dispatch concurrency (default: the dispatch
+                                 path's slots — what executors advertise, or
+                                 FLEXIQ_PUSH_TARGET_CAPACITY under push)
   FLEXIQ_MAINTENANCE            on | off — run retention and cleanup (default: on)
   FLEXIQ_LISTEN                 executor attach address, e.g. 127.0.0.1:7777
                                  or unix:/run/flexiq.sock (default: off)
@@ -44,7 +46,10 @@ Configuration (environment only):
                                  present an API token; mint one with
                                  `flexiq-server token create`, and see
                                  `token --help`. Which door a caller reaches is
-                                 its token's scope: `produce` or `execute`
+                                 its token's scope: `produce` or `execute`.
+                                 With FLEXIQ_PUSH_TARGET_URL set, only the
+                                 producer door is served — this process dials
+                                 out, so there is nothing to attach to
   FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE  seconds an executor's attach stream lives
                                  before the scheduler drains it and closes it,
                                  so the executor reconnects and can be placed

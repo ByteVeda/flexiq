@@ -53,7 +53,7 @@ pub struct Config {
     /// Where the `flexiq.v1` gRPC door listens. `None` disables it.
     pub grpc: Option<GrpcConfig>,
     /// The endpoint the scheduler POSTs claimed jobs to. `None` disables push
-    /// dispatch. Config only until the next commit wires it into `Worker`.
+    /// dispatch, which is then the attach path's to serve.
     pub push: Option<PushTargetConfig>,
     /// Whether opening storage applies pending schema changes. Off for a
     /// deployment whose database credentials do not permit DDL at runtime; the

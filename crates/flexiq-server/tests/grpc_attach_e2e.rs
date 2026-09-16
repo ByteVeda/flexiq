@@ -30,7 +30,7 @@ use flexiq_server::grpc::pb::executor as pb;
 use flexiq_server::grpc::pb::executor::executor_service_client::ExecutorServiceClient;
 use flexiq_server::grpc::Listener;
 use flexiq_server::runtime::listener;
-use flexiq_server::runtime::scheduler::{SchedulerSettings, SchedulerSupervisor};
+use flexiq_server::runtime::scheduler::{DispatchPath, SchedulerSettings, SchedulerSupervisor};
 use flexiq_server::runtime::shutdown::Shutdown;
 use flexiq_server::tokens::{Scope, ScopeSet};
 use tokio::sync::mpsc;
@@ -147,7 +147,7 @@ impl Harness {
         });
         let supervisor = Arc::new(SchedulerSupervisor::new(
             (*storage).clone(),
-            dispatcher.clone(),
+            DispatchPath::Attach(dispatcher.clone()),
             SchedulerSettings {
                 queues: vec!["default".to_string()],
                 namespace: Some(NAMESPACE.to_string()),

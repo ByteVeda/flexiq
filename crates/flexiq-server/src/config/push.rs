@@ -6,19 +6,18 @@
 //! endpoint. `flexiq-core` already ships the dispatcher
 //! (`flexiq_core::HttpDispatchTarget`), the egress guard that pins DNS at
 //! connect and denies by default, and all four outbound-auth schemes #844
-//! names. This module is config only: it reads a push target out of the
-//! environment and validates it at boot, but nothing in `flexiq-server` runs
-//! it yet — the next commit wires [`PushTargetConfig`] into `Worker`'s
-//! dispatcher.
+//! names. This module reads a push target out of the environment and
+//! validates what it can there; `runtime::push_target` turns the result into
+//! the dispatcher the scheduler runs on.
 //!
 //! **`auth` is [`PushAuthConfig`], not `flexiq_core::OutboundAuth`.**
 //! `OutboundAuth` lives behind the `http-target` cargo feature, and this
 //! module has to compile in every build — exactly as
 //! [`super::grpc::GrpcConfig`] compiles without the `grpc` feature.
 //! `PushAuthConfig` is a feature-free description of what the operator asked
-//! for; the next commit converts it into an `OutboundAuth` behind the gate.
-//! `flexiq_core::net::Allowlist` has no such split — it is unconditional —
-//! so [`PushTargetConfig`] holds one directly.
+//! for, converted into an `OutboundAuth` by the `From` impl further down,
+//! which is itself behind the gate. `flexiq_core::net::Allowlist` has no such
+//! split — it is unconditional — so [`PushTargetConfig`] holds one directly.
 //!
 //! **Not exposed here, deliberately: two of OIDC's five credential sources
 //! (`OAuth2ClientCredentials`, `File`) and one of SigV4's five
@@ -116,8 +115,9 @@ const UNHONOURED_VARS: [(&str, &str); 2] = [
 /// A push target the scheduler POSTs claimed jobs to, and the guards that
 /// keep the socket from becoming an SSRF pivot.
 ///
-/// Config only: nothing in `flexiq-server` reads this yet. The next commit
-/// wires it into `Worker`'s dispatcher.
+/// What an operator asked for. `runtime::push_target` builds the dispatcher
+/// from it at boot, and a target that will not construct stops the process
+/// there rather than dead-lettering jobs later.
 #[derive(Debug, Clone)]
 pub struct PushTargetConfig {
     /// The URL the scheduler POSTs a claimed job to.
@@ -246,6 +246,77 @@ impl std::fmt::Debug for PushAuthConfig {
                 .field("region", region)
                 .field("service", service)
                 .finish(),
+        }
+    }
+}
+
+/// The feature-free description turned into the credential `flexiq-core`
+/// actually signs with.
+///
+/// Here rather than in `runtime/`, beside the types it converts, so the two
+/// stay adjacent when a source is added: a new [`PushOidcSource`] arm and the
+/// `flexiq_core::http::auth::OidcSource` it maps onto are then one screen
+/// apart instead of one module apart.
+#[cfg(feature = "http-target")]
+impl From<PushAuthConfig> for flexiq_core::OutboundAuth {
+    fn from(auth: PushAuthConfig) -> Self {
+        use flexiq_core::http::auth::{HmacConfig, OidcConfig, SigV4Config};
+        use flexiq_core::OutboundAuth;
+
+        match auth {
+            PushAuthConfig::None => OutboundAuth::None,
+            PushAuthConfig::Bearer { token } => OutboundAuth::Bearer(token),
+            PushAuthConfig::Hmac { secret, key_id } => {
+                OutboundAuth::Hmac(HmacConfig { key_id, secret })
+            }
+            PushAuthConfig::Oidc { source, audience } => OutboundAuth::Oidc(OidcConfig {
+                source: source.into(),
+                audience,
+            }),
+            PushAuthConfig::SigV4 {
+                source,
+                region,
+                service,
+            } => OutboundAuth::SigV4(SigV4Config {
+                source: source.into(),
+                region,
+                service,
+            }),
+        }
+    }
+}
+
+#[cfg(feature = "http-target")]
+impl From<PushOidcSource> for flexiq_core::http::auth::OidcSource {
+    fn from(source: PushOidcSource) -> Self {
+        use flexiq_core::http::auth::OidcSource;
+
+        match source {
+            PushOidcSource::GoogleMetadata => OidcSource::GoogleMetadata,
+            PushOidcSource::AzureImds {
+                client_id,
+                object_id,
+                msi_res_id,
+            } => OidcSource::AzureImds {
+                client_id,
+                object_id,
+                msi_res_id,
+            },
+            PushOidcSource::AzureAppService => OidcSource::AzureAppService,
+        }
+    }
+}
+
+#[cfg(feature = "http-target")]
+impl From<PushAwsSource> for flexiq_core::http::auth::AwsCredentialSource {
+    fn from(source: PushAwsSource) -> Self {
+        use flexiq_core::http::auth::AwsCredentialSource;
+
+        match source {
+            PushAwsSource::DefaultChain => AwsCredentialSource::DefaultChain,
+            PushAwsSource::Environment => AwsCredentialSource::Environment,
+            PushAwsSource::ContainerCredentials => AwsCredentialSource::ContainerCredentials,
+            PushAwsSource::Imdsv2 => AwsCredentialSource::Imdsv2,
         }
     }
 }
