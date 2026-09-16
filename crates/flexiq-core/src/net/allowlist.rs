@@ -54,6 +54,16 @@ pub enum AllowlistError {
 /// Deny by default: nothing a rule does not name is permitted, and an
 /// allowlist naming nothing fails to construct rather than quietly denying
 /// everything (see [`AllowlistError::Empty`]).
+///
+/// **This is a matcher, not an egress policy.** It answers only "does some
+/// rule name this?", and knows nothing about the destinations that are never
+/// anyone's to grant — [`is_never_routable`](crate::net::is_never_routable)
+/// addresses, loopback and the cloud metadata literals all pass it whenever a
+/// rule happens to cover them. To decide whether an outbound destination may
+/// be dialled, use `EgressPolicy` in `flexiq_core::http` (behind the
+/// `http-target` feature), which layers the unconditional refusals over this;
+/// named in prose rather than linked because it does not exist in a default
+/// build.
 #[derive(Debug, Clone)]
 pub struct Allowlist {
     rules: Vec<AllowRule>,
@@ -107,6 +117,11 @@ impl Allowlist {
     /// host that parses as an IP literal is matched as an address instead —
     /// callers pass `url::Host`-derived strings, which are already
     /// unbracketed, so a bracketed literal is not this function's problem.
+    ///
+    /// That literal path is the reason this is the wrong function to gate an
+    /// outbound dial on: against a rule of `127.0.0.0/8` it answers `true` for
+    /// `"127.0.0.1"`. See the type's own docs — `EgressPolicy` is what adds
+    /// the unconditional refusals.
     pub fn permits_host(&self, host: &str) -> bool {
         let lowered = host.to_ascii_lowercase();
         let normalized = lowered.strip_suffix('.').unwrap_or(&lowered);
