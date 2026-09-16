@@ -53,7 +53,7 @@ define it a second time here.
 | `x-flexiq-namespace` | only for a non-default namespace | The job's namespace |
 | `x-flexiq-lease` | only when the scheduler held a lease | An opaque capability token (the lease's base64url bytes, as text) — never inspect or construct one, it exists only to appear in [the idempotency key](#the-idempotency-key) |
 | `x-flexiq-idempotency-key` | yes | `<job id>.<attempt>.<lease>`, or `<job id>.<attempt>` with no lease — see [The idempotency key](#the-idempotency-key) |
-| `x-flexiq-deadline-ms` | yes | Milliseconds this dispatch will wait for an answer, decimal |
+| `x-flexiq-deadline-ms` | yes | Milliseconds this dispatch will wait for an answer, decimal — an upper bound, not an exact window |
 | `x-flexiq-disabled-middleware` | only when non-empty | Comma-separated middleware names the operator has disabled for this task |
 | `x-flexiq-metadata` | only when the job carries metadata and it fits | The job's metadata blob, base64url-encoded (no padding) |
 
@@ -64,9 +64,14 @@ them the same way — see the operator page's note on header logging.
 
 `x-flexiq-deadline-ms` is not the job's raw remaining timeout. It is the
 scheduler's own request budget — the job's execution deadline, less the
-reaper's safety margin, capped by the operator's configured request ceiling.
-An answer that arrives after this window has already been fenced out, so
-there is no value in a target racing past it.
+reaper's safety margin, capped by the operator's configured request ceiling —
+and the scheduler waits **at most** that long, not exactly that long. The
+budget starts running before the request is built and signed, so whatever
+that costs comes out of it: sub-millisecond usually, but hundreds of
+milliseconds when an auth scheme has to fetch an identity token it has not
+cached. Read it as a ceiling on the time a target has. An answer that arrives
+after the window has already been fenced out, so there is no value in a
+target racing past it.
 
 `x-flexiq-metadata` is dropped, silently as far as the target is concerned,
 when the encoded blob exceeds an internal 8 KiB cap — the job still dispatches

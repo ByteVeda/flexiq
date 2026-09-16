@@ -32,13 +32,18 @@ pub const HDR_NAMESPACE: &str = "x-flexiq-namespace";
 pub const HDR_LEASE: &str = "x-flexiq-lease";
 /// [`idempotency_key`]'s value, for a target that dedupes on it.
 pub const HDR_IDEMPOTENCY_KEY: &str = "x-flexiq-idempotency-key";
-/// Milliseconds this dispatch will wait for an answer.
+/// Milliseconds this dispatch will wait for an answer, at most.
 ///
 /// The request budget, not the job's raw remaining timeout: it is the job's
 /// own execution deadline less the reaper's margin, capped by the target's
 /// configured request ceiling. Sending the raw deadline would promise a
 /// target more time than the scheduler will actually wait for it, and an
 /// answer that arrives after this is fenced out on arrival.
+///
+/// An upper bound rather than an exact window, deliberately advertised as
+/// one: the guard's budget starts before the toggles are resolved and the
+/// request is signed, so that work comes out of the same number — hundreds of
+/// milliseconds when an identity token has to be fetched uncached.
 pub const HDR_DEADLINE_MS: &str = "x-flexiq-deadline-ms";
 /// Comma-separated middleware the operator has disabled for this task.
 pub const HDR_DISABLED_MIDDLEWARE: &str = "x-flexiq-disabled-middleware";
