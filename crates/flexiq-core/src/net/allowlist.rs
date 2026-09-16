@@ -142,6 +142,13 @@ impl Allowlist {
     /// An IPv4-mapped IPv6 address is folded to IPv4 on both sides before
     /// comparing, so a rule written in either family matches the same real
     /// addresses regardless of which representation the caller hands in.
+    ///
+    /// **A [`AllowRule::Host`] or [`AllowRule::Suffix`] rule never matches
+    /// here** — an address is not a name, and this function has no name to
+    /// resolve one against. A caller vetting the addresses some *host*
+    /// resolved to must therefore also ask [`Self::permits_host`] about that
+    /// host, or a name-only allowlist matches nothing at all; `EgressPolicy`
+    /// in `flexiq_core::http` is the one that combines the two.
     pub fn permits_address(&self, address: IpAddr) -> bool {
         self.rules.iter().any(|rule| match rule {
             AllowRule::Network { base, prefix } => network_contains(*base, *prefix, address),
@@ -346,6 +353,20 @@ mod tests {
         let list = allow("2001:db8::/33");
         assert!(list.permits_address(addr("2001:db8:7fff::1")));
         assert!(!list.permits_address(addr("2001:db8:8000::1")));
+    }
+
+    /// The fact `permits_address`'s doc warns about, pinned: a name rule
+    /// matches no address, so a caller holding both a host and the addresses
+    /// it resolved to has to ask about the host too. `EgressPolicy::vet` once
+    /// asked only about the addresses, and a name-only allowlist therefore
+    /// refused every dispatch.
+    #[test]
+    fn a_name_rule_matches_no_address() {
+        let list = allow("api.example.com,.run.app");
+        assert!(list.permits_host("api.example.com"));
+        assert!(list.permits_host("svc.run.app"));
+        assert!(!list.permits_address(addr("93.184.216.34")));
+        assert!(!list.permits_address(addr("2606:4700::1111")));
     }
 
     #[test]

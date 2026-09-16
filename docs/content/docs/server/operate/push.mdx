@@ -115,6 +115,15 @@ scheme, and it runs whether or not you think you need it:
   networks. Nothing outside that list is reachable — an allowlist naming
   nothing fails to start rather than quietly denying everything, so an empty
   value is a configuration error, not a valid "deny all".
+- **A name entry trusts DNS for that name; a CIDR entry constrains the address
+  space.** Naming `api.example.com` permits whatever `api.example.com`
+  resolves to, so whoever controls that record controls the destination —
+  bounded by the loopback, link-local and cloud-metadata refusals below, which
+  a name can never vouch past. That bound is what makes a name sufficient on
+  its own for a target whose address you do not control, such as
+  `https://svc.run.app`. If
+  you want the addresses constrained as well, list a CIDR beside the name: an
+  address outside it is refused however the name resolves.
 - **DNS is vetted where it is resolved, not before.** The addresses a name
   resolves to are checked at the moment of connection, inside resolution
   itself, so the addresses the socket actually dials are the exact addresses

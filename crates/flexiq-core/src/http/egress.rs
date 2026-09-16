@@ -88,7 +88,14 @@ impl EgressPolicy {
         self.allow.permits_host(host)
     }
 
-    /// Whether this address may be dialled.
+    /// Whether this address may be dialled on its own account — not refused
+    /// unconditionally, and covered by a CIDR rule.
+    ///
+    /// Strictly narrower than what [`Self::vet`] permits, because this has no
+    /// host to consider: a name rule cannot answer for a bare address. The
+    /// caller that has a name uses `vet`; the one that has only an address —
+    /// [`Self::permits_host`]'s IP-literal path, where there is no name to
+    /// have matched a rule — uses this.
     pub fn permits_address(&self, address: IpAddr) -> bool {
         if self.refused_unconditionally(address) {
             return false;
@@ -107,9 +114,37 @@ impl EgressPolicy {
         is_never_routable(address) && !(self.allow_loopback && is_loopback_address(address))
     }
 
+    /// Whether a *name* rule on the allowlist names `host`.
+    ///
+    /// An IP-literal host is deliberately not a name here, even though
+    /// [`Allowlist::permits_host`] answers for one: it folds a literal to
+    /// [`Allowlist::permits_address`], and reading that answer as "the name is
+    /// allowlisted" would let a single allowlisted literal vouch for every
+    /// other address a resolution returned alongside it. A literal never
+    /// reaches [`Self::vet`] — the connector dials it without calling a
+    /// resolver — so this refuses to depend on that staying true.
+    fn host_is_named(&self, host: &str) -> bool {
+        let normalized = host.strip_suffix('.').unwrap_or(host);
+        if normalized.parse::<IpAddr>().is_ok() {
+            return false;
+        }
+        self.allow.permits_host(host)
+    }
+
     /// Why `address` may not be dialled, or `None` when it may.
-    fn refusal_for(&self, host: &str, address: IpAddr) -> Option<EgressRefusal> {
-        if self.permits_address(address) {
+    ///
+    /// `host_is_named` is [`Self::host_is_named`]'s answer for the host this
+    /// resolution belongs to, hoisted out by [`Self::vet`] so one name lookup
+    /// covers every address rather than one per address.
+    fn refusal_for(
+        &self,
+        host: &str,
+        host_is_named: bool,
+        address: IpAddr,
+    ) -> Option<EgressRefusal> {
+        if !self.refused_unconditionally(address)
+            && (host_is_named || self.allow.permits_address(address))
+        {
             return None;
         }
         // Which of the two rules refused it matters to the operator: only
@@ -132,6 +167,24 @@ impl EgressPolicy {
     /// Filtering to the permitted addresses would let a rebinding attack in
     /// progress succeed on its second A record, so one refused address
     /// refuses the whole resolution.
+    ///
+    /// # Which rule may permit an address
+    ///
+    /// An address passes when it is not refused unconditionally **and**
+    /// either a CIDR rule covers it or a name rule already named the host it
+    /// came from. Both halves of that `or` are needed, and only the first was
+    /// once checked here — a name-only allowlist (`api.example.com`) matched
+    /// no address at all, so hostname allowlisting refused every dispatch.
+    ///
+    /// **The trade-off, stated rather than left to be worked out:** a name
+    /// rule trusts DNS for that name. Whatever `api.example.com` resolves to
+    /// is where the dispatch goes, so whoever controls that record controls
+    /// the destination — bounded by the unconditional refusals, which a name
+    /// rule cannot vouch past: loopback, link-local, the metadata literals,
+    /// multicast and broadcast stay refused however the name is written. That
+    /// bound is what makes a name rule sufficient on its own. An operator who
+    /// wants the address space constrained too adds a CIDR beside the name,
+    /// and the name then buys nothing an address outside that CIDR can use.
     pub fn vet(
         &self,
         host: &str,
@@ -144,8 +197,9 @@ impl EgressPolicy {
             });
         }
 
+        let host_is_named = self.host_is_named(host);
         for socket in &resolved {
-            if let Some(refusal) = self.refusal_for(host, socket.ip()) {
+            if let Some(refusal) = self.refusal_for(host, host_is_named, socket.ip()) {
                 return Err(refusal);
             }
         }
@@ -166,10 +220,11 @@ mod tests {
         literal.parse().expect("test address parses")
     }
 
+    /// Built from the parsed `IpAddr` rather than by formatting `"{literal}:443"`:
+    /// the string form needs an IPv6 literal bracketed, and this takes both
+    /// families without the caller having to remember which.
     fn sock(literal: &str) -> SocketAddr {
-        format!("{literal}:443")
-            .parse()
-            .expect("test socket address parses")
+        SocketAddr::new(addr(literal), 443)
     }
 
     #[test]
@@ -265,6 +320,105 @@ mod tests {
                 "{literal} must be refused however the policy is configured"
             );
         }
+    }
+
+    /// Regression: a name rule is the documented primary configuration
+    /// (`FLEXIQ_PUSH_TARGET_ALLOW=api.example.com` for a target like
+    /// `https://svc.run.app`), and it used to dispatch nothing at all.
+    /// `vet` ran every resolved address through `Allowlist::permits_address`,
+    /// which matches only `AllowRule::Network` — so a name-only allowlist
+    /// passed the name gate in `validate_target_url` and then refused every
+    /// address the name resolved to as `NotAllowed`. Every earlier test used
+    /// a CIDR or an IP literal (which parses as a `/32` network rule), so
+    /// none of them touched this path.
+    #[test]
+    fn a_name_rule_permits_the_public_address_it_resolves_to() {
+        let policy = EgressPolicy::new(allow("api.example.com"), false);
+        let resolved = vec![sock("93.184.216.34")];
+
+        let vetted = policy
+            .vet("api.example.com", resolved.clone())
+            .expect("a name rule must permit the address that name resolves to");
+
+        assert_eq!(vetted, resolved);
+    }
+
+    #[test]
+    fn a_suffix_rule_permits_the_public_address_a_subdomain_resolves_to() {
+        let policy = EgressPolicy::new(allow(".run.app"), false);
+        let resolved = vec![sock("93.184.216.34"), sock("8.8.8.8")];
+
+        let vetted = policy
+            .vet("svc.run.app", resolved.clone())
+            .expect("a suffix rule must permit the addresses a subdomain resolves to");
+
+        assert_eq!(vetted, resolved);
+    }
+
+    #[test]
+    fn a_name_rule_does_not_vouch_for_a_different_name() {
+        let policy = EgressPolicy::new(allow("api.example.com"), false);
+
+        let refusal = policy
+            .vet("evil.example.com", vec![sock("93.184.216.34")])
+            .unwrap_err();
+
+        assert!(matches!(refusal, EgressRefusal::NotAllowed { .. }));
+    }
+
+    #[test]
+    fn a_name_rule_still_refuses_loopback_and_the_metadata_literals() {
+        // The bound on the trade-off `vet` documents: a name rule trusts DNS
+        // for that name, but the unconditional refusals are not inside what
+        // it may vouch for, so a rebind onto loopback or IMDS still fails.
+        let policy = EgressPolicy::new(allow("api.example.com"), false);
+        for literal in [
+            "127.0.0.1",
+            "169.254.169.254",
+            "fd00:ec2::254",
+            "100.100.100.200",
+        ] {
+            let refusal = policy
+                .vet("api.example.com", vec![sock(literal)])
+                .unwrap_err();
+            assert!(
+                matches!(refusal, EgressRefusal::NeverRoutable { .. }),
+                "{literal} must stay refused however the name is allowlisted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cidr_only_allowlist_still_refuses_an_address_outside_it() {
+        // The other half of the trade-off: an operator who wants the address
+        // space constrained as well writes a CIDR, and a name that resolves
+        // outside it is still refused.
+        let policy = EgressPolicy::new(allow("93.184.216.0/24"), false);
+
+        let refusal = policy
+            .vet("api.example.com", vec![sock("8.8.8.8")])
+            .unwrap_err();
+
+        assert!(matches!(refusal, EgressRefusal::NotAllowed { .. }));
+    }
+
+    #[test]
+    fn an_ip_literal_host_does_not_vouch_for_a_whole_resolution() {
+        // `Allowlist::permits_host` folds a literal to `permits_address`, so
+        // reading its answer as "the *name* is allowlisted" would let one
+        // allowlisted literal vouch for every address alongside it. A literal
+        // never reaches `vet` (the connector dials it without a resolver);
+        // this pins that `vet` does not depend on that being true.
+        let policy = EgressPolicy::new(allow("93.184.216.34"), false);
+
+        let refusal = policy
+            .vet(
+                "93.184.216.34",
+                vec![sock("93.184.216.34"), sock("8.8.8.8")],
+            )
+            .unwrap_err();
+
+        assert!(matches!(refusal, EgressRefusal::NotAllowed { .. }));
     }
 
     #[test]
