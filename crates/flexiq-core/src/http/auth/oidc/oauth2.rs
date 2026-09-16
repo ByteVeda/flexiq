@@ -56,7 +56,7 @@ struct TokenResponse {
 /// the same argument [`OutboundAuth::signer`](crate::http::auth::OutboundAuth::signer)'s
 /// empty-secret checks make.
 ///
-/// Three rules:
+/// Four rules:
 ///
 /// - **A URL at all.** Anything `url::Url` cannot parse is a typo.
 /// - **`https`, or `http` only to a loopback host.** The client secret goes to
@@ -78,13 +78,28 @@ struct TokenResponse {
 ///   wire this way (reqwest does not turn URL userinfo into an
 ///   `Authorization` header), so this is a log-leak guard, not a
 ///   transport-security one.
+/// - **A host the egress allowlist permits.** The fetch dials through the
+///   guarded client, whose pinned resolver vets whatever a *name* resolves to
+///   — but an IP-literal host never reaches a resolver at all, because the
+///   connector recognizes it as an address and dials it directly. Without a
+///   check here, `https://10.1.2.3/token` would reach a host the operator
+///   never allowlisted. This is the same gate, for the same reason, that
+///   `worker::http_target::validate_target_url` applies to the dispatch URL,
+///   and it means **an OAuth2 token endpoint has to be on the same allowlist
+///   as the dispatch target**.
 ///
 /// `localhost` counts as loopback without being resolved: RFC 6761 §6.3
 /// reserves the name for the loopback interface, and there is nothing to
 /// resolve at construction time. Errors name no part of the URL — an
 /// operator's token URL may carry a tenant key in its query — which is the
-/// same discipline [`LABEL`] exists for.
-pub(super) fn validate_token_url(raw: &str) -> Result<url::Url, AuthError> {
+/// same discipline [`LABEL`] exists for; the allowlist refusal is the one
+/// exception and names the **host only**, because an operator cannot fix an
+/// allowlist they are not told the missing entry for, and a host is not the
+/// part of a URL a credential hides in.
+pub(super) fn validate_token_url(
+    raw: &str,
+    policy: &crate::http::EgressPolicy,
+) -> Result<url::Url, AuthError> {
     let url = url::Url::parse(raw)
         .map_err(|_| AuthError::Config("oauth2 token_url is not a valid URL".to_string()))?;
 
@@ -104,6 +119,27 @@ pub(super) fn validate_token_url(raw: &str) -> Result<url::Url, AuthError> {
         return Err(AuthError::Config(
             "oauth2 token_url must not carry userinfo".to_string(),
         ));
+    }
+
+    // Read through `url::Host` rather than `host_str`: the latter keeps an
+    // IPv6 literal's brackets, and `permits_host` expects the unbracketed form
+    // every other caller gives it. The same reading `validate_target_url` does.
+    let host = match url.host() {
+        Some(url::Host::Domain(domain)) => domain.to_string(),
+        Some(url::Host::Ipv4(v4)) => v4.to_string(),
+        Some(url::Host::Ipv6(v6)) => v6.to_string(),
+        None => {
+            return Err(AuthError::Config(
+                "oauth2 token_url must include a hostname".to_string(),
+            ))
+        }
+    };
+    if !policy.permits_host(&host) {
+        return Err(AuthError::Config(format!(
+            "oauth2 token_url host '{host}' is not on the egress allowlist — a token \
+             endpoint is dialled through the same guard as the dispatch target, so it \
+             has to be named there too"
+        )));
     }
 
     Ok(url)
@@ -291,11 +327,24 @@ mod tests {
         url::Url::parse(&format!("{}/token", stub.base_url())).expect("stub url parses")
     }
 
+    /// A policy that permits every host the transport tests use, so those
+    /// tests fail on the rule they are about rather than on the allowlist.
+    fn permissive_policy() -> EgressPolicy {
+        EgressPolicy::new(
+            Allowlist::parse(
+                "issuer.example.com,10.0.0.0/8,2606:4700::/32,127.0.0.0/8,::1,localhost",
+            )
+            .expect("test allowlist parses"),
+            true,
+        )
+    }
+
     #[test]
     fn a_cleartext_token_url_is_refused_unless_it_is_loopback() {
         // The client secret goes to this endpoint in a form body and the
         // access token comes back in the response; neither may cross a
         // network in the clear.
+        let policy = permissive_policy();
         for refused in [
             "http://issuer.example.com/token",
             "http://10.1.2.3:8080/token",
@@ -304,7 +353,10 @@ mod tests {
             "not a url",
         ] {
             assert!(
-                matches!(validate_token_url(refused), Err(AuthError::Config(_))),
+                matches!(
+                    validate_token_url(refused, &policy),
+                    Err(AuthError::Config(_))
+                ),
                 "{refused} must be refused at construction"
             );
         }
@@ -317,22 +369,81 @@ mod tests {
             "http://LocalHost.:8080/token",
         ] {
             assert!(
-                validate_token_url(accepted).is_ok(),
+                validate_token_url(accepted, &policy).is_ok(),
                 "{accepted} is https or a loopback sidecar, both of which stay reachable"
             );
         }
     }
 
+    /// The token URL is the second operator-supplied host in this subsystem,
+    /// and it used to pass no allowlist check at all. A *name* would still be
+    /// caught at fetch time by the pinned resolver, but an IP literal never
+    /// reaches a resolver — the connector dials it directly — so nothing
+    /// vetted `https://10.1.2.3/token` before the client secret went to it.
+    #[test]
+    fn a_token_url_host_off_the_allowlist_is_refused_at_construction() {
+        let policy = EgressPolicy::new(
+            Allowlist::parse("issuer.example.com").expect("test allowlist parses"),
+            false,
+        );
+
+        for refused in [
+            "https://elsewhere.example.com/token",
+            // The literal: the case the resolver can never catch.
+            "https://10.1.2.3/token",
+            "https://[2606:4700::1111]/token",
+            // Unconditionally refused whatever the allowlist says, and the
+            // loopback relaxation is off here.
+            "https://169.254.169.254/token",
+            "https://127.0.0.1/token",
+        ] {
+            let error = match validate_token_url(refused, &policy) {
+                Err(error) => error,
+                Ok(_) => panic!("{refused} must be refused at construction"),
+            };
+            assert!(matches!(error, AuthError::Config(_)), "{error:?}");
+            assert!(
+                error.to_string().contains("allowlist"),
+                "the refusal must say which guard refused it: {error}"
+            );
+        }
+
+        assert!(
+            validate_token_url("https://issuer.example.com/token", &policy).is_ok(),
+            "the host the operator did allowlist stays reachable"
+        );
+    }
+
     #[test]
     fn a_refused_token_url_never_appears_in_the_error() {
         // The same invariant `LABEL` exists for: an operator's token URL may
-        // carry a tenant key in its query, and this error reaches a log.
-        let error = validate_token_url("http://issuer.example.com/token?tenant=q1w2e3r4")
-            .expect_err("cleartext off loopback is refused");
+        // carry a tenant key in its query, and this error reaches a log. The
+        // allowlist refusal names the host deliberately (an operator cannot
+        // fix a list they are not told the missing entry for) and is checked
+        // separately below.
+        let error = validate_token_url(
+            "http://issuer.example.com/token?tenant=q1w2e3r4",
+            &permissive_policy(),
+        )
+        .expect_err("cleartext off loopback is refused");
 
         let rendered = error.to_string();
         assert!(!rendered.contains("q1w2e3r4"), "{rendered}");
         assert!(!rendered.contains("issuer.example.com"), "{rendered}");
+
+        // The one refusal that does name a host still names only the host —
+        // never the path, never the query.
+        let policy = EgressPolicy::new(
+            Allowlist::parse("elsewhere.example.com").expect("test allowlist parses"),
+            false,
+        );
+        let rendered =
+            validate_token_url("https://issuer.example.com/token?tenant=q1w2e3r4", &policy)
+                .expect_err("a host off the allowlist is refused")
+                .to_string();
+        assert!(rendered.contains("issuer.example.com"), "{rendered}");
+        assert!(!rendered.contains("q1w2e3r4"), "{rendered}");
+        assert!(!rendered.contains("/token"), "{rendered}");
     }
 
     fn permissive_dispatch_client() -> DispatchClient {
@@ -558,9 +669,13 @@ mod tests {
         // an operator who puts a tenant key there must not find it in a log.
         let disallowed_url = format!("http://localhost:{port}/token?tenant=q1w2e3r4");
 
-        // A policy that permits nothing at all — not even loopback.
+        // Names `localhost`, so the construction-time allowlist check passes
+        // and this test still reaches the *runtime* guard it is about — but
+        // leaves the loopback relaxation off, so what `localhost` resolves to
+        // is refused unconditionally inside resolution. That is the bound a
+        // name rule cannot vouch past, exercised end to end.
         let policy = Arc::new(EgressPolicy::new(
-            Allowlist::parse("93.184.216.34").expect("test allowlist parses"),
+            Allowlist::parse("localhost").expect("test allowlist parses"),
             false,
         ));
         let dispatch = DispatchClient::new(policy, Duration::from_secs(1))

@@ -21,6 +21,13 @@ use crate::worker::http_target::HttpTargetError;
 /// is a designed feature — a clear connection failure beats a silent bypass.
 pub struct DispatchClient {
     client: reqwest::Client,
+    /// The same policy [`PinnedResolver`] resolves through, kept so a caller
+    /// that has to vet a URL *before* dialling it can reach the one this
+    /// client was actually built with rather than being handed a second copy
+    /// to keep in step. The resolver closes the rebinding window for a name;
+    /// it is never reached at all for an IP literal, which is why a
+    /// construction-time check needs this. See [`Self::policy`].
+    policy: Arc<EgressPolicy>,
 }
 
 impl DispatchClient {
@@ -31,7 +38,7 @@ impl DispatchClient {
         connect_timeout: Duration,
     ) -> Result<Self, HttpTargetError> {
         let client = reqwest::Client::builder()
-            .dns_resolver(Arc::new(PinnedResolver::new(policy)))
+            .dns_resolver(Arc::new(PinnedResolver::new(Arc::clone(&policy))))
             // A 3xx could carry a signed body to a host that never passed the guard.
             .redirect(reqwest::redirect::Policy::none())
             // reqwest retries a protocol NACK twice by default. Those never
@@ -49,7 +56,21 @@ impl DispatchClient {
             // here.
             .build()
             .map_err(|error| HttpTargetError::Client(error.to_string()))?;
-        Ok(Self { client })
+        Ok(Self { client, policy })
+    }
+
+    /// The egress policy this client resolves through.
+    ///
+    /// For a caller that must vet an operator-supplied URL at *construction*,
+    /// which the resolver cannot do for it: an IP-literal host never reaches a
+    /// `Resolve` impl — the connector dials it directly — so a literal would
+    /// otherwise pass no allowlist check at all. `worker::http_target`'s
+    /// `validate_target_url` uses `EgressPolicy::permits_host` for exactly
+    /// this on the dispatch URL; `oidc::oauth2` reaches it through here for
+    /// the OAuth2 token URL, the other operator-supplied host in this
+    /// subsystem.
+    pub(crate) fn policy(&self) -> &EgressPolicy {
+        &self.policy
     }
 
     /// The underlying client, for a caller that must dial through the same

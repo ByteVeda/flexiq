@@ -293,6 +293,16 @@ expires. `flexiq-server`'s environment surface picks the source —
 header either way and verifies the token against its own platform. Cloud Run
 and Azure Functions' native answer to "prove who is calling".
 
+The library API carries two further sources that the environment surface does
+not, one of which an embedder has to allowlist: **`OAuth2ClientCredentials`
+dials a token endpoint the operator configured, and that endpoint goes through
+the same egress guard as the dispatch target** — same `https`-unless-loopback
+rule, and its host has to be named on the same allowlist. Both are enforced
+when the signer is built, not on the first dispatch, so a token URL the
+allowlist does not name stops the process at boot. The other three sources
+reach a compile-time-constant or platform-supplied host and are not
+allowlisted, because they cannot be pointed anywhere else.
+
 ### `sigv4` — AWS Signature Version 4
 
 `authorization: AWS4-HMAC-SHA256 Credential=...`, plus `x-amz-date`,

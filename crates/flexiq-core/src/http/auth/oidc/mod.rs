@@ -19,10 +19,11 @@
 //!   configured, exactly the same kind of input the dispatch target's own
 //!   URL is, so it fetches through the guarded
 //!   [`DispatchClient`](crate::http::DispatchClient) instead, subject to the
-//!   same egress allowlist as the dispatch target itself — see `oauth2.rs`'s
-//!   module doc for the full argument. That asymmetry, three sources on one
-//!   client and one source on the other, is the load-bearing design decision
-//!   in this commit.
+//!   same egress allowlist as the dispatch target itself — **including the
+//!   construction-time host check**, because the pinned resolver alone never
+//!   sees an IP-literal host. See `oauth2.rs`'s `validate_token_url` for the
+//!   four rules. That asymmetry, three sources on one client and one source
+//!   on the other, is the load-bearing design decision here.
 //! - [`OidcSource::File`] touches no network at all: it re-reads a
 //!   Kubernetes-projected service-account token off disk on every refresh.
 //!
@@ -84,7 +85,11 @@ pub enum OidcSource {
     /// the one that dials an operator-supplied host. See this module's doc.
     OAuth2ClientCredentials {
         /// The token endpoint the operator configured. Parsed and validated
-        /// once at construction.
+        /// once at construction, by `oauth2::validate_token_url`: a URL,
+        /// `https` (or `http` to loopback), no userinfo, and **a host the
+        /// egress allowlist names** — this endpoint is dialled through the
+        /// same guard as the dispatch target, so it has to be allowlisted
+        /// alongside it.
         token_url: String,
         /// The client id sent in the form body under
         /// [`ClientAuthStyle::ClientSecretPost`], or urlencoded into the
@@ -257,7 +262,7 @@ impl OidcSigner {
                 // side — the same argument `OutboundAuth::signer`'s
                 // empty-secret checks make. The rules are `oauth2.rs`'s, next
                 // to the code that puts the client secret on the wire.
-                let token_url = oauth2::validate_token_url(&token_url)?;
+                let token_url = oauth2::validate_token_url(&token_url, dispatch.policy())?;
                 Resolved::OAuth2(Box::new(OAuth2Resolved {
                     client: dispatch.inner().clone(),
                     token_url,
