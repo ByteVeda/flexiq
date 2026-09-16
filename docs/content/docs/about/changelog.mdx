@@ -30,7 +30,7 @@ their entries below keep that name.
   scheduler's identity to the target: a static bearer token, HMAC-SHA256 with replay defence,
   OIDC identity tokens (Cloud Run, Azure IMDS, Azure App Service), and AWS SigV4 (Lambda, API
   Gateway). The wire contract a target implements against is
-  [`contracts/PUSH_DISPATCH_CONTRACT.md`](contracts/PUSH_DISPATCH_CONTRACT.md).
+  [`contracts/PUSH_DISPATCH_CONTRACT.md`](https://github.com/ByteVeda/flexiq/blob/master/contracts/PUSH_DISPATCH_CONTRACT.md).
   Three limits worth knowing before deploying it: a job has to finish inside one HTTP
   request — Cloud Run caps that at 60 minutes, Lambda at 15 (#845 tracks lifting this);
   `cancel()` abandons the request and fences the target's answer out rather than stopping the
