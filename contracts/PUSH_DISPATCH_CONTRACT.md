@@ -107,7 +107,7 @@ The target answers with an HTTP status and, on success, an
 | Status | `x-flexiq-outcome` | Result | Retried? |
 |---|---|---|---|
 | 2xx (not 202) | `success` | Job succeeds. Body is the result — the tagged envelope: `0x02` then a bare CBOR value, no array wrapper — or empty for no result | — |
-| 2xx (not 202) | `failure` | Job fails. Body becomes `Job.error`, verbatim (lossy UTF-8 decode if the body is not valid UTF-8) | `x-flexiq-retry` decides — see below |
+| 2xx (not 202) | `failure` | Job fails. Body becomes `Job.error` (lossy UTF-8 decode if the body is not valid UTF-8) — verbatim, except that a missing or unparseable `x-flexiq-retry` appends a line saying it retried for want of the header | `x-flexiq-retry` decides — see below |
 | 2xx (not 202) | `cancelled` | Job settles cancelled. Body is ignored | no |
 | 2xx (not 202) | `slept` | **Refused.** A push dispatch has no step session to resume; treated as a failure | no |
 | 2xx (not 202) | absent | **Refused**: `MissingOutcome` | no |
