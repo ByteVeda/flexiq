@@ -58,11 +58,14 @@ are then required together.
 | `FLEXIQ_PUSH_TARGET_MAX_RESPONSE_BYTES` | `1048576` (1 MiB) | Ceiling on one response body read back |
 | `FLEXIQ_PUSH_TARGET_AUTH` | `none` | `none` \| `bearer` \| `hmac` \| `oidc` \| `sigv4` |
 
-The three second-valued variables each take a minimum of `1`. None of them is
-a "no limit" switch: `0` is a deadline that has already passed, so it would
-fail every dispatch — or, for `DRAIN`, abort every in-flight one at shutdown —
-and the failure would look like a target that never answered. Zero is refused
-at boot, naming the variable.
+The three second-valued variables and the two byte caps each take a minimum of
+`1`. None of the five is a "no limit" switch. For a duration, `0` is a deadline
+that has already passed, so it would fail every dispatch — or, for `DRAIN`,
+abort every in-flight one at shutdown. For a cap, `0` is a ceiling nothing fits
+under, so every request is refused as oversized before it is sent, or every
+answer with a body is, and neither refusal is retryable. In each case the
+failure would look like something other than the setting you changed, so zero
+is refused at boot, naming the variable.
 
 Push dispatch is behind its own cargo feature, `http-target`, so a binary that
 never dials out does not have to compile in an HTTP client and a TLS stack.

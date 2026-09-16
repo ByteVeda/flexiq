@@ -160,9 +160,12 @@ push:
   # Required — deny by default. Loopback, link-local and cloud metadata are
   # refused whatever this names.
   allow: ""
-  # Seconds one dispatch may take before it is abandoned as failed.
+  # Seconds one dispatch may take before it is abandoned as failed. Minimum 1;
+  # zero is refused at boot — it is a deadline that has already passed, not a
+  # way to say "no limit".
   timeout: 60
-  # Seconds the connection may take to establish.
+  # Seconds the connection may take to establish. Minimum 1; zero is refused at
+  # boot, for the same reason as timeout above.
   connectTimeout: 5
   # Seconds shutdown waits for in-flight dispatches, and then again for each
   # to settle once abandoned — a shutdown runs to at most twice this. Minimum
@@ -170,9 +173,12 @@ push:
   # shorter than the 60s worst case this value implies, so either lower this
   # or raise terminationGracePeriodSeconds (bottom of this file) past 2 × it.
   drain: 30
-  # Ceiling on one job's request body, in bytes.
+  # Ceiling on one job's request body, in bytes. Minimum 1; zero is refused at
+  # boot — a cap nothing fits under refuses every dispatch as oversized, and
+  # that refusal is not retryable.
   maxRequestBytes: 8388608
-  # Ceiling on one response body read back, in bytes.
+  # Ceiling on one response body read back, in bytes. Minimum 1; zero is
+  # refused at boot, for the same reason as maxRequestBytes above.
   maxResponseBytes: 1048576
   # none | bearer | hmac | oidc | sigv4. Every field a non-"none" scheme needs
   # beyond this one — a bearer token, an HMAC secret, an OIDC audience, a

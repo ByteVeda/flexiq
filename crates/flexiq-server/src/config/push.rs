@@ -369,8 +369,22 @@ pub fn from_env(env: &Env) -> Result<Option<PushTargetConfig>> {
          stale-job reaper rather than failing them retryably. Use 1 for a near-immediate drain \
          that still settles",
     )?;
-    let max_request_bytes = bytes(env, MAX_REQUEST_BYTES_VAR, DEFAULT_MAX_REQUEST_BYTES)?;
-    let max_response_bytes = bytes(env, MAX_RESPONSE_BYTES_VAR, DEFAULT_MAX_RESPONSE_BYTES)?;
+    let max_request_bytes = bytes(
+        env,
+        MAX_REQUEST_BYTES_VAR,
+        DEFAULT_MAX_REQUEST_BYTES,
+        "a zero request cap is smaller than the smallest payload there is, so every \
+         dispatch is refused as oversized before it is sent — and that refusal is not \
+         retryable, so every job dead-letters",
+    )?;
+    let max_response_bytes = bytes(
+        env,
+        MAX_RESPONSE_BYTES_VAR,
+        DEFAULT_MAX_RESPONSE_BYTES,
+        "a zero response cap makes any answer with a body oversized, so a target that \
+         replies with anything at all fails its job non-retryably however it actually \
+         went",
+    )?;
     let auth = parse_auth(env)?;
 
     Ok(Some(PushTargetConfig {
@@ -444,13 +458,22 @@ fn seconds(env: &Env, key: &str, default: Duration, zero_means: &str) -> Result<
 }
 
 /// Read a whole number of bytes, or `default` when the variable is unset.
-fn bytes(env: &Env, key: &str, default: usize) -> Result<usize> {
-    match value(env, key) {
-        None => Ok(default),
-        Some(raw) => raw
-            .parse()
-            .with_context(|| format!("{key} must be a whole number of bytes, got '{raw}'")),
+///
+/// Zero is refused, for the reason [`seconds`] refuses it: a cap of zero is
+/// not "no cap", it is a cap nothing can satisfy, and what an operator sees is
+/// every job failing for a reason that does not mention the setting they
+/// changed. `zero_means` says which failure it would be.
+fn bytes(env: &Env, key: &str, default: usize, zero_means: &str) -> Result<usize> {
+    let Some(raw) = value(env, key) else {
+        return Ok(default);
+    };
+    let parsed: usize = raw
+        .parse()
+        .with_context(|| format!("{key} must be a whole number of bytes, got '{raw}'"))?;
+    if parsed == 0 {
+        bail!("{key} must be greater than zero — {zero_means}");
     }
+    Ok(parsed)
 }
 
 /// Parse `AUTH_VAR` and the fields the chosen scheme needs.
@@ -616,16 +639,20 @@ mod tests {
         assert!(matches!(config.auth, PushAuthConfig::None));
     }
 
-    /// None of the three duration variables is a "no limit" switch: zero is a
-    /// deadline that has already passed, and the dispatch it kills looks like
-    /// a target that never answered rather than like a misconfiguration.
+    /// No push tunable is a "no limit" switch. For a duration, zero is a
+    /// deadline that has already passed; for a byte cap, zero is a ceiling
+    /// nothing fits under. Either way what an operator sees is every job
+    /// failing for a reason that does not mention the setting they changed,
+    /// so all five are refused at boot instead.
     #[cfg(feature = "http-target")]
     #[test]
-    fn a_zero_duration_is_refused_and_says_what_it_would_have_done() {
+    fn a_zero_tunable_is_refused_and_says_what_it_would_have_done() {
         for (key, expected) in [
             (TIMEOUT_VAR, "timeout"),
             (CONNECT_TIMEOUT_VAR, "handshake"),
             (DRAIN_VAR, "reaper"),
+            (MAX_REQUEST_BYTES_VAR, "oversized"),
+            (MAX_RESPONSE_BYTES_VAR, "oversized"),
         ] {
             let mut pairs = BASE.to_vec();
             pairs.push((key, "0"));
@@ -642,14 +669,19 @@ mod tests {
 
     #[cfg(feature = "http-target")]
     #[test]
-    fn a_one_second_duration_is_accepted() {
+    fn the_smallest_workable_tunable_is_accepted() {
         // The floor is zero, not some larger "sensible" number: a tight
-        // budget is an operator's call, an impossible one is not.
+        // budget is an operator's call, an impossible one is not. Same for a
+        // one-byte cap — absurd, but it is a cap, and refusing it would be
+        // this module inventing a policy rather than rejecting an
+        // impossibility.
         let mut pairs = BASE.to_vec();
         pairs.extend([
             (TIMEOUT_VAR, "1"),
             (CONNECT_TIMEOUT_VAR, "1"),
             (DRAIN_VAR, "1"),
+            (MAX_REQUEST_BYTES_VAR, "1"),
+            (MAX_RESPONSE_BYTES_VAR, "1"),
         ]);
         let config = from_env(&env(&pairs))
             .expect("one second is tight but possible")
@@ -658,6 +690,8 @@ mod tests {
         assert_eq!(config.request_timeout, Duration::from_secs(1));
         assert_eq!(config.connect_timeout, Duration::from_secs(1));
         assert_eq!(config.shutdown_drain, Duration::from_secs(1));
+        assert_eq!(config.max_request_bytes, 1);
+        assert_eq!(config.max_response_bytes, 1);
     }
 
     #[cfg(feature = "http-target")]
