@@ -59,13 +59,17 @@ struct TokenResponse {
 /// Four rules:
 ///
 /// - **A URL at all.** Anything `url::Url` cannot parse is a typo.
-/// - **`https`, or `http` only to a loopback host.** The client secret goes to
-///   this endpoint in a form body (or base64 in an `Authorization: Basic`
-///   header, which is encoding, not encryption), and the access token comes
-///   back the same way, so cleartext to anywhere but the host this process is
-///   already running on puts a credential on the wire. This is the same rule
-///   the push dispatch target's own URL obeys, for the same reason, and it is
-///   deliberately *not* the rule
+/// - **`https`, or `http` only to a loopback host *with the loopback
+///   relaxation enabled*.** The client secret goes to this endpoint in a form
+///   body (or base64 in an `Authorization: Basic` header, which is encoding,
+///   not encryption), and the access token comes back the same way, so
+///   cleartext to anywhere but the host this process is already running on
+///   puts a credential on the wire. Both halves are load-bearing: `localhost`
+///   is matched as a *name* here, and a name rule on the allowlist vouches for
+///   whatever it resolves to, so without `allow_loopback` a resolver answering
+///   a public address for `localhost` would turn this into cleartext to a
+///   remote host. This is the same rule the push dispatch target's own URL
+///   obeys, for the same reason, and it is deliberately *not* the rule
 ///   [`accept_env_endpoint`](crate::http::auth::metadata::accept_env_endpoint)
 ///   applies: that one vets a credential endpoint the *platform* placed in the
 ///   environment, which is `http` on loopback or link-local by construction,
@@ -105,11 +109,21 @@ pub(super) fn validate_token_url(
 
     match url.scheme() {
         "https" => {}
-        "http" if is_loopback_host(&url) => {}
+        // Both halves, not just the host — the same pair
+        // `worker::http_target`'s `cleartext_permitted` requires. The host
+        // alone is not enough because `localhost` is taken at its *name* here
+        // (nothing is resolved at construction), and a name rule on the
+        // allowlist vouches for whatever that name resolves to. With the
+        // relaxation off but `localhost` allowlisted, a resolver answering a
+        // public address would put the client secret on the wire in the clear.
+        // Requiring the knob is what makes "cleartext is only ever reaching
+        // this host" true rather than merely likely.
+        "http" if is_loopback_host(&url) && policy.allows_loopback() => {}
         _ => {
             return Err(AuthError::Config(
                 "oauth2 token_url must use https; http is accepted only for a loopback host \
-                 (127.0.0.0/8, ::1, or the name 'localhost')"
+                 (127.0.0.0/8, ::1, or the name 'localhost') and only with the loopback \
+                 relaxation enabled"
                     .to_string(),
             ))
         }
@@ -373,6 +387,36 @@ mod tests {
                 "{accepted} is https or a loopback sidecar, both of which stay reachable"
             );
         }
+
+        // Without the loopback relaxation, *every* cleartext URL is refused —
+        // loopback included. The host alone does not buy it, because
+        // `localhost` is matched as a name and a name rule vouches for
+        // whatever it resolves to: with the knob off and `localhost`
+        // allowlisted, a resolver answering a public address would otherwise
+        // have put the client secret on the wire in the clear.
+        let strict = EgressPolicy::new(
+            Allowlist::parse("issuer.example.com,127.0.0.0/8,::1,localhost")
+                .expect("test allowlist parses"),
+            false,
+        );
+        for refused in [
+            "http://127.0.0.1:8080/token",
+            "http://[::1]:8080/token",
+            "http://localhost:8080/token",
+        ] {
+            let error = match validate_token_url(refused, &strict) {
+                Err(error) => error,
+                Ok(_) => panic!("{refused} is cleartext without the loopback relaxation"),
+            };
+            assert!(
+                error.to_string().contains("relaxation"),
+                "the refusal must say which half is missing: {error}"
+            );
+        }
+        assert!(
+            validate_token_url("https://issuer.example.com/token", &strict).is_ok(),
+            "the knob gates cleartext only; https is unaffected"
+        );
     }
 
     /// The token URL is the second operator-supplied host in this subsystem,
@@ -650,40 +694,105 @@ mod tests {
         );
     }
 
+    /// The policy governs the token URL, and it does so at **construction**.
+    ///
+    /// This used to prove the point with a runtime refusal: a token URL the
+    /// policy disallowed, refused inside resolution. That path no longer
+    /// exists, and its absence is the fix — every way a token URL can be
+    /// refused is now a construction-time check, so an operator sees it at
+    /// boot rather than on the first dispatch. What is left to show is the
+    /// pair: a host the policy names is dialled through the client that was
+    /// handed in, and a host it does not name never produces a signer at all.
     #[tokio::test]
-    async fn an_oauth2_token_url_goes_through_the_guarded_client() {
+    async fn the_policy_gates_the_token_url_at_construction() {
         let stub = StubServer::start(200, r#"{"access_token":"tok","expires_in":3600}"#).await;
-        // `127.0.0.1` is an IP literal and never reaches the pinned
-        // resolver at all (see `egress.rs`'s `permits_host` doc) — using
-        // `localhost` here is what actually exercises the guard, the same
-        // technique `resolver.rs`'s own
-        // `localhost_is_refused_by_a_policy_that_does_not_allow_it` uses.
         let port = stub
             .base_url()
             .rsplit(':')
             .next()
             .expect("stub base url has a port")
             .to_string();
-        // The query is the threat model for the `without_url` assertion
-        // below: RFC 6749 has no place for one, but nothing refuses it, and
-        // an operator who puts a tenant key there must not find it in a log.
-        let disallowed_url = format!("http://localhost:{port}/token?tenant=q1w2e3r4");
+        let token_url = format!("http://localhost:{port}/token");
 
-        // Names `localhost`, so the construction-time allowlist check passes
-        // and this test still reaches the *runtime* guard it is about — but
-        // leaves the loopback relaxation off, so what `localhost` resolves to
-        // is refused unconditionally inside resolution. That is the bound a
-        // name rule cannot vouch past, exercised end to end.
+        let build = |entries: &str, allow_loopback: bool| {
+            let policy = Arc::new(EgressPolicy::new(
+                Allowlist::parse(entries).expect("test allowlist parses"),
+                allow_loopback,
+            ));
+            let dispatch = DispatchClient::new(policy, Duration::from_secs(1))
+                .expect("a policy and a timeout are enough to build a client");
+            let config = super::super::OidcConfig {
+                source: super::super::OidcSource::OAuth2ClientCredentials {
+                    token_url: token_url.clone(),
+                    client_id: "id".to_string(),
+                    client_secret: Secret::new("secret"),
+                    scope: None,
+                    style: ClientAuthStyle::ClientSecretPost,
+                },
+                audience: "https://push.example.com".to_string(),
+            };
+            super::super::OidcSigner::new(config, &dispatch)
+        };
+
+        // A policy that does not name the host: no signer, and nothing dialled.
+        // `OidcSigner` carries no `Debug`, so the `Ok` arm is unwrapped by hand.
+        match build("elsewhere.example.com", true) {
+            Err(AuthError::Config(reason)) => {
+                assert!(reason.contains("allowlist"), "{reason}")
+            }
+            Err(other) => panic!("expected a Config refusal, got {other:?}"),
+            Ok(_) => panic!("a host the policy does not name must not produce a signer"),
+        }
+        assert_eq!(
+            stub.request_count(),
+            0,
+            "a token URL refused at construction is never dialled"
+        );
+
+        // The same URL, named by the policy and with the relaxation the
+        // cleartext rule also requires: the fetch goes out through the client
+        // the signer was handed.
+        let signer = build("localhost", true).expect("an allowlisted loopback host builds");
+        let target_url = url::Url::parse("https://push.example.com/hook").expect("test url parses");
+        let request_headers = reqwest::header::HeaderMap::new();
+        let request = crate::http::auth::SigningRequest {
+            method: "POST",
+            url: &target_url,
+            body: b"",
+            headers: &request_headers,
+        };
+        signer
+            .sign(&request)
+            .await
+            .expect("an allowlisted token endpoint answers");
+
+        assert_eq!(
+            stub.request_count(),
+            1,
+            "the token fetch is dialled through the client handed to the signer"
+        );
+    }
+
+    /// `AuthError::Transport`'s invariant, guarded where it is built: this
+    /// string reaches `cache.rs`'s refresh `warn!` and — through the push
+    /// dispatcher's `Refusal::Signing` — a stored job error. RFC 6749 has no
+    /// place for a query on a token URL, but nothing refuses one, and an
+    /// operator who puts a tenant key there must not find it in a log.
+    ///
+    /// Port 1 on loopback: allowlisted, so construction passes, and nothing
+    /// listens there, so the fetch fails without needing DNS or a network.
+    #[tokio::test]
+    async fn a_transport_failure_never_carries_the_token_url() {
         let policy = Arc::new(EgressPolicy::new(
-            Allowlist::parse("localhost").expect("test allowlist parses"),
-            false,
+            Allowlist::parse("127.0.0.0/8").expect("test allowlist parses"),
+            true,
         ));
         let dispatch = DispatchClient::new(policy, Duration::from_secs(1))
             .expect("a policy and a timeout are enough to build a client");
 
         let config = super::super::OidcConfig {
             source: super::super::OidcSource::OAuth2ClientCredentials {
-                token_url: disallowed_url,
+                token_url: "http://127.0.0.1:1/token?tenant=q1w2e3r4".to_string(),
                 client_id: "id".to_string(),
                 client_secret: Secret::new("secret"),
                 scope: None,
@@ -692,7 +801,7 @@ mod tests {
             audience: "https://push.example.com".to_string(),
         };
         let signer = super::super::OidcSigner::new(config, &dispatch)
-            .expect("construction does not need network access");
+            .expect("an allowlisted loopback token URL builds");
 
         let target_url = url::Url::parse("https://push.example.com/hook").expect("test url parses");
         let request_headers = reqwest::header::HeaderMap::new();
@@ -706,20 +815,17 @@ mod tests {
         let error = signer
             .sign(&request)
             .await
-            .expect_err("a policy that disallows loopback must refuse the token fetch");
-        assert!(matches!(error, AuthError::Transport(_)));
-        // `AuthError::Transport`'s invariant, guarded where it is built: this
-        // string reaches `cache.rs`'s refresh `warn!` and — through the push
-        // dispatcher's `Refusal::Signing` — a stored job error.
+            .expect_err("nothing listens on port 1");
+
+        assert!(matches!(error, AuthError::Transport(_)), "{error:?}");
         let rendered = error.to_string();
         assert!(
             !rendered.contains("q1w2e3r4"),
             "the token URL's query must not survive into the error: {rendered}"
         );
-        assert_eq!(
-            stub.request_count(),
-            0,
-            "a refused fetch must never reach the stub at all"
+        assert!(
+            !rendered.contains("127.0.0.1"),
+            "nor the host it was dialling: {rendered}"
         );
     }
 }

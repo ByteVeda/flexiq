@@ -296,12 +296,17 @@ and Azure Functions' native answer to "prove who is calling".
 The library API carries two further sources that the environment surface does
 not, one of which an embedder has to allowlist: **`OAuth2ClientCredentials`
 dials a token endpoint the operator configured, and that endpoint goes through
-the same egress guard as the dispatch target** — same `https`-unless-loopback
-rule, and its host has to be named on the same allowlist. Both are enforced
+the same egress guard as the dispatch target.** Same transport rule — `https`,
+or `http` only to a loopback host *and* only with the loopback relaxation
+enabled — and its host has to be named on the same allowlist. Both are enforced
 when the signer is built, not on the first dispatch, so a token URL the
-allowlist does not name stops the process at boot. The other three sources
-reach a compile-time-constant or platform-supplied host and are not
-allowlisted, because they cannot be pointed anywhere else.
+allowlist does not name stops the process at boot.
+
+The remaining sources are not allowlisted, because none of them can be pointed
+at a host an operator chose: `GoogleMetadata` and `AzureImds` reach a
+compile-time constant, `AzureAppService` reads a platform-supplied endpoint
+that is vetted separately as loopback-or-link-local, and `File` reaches no host
+at all — it re-reads a projected token off disk.
 
 ### `sigv4` — AWS Signature Version 4
 
