@@ -166,10 +166,22 @@ There is no durable-step equivalent under push, and no way to hand a job off
 mid-flight and pick it back up later: the whole task runs inside the single
 request the scheduler is holding open, for as long as
 `FLEXIQ_PUSH_TARGET_TIMEOUT` and the job's own timeout allow. That ceiling is
-yours to set, but the platform in front of your target sets one of its own,
-and it wins if it is the shorter of the two — **Cloud Run caps a request at 60
-minutes, and Lambda function URLs and API Gateway cap one at 15.** A task that
-legitimately needs longer than that has no path forward under push today;
+yours to set, but the platform in front of your target sets one of its own, and
+it wins if it is the shorter of the two:
+
+- **Cloud Run** caps a request at 60 minutes; the default is 5.
+- A **Lambda function URL** is bounded by the function's own timeout, which
+  caps at 15 minutes.
+- **API Gateway is shorter than either by a wide margin, and it is the one that
+  usually surprises people.** An HTTP API's integration timeout is 30 seconds
+  and cannot be raised at all. A REST API's is 29 seconds, raisable above that
+  by a service-quota increase on Regional and private REST APIs — but not on
+  edge-optimized ones, and AWS notes the increase may require lowering your
+  account's throttle quota in that Region. Behind API Gateway, the budget is
+  seconds, not minutes.
+
+A task that legitimately needs longer than the shortest of these has no path
+forward under push today;
 [issue #845](https://github.com/ByteVeda/flexiq/issues/845) is the tracked
 follow-up for a job that outlives one request.
 
