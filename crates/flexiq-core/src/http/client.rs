@@ -136,12 +136,11 @@ pub(crate) async fn read_bounded(response: reqwest::Response, cap: usize) -> Bod
             Ok(Some(chunk)) => {
                 let room = cap.saturating_sub(buffered.len());
                 if chunk.len() > room {
-                    // Keep what fits and drop the rest unexamined: the
-                    // overflow is evidence that the body continues past the
-                    // cap, and evidence is the only use it has. `room` is `0`
-                    // once the budget is already spent, so this appends
-                    // nothing and the slice is still in bounds.
-                    buffered.extend_from_slice(&chunk[..room]);
+                    // The overflow is evidence that the body continues past
+                    // the cap, and evidence is the only use it has: nothing of
+                    // this chunk is kept, because `Truncated` carries no bytes
+                    // and the caller refuses rather than storing half an
+                    // answer.
                     return BodyRead::Truncated;
                 }
                 buffered.extend_from_slice(&chunk);
