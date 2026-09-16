@@ -75,6 +75,10 @@ backend-documented differences.
   budgets, circuit breakers, a dead-letter queue with replay.
 - **Workers**: `Worker` builder + `TaskRegistry` for sync and async Rust
   handlers, heartbeat/registry with elected cluster reaps.
+- **Push dispatch** (`http-target` feature): POST a claimed job to an
+  operator-configured HTTP endpoint instead of waiting for an executor to
+  attach — bearer, HMAC-SHA256, OIDC or SigV4 auth, egress guarded by a
+  deny-by-default allowlist that pins DNS at connect.
 - **Pub/sub**: topics with durable/ephemeral subscriptions and fan-out on
   publish.
 - **Periodic tasks**: cron expressions with optional time zones.

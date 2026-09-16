@@ -15,6 +15,28 @@ underlying Rust crates are released together, in lock-step.
 Releases up to and including 0.23.0 were published under the project's former name, Taskito, and
 their entries below keep that name.
 
+## Unreleased
+
+### Added
+
+- **Push dispatch** (#843, #844). `FLEXIQ_PUSH_TARGET_URL` adds a second way for the scheduler to
+  reach an executor: instead of waiting for one to attach, it POSTs each claimed job straight to
+  an operator-configured HTTP endpoint — for a platform that starts a container from an inbound
+  request rather than running one continuously. Behind the `http-target` cargo feature, not yet
+  compiled into the published image.
+  Every dispatch goes through an egress guard: a deny-by-default allowlist, DNS vetted inside
+  resolution so the address dialled is the address checked, loopback/link-local/cloud metadata
+  refused whatever the allowlist says, and no redirects. Four outbound auth schemes prove the
+  scheduler's identity to the target: a static bearer token, HMAC-SHA256 with replay defence,
+  OIDC identity tokens (Cloud Run, Azure IMDS, Azure App Service), and AWS SigV4 (Lambda, API
+  Gateway). The wire contract a target implements against is
+  [`contracts/PUSH_DISPATCH_CONTRACT.md`](contracts/PUSH_DISPATCH_CONTRACT.md).
+  Three limits worth knowing before deploying it: a job has to finish inside one HTTP
+  request — Cloud Run caps that at 60 minutes, Lambda at 15 (#845 tracks lifting this);
+  `cancel()` abandons the request and fences the target's answer out rather than stopping the
+  target's own work (#846 tracks reaching it); and push dispatch does not honour `HTTP_PROXY` /
+  `HTTPS_PROXY` / `ALL_PROXY`, since a proxy would resolve the target outside the egress guard.
+
 ## 2.0.0
 
 Three things a queue could not do before: checkpoint work *inside* a job, be reached by a process

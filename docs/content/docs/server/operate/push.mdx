@@ -1,0 +1,230 @@
+---
+title: Push dispatch
+description: "The scheduler POSTs claimed jobs to your endpoint instead of waiting for an executor to attach: the environment variables, the egress guard, and the limits worth knowing before you deploy it."
+---
+
+`FLEXIQ_PUSH_TARGET_URL` adds a way to run work that has nothing in common with
+attach or the gRPC executor door: instead of an executor dialling in and
+holding a connection, the scheduler dials **out**, once per job, to an
+operator-configured URL. It exists for platforms that start a process from an
+inbound request — Cloud Run, Lambda, and similar — which have nothing that
+could hold an attach connection open in the first place.
+
+```bash
+FLEXIQ_DSN=postgres://user:pass@host/db \
+FLEXIQ_PUSH_TARGET_URL=https://executor.internal/hook \
+FLEXIQ_PUSH_TARGET_CAPACITY=10 \
+FLEXIQ_PUSH_TARGET_ALLOW=executor.internal \
+flexiq-server
+```
+
+Writing the target that receives that `POST` is
+[its own contract](https://github.com/ByteVeda/flexiq/blob/master/contracts/PUSH_DISPATCH_CONTRACT.md) —
+every header, the response table, and a worked example. This page is the
+operator half: turning it on, and what it costs you.
+
+## When to reach for it instead of attach
+
+Push is additive, not a replacement. If you can run a long-lived worker
+process at all — a container, a VM, anything that stays up — attach is still
+the better answer: it keeps the execution lease local to the process holding
+the work, makes `cancel()` actually stop something, and puts no load balancer
+or ingress between the scheduler and the job. Reach for push only when nothing
+in your deployment can hold a connection open — a platform that hands you a
+request and tears the process down when it is answered.
+
+`FLEXIQ_PUSH_TARGET_URL` and `FLEXIQ_LISTEN` **cannot both be set.** A
+`Worker` holds exactly one dispatcher, and running both would race two
+dispatchers for the same queues — a routing policy that has to be designed,
+not defaulted. Choose one per process; the gRPC **producer** door is
+unaffected either way, and can run alongside push on the same process — it is
+only the gRPC **executor** door that push has nothing to attach to, for the
+same reason the socket-based attach listener doesn't.
+
+## Environment variables
+
+Everything is optional except the first three, which turn the section on and
+are then required together.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FLEXIQ_PUSH_TARGET_URL` | Unset (off) | Where the scheduler POSTs a claimed job, e.g. `https://executor.internal/run` |
+| `FLEXIQ_PUSH_TARGET_CAPACITY` | **Required** | Jobs the target may run at once |
+| `FLEXIQ_PUSH_TARGET_ALLOW` | **Required** | Comma-separated hosts and CIDRs the target's resolved address must match |
+| `FLEXIQ_PUSH_TARGET_TIMEOUT` | `60` | Seconds one dispatch may take before it is abandoned as failed |
+| `FLEXIQ_PUSH_TARGET_CONNECT_TIMEOUT` | `5` | Seconds the connection may take to establish |
+| `FLEXIQ_PUSH_TARGET_DRAIN` | `30` | Seconds shutdown waits for in-flight dispatches before abandoning them |
+| `FLEXIQ_PUSH_TARGET_MAX_REQUEST_BYTES` | `8388608` (8 MiB) | Ceiling on one job's request body |
+| `FLEXIQ_PUSH_TARGET_MAX_RESPONSE_BYTES` | `1048576` (1 MiB) | Ceiling on one response body read back |
+| `FLEXIQ_PUSH_TARGET_AUTH` | `none` | `none` \| `bearer` \| `hmac` \| `oidc` \| `sigv4` |
+
+Push dispatch is behind its own cargo feature, `http-target`, so a binary that
+never dials out does not have to compile in an HTTP client and a TLS stack.
+**The published `flexiq-server` image does not currently build it in** —
+unlike `postgres`, `redis` and `grpc`, which the release image does carry —
+so `FLEXIQ_PUSH_TARGET_URL` set against that image fails at boot, naming the
+missing feature rather than silently never dialling out. Build your own image
+with `--features http-target` (alongside whichever backends you need) until
+the published one carries it.
+
+The four auth schemes each read a few more variables, only when
+`FLEXIQ_PUSH_TARGET_AUTH` selects them:
+
+| Variable | For | Meaning |
+| --- | --- | --- |
+| `FLEXIQ_PUSH_TARGET_TOKEN` | `bearer` (required) | The bearer secret |
+| `FLEXIQ_PUSH_TARGET_HMAC_SECRET` | `hmac` (required) | The HMAC-SHA256 signing secret |
+| `FLEXIQ_PUSH_TARGET_HMAC_KEY_ID` | `hmac` (optional) | Sent alongside the signature, so a receiver holding two secrets mid-rotation knows which one to check against |
+| `FLEXIQ_PUSH_TARGET_OIDC_SOURCE` | `oidc` (required) | `google` \| `azure-imds` \| `azure-app-service` |
+| `FLEXIQ_PUSH_TARGET_OIDC_AUDIENCE` | `oidc` (required) | The `aud` claim the receiver checks |
+| `FLEXIQ_PUSH_TARGET_AZURE_CLIENT_ID` | `oidc` + `azure-imds` (optional) | A user-assigned identity's client id |
+| `FLEXIQ_PUSH_TARGET_AZURE_OBJECT_ID` | `oidc` + `azure-imds` (optional) | A user-assigned identity's object id |
+| `FLEXIQ_PUSH_TARGET_AZURE_MSI_RES_ID` | `oidc` + `azure-imds` (optional) | A user-assigned identity's Azure resource id |
+| `FLEXIQ_PUSH_TARGET_AWS_SOURCE` | `sigv4` (optional) | `default-chain` (default) \| `environment` \| `container` \| `imds` |
+| `FLEXIQ_PUSH_TARGET_AWS_REGION` | `sigv4` (optional) | Overrides the region inferred from the target URL |
+| `FLEXIQ_PUSH_TARGET_AWS_SERVICE` | `sigv4` (optional) | Overrides the service inferred from the target URL |
+
+At most one of the three Azure identity selectors may be set — Azure IMDS
+takes one identity, and more than one leaves the server to guess which. The
+full scheme write-up, including the HMAC string-to-sign, is in
+[the contract](https://github.com/ByteVeda/flexiq/blob/master/contracts/PUSH_DISPATCH_CONTRACT.md#the-four-auth-schemes).
+
+## Why `CAPACITY` and `ALLOW` are required
+
+Neither has a default, and neither can be inferred.
+
+**`CAPACITY`** because an attached executor announces its own slots in
+`hello`, and a gRPC executor stream does the same — the scheduler reads
+concurrency off the wire. A push target sends no `hello` at all; it is a URL,
+not a connection, and nothing about it carries a number. Leave this unset and
+there is nothing for the scheduler to size dispatch concurrency from.
+
+**`ALLOW`** because the URL you configure is itself operator input — exactly
+the kind of value a copy-paste error, a stale environment variable, or a
+compromised deployment pipeline could point somewhere you did not intend. An
+allowlist that defaulted to "permit whatever host the URL already names"
+would not be a guard at all, just the same value written twice under two
+names. Naming the destination separately, in its own variable, is what turns
+this into an actual check rather than an echo.
+
+## The egress guard
+
+Every push target is dispatched through the same guard, regardless of auth
+scheme, and it runs whether or not you think you need it:
+
+- **Deny by default.** `FLEXIQ_PUSH_TARGET_ALLOW` is a comma-separated list of
+  exact hostnames, `.suffix` entries for a name and its subdomains, and CIDR
+  networks. Nothing outside that list is reachable — an allowlist naming
+  nothing fails to start rather than quietly denying everything, so an empty
+  value is a configuration error, not a valid "deny all".
+- **DNS is vetted where it is resolved, not before.** The addresses a name
+  resolves to are checked at the moment of connection, inside resolution
+  itself, so the addresses the socket actually dials are the exact addresses
+  that just passed the check. Vetting a name earlier and dialling later would
+  leave a window for the name to re-resolve to something else in between — a
+  DNS-rebinding attack works in exactly that window, and this guard has none.
+- **Loopback, link-local and cloud metadata are refused whatever the
+  allowlist says.** These are not the operator's to grant back: they reach the
+  host itself and whatever credential endpoint sits on it — `169.254.169.254`
+  hands out cloud IAM credentials to anything that asks. There is no
+  environment variable that reopens this; the one that would ask for it,
+  `FLEXIQ_PUSH_TARGET_ALLOW_PRIVATE`, is rejected outright at boot, naming
+  itself, rather than silently ignored.
+- **No redirects.** A `3xx` is a refusal, never a followed hop — a redirect is
+  exactly the kind of indirection an allowlist cannot see through.
+- **Request and response ceilings.** `FLEXIQ_PUSH_TARGET_MAX_REQUEST_BYTES`
+  bounds what the scheduler will build as a request body; a response over
+  `FLEXIQ_PUSH_TARGET_MAX_RESPONSE_BYTES` is refused outright rather than read
+  in truncated form, because a partial body is not what the target said and
+  must not become a job result.
+
+## A job has to finish inside one HTTP request
+
+There is no durable-step equivalent under push, and no way to hand a job off
+mid-flight and pick it back up later: the whole task runs inside the single
+request the scheduler is holding open, for as long as
+`FLEXIQ_PUSH_TARGET_TIMEOUT` and the job's own timeout allow. That ceiling is
+yours to set, but the platform in front of your target sets one of its own,
+and it wins if it is the shorter of the two — **Cloud Run caps a request at 60
+minutes, and Lambda function URLs and API Gateway cap one at 15.** A task that
+legitimately needs longer than that has no path forward under push today;
+[issue #845](https://github.com/ByteVeda/flexiq/issues/845) is the tracked
+follow-up for a job that outlives one request.
+
+A target that answers `202 Accepted` — "I took it, I have not finished" — does
+not buy more time either: push dispatch has nothing further to wait on, and
+treats an accepted-but-unsettled job as a failure rather than polling for a
+later answer.
+
+## `cancel()` does not stop the target's work
+
+Under attach, cancelling a job sends a `cancel` frame and the executor stops.
+Under push, there is no frame to send and no connection to send it on — the
+scheduler already handed the whole job to the target in one request. Cancelling
+a job dispatched this way:
+
+- **abandons the request** the scheduler was holding open,
+- **settles the attempt `Cancelled`** in FlexiQ's own state, and
+- **fences the target's eventual answer out** when it does arrive.
+
+The target's process is not told, keeps running, and **its side effects still
+happen.** A charge that was about to go through goes through; an email that
+was about to send, sends. Nothing about `cancel()` reaches the target itself
+under push — that is
+[issue #846](https://github.com/ByteVeda/flexiq/issues/846), the tracked
+follow-up for reaching the target's own process. Until it lands, treat a
+push-dispatched job's `cancel()` as "FlexiQ stops waiting", never as "the work
+stops".
+
+## No egress proxy, yet
+
+Push dispatch does not honour `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY`. A
+proxy would resolve the target's hostname **itself**, on the proxy's own
+network path — which moves the one lookup this guard exists to check outside
+the guard entirely. There is no way to vet an address a proxy resolves for
+you, so this is refused rather than silently insecure:
+`FLEXIQ_PUSH_TARGET_PROXY` is rejected outright at boot if set, naming itself
+in the error. **A deployment behind a mandatory egress proxy cannot use push
+dispatch yet.**
+
+## A deployment note on header logging
+
+Every push request carries `x-flexiq-lease` when the scheduler held one. It is
+an attempt-scoped capability — the token that identifies which execution claim
+a job was dispatched under, and whoever holds it holds the ability to settle
+that job's current attempt. It is narrow: it expires the moment the attempt
+settles or is superseded, and the scheduler refuses a retired one outright. But
+it is still a credential-shaped value, and some platforms (an API gateway's
+access log, a debugging reverse proxy, a request logger enabled by default)
+log every inbound request header without being asked to. Treat
+`x-flexiq-lease` the way you would a bearer token in that logging surface, and
+configure header redaction if your platform in front of the target offers one.
+
+## With Helm
+
+`push.enabled` needs a URL, a capacity and an allowlist — nothing else has a
+sensible default, so the chart fails at `helm template` time rather than
+starting a target that will not construct:
+
+```yaml
+push:
+  enabled: true
+  url: https://executor.internal/hook
+  capacity: 10
+  allow: executor.internal
+```
+
+`push.enabled` and `attach.enabled` are refused together, the same way the
+binary refuses `FLEXIQ_PUSH_TARGET_URL` and `FLEXIQ_LISTEN` together. Every
+auth-scheme variable beyond `push.auth` itself — a bearer token, an HMAC
+secret, an OIDC audience — goes through `extraEnv`, reading a secret-bearing
+one from a Secret you create via `valueFrom.secretKeyRef`; this chart does not
+give each of the four schemes its own typed value.
+
+**There is no Service and no containerPort for this role.** A push target
+dials out; unlike every other role in this chart, it opens no listener for a
+Service to front. A release running push alone has no HTTP or TCP surface at
+all for Kubernetes to probe, so it carries no liveness or readiness probe
+either — the pod is considered healthy once it is running, and restarts only
+on a process exit. Enable `dashboard.enabled` alongside push if you want a
+real health signal.

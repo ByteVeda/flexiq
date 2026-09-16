@@ -147,6 +147,28 @@ Never inspect it, never construct one, never reuse one across attempts.
 job. A frame that should carry a lease and does not is dropped, and what it was
 reporting is a job that ran without its result being recorded.
 
+## What `cancel()` promises, per topology
+
+`cancel` above is this door's frame, and what it does for you follows the same
+rule an attached executor gets — the scheduler sends it and you stop. That is
+not true everywhere FlexiQ dispatches a job, and the difference is worth
+knowing before you build against one topology and assume it generalizes:
+
+| Topology | What `cancel()` promises |
+|---|---|
+| Native | The handler observes the storage flag and stops. |
+| Attach | The scheduler sends a `cancel` frame; the executor stops. |
+| Push | The request is abandoned, the attempt settles `Cancelled`, the target keeps running and its side effects still happen, and its result is fenced out on arrival. |
+
+An executor built against this page — attach, over `flexiq.executor.v1` or the
+socket protocol either one — is the middle row: cancellation is real, because
+there is a connection to send it down. [Push dispatch](/server/operate/push)
+has no such connection; the scheduler can stop waiting on a job, but it cannot
+reach into the target's process and stop it.
+[Issue #846](https://github.com/ByteVeda/flexiq/issues/846) is the tracked
+follow-up that changes the push row — until it lands, that gap is a known one,
+not an oversight.
+
 ## Heartbeat is a separate RPC
 
 `Heartbeat` is unary and deliberately off the dispatch stream: a busy stream and
