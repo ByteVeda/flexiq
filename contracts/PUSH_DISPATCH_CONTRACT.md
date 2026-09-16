@@ -253,10 +253,11 @@ identity, and signing the host would make failures behind a proxy that
 rewrites `Host` look like key failures instead.
 
 A reference verifier ships in `flexiq-core`, at
-`flexiq_core::http::auth::hmac::verify` — read it (or its module, `hmac.rs`)
-for the exact skew check, the `v1=` version guard, and the constant-time
-comparison a target implementing this scheme in another language needs to
-match. Its default skew window is five minutes.
+`flexiq_core::http::auth::verify` — read it for the exact skew check, the
+`v1=` version guard, and the constant-time comparison a target implementing
+this scheme in another language needs to match. `string_to_sign`,
+`HmacRejection`, `DEFAULT_MAX_SKEW` and the four header constants above are
+re-exported beside it. Its default skew window is five minutes.
 
 ### `oidc` — a signed identity token
 
