@@ -257,6 +257,17 @@ deliberately **not** signed — a per-target secret already binds target
 identity, and signing the host would make failures behind a proxy that
 rewrites `Host` look like key failures instead.
 
+**This scheme signs no `x-flexiq-*` header.** Its coverage is exactly the six
+fields above, so "replay-resistant" binds the body, the method, the
+request-target, the timestamp and the nonce — not *which job* the request says
+it is. `x-flexiq-job-id`, `x-flexiq-task`, `x-flexiq-lease` and
+`x-flexiq-idempotency-key` are unauthenticated under HMAC: an on-path attacker
+who cannot forge a signature can still rewrite them and the signature still
+verifies. Dispatch over TLS, and do not read those headers as if the signature
+covered them. SigV4 is the one scheme that does cover them — it canonicalises
+every header present when it signs, so the whole `x-flexiq-*` set appears in
+its `SignedHeaders`.
+
 A reference verifier ships in `flexiq-core`, at
 `flexiq_core::http::auth::verify` — read it for the exact skew check, the
 `v1=` version guard, and the constant-time comparison a target implementing

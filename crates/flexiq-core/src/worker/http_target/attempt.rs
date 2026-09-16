@@ -222,7 +222,10 @@ async fn attempt(
         // afterwards but the signer's own output: a scheme that covers
         // headers signs what it was given, and a header added later makes a
         // correct receiver canonicalise a different request and reject a
-        // valid signature.
+        // valid signature. SigV4 is the scheme that reads this map — every
+        // header in it lands in `SignedHeaders`, `x-flexiq-*` included. HMAC
+        // covers six fixed fields and none of these, so a target verifying
+        // HMAC has nothing authenticating which job it was handed.
         let signed = signer
             .sign(&SigningRequest {
                 method: "POST",
