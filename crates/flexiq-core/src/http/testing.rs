@@ -50,6 +50,10 @@ impl Script {
 
 struct Inner {
     script: Script,
+    /// Bytes to add to the advertised `Content-Length` without sending them,
+    /// so the peer sees the body break part-way through. `0` for an ordinary
+    /// stub. See [`StubServer::start_truncating`].
+    declared_extra: usize,
     /// The response index and this list's length must agree: under
     /// concurrent connections, a response chosen from a separately
     /// incremented counter could pair with the wrong recorded request.
@@ -68,7 +72,7 @@ pub(crate) struct StubServer {
 impl StubServer {
     /// Bind `127.0.0.1:0` and answer every request with `status` and `body`.
     pub(crate) async fn start(status: u16, body: impl Into<String>) -> Self {
-        Self::start_with(Script::Fixed(status, body.into())).await
+        Self::start_with(Script::Fixed(status, body.into()), 0).await
     }
 
     /// Answer each request from the queue in turn, then repeat the last.
@@ -77,10 +81,25 @@ impl StubServer {
             !responses.is_empty(),
             "a scripted stub needs at least one response"
         );
-        Self::start_with(Script::Sequence(responses)).await
+        Self::start_with(Script::Sequence(responses), 0).await
     }
 
-    async fn start_with(script: Script) -> Self {
+    /// Answer with `status` and `body`, but advertise `missing` bytes more
+    /// than are sent, then close.
+    ///
+    /// The peer reads a body that ends before its declared `Content-Length`
+    /// and reports it as a read error rather than a clean end of body — which
+    /// is the only way to exercise a caller that has to tell those two apart.
+    /// A `missing` of `0` is an ordinary, complete response.
+    pub(crate) async fn start_truncating(
+        status: u16,
+        body: impl Into<String>,
+        missing: usize,
+    ) -> Self {
+        Self::start_with(Script::Fixed(status, body.into()), missing).await
+    }
+
+    async fn start_with(script: Script, declared_extra: usize) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("stub binds an ephemeral loopback port");
@@ -93,6 +112,7 @@ impl StubServer {
 
         let inner = Arc::new(Inner {
             script,
+            declared_extra,
             received: Mutex::new(Vec::new()),
         });
 
@@ -194,7 +214,9 @@ async fn serve_one(mut socket: TcpStream, inner: Arc<Inner>) {
     let head = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n",
         reason = reason_phrase(status),
-        len = response_body.len(),
+        // Ordinarily the body's own length; `declared_extra` over-declares it
+        // so the connection closes mid-body — see `start_truncating`.
+        len = response_body.len() + inner.declared_extra,
     );
     let _ = socket.write_all(head.as_bytes()).await;
     let _ = socket.write_all(response_body.as_bytes()).await;

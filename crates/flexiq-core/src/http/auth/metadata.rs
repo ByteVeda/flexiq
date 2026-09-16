@@ -255,7 +255,7 @@ impl MetadataClient {
             });
         }
 
-        let body = read_capped(response, MAX_BODY_BYTES).await;
+        let body = read_capped(response, MAX_BODY_BYTES).await?;
         Ok(String::from_utf8_lossy(&body).into_owned())
     }
 }
@@ -303,7 +303,17 @@ fn build_client() -> Result<reqwest::Client, AuthError> {
 /// A cap of its own, separate from `client::read_bounded`'s: a credential
 /// document or a JWT is at most a few KB, and this module has no
 /// dispatcher-sized response to plan around.
-async fn read_capped(response: reqwest::Response, cap: usize) -> Vec<u8> {
+///
+/// **A clean end of body and a broken connection are not the same thing
+/// here.** Returning the bytes gathered so far on a read error would hand
+/// `fetch` a partial credential document as if it were complete: a truncated
+/// JWT still has three dot-separated segments and a readable `exp`, so the
+/// caller would present a corrupt token rather than diagnose it, and would
+/// classify a retryable network failure as a permanent
+/// [`AuthError::CredentialShape`]. The error is
+/// [`AuthError::Transport`] instead, built from
+/// [`reqwest::Error::without_url`] per that variant's own invariant.
+async fn read_capped(response: reqwest::Response, cap: usize) -> Result<Vec<u8>, AuthError> {
     let mut response = response;
     let mut buffered = Vec::new();
     while buffered.len() < cap {
@@ -312,14 +322,13 @@ async fn read_capped(response: reqwest::Response, cap: usize) -> Vec<u8> {
                 let room = cap - buffered.len();
                 buffered.extend_from_slice(&chunk[..chunk.len().min(room)]);
             }
-            // A clean end of body and a broken connection are both "stop
-            // reading" here: `fetch` only ever returns the bytes gathered so
-            // far, never a distinct truncation signal, so the two need no
-            // separate handling.
-            _ => break,
+            Ok(None) => break,
+            Err(error) => {
+                return Err(AuthError::Transport(error.without_url().to_string()));
+            }
         }
     }
-    buffered
+    Ok(buffered)
 }
 
 /// Accept an endpoint URL that arrived from the process environment.
@@ -591,6 +600,42 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains(MetadataEndpoint::GoogleIdentity.label()));
         assert!(!message.contains("leaked-secret-body"));
+    }
+
+    /// Regression: the loop used to treat a mid-body read error as the end of
+    /// the body and hand `fetch` the bytes gathered so far. A truncated JWT
+    /// still has three dot-separated segments and a readable `exp`, so the
+    /// caller presented a corrupt token instead of diagnosing it — and a
+    /// retryable network failure was reported as a permanent shape error.
+    #[tokio::test]
+    async fn a_body_that_breaks_mid_read_is_a_transport_error() {
+        // A header segment, a payload segment, and a third the peer never
+        // sends: parseable as a JWT by anything that only counts dots.
+        let stub =
+            crate::http::testing::StubServer::start_truncating(200, "eyJhbGci.eyJleHAi.", 64).await;
+        let client = MetadataClient::with_base_url(
+            url::Url::parse(&stub.base_url()).expect("stub url parses"),
+        )
+        .expect("test client builds");
+
+        let error = client
+            .fetch(
+                &MetadataEndpoint::GoogleIdentity,
+                reqwest::Method::GET,
+                &[],
+                &[],
+            )
+            .await
+            .expect_err("a body that ends before its Content-Length is not a complete answer");
+
+        assert!(
+            matches!(error, AuthError::Transport(_)),
+            "expected Transport, got {error:?}"
+        );
+        assert!(
+            error.retryable(),
+            "a broken connection is worth another attempt"
+        );
     }
 
     #[tokio::test]

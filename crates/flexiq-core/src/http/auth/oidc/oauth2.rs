@@ -171,7 +171,7 @@ pub(super) async fn fetch(
         });
     }
 
-    let body = read_capped(response).await;
+    let body = read_capped(response).await?;
     let parsed: TokenResponse =
         serde_json::from_slice(&body).map_err(|_| AuthError::CredentialShape {
             endpoint: LABEL,
@@ -199,7 +199,13 @@ const MAX_BODY_BYTES: usize = 16 * 1024;
 /// operator's token URL through the guarded `DispatchClient` instead — a
 /// different trust boundary, sharing only the cap's rationale, not its
 /// implementation.
-async fn read_capped(response: reqwest::Response) -> Vec<u8> {
+///
+/// **A clean end of body and a broken connection are not the same thing
+/// here**, mirroring `metadata.rs`'s own `read_capped` for the same reason:
+/// returning the bytes gathered so far would let a half-read token response
+/// be parsed as if it were whole, and would report a retryable network
+/// failure as a permanent [`AuthError::CredentialShape`].
+async fn read_capped(response: reqwest::Response) -> Result<Vec<u8>, AuthError> {
     let mut response = response;
     let mut buffered = Vec::new();
     while buffered.len() < MAX_BODY_BYTES {
@@ -208,13 +214,16 @@ async fn read_capped(response: reqwest::Response) -> Vec<u8> {
                 let room = MAX_BODY_BYTES - buffered.len();
                 buffered.extend_from_slice(&chunk[..chunk.len().min(room)]);
             }
-            // A clean end of body and a broken connection are both "stop
-            // reading" here, mirroring `metadata.rs`'s own `read_capped`:
-            // this function only ever returns the bytes gathered so far.
-            _ => break,
+            Ok(None) => break,
+            // `without_url`, never the bare `Display`, for the reason
+            // `AuthError::Transport`'s own doc gives: the operator's token
+            // URL may carry a credential in its query.
+            Err(error) => {
+                return Err(AuthError::Transport(error.without_url().to_string()));
+            }
         }
     }
-    buffered
+    Ok(buffered)
 }
 
 /// The client-credentials form body: `grant_type` always, `client_id` and
@@ -340,6 +349,41 @@ mod tests {
             url::Url::parse("https://push.example.com/hook").expect("test url parses"),
             HeaderMap::new(),
         )
+    }
+
+    /// Regression, the twin of `metadata.rs`'s own: the loop used to read a
+    /// mid-body break as the end of the body, so a half-delivered token
+    /// response was parsed as if it were whole and a retryable network
+    /// failure was reported as a permanent `CredentialShape`.
+    #[tokio::test]
+    async fn a_token_body_that_breaks_mid_read_is_a_transport_error() {
+        let stub = StubServer::start_truncating(200, r#"{"access_token":"tok","expire"#, 64).await;
+
+        // `Expiring<String>` carries no `Debug` — it holds a credential — so
+        // `expect_err` cannot be used here; the `Ok` arm is unwrapped by hand.
+        let result = fetch(
+            &reqwest::Client::new(),
+            &token_url(&stub),
+            "id",
+            &Secret::new("secret"),
+            None,
+            ClientAuthStyle::ClientSecretPost,
+            "",
+        )
+        .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a body that ends before its Content-Length is not a complete answer"),
+        };
+
+        assert!(
+            matches!(error, AuthError::Transport(_)),
+            "expected Transport, got {error:?}"
+        );
+        assert!(
+            error.retryable(),
+            "a broken connection is worth another attempt"
+        );
     }
 
     #[tokio::test]

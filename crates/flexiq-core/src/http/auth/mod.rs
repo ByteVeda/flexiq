@@ -140,7 +140,14 @@ pub enum AuthError {
         /// (`"not valid JSON"`, `"expires_in is not an integer"`, and so on).
         reason: &'static str,
     },
-    /// The credential fetch never got a response.
+    /// The credential fetch never produced a complete response: no response
+    /// at all, or a body that broke part-way through being read.
+    ///
+    /// A partial body is this and not [`Self::CredentialShape`] on purpose. A
+    /// truncated JWT still has three dot-separated segments and a readable
+    /// `exp`, so reading one as a shape error would present a corrupt token
+    /// instead of diagnosing it — and would make a retryable failure
+    /// permanent.
     ///
     /// **Invariant every construction site must keep: build this from
     /// [`reqwest::Error::without_url`], never from the bare `Display`.**
