@@ -455,7 +455,11 @@ fn parse_aws_source(env: &Env) -> Result<PushAwsSource> {
 /// Remove push-target secrets from the process environment once they are
 /// parsed, so neither a bearer token nor an HMAC secret survives into
 /// `/proc/<pid>/environ`, `ps`, or a crash dump. Mirrors
-/// `listen::scrub_attach_token`.
+/// `listen::scrub_attach_token` — one `remove_var` per secret rather than a
+/// shared `fn scrub_vars(names: &[&str])`: two literal calls already read as
+/// clearly as a loop over a two-element array would, and keeping this
+/// function's body the same shape as `scrub_attach_token`'s is worth more
+/// than the line saved by generalising two call sites.
 pub fn scrub_push_target_secrets() {
     // Called once from `main`, before any thread that reads the environment
     // has been spawned.
@@ -497,11 +501,15 @@ mod tests {
         assert_eq!(config.url, "https://push.example.com/hook");
         assert_eq!(config.capacity, 10);
         assert!(config.allow.permits_host("push.example.com"));
-        assert_eq!(config.request_timeout, DEFAULT_REQUEST_TIMEOUT);
-        assert_eq!(config.connect_timeout, DEFAULT_CONNECT_TIMEOUT);
-        assert_eq!(config.shutdown_drain, DEFAULT_SHUTDOWN_DRAIN);
-        assert_eq!(config.max_request_bytes, DEFAULT_MAX_REQUEST_BYTES);
-        assert_eq!(config.max_response_bytes, DEFAULT_MAX_RESPONSE_BYTES);
+        // Asserted against the literals the brief specifies, not against the
+        // `DEFAULT_*` constants under test: pinning to the constant would
+        // still pass if the constant itself were wrong, proving only that the
+        // wiring moved a value, not that the value is the specified one.
+        assert_eq!(config.request_timeout, Duration::from_secs(60));
+        assert_eq!(config.connect_timeout, Duration::from_secs(5));
+        assert_eq!(config.shutdown_drain, Duration::from_secs(30));
+        assert_eq!(config.max_request_bytes, 8 * 1024 * 1024);
+        assert_eq!(config.max_response_bytes, 1024 * 1024);
         assert!(matches!(config.auth, PushAuthConfig::None));
     }
 
@@ -717,6 +725,40 @@ mod tests {
         assert!(message.contains(AZURE_OBJECT_ID_VAR), "{message}");
     }
 
+    /// The edge case sitting right next to the one above: exactly one
+    /// selector set is the normal case, not a boundary, and must parse.
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_single_azure_identity_selector_is_accepted() {
+        let config = from_env(&env(&[
+            BASE[0],
+            BASE[1],
+            BASE[2],
+            (AUTH_VAR, "oidc"),
+            (OIDC_SOURCE_VAR, "azure-imds"),
+            (OIDC_AUDIENCE_VAR, "api://push"),
+            (AZURE_CLIENT_ID_VAR, "client-1"),
+        ]))
+        .expect("valid")
+        .expect("configured");
+        match config.auth {
+            PushAuthConfig::Oidc {
+                source:
+                    PushOidcSource::AzureImds {
+                        client_id,
+                        object_id,
+                        msi_res_id,
+                    },
+                ..
+            } => {
+                assert_eq!(client_id.as_deref(), Some("client-1"));
+                assert!(object_id.is_none());
+                assert!(msi_res_id.is_none());
+            }
+            other => panic!("expected AzureImds with client_id set, got {other:?}"),
+        }
+    }
+
     /// The only test in this module that touches the real process
     /// environment: every other test parses through the `Env` map, but
     /// scrubbing acts on `std::env` directly, the way
@@ -746,11 +788,21 @@ mod tests {
 
     #[test]
     fn no_secret_reaches_a_formatter() {
+        // The negative check alone (`assert_no_secret_leak`) would still pass
+        // if the whole struct printed a fixed placeholder for every variant —
+        // e.g. `f.write_str("<all redacted>")` regardless of shape. These
+        // positive assertions prove real, non-secret data survives alongside
+        // the redaction, so the impl is field-scoped rather than wholesale.
         let bearer_secret = "a1b2c3d4e5f6g7h8";
         let bearer = PushAuthConfig::Bearer {
             token: Secret::new(bearer_secret),
         };
-        assert_no_secret_leak(bearer_secret, &format!("{bearer:?}"));
+        let bearer_rendered = format!("{bearer:?}");
+        assert!(
+            bearer_rendered.contains("Bearer"),
+            "the variant name is not secret and must still print: {bearer_rendered}"
+        );
+        assert_no_secret_leak(bearer_secret, &bearer_rendered);
 
         let hmac_secret = "h8g7f6e5d4c3b2a1";
         let config = PushTargetConfig {
@@ -767,6 +819,15 @@ mod tests {
                 key_id: Some("key-1".to_string()),
             },
         };
-        assert_no_secret_leak(hmac_secret, &format!("{config:?}"));
+        let rendered = format!("{config:?}");
+        assert!(
+            rendered.contains("push.example.com"),
+            "the url is not secret and must still print: {rendered}"
+        );
+        assert!(
+            rendered.contains("key-1"),
+            "key_id is not secret and must still print: {rendered}"
+        );
+        assert_no_secret_leak(hmac_secret, &rendered);
     }
 }
