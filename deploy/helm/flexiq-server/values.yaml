@@ -169,9 +169,9 @@ push:
   connectTimeout: 5
   # Seconds shutdown waits for in-flight dispatches, and then again for each
   # to settle once abandoned — a shutdown runs to at most twice this. Minimum
-  # 1; zero is refused at boot. Kubernetes' own default grace period is 30s,
-  # shorter than the 60s worst case this value implies, so either lower this
-  # or raise terminationGracePeriodSeconds (bottom of this file) past 2 × it.
+  # 1; zero is refused at boot. With push.enabled, an unset
+  # terminationGracePeriodSeconds (bottom of this file) is computed from
+  # this value rather than left at Kubernetes' 30s default.
   drain: 30
   # Ceiling on one job's request body, in bytes. Minimum 1; zero is refused at
   # boot — a cap nothing fits under refuses every dispatch as oversized, and
@@ -222,15 +222,20 @@ topologySpreadConstraints: []
 podAnnotations: {}
 podLabels: {}
 
-# Seconds Kubernetes waits after SIGTERM before SIGKILL. Empty leaves the field
-# off the Deployment, which is Kubernetes' own 30s default.
+# Seconds Kubernetes waits after SIGTERM before SIGKILL. Empty leaves the
+# field off the Deployment when push is disabled, which is Kubernetes' own
+# 30s default — nothing here needs more.
 #
-# Push dispatch is the role that outgrows it: push.drain is spent twice, so a
-# push shutdown runs to at most 2 × push.drain — 60s at the chart's default —
-# and a 30s grace period cuts the second wait short, aborting in-flight
-# dispatches and leaving their leases to the stale-job reaper. With
-# push.enabled, either set this to more than 2 × push.drain or lower
-# push.drain to fit inside the period you set.
+# With push.enabled, empty is computed instead: 2 × push.drain (the full
+# shutdown budget — push.drain is spent twice, once waiting for in-flight
+# dispatches and again for each to settle once abandoned) plus a fixed 10s
+# margin for the pod's own teardown that the two drains don't cover — SIGTERM
+# delivery, the tokio runtime unwinding once the second drain returns, the
+# container runtime's own stop overhead. That is 70s at the chart's
+# push.drain default of 30.
+#
+# An explicit value always wins over the computed one, 0 included — a
+# deliberate "kill immediately, no grace".
 terminationGracePeriodSeconds: ""
 
 # The image already runs as nonroot:65532 and needs no write access to its own

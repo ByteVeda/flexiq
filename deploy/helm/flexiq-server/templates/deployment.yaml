@@ -43,14 +43,22 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "flexiq-server.serviceAccountName" . }}
-      {{- if not (or (kindIs "invalid" .Values.terminationGracePeriodSeconds) (eq (toString .Values.terminationGracePeriodSeconds) "")) }}
-      # Rendered only when set, so an unset value leaves Kubernetes' own 30s
-      # default in place rather than this chart restating it as its own.
-      #
-      # An explicit nil/"" test rather than `with`: `with` is falsey on `0`
-      # too, and 0 is a value Kubernetes accepts — it means kill immediately,
-      # no grace. An operator who asks for that must not silently get 30s.
+      {{- if eq (include "flexiq-server.terminationGraceIsSet" .) "true" }}
+      # Rendered exactly as set, including 0 — kill immediately, no grace. An
+      # explicit nil/"" test rather than `with`, which is falsey on 0 too: an
+      # operator asking for immediate kill must not silently get Kubernetes'
+      # 30s default back.
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | int64 }}
+      {{- else if .Values.push.enabled }}
+      # Unset, but push.enabled spends push.drain twice during shutdown —
+      # once waiting for in-flight dispatches, again for each to settle once
+      # abandoned — before Kubernetes' own 30s default would otherwise send
+      # SIGKILL. Computed instead of left absent: 2 × push.drain plus a 10s
+      # margin for the pod's own teardown the two drains don't cover (SIGTERM
+      # delivery, the tokio runtime unwinding after the second drain
+      # returns, the container runtime's own stop overhead). An explicit
+      # value above always wins over this.
+      terminationGracePeriodSeconds: {{ add (mul 2 (.Values.push.drain | int64)) 10 }}
       {{- end }}
       {{- with .Values.pullSecrets }}
       imagePullSecrets:

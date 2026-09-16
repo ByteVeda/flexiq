@@ -62,6 +62,18 @@ was supplied inline rather than pointed at an existing Secret.
 {{- end -}}
 
 {{/*
+Whether terminationGracePeriodSeconds was explicitly set — including to 0.
+
+`with` and a bare truthiness test are both falsey on 0, same trap either way:
+0 is a value Kubernetes accepts (kill immediately, no grace) and has to read
+as "set", not "unset", so an explicit nil/"" test is the only correct guard.
+Shared by deployment.yaml (what to render) and _validate.tpl (what to check).
+*/}}
+{{- define "flexiq-server.terminationGraceIsSet" -}}
+{{- if not (or (kindIs "invalid" .Values.terminationGracePeriodSeconds) (eq (toString .Values.terminationGracePeriodSeconds) "")) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
 The webhook's serving certificate, as `caCert` / `tlsCert` / `tlsKey` in
 base64.
 
