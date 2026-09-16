@@ -165,6 +165,33 @@ spec:
             - name: FLEXIQ_WEBHOOK_TLS_KEY
               value: /etc/flexiq/webhook-tls/tls.key
             {{- end }}
+            {{- if .Values.push.enabled }}
+            - name: FLEXIQ_PUSH_TARGET_URL
+              value: {{ .Values.push.url | quote }}
+            # int64 before quote on every number below: Helm decodes a
+            # values.yaml number as float64, and fmt's default formatting
+            # renders one this size in scientific notation —
+            # "8.388608e+06" fails FLEXIQ_PUSH_TARGET_*'s usize parse at boot
+            # instead of reading as bytes.
+            - name: FLEXIQ_PUSH_TARGET_CAPACITY
+              value: {{ .Values.push.capacity | int64 | quote }}
+            - name: FLEXIQ_PUSH_TARGET_ALLOW
+              value: {{ .Values.push.allow | quote }}
+            - name: FLEXIQ_PUSH_TARGET_TIMEOUT
+              value: {{ .Values.push.timeout | int64 | quote }}
+            - name: FLEXIQ_PUSH_TARGET_CONNECT_TIMEOUT
+              value: {{ .Values.push.connectTimeout | int64 | quote }}
+            - name: FLEXIQ_PUSH_TARGET_DRAIN
+              value: {{ .Values.push.drain | int64 | quote }}
+            - name: FLEXIQ_PUSH_TARGET_MAX_REQUEST_BYTES
+              value: {{ .Values.push.maxRequestBytes | int64 | quote }}
+            - name: FLEXIQ_PUSH_TARGET_MAX_RESPONSE_BYTES
+              value: {{ .Values.push.maxResponseBytes | int64 | quote }}
+            {{- if ne .Values.push.auth "none" }}
+            - name: FLEXIQ_PUSH_TARGET_AUTH
+              value: {{ .Values.push.auth | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -231,10 +258,18 @@ spec:
             {{- else }}
             tcpSocket: { port: grpc }
             {{- end }}
-          {{- else }}
+          {{- else if .Values.attach.enabled }}
           {{- $probe := dict "tcpSocket" (dict "port" "attach") }}
           livenessProbe: {{- toYaml $probe | nindent 12 }}
           readinessProbe: {{- toYaml $probe | nindent 12 }}
+          {{- else }}
+          {{/*
+          push.enabled with nothing else: a push target dials out and binds no
+          port, so there is nothing here for a kubelet to probe. The pod is
+          Ready once it is Running and restarts only on a process exit. Turn
+          dashboard.enabled on alongside push for a real liveness/readiness
+          signal.
+          */}}
           {{- end }}
           {{- with .Values.resources }}
           resources:

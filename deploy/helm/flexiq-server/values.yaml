@@ -1,8 +1,9 @@
 # Default values for flexiq-server.
 #
-# The chart installs one Deployment that plays up to four roles — scheduler,
-# dashboard, sidecar injector, and gRPC door — because they are one binary and
-# one image. Turn off what you do not want; at least one role has to stay on.
+# The chart installs one Deployment that plays up to four roles — scheduler
+# (dispatching over attach or push, never both), dashboard, sidecar injector,
+# and gRPC door — because they are one binary and one image. Turn off what you
+# do not want; at least one role has to stay on.
 
 image:
   repository: ghcr.io/byteveda/flexiq-server
@@ -142,6 +143,42 @@ grpc:
   # browse should not be one object an annotation can widen by accident.
   service:
     annotations: {}
+
+# Push dispatch (#843/#844): instead of an executor attaching, the scheduler
+# POSTs each claimed job straight to this URL — for a platform that starts a
+# container from an inbound request rather than running one continuously.
+# Additive, not a replacement for attach: the two cannot both be set, because
+# a Worker holds exactly one dispatcher.
+push:
+  enabled: false
+  # Where the scheduler POSTs a claimed job.
+  url: ""
+  # Jobs the target may run at once. Required — a push target announces no
+  # slots of its own, so nothing here can size it for you.
+  capacity: 1
+  # Comma-separated hosts and CIDRs the target's resolved address must match.
+  # Required — deny by default. Loopback, link-local and cloud metadata are
+  # refused whatever this names.
+  allow: ""
+  # Seconds one dispatch may take before it is abandoned as failed.
+  timeout: 60
+  # Seconds the connection may take to establish.
+  connectTimeout: 5
+  # Seconds shutdown waits for in-flight dispatches before abandoning them.
+  drain: 30
+  # Ceiling on one job's request body, in bytes.
+  maxRequestBytes: 8388608
+  # Ceiling on one response body read back, in bytes.
+  maxResponseBytes: 1048576
+  # none | bearer | hmac | oidc | sigv4. Every field a non-"none" scheme needs
+  # beyond this one — a bearer token, an HMAC secret, an OIDC audience, a
+  # SigV4 region override — is operator- and secret-specific enough that this
+  # chart does not give each one its own value. Set the matching
+  # FLEXIQ_PUSH_TARGET_* variable through extraEnv below, reading a
+  # secret-bearing one from a Secret you create via valueFrom.secretKeyRef.
+  auth: none
+  # No Service and no containerPort: a push target dials out, so this role has
+  # no listener for either to front.
 
 # Annotation-driven executor sidecar injection.
 webhook:

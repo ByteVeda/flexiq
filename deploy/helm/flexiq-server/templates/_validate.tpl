@@ -7,14 +7,36 @@ guard in crates/flexiq-server/src/config.
 */}}
 {{- define "flexiq-server.validate" -}}
 
-{{- if not (or .Values.attach.enabled .Values.dashboard.enabled .Values.webhook.enabled .Values.grpc.enabled) -}}
-{{- fail "flexiq-server: nothing to run. Enable at least one of attach.enabled, dashboard.enabled, webhook.enabled or grpc.enabled." -}}
+{{- if not (or .Values.attach.enabled .Values.dashboard.enabled .Values.webhook.enabled .Values.grpc.enabled .Values.push.enabled) -}}
+{{- fail "flexiq-server: nothing to run. Enable at least one of attach.enabled, dashboard.enabled, webhook.enabled, grpc.enabled or push.enabled." -}}
 {{- end -}}
 
 {{/* Only the webhook runs without storage. */}}
-{{- if or .Values.attach.enabled .Values.dashboard.enabled .Values.grpc.enabled -}}
+{{- if or .Values.attach.enabled .Values.dashboard.enabled .Values.grpc.enabled .Values.push.enabled -}}
 {{- if not (or .Values.storage.dsn .Values.storage.existingSecret) -}}
 {{- fail "flexiq-server: storage.dsn or storage.existingSecret is required unless the release runs webhook.enabled alone." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+A Worker holds exactly one dispatcher — the server itself refuses to start
+with both FLEXIQ_LISTEN and FLEXIQ_PUSH_TARGET_URL set, so the chart fails at
+template time instead of letting the pod CrashLoopBackOff on it.
+*/}}
+{{- if and .Values.push.enabled .Values.attach.enabled -}}
+{{- fail "flexiq-server: push.enabled and attach.enabled cannot both be set — a Worker holds exactly one dispatcher. Enable one or the other." -}}
+{{- end -}}
+
+{{/* Mirrors config/push.rs: a push target announces no slots and no guard of its own. */}}
+{{- if .Values.push.enabled -}}
+{{- if not .Values.push.url -}}
+{{- fail "flexiq-server: push.enabled requires push.url — where the scheduler POSTs a claimed job." -}}
+{{- end -}}
+{{- if not .Values.push.capacity -}}
+{{- fail "flexiq-server: push.enabled requires push.capacity — a push target announces no slots of its own, so nothing here can infer one." -}}
+{{- end -}}
+{{- if not .Values.push.allow -}}
+{{- fail "flexiq-server: push.enabled requires push.allow — a guard whose default is derived from the value it guards is not a guard. List every host and CIDR the scheduler may dispatch a job to." -}}
 {{- end -}}
 {{- end -}}
 
