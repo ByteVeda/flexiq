@@ -26,7 +26,7 @@ use super::contract::{
     HDR_METADATA, HDR_NAMESPACE, HDR_OUTCOME, HDR_PROTOCOL_VERSION, HDR_QUEUE, HDR_RETRY, HDR_TASK,
 };
 use super::Shared;
-use crate::http::{read_bounded, SigningRequest};
+use crate::http::{read_bounded, BodyRead, SigningRequest};
 use crate::job::{now_millis, Job};
 use crate::scheduler::JobResult;
 use crate::worker::protocol::{Dispatch, PROTOCOL_VERSION};
@@ -294,13 +294,16 @@ async fn exchange(
     let outcome = contract::classify(status, outcome.as_deref(), retry.as_deref())?;
 
     let cap = shared.config.max_response_bytes;
-    let (body, truncated) = read_bounded(response, cap).await;
-    if truncated {
-        // Refused rather than stored short: a truncated body is not what the
-        // target said, and a result assembled from half of it would be wrong
-        // rather than incomplete.
-        return Err(Refusal::ResponseTooLarge { cap });
-    }
+    // Both failure arms refuse rather than store short: a partial body is not
+    // what the target said, and a result assembled from half of it would be
+    // wrong rather than incomplete. They stay apart because their retry
+    // decisions differ — an oversized body is the target's, and will be
+    // oversized again; a broken connection is the network's, and may not be.
+    let body = match read_bounded(response, cap).await {
+        BodyRead::Complete(body) => body,
+        BodyRead::Truncated => return Err(Refusal::ResponseTooLarge { cap }),
+        BodyRead::Broken(error) => return Err(Refusal::ResponseIncomplete(error)),
+    };
     Ok((outcome, body))
 }
 

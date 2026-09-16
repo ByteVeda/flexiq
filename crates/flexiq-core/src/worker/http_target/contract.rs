@@ -137,6 +137,17 @@ pub enum Refusal {
         /// The configured cap it exceeded.
         cap: usize,
     },
+    /// The connection broke part-way through the response body.
+    ///
+    /// Distinct from [`Refusal::Transport`], which is a request that never got
+    /// a response at all, and from [`Refusal::ResponseTooLarge`], which is a
+    /// target that answered with more than it was allowed to. Here the target
+    /// answered, the status and headers were read, and the body stopped
+    /// arriving. It is its own variant because it is the only one of the three
+    /// that is both *retryable* and *not the target's fault* — folding it into
+    /// `ResponseTooLarge` (which it once was) failed a job permanently, under
+    /// a reason that was also untrue.
+    ResponseIncomplete(String),
     /// The target did not answer within the configured deadline.
     Deadline(Duration),
     /// The request could not be sent, or the connection failed outright.
@@ -187,6 +198,7 @@ impl Refusal {
             Refusal::ServerError(_)
             | Refusal::Deadline(_)
             | Refusal::Transport(_)
+            | Refusal::ResponseIncomplete(_)
             | Refusal::NoBudget
             | Refusal::Abandoned => true,
             Refusal::ClientError(status) => matches!(status, 408 | 425 | 429),
@@ -242,6 +254,9 @@ impl Refusal {
             }
             Refusal::ResponseTooLarge { cap } => {
                 format!("target {target}: response exceeded the {cap} byte cap")
+            }
+            Refusal::ResponseIncomplete(error) => {
+                format!("target {target} answered, but the response body ended early: {error}")
             }
             Refusal::Deadline(after) => {
                 format!("target {target} did not answer within {after:?}")
@@ -581,6 +596,33 @@ mod tests {
                 "status {status} should_retry mismatch"
             );
         }
+    }
+
+    /// Regression: a connection that broke part-way through the response body
+    /// used to arrive here as `ResponseTooLarge`, which is non-retryable — so
+    /// a transient network failure permanently failed a job, under a reason
+    /// that was also untrue. The two must not agree on either count.
+    #[test]
+    fn a_broken_response_body_is_retryable_where_an_oversized_one_is_not() {
+        let broken = Refusal::ResponseIncomplete("connection closed".to_string());
+        let oversized = Refusal::ResponseTooLarge { cap: 1024 };
+
+        assert!(
+            broken.should_retry(),
+            "the body exceeded nothing; the connection went away"
+        );
+        assert!(
+            !oversized.should_retry(),
+            "a target that answered with too much will answer with too much again"
+        );
+        assert!(!broken.timed_out(), "nothing timed out");
+
+        let message = broken.message("https://push.example.com");
+        assert!(message.contains("https://push.example.com"), "{message}");
+        assert!(
+            !message.contains("cap"),
+            "a broken read must not claim a cap was exceeded: {message}"
+        );
     }
 
     #[test]

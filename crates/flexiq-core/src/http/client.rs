@@ -66,7 +66,26 @@ impl DispatchClient {
     }
 }
 
-/// Read at most `cap` bytes of a response, reporting whether it was truncated.
+/// How a bounded body read ended.
+///
+/// Three outcomes, not two, because the caller's response to each differs and
+/// two of them are not failures of the same kind. Collapsing the last two into
+/// one boolean is what made a broken connection settle as
+/// `Refusal::ResponseTooLarge` — permanently, under a reason that was also
+/// untrue.
+pub(crate) enum BodyRead {
+    /// The body ended inside the cap. These are all of it.
+    Complete(Vec<u8>),
+    /// More body followed the cap. The bytes read are deliberately not carried:
+    /// a partial body is not what the target said, and the caller refuses
+    /// rather than storing half an answer.
+    Truncated,
+    /// The connection broke part-way through the body. Carries reqwest's
+    /// message, already stripped of the URL it was dialling.
+    Broken(String),
+}
+
+/// Read at most `cap` bytes of a response.
 ///
 /// `bytes()` would buffer whatever the endpoint chose to send before any cap
 /// applied. Streaming stops as soon as the budget is spent.
@@ -76,21 +95,21 @@ impl DispatchClient {
 /// 1. **Never buffer past `cap`.** The cap is the memory bound; a loop that
 ///    appended a whole chunk and trimmed afterwards would have already held
 ///    `cap + chunk` bytes at once.
-/// 2. **Never report `truncated: false` without having seen the end of the
+/// 2. **Never answer [`BodyRead::Complete`] without having seen the end of the
 ///    body.** A body that exactly fills `cap` is indistinguishable from the
 ///    first `cap` bytes of a longer one until something further is read, and
-///    the caller turns this flag into a refusal, so guessing is not available.
+///    the caller turns this answer into a job result, so guessing is not
+///    available.
 ///
 /// They pull opposite ways, and the resolution is that the loop reads *one
 /// byte* past the cap and keeps none of it: a chunk longer than the remaining
-/// room is appended only up to that room, and its existence is what sets
-/// `truncated`. So a body of exactly `cap` costs one extra `chunk()` await
-/// that comes back `Ok(None)` and reports `false`, and a body of `cap + 1`
-/// reports `true` having buffered exactly `cap`.
-pub(crate) async fn read_bounded(response: reqwest::Response, cap: usize) -> (Vec<u8>, bool) {
+/// room is appended only up to that room, and its existence is what proves the
+/// body continues. So a body of exactly `cap` costs one extra `chunk()` await
+/// that comes back `Ok(None)` and answers `Complete`, and a body of `cap + 1`
+/// answers `Truncated`.
+pub(crate) async fn read_bounded(response: reqwest::Response, cap: usize) -> BodyRead {
     let mut response = response;
     let mut buffered: Vec<u8> = Vec::new();
-    let mut truncated = false;
     loop {
         match response.chunk().await {
             Ok(Some(chunk)) => {
@@ -102,25 +121,22 @@ pub(crate) async fn read_bounded(response: reqwest::Response, cap: usize) -> (Ve
                     // once the budget is already spent, so this appends
                     // nothing and the slice is still in bounds.
                     buffered.extend_from_slice(&chunk[..room]);
-                    truncated = true;
-                    break;
+                    return BodyRead::Truncated;
                 }
                 buffered.extend_from_slice(&chunk);
             }
             // The one answer that proves nothing follows, and so the only one
-            // that may leave `truncated` false.
-            Ok(None) => break,
-            // Whatever arrived is still useful (mirrors `flexiq-server`'s
-            // `webhook_sender::read_bounded`), but unlike a clean end of
-            // body this is not the complete response — the caller cannot
-            // tell the difference unless `truncated` says so.
-            Err(_) => {
-                truncated = true;
-                break;
-            }
+            // that may report a complete body.
+            Ok(None) => return BodyRead::Complete(buffered),
+            // Reported apart from `Truncated`, not folded into it: the body did
+            // not exceed anything, the connection went away, and that is worth
+            // another attempt where an oversized body is not. `without_url`
+            // for the reason `Refusal::Transport`'s own call site gives — the
+            // URL reqwest interpolates is where an operator's query-string
+            // credential would be.
+            Err(error) => return BodyRead::Broken(error.without_url().to_string()),
         }
     }
-    (buffered, truncated)
 }
 
 #[cfg(test)]
@@ -150,6 +166,13 @@ mod tests {
     /// `Content-Length`, then closes. Loopback and a kernel-assigned port, so
     /// this needs no external network and cannot collide with another test.
     async fn serve_once(body: Vec<u8>) -> String {
+        serve_once_declaring(body, 0).await
+    }
+
+    /// As [`serve_once`], but advertises `missing` bytes more than it sends,
+    /// so the peer sees the body stop before its `Content-Length` and reports
+    /// a read error rather than a clean end of body.
+    async fn serve_once_declaring(body: Vec<u8>, missing: usize) -> String {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("loopback listener binds");
@@ -158,7 +181,7 @@ mod tests {
             let (mut socket, _) = listener.accept().await.expect("test client connects");
             let header = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
+                body.len() + missing
             );
             socket
                 .write_all(header.as_bytes())
@@ -170,6 +193,17 @@ mod tests {
         format!("http://{addr}/")
     }
 
+    /// The bytes of a `Complete` read, or a panic naming what came back
+    /// instead. `BodyRead` carries no `Debug` — one variant holds a response
+    /// body — so `assert!(matches!(..))` is the idiom everywhere else here.
+    fn complete(read: BodyRead) -> Vec<u8> {
+        match read {
+            BodyRead::Complete(bytes) => bytes,
+            BodyRead::Truncated => panic!("expected a complete body, got Truncated"),
+            BodyRead::Broken(error) => panic!("expected a complete body, got Broken({error})"),
+        }
+    }
+
     #[tokio::test]
     async fn read_bounded_stops_at_the_cap_and_reports_truncation() {
         let url = serve_once(vec![b'x'; 100]).await;
@@ -179,16 +213,16 @@ mod tests {
             .await
             .expect("the local server answers");
 
-        let (bytes, truncated) = read_bounded(response, 10).await;
-
-        assert_eq!(bytes.len(), 10);
-        assert!(truncated);
+        assert!(matches!(
+            read_bounded(response, 10).await,
+            BodyRead::Truncated
+        ));
     }
 
     /// Regression: the loop used to stop the moment `buffered.len() == cap`,
     /// so a body that exactly filled the cap reported `truncated: false`
-    /// whether or not more followed. The caller turns that flag into a
-    /// refusal, so the two cases below must not be reported the same way.
+    /// whether or not more followed. The caller turns that answer into a job
+    /// result, so the two cases below must not be reported the same way.
     #[tokio::test]
     async fn read_bounded_distinguishes_a_body_that_exactly_fills_the_cap() {
         let exact = serve_once(vec![b'x'; 10]).await;
@@ -198,11 +232,10 @@ mod tests {
             .await
             .expect("the local server answers");
 
-        let (bytes, truncated) = read_bounded(response, 10).await;
-
-        assert_eq!(bytes.len(), 10);
-        assert!(
-            !truncated,
+        let bytes = complete(read_bounded(response, 10).await);
+        assert_eq!(
+            bytes.len(),
+            10,
             "the body ended at the cap, which is a complete answer"
         );
 
@@ -213,14 +246,31 @@ mod tests {
             .await
             .expect("the local server answers");
 
-        let (bytes, truncated) = read_bounded(response, 10).await;
-
-        assert_eq!(
-            bytes.len(),
-            10,
-            "the overflow byte is evidence, never something to buffer"
+        assert!(
+            matches!(read_bounded(response, 10).await, BodyRead::Truncated),
+            "one byte past the cap is still past the cap"
         );
-        assert!(truncated, "one byte past the cap is still past the cap");
+    }
+
+    /// Regression: a body that broke mid-read used to be reported as
+    /// truncation, which `attempt.rs` settles as `Refusal::ResponseTooLarge`
+    /// — non-retryable, and untrue. The body exceeded nothing; the connection
+    /// went away.
+    #[tokio::test]
+    async fn read_bounded_reports_a_broken_body_apart_from_truncation() {
+        // Well inside the cap, so `Truncated` is not even a candidate: the
+        // only reason this is not `Complete` is the connection.
+        let url = serve_once_declaring(b"half a bo".to_vec(), 64).await;
+        let response = reqwest::Client::new()
+            .get(url)
+            .send()
+            .await
+            .expect("the local server answers");
+
+        assert!(matches!(
+            read_bounded(response, 1024).await,
+            BodyRead::Broken(_)
+        ));
     }
 
     #[tokio::test]
@@ -233,9 +283,6 @@ mod tests {
             .await
             .expect("the local server answers");
 
-        let (bytes, truncated) = read_bounded(response, 1024).await;
-
-        assert_eq!(bytes, body);
-        assert!(!truncated);
+        assert_eq!(complete(read_bounded(response, 1024).await), body);
     }
 }
