@@ -181,19 +181,22 @@ policy nobody chose, so the log says which one.
 
 ## Feature-gated builds
 
-Postgres, Redis and gRPC are cargo features. The published image has all three
-compiled in, so the DSN picks the backend at runtime and nothing has to be
-rebuilt to enable the door:
+Postgres, Redis, gRPC and push dispatch are cargo features. The published image
+has all four compiled in, so the DSN picks the backend at runtime and nothing
+has to be rebuilt to enable a role:
 
 ```bash
 cargo build -p flexiq-server --features postgres
 cargo build -p flexiq-server --features redis
 cargo build -p flexiq-server --features grpc
+cargo build -p flexiq-server --features http-target
 ```
 
 A binary you built yourself without `--features grpc` **rejects
-`FLEXIQ_GRPC_LISTEN` at boot** rather than ignoring it. A deployment that looks
-configured and serves nothing on the port its clients dial is the worse failure.
+`FLEXIQ_GRPC_LISTEN` at boot** rather than ignoring it, and one without
+`--features http-target` rejects `FLEXIQ_PUSH_TARGET_URL` the same way. A
+deployment that looks configured and serves — or dials — nothing is the worse
+failure.
 
 ## The image
 

@@ -48,8 +48,9 @@ but the webhook needs `FLEXIQ_DSN`. `FLEXIQ_PUSH_TARGET_URL` and
 dispatcher.
 
 Postgres, Redis, gRPC and push dispatch (`http-target`) are cargo features.
-**The published image compiles in `postgres`, `redis` and `grpc` — not
-`http-target`.** A local build enables what it needs:
+**The published image compiles in all four**, so the DSN picks the backend and
+the environment picks the roles with nothing to rebuild. A local build enables
+what it needs:
 
 ```bash
 cargo build -p flexiq-server --features postgres

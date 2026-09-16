@@ -22,8 +22,8 @@ their entries below keep that name.
 - **Push dispatch** (#843, #844). `FLEXIQ_PUSH_TARGET_URL` adds a second way for the scheduler to
   reach an executor: instead of waiting for one to attach, it POSTs each claimed job straight to
   an operator-configured HTTP endpoint — for a platform that starts a container from an inbound
-  request rather than running one continuously. Behind the `http-target` cargo feature, not yet
-  compiled into the published image.
+  request rather than running one continuously. Behind the `http-target` cargo feature, which the
+  published `flexiq-server` image compiles in alongside `postgres`, `redis` and `grpc`.
   Every dispatch goes through an egress guard: a deny-by-default allowlist, DNS vetted inside
   resolution so the address dialled is the address checked, loopback/link-local/cloud metadata
   refused whatever the allowlist says, and no redirects. Four outbound auth schemes prove the

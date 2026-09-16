@@ -60,12 +60,10 @@ are then required together.
 
 Push dispatch is behind its own cargo feature, `http-target`, so a binary that
 never dials out does not have to compile in an HTTP client and a TLS stack.
-**The published `flexiq-server` image does not currently build it in** —
-unlike `postgres`, `redis` and `grpc`, which the release image does carry —
-so `FLEXIQ_PUSH_TARGET_URL` set against that image fails at boot, naming the
-missing feature rather than silently never dialling out. Build your own image
-with `--features http-target` (alongside whichever backends you need) until
-the published one carries it.
+**The published `flexiq-server` image carries it**, alongside `postgres`,
+`redis` and `grpc`, so there is nothing to rebuild to turn it on. A binary you
+built yourself without the feature refuses `FLEXIQ_PUSH_TARGET_URL` at boot,
+naming the missing feature rather than silently never dialling out.
 
 The four auth schemes each read a few more variables, only when
 `FLEXIQ_PUSH_TARGET_AUTH` selects them:
