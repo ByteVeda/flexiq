@@ -53,7 +53,7 @@ are then required together.
 | `FLEXIQ_PUSH_TARGET_ALLOW` | **Required** | Comma-separated hosts and CIDRs the target's resolved address must match |
 | `FLEXIQ_PUSH_TARGET_TIMEOUT` | `60` | Seconds one dispatch may take before it is abandoned as failed |
 | `FLEXIQ_PUSH_TARGET_CONNECT_TIMEOUT` | `5` | Seconds the connection may take to establish |
-| `FLEXIQ_PUSH_TARGET_DRAIN` | `30` | Seconds shutdown waits for in-flight dispatches before abandoning them |
+| `FLEXIQ_PUSH_TARGET_DRAIN` | `30` | Seconds shutdown waits for in-flight dispatches, then again for each to settle once abandoned — a shutdown runs to at most twice this |
 | `FLEXIQ_PUSH_TARGET_MAX_REQUEST_BYTES` | `8388608` (8 MiB) | Ceiling on one job's request body |
 | `FLEXIQ_PUSH_TARGET_MAX_RESPONSE_BYTES` | `1048576` (1 MiB) | Ceiling on one response body read back |
 | `FLEXIQ_PUSH_TARGET_AUTH` | `none` | `none` \| `bearer` \| `hmac` \| `oidc` \| `sigv4` |
@@ -233,6 +233,13 @@ push:
   capacity: 10
   allow: executor.internal
 ```
+
+Mind the grace period: `push.drain` is spent twice, so a shutdown runs to at
+most `2 × push.drain` — 60 seconds at the default. This chart sets no
+`terminationGracePeriodSeconds`, so Kubernetes' 30-second default applies and
+cuts the second wait short, leaving the abandoned attempts to the reaper.
+Either lower `push.drain` to fit inside it, or patch a longer grace period onto
+the Deployment.
 
 `push.enabled` and `attach.enabled` are refused together, the same way the
 binary refuses `FLEXIQ_PUSH_TARGET_URL` and `FLEXIQ_LISTEN` together. Every

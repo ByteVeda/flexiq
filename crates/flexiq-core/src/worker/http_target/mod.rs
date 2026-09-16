@@ -108,6 +108,12 @@ pub struct HttpTargetConfig {
     /// Ceiling on establishing the connection.
     pub connect_timeout: Duration,
     /// How long `shutdown` waits for in-flight requests before abandoning them.
+    ///
+    /// The budget for **one** wait, and `shutdown` takes two: it waits this
+    /// long for the requests themselves, signals the abandon, then waits this
+    /// long again for each attempt to settle. A shutdown therefore runs to at
+    /// most `2 × shutdown_drain`, which is the figure a deployment's
+    /// termination grace period has to cover — not this one.
     pub shutdown_drain: Duration,
     /// Destinations this target may resolve to. Deny by default.
     pub allow: Allowlist,
@@ -150,7 +156,9 @@ impl HttpTargetConfig {
             // hole fast.
             connect_timeout: Duration::from_secs(5),
             // Matches `RemoteConfig::shutdown_drain`, so an operator tunes one
-            // number regardless of which dispatcher is running.
+            // number regardless of which dispatcher is running — but this path
+            // spends it twice (see the field's docs), so the same 30 here is a
+            // 60-second worst case rather than a 30-second one.
             shutdown_drain: Duration::from_secs(30),
             allow,
             // Deny by default; an embedder flips this only for a sidecar it

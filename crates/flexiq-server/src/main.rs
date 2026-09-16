@@ -81,8 +81,9 @@ Configuration (environment only):
   FLEXIQ_PUSH_TARGET_CONNECT_TIMEOUT  seconds the connection may take to establish
                                  (default: 5)
   FLEXIQ_PUSH_TARGET_DRAIN      seconds shutdown waits for in-flight
-                                 dispatches before abandoning them (default:
-                                 30)
+                                 dispatches before abandoning them, and then
+                                 again for each to settle — a shutdown runs to
+                                 at most twice this (default: 30)
   FLEXIQ_PUSH_TARGET_MAX_REQUEST_BYTES  ceiling on one job's request body (default:
                                  8388608, i.e. 8 MiB)
   FLEXIQ_PUSH_TARGET_MAX_RESPONSE_BYTES  ceiling on one response body read back

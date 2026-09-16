@@ -164,7 +164,11 @@ push:
   timeout: 60
   # Seconds the connection may take to establish.
   connectTimeout: 5
-  # Seconds shutdown waits for in-flight dispatches before abandoning them.
+  # Seconds shutdown waits for in-flight dispatches, and then again for each
+  # to settle once abandoned — a shutdown runs to at most twice this. The
+  # chart sets no terminationGracePeriodSeconds, so Kubernetes' 30s default
+  # applies and is shorter than the 60s worst case this value implies: lower
+  # it, or patch a longer grace period onto the Deployment.
   drain: 30
   # Ceiling on one job's request body, in bytes.
   maxRequestBytes: 8388608
