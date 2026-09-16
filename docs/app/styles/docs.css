@@ -654,6 +654,13 @@ body {
   color: var(--indigo-br);
 }
 .callout .cc {
+  /* A flex item's `min-width: auto` floors it at its content's min-content
+     width, and a `<pre>` reports its longest line there even though it scrolls.
+     A callout wrapping a code block would otherwise stretch past the callout's
+     own border and over the TOC; `min-width: 0` lets it shrink so the code
+     block scrolls inside the callout instead. */
+  flex: 1;
+  min-width: 0;
   font-size: 14.5px;
   line-height: 1.6;
   color: var(--txt2);
@@ -908,6 +915,16 @@ body {
   /* long feature names wrap instead of widening the frozen column */
   white-space: normal;
   max-width: 240px;
+}
+/* The cap above only binds on content that can wrap, and the `td code` rule
+   holds identifiers on one line. A frozen column paints over the cells beside
+   it rather than scrolling away, so an identifier wider than the cap would sit
+   on top of the next column — here containment wins over keeping the token
+   whole, and a long name breaks across lines instead. */
+.md-table.sticky th:first-child code,
+.md-table.sticky td:first-child code {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .md-table.sticky td:first-child {
   z-index: 1;
