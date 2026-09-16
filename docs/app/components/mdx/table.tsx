@@ -6,28 +6,32 @@ import {
 } from "react";
 
 /** Count body rows and the widest row's cell count, so large tables can opt into
- *  the frozen header/first-column treatment. Walks past thead/tbody to the trs. */
+ *  the frozen header/first-column treatment. Walks past thead/tbody to the trs;
+ *  the header's own `tr` is not a body row, so rows inside `thead` are measured
+ *  for their cell count but left out of the row total. */
 function measure(children: ReactNode): { rows: number; cols: number } {
   let rows = 0;
   let cols = 0;
-  const walk = (node: ReactNode) => {
+  const walk = (node: ReactNode, inHead: boolean) => {
     for (const child of Children.toArray(node)) {
       if (!isValidElement(child)) {
         continue;
       }
       const el = child as { type: unknown; props?: { children?: ReactNode } };
       if (el.type === "tr") {
-        rows += 1;
+        if (!inHead) {
+          rows += 1;
+        }
         const cells = Children.toArray(el.props?.children).filter(
           isValidElement,
         );
         cols = Math.max(cols, cells.length);
       } else {
-        walk(el.props?.children);
+        walk(el.props?.children, inHead || el.type === "thead");
       }
     }
   };
-  walk(children);
+  walk(children, false);
   return { rows, cols };
 }
 
