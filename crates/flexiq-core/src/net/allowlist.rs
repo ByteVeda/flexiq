@@ -95,6 +95,10 @@ impl Allowlist {
     ///
     /// Applies the same checks [`Self::parse`] does: at least one rule, and
     /// every [`AllowRule::Network`] prefix within its address family's width.
+    /// Name rules are put into the same stored form too, so
+    /// `Host("API.EXAMPLE.COM")` and `Suffix(".run.app")` match what the
+    /// equivalent [`Self::parse`] entries match rather than nothing at all —
+    /// lowercased, and a suffix's leading dot dropped.
     pub fn from_rules(rules: Vec<AllowRule>) -> Result<Self, AllowlistError> {
         if rules.is_empty() {
             return Err(AllowlistError::Empty);
@@ -107,6 +111,7 @@ impl Allowlist {
                 })?;
             }
         }
+        let rules = rules.into_iter().map(canonicalize).collect();
         Ok(Self { rules })
     }
 
@@ -203,16 +208,42 @@ fn parse_entry(segment: &str) -> Result<AllowRule, AllowlistError> {
         });
     }
 
+    // Neither name rule is normalised here: `from_rules`, which `parse` hands
+    // every rule to, is the one place that does it. See `canonicalize`.
     if let Some(rest) = segment.strip_prefix('.') {
         if rest.is_empty() {
             return Err(malformed(
                 "a suffix rule needs a name after the leading dot".to_string(),
             ));
         }
-        return Ok(AllowRule::Suffix(rest.to_ascii_lowercase()));
+        return Ok(AllowRule::Suffix(segment.to_string()));
     }
 
-    Ok(AllowRule::Host(segment.to_ascii_lowercase()))
+    Ok(AllowRule::Host(segment.to_string()))
+}
+
+/// The one stored form of a name rule: lowercase, and a suffix without its
+/// leading dot.
+///
+/// [`Allowlist::permits_host`] lowercases the host it is asked about and then
+/// compares it to the stored string directly, so a rule held in any other
+/// form can never match anything — a `Host` in mixed case, or a `Suffix` in
+/// exactly the leading-dot form [`AllowRule::Suffix`]'s own doc prescribes,
+/// would silently permit nothing.
+///
+/// Every rule passes through here, whichever door it came in by:
+/// [`Allowlist::parse`] builds rules and then hands them to
+/// [`Allowlist::from_rules`] like any other caller. That is what keeps the
+/// two entry points from drifting into different representations of the same
+/// rule.
+fn canonicalize(rule: AllowRule) -> AllowRule {
+    match rule {
+        AllowRule::Host(name) => AllowRule::Host(name.to_ascii_lowercase()),
+        AllowRule::Suffix(name) => {
+            AllowRule::Suffix(name.strip_prefix('.').unwrap_or(&name).to_ascii_lowercase())
+        }
+        network @ AllowRule::Network { .. } => network,
+    }
 }
 
 /// Rejects a prefix wider than its address family allows.
@@ -425,6 +456,62 @@ mod tests {
                 }
                 other => panic!("{entry} should be Malformed, got {other:?}"),
             }
+        }
+    }
+
+    /// `from_rules` is `pub`, so typed configuration reaches it without ever
+    /// passing through `parse`. It used to store its caller's strings
+    /// verbatim, and `permits_host` compares against the canonical form — so
+    /// a rule in any other shape was accepted at construction and then
+    /// matched nothing, which is the worst way for an allowlist to fail.
+    #[test]
+    fn from_rules_canonicalizes_a_host_rule() {
+        let list = Allowlist::from_rules(vec![AllowRule::Host("API.EXAMPLE.COM".into())])
+            .expect("a single host rule is a valid allowlist");
+        assert!(list.permits_host("api.example.com"));
+        assert!(list.permits_host("API.EXAMPLE.COM"));
+        assert!(!list.permits_host("evil.api.example.com"));
+    }
+
+    #[test]
+    fn from_rules_canonicalizes_a_suffix_rule_written_with_its_leading_dot() {
+        // The leading dot is the form `AllowRule::Suffix`'s own doc
+        // prescribes, so this is the shape a caller is most likely to build.
+        let list = Allowlist::from_rules(vec![AllowRule::Suffix(".RUN.APP".into())])
+            .expect("a single suffix rule is a valid allowlist");
+        assert!(list.permits_host("svc.run.app"));
+        assert!(list.permits_host("run.app"));
+        assert!(!list.permits_host("evilrun.app"));
+        assert!(!list.permits_host("run.app.evil.test"));
+    }
+
+    #[test]
+    fn a_typed_rule_and_its_parsed_equivalent_agree_on_every_host() {
+        let typed = Allowlist::from_rules(vec![
+            AllowRule::Host("API.EXAMPLE.COM".into()),
+            AllowRule::Suffix(".RUN.APP".into()),
+        ])
+        .expect("typed rules build an allowlist");
+        let parsed = allow("api.example.com,.run.app");
+
+        for host in [
+            "api.example.com",
+            "API.EXAMPLE.COM",
+            "api.example.com.",
+            "evil.api.example.com",
+            "api.example.com.evil.test",
+            "run.app",
+            "svc.run.app",
+            "SVC.RUN.APP",
+            "evilrun.app",
+            "run.app.evil.test",
+            "app",
+        ] {
+            assert_eq!(
+                typed.permits_host(host),
+                parsed.permits_host(host),
+                "the two doors disagree about {host}"
+            );
         }
     }
 
