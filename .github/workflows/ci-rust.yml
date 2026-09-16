@@ -138,6 +138,12 @@ jobs:
       - name: Run http-target tests
         run: LD_LIBRARY_PATH="$pythonLocation/lib" cargo test --workspace --features http-target
 
+      # The only run that compiles both dispatch paths, so it is the only one
+      # where the test asserting push takes the gRPC executor door away can
+      # exist at all — it is `#[cfg(feature = "grpc")]`.
+      - name: Run push dispatch against the gRPC door
+        run: cargo test -p flexiq-server --features http-target,grpc
+
       - name: Check http-target against the other backends
         run: cargo check --workspace --features http-target,postgres,redis
 
