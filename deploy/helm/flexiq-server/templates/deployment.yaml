@@ -43,6 +43,11 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "flexiq-server.serviceAccountName" . }}
+      {{- with .Values.terminationGracePeriodSeconds }}
+      # Rendered only when set, so an unset value leaves Kubernetes' own 30s
+      # default in place rather than this chart restating it as its own.
+      terminationGracePeriodSeconds: {{ . | int64 }}
+      {{- end }}
       {{- with .Values.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

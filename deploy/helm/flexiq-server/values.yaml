@@ -165,10 +165,10 @@ push:
   # Seconds the connection may take to establish.
   connectTimeout: 5
   # Seconds shutdown waits for in-flight dispatches, and then again for each
-  # to settle once abandoned — a shutdown runs to at most twice this. The
-  # chart sets no terminationGracePeriodSeconds, so Kubernetes' 30s default
-  # applies and is shorter than the 60s worst case this value implies: lower
-  # it, or patch a longer grace period onto the Deployment.
+  # to settle once abandoned — a shutdown runs to at most twice this. Minimum
+  # 1; zero is refused at boot. Kubernetes' own default grace period is 30s,
+  # shorter than the 60s worst case this value implies, so either lower this
+  # or raise terminationGracePeriodSeconds (bottom of this file) past 2 × it.
   drain: 30
   # Ceiling on one job's request body, in bytes.
   maxRequestBytes: 8388608
@@ -215,6 +215,17 @@ topologySpreadConstraints: []
 
 podAnnotations: {}
 podLabels: {}
+
+# Seconds Kubernetes waits after SIGTERM before SIGKILL. Empty leaves the field
+# off the Deployment, which is Kubernetes' own 30s default.
+#
+# Push dispatch is the role that outgrows it: push.drain is spent twice, so a
+# push shutdown runs to at most 2 × push.drain — 60s at the chart's default —
+# and a 30s grace period cuts the second wait short, aborting in-flight
+# dispatches and leaving their leases to the stale-job reaper. With
+# push.enabled, either set this to more than 2 × push.drain or lower
+# push.drain to fit inside the period you set.
+terminationGracePeriodSeconds: ""
 
 # The image already runs as nonroot:65532 and needs no write access to its own
 # filesystem.

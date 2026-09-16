@@ -259,11 +259,19 @@ push:
 ```
 
 Mind the grace period: `push.drain` is spent twice, so a shutdown runs to at
-most `2 × push.drain` — 60 seconds at the default. This chart sets no
-`terminationGracePeriodSeconds`, so Kubernetes' 30-second default applies and
-cuts the second wait short, leaving the abandoned attempts to the reaper.
-Either lower `push.drain` to fit inside it, or patch a longer grace period onto
-the Deployment.
+most `2 × push.drain` — 60 seconds at the default. Kubernetes' own default is
+30 seconds, which cuts the second wait short and leaves the abandoned attempts
+to the reaper. The chart exposes `terminationGracePeriodSeconds` for this; it
+is unset by default, which is what leaves Kubernetes' 30 seconds in force.
+Either raise it past `2 × push.drain` or lower `push.drain` to fit inside the
+period you set:
+
+```yaml
+push:
+  enabled: true
+  drain: 30
+terminationGracePeriodSeconds: 75
+```
 
 `push.enabled` and `attach.enabled` are refused together, the same way the
 binary refuses `FLEXIQ_PUSH_TARGET_URL` and `FLEXIQ_LISTEN` together. Every
