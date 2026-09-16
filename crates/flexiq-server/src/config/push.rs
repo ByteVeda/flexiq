@@ -346,9 +346,29 @@ pub fn from_env(env: &Env) -> Result<Option<PushTargetConfig>> {
 
     let capacity = capacity(env)?;
     let allow = allow(env)?;
-    let request_timeout = seconds(env, TIMEOUT_VAR, DEFAULT_REQUEST_TIMEOUT)?;
-    let connect_timeout = seconds(env, CONNECT_TIMEOUT_VAR, DEFAULT_CONNECT_TIMEOUT)?;
-    let shutdown_drain = seconds(env, DRAIN_VAR, DEFAULT_SHUTDOWN_DRAIN)?;
+    let request_timeout = seconds(
+        env,
+        TIMEOUT_VAR,
+        DEFAULT_REQUEST_TIMEOUT,
+        "a zero request budget has expired before the first byte goes out, so every dispatch \
+         fails as a timeout against a target that was never given a chance to answer",
+    )?;
+    let connect_timeout = seconds(
+        env,
+        CONNECT_TIMEOUT_VAR,
+        DEFAULT_CONNECT_TIMEOUT,
+        "a zero connect budget has expired before the handshake starts, so no dispatch ever \
+         reaches the target at all",
+    )?;
+    let shutdown_drain = seconds(
+        env,
+        DRAIN_VAR,
+        DEFAULT_SHUTDOWN_DRAIN,
+        "a zero drain gives an in-flight dispatch no time to settle either before or after the \
+         abandon signal, so shutdown aborts every one of them and leaves their leases to the \
+         stale-job reaper rather than failing them retryably. Use 1 for a near-immediate drain \
+         that still settles",
+    )?;
     let max_request_bytes = bytes(env, MAX_REQUEST_BYTES_VAR, DEFAULT_MAX_REQUEST_BYTES)?;
     let max_response_bytes = bytes(env, MAX_RESPONSE_BYTES_VAR, DEFAULT_MAX_RESPONSE_BYTES)?;
     let auth = parse_auth(env)?;
@@ -402,13 +422,25 @@ fn allow(env: &Env) -> Result<Allowlist> {
 }
 
 /// Read a whole number of seconds, or `default` when the variable is unset.
-fn seconds(env: &Env, key: &str, default: Duration) -> Result<Duration> {
-    match value(env, key) {
-        None => Ok(default),
-        Some(raw) => Ok(Duration::from_secs(raw.parse().with_context(|| {
-            format!("{key} must be a whole number of seconds, got '{raw}'")
-        })?)),
+///
+/// Zero is refused for every caller. None of these three is a "no limit"
+/// switch — each is a deadline, and a deadline of zero has already passed by
+/// the time anything is measured against it, so it does not disable the
+/// budget, it fails every use of it. `zero_means` says what that failure
+/// would look like, because the failure itself carries no explanation: a
+/// dispatch that times out instantly looks exactly like a target that never
+/// answered.
+fn seconds(env: &Env, key: &str, default: Duration, zero_means: &str) -> Result<Duration> {
+    let Some(raw) = value(env, key) else {
+        return Ok(default);
+    };
+    let parsed: u64 = raw
+        .parse()
+        .with_context(|| format!("{key} must be a whole number of seconds, got '{raw}'"))?;
+    if parsed == 0 {
+        bail!("{key} must be greater than zero — {zero_means}");
     }
+    Ok(Duration::from_secs(parsed))
 }
 
 /// Read a whole number of bytes, or `default` when the variable is unset.
@@ -582,6 +614,50 @@ mod tests {
         assert_eq!(config.max_request_bytes, 8 * 1024 * 1024);
         assert_eq!(config.max_response_bytes, 1024 * 1024);
         assert!(matches!(config.auth, PushAuthConfig::None));
+    }
+
+    /// None of the three duration variables is a "no limit" switch: zero is a
+    /// deadline that has already passed, and the dispatch it kills looks like
+    /// a target that never answered rather than like a misconfiguration.
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_zero_duration_is_refused_and_says_what_it_would_have_done() {
+        for (key, expected) in [
+            (TIMEOUT_VAR, "timeout"),
+            (CONNECT_TIMEOUT_VAR, "handshake"),
+            (DRAIN_VAR, "reaper"),
+        ] {
+            let mut pairs = BASE.to_vec();
+            pairs.push((key, "0"));
+            let error = from_env(&env(&pairs)).expect_err("zero must be refused");
+
+            let message = format!("{error:#}");
+            assert!(message.contains(key), "must name the variable: {message}");
+            assert!(
+                message.contains(expected),
+                "must say what zero would have done, got: {message}"
+            );
+        }
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_one_second_duration_is_accepted() {
+        // The floor is zero, not some larger "sensible" number: a tight
+        // budget is an operator's call, an impossible one is not.
+        let mut pairs = BASE.to_vec();
+        pairs.extend([
+            (TIMEOUT_VAR, "1"),
+            (CONNECT_TIMEOUT_VAR, "1"),
+            (DRAIN_VAR, "1"),
+        ]);
+        let config = from_env(&env(&pairs))
+            .expect("one second is tight but possible")
+            .expect("configured");
+
+        assert_eq!(config.request_timeout, Duration::from_secs(1));
+        assert_eq!(config.connect_timeout, Duration::from_secs(1));
+        assert_eq!(config.shutdown_drain, Duration::from_secs(1));
     }
 
     #[cfg(feature = "http-target")]
