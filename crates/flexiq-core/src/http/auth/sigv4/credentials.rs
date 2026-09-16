@@ -177,19 +177,41 @@ fn fetch_environment(
 }
 
 /// Resolve the container-credentials endpoint: a relative URI joined onto
-/// the ECS/EKS Pod Identity link-local host, or a full URI vetted by
-/// [`accept_env_endpoint`] — a routable one is refused there, not here.
+/// the ECS/EKS Pod Identity link-local host, or a full URI — either way
+/// vetted by [`accept_env_endpoint`], so one rule decides both branches.
 /// Neither variable set is [`AuthError::NoCredentials`]: this source simply
 /// is not configured, not misconfigured.
+///
+/// The relative branch reads a *path*, and the leading `/` is checked rather
+/// than assumed: string concatenation onto an authority is not path joining,
+/// and a value that does not begin with `/` can rewrite the authority it was
+/// meant to hang off. `@evil.example.com/` joins to
+/// `http://169.254.170.2@evil.example.com/`, whose host is `evil.example.com`
+/// and whose *userinfo* is the link-local address — which would send the
+/// container authorization token to whoever answers that name. Both guards
+/// catch it independently (the leading `/`, and `accept_env_endpoint`
+/// refusing a host that is a name), and both are here because one rule
+/// covering both branches is the point.
 fn container_credentials_endpoint(
     read: &impl Fn(&str) -> Option<String>,
 ) -> Result<url::Url, AuthError> {
     if let Some(relative) = read("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") {
+        if !relative.starts_with('/') {
+            return Err(AuthError::Config(format!(
+                "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI '{relative}' must begin with '/': it is \
+                 joined onto {ECS_CONTAINER_CREDENTIALS_HOST}, and a value that does not can \
+                 rewrite the host it is joined to"
+            )));
+        }
         let joined = format!("http://{ECS_CONTAINER_CREDENTIALS_HOST}{relative}");
-        return url::Url::parse(&joined).map_err(|_| {
-            AuthError::Config(format!(
-                "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI '{relative}' does not join into a usable URL"
-            ))
+        return accept_env_endpoint(&joined).map_err(|error| match error {
+            // Re-labelled so an operator can find the variable to fix;
+            // `accept_env_endpoint` speaks about "credential endpoint"
+            // generically, because it serves four of them.
+            AuthError::Config(reason) => AuthError::Config(format!(
+                "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI '{relative}': {reason}"
+            )),
+            other => other,
         });
     }
     if let Some(full) = read("AWS_CONTAINER_CREDENTIALS_FULL_URI") {
@@ -427,6 +449,37 @@ mod tests {
         )]);
         let url = container_credentials_endpoint(&read).expect("a relative URI joins");
         assert_eq!(url.as_str(), "http://169.254.170.2/v2/credentials/abc-123");
+    }
+
+    /// Regression: the relative branch used to skip `accept_env_endpoint`
+    /// entirely and accept anything `url::Url` would parse. Concatenating a
+    /// value onto an authority is not path joining — `@evil.example.com/`
+    /// joins to `http://169.254.170.2@evil.example.com/`, whose host is
+    /// `evil.example.com` and whose userinfo is the link-local address, so
+    /// the container authorization token would have gone to whoever answers
+    /// that name.
+    #[test]
+    fn a_relative_container_uri_that_rewrites_the_host_is_refused() {
+        for relative in [
+            "@evil.example.com/",
+            "evil.example.com/",
+            "v2/credentials",
+            "",
+        ] {
+            let read = fixed_env(&[("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", relative)]);
+            let error = container_credentials_endpoint(&read)
+                .expect_err("a value that is not a path must be refused");
+            assert!(
+                matches!(error, AuthError::Config(_)),
+                "'{relative}' must be refused, got {error:?}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"),
+                "the refusal must name the variable to fix: {error}"
+            );
+        }
     }
 
     #[test]
