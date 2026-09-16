@@ -41,12 +41,6 @@ pub enum EgressRefusal {
         /// The refused address it resolved to.
         address: IpAddr,
     },
-    /// The host name itself is not named by the operator's allowlist.
-    #[error("host '{host}' is not on the allowlist")]
-    HostNotAllowed {
-        /// The name that was refused.
-        host: String,
-    },
     /// The name could not be resolved at all, including a resolution that
     /// answered with no addresses.
     #[error("could not resolve '{host}': {reason}")]
