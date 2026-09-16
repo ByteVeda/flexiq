@@ -305,6 +305,7 @@ fn region_between(host: &str, marker: &str, suffix: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker::http_target::{HDR_JOB_ID, HDR_TASK};
     use crate::worker::Secret;
 
     fn test_source() -> AwsCredentialSource {
@@ -548,6 +549,57 @@ mod tests {
         assert!(
             signed_headers.contains(&"x-amz-content-sha256"),
             "x-amz-content-sha256 missing from SignedHeaders: {signed_headers:?}"
+        );
+    }
+
+    #[test]
+    fn the_flexiq_dispatch_headers_are_signed_when_present() {
+        // Pins `PUSH_DISPATCH_CONTRACT.md`'s claim that SigV4 covers the
+        // whole `x-flexiq-*` set: `canonical.rs`'s
+        // `a_security_token_is_signed_when_present` already covers the
+        // generic "a present header gets signed" property, but nothing
+        // asserted it for the specific headers the contract names.
+        let config = SigV4Config {
+            source: test_source(),
+            region: Some("us-east-1".to_string()),
+            service: Some("service".to_string()),
+        };
+        let signer = signer_for(config, "https://example.amazonaws.com/");
+        let credentials = test_credentials(None);
+        let url = url::Url::parse("https://example.amazonaws.com/").expect("test url parses");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static(HDR_JOB_ID),
+            "job-123".parse().expect("header value parses"),
+        );
+        headers.insert(
+            HeaderName::from_static(HDR_TASK),
+            "send_email".parse().expect("header value parses"),
+        );
+        let request = SigningRequest {
+            method: "POST",
+            url: &url,
+            body: b"",
+            headers: &headers,
+        };
+
+        let signed = signer
+            .sign_at(&request, &credentials, fixed_now())
+            .expect("signs");
+
+        let authz = signed
+            .get(AUTHORIZATION)
+            .expect("authorization header present")
+            .to_str()
+            .expect("header is ascii");
+        let signed_headers = signed_header_names(authz);
+        assert!(
+            signed_headers.contains(&HDR_JOB_ID),
+            "{HDR_JOB_ID} missing from SignedHeaders: {signed_headers:?}"
+        );
+        assert!(
+            signed_headers.contains(&HDR_TASK),
+            "{HDR_TASK} missing from SignedHeaders: {signed_headers:?}"
         );
     }
 
