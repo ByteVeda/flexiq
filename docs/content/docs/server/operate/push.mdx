@@ -198,6 +198,28 @@ log every inbound request header without being asked to. Treat
 `x-flexiq-lease` the way you would a bearer token in that logging surface, and
 configure header redaction if your platform in front of the target offers one.
 
+## The dashboard is blind to a push target's capacity
+
+The dashboard reports execution capacity from the attach dispatcher, and a push
+deployment builds none, so every capacity reading is missing or zero:
+
+- `GET /api/scaler` — the **KEDA external-scaler payload** — reports
+  `totalCapacity: 0` and omits `workerUtilization` altogether.
+- `/metrics` omits `flexiq_executors` and `flexiq_executor_slots`, the two
+  gauges derived from the same number.
+- `GET /api/executors` reports nothing attached, which is simply true: under
+  push nothing attaches.
+
+**An autoscaler that scales on utilization will therefore never scale a push
+deployment** — the field it reads is not in the body, and the capacity it would
+divide by is zero. Scale on queue depth instead: `metricValue` in the same
+payload, and the `flexiq_jobs` gauges, are read from storage and are correct
+under push. Size the target itself with `FLEXIQ_PUSH_TARGET_CAPACITY`, which
+nothing in the dashboard reflects today.
+
+Queue depth, job counts, the job list, dead letters and every operator action
+are unaffected. It is capacity alone that the dashboard cannot see.
+
 ## With Helm
 
 `push.enabled` needs a URL, a capacity and an allowlist — nothing else has a
@@ -224,5 +246,7 @@ dials out; unlike every other role in this chart, it opens no listener for a
 Service to front. A release running push alone has no HTTP or TCP surface at
 all for Kubernetes to probe, so it carries no liveness or readiness probe
 either — the pod is considered healthy once it is running, and restarts only
-on a process exit. Enable `dashboard.enabled` alongside push if you want a
-real health signal.
+on a process exit. Enabling `dashboard.enabled` alongside push gives Kubernetes
+`/health` and `/readiness` to probe, which answer on whether storage is
+reachable — useful, but not a signal about the target: nothing probes the push
+URL, and the dashboard cannot see the target's capacity either (above).
