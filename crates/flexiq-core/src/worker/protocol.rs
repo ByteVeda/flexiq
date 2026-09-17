@@ -72,6 +72,15 @@ pub const CAP_STEPS: &str = "steps";
 /// executor advertises it in `hello` so a scheduler never *requires* a lease
 /// from a peer that will not echo one.
 ///
+/// **The acknowledgement is what binds, and it binds for the whole attach.** A
+/// scheduler holds no lease book until its scheduler role starts, which can be
+/// after an executor has attached — so the answer can differ between two
+/// attaches of the same peer. Whichever it was, the scheduler checks leases on
+/// that connection only where it acknowledged the capability, and dispatches
+/// none where it did not. An executor is therefore safe taking `hello_ack`
+/// literally, and equally safe echoing whatever its `job` frame carried: the
+/// two rules cannot disagree.
+///
 /// **What an executor without it gives up.** It still attaches and still runs
 /// jobs. Its results are fenced on the claim's `(owner, attempt, epoch)` alone,
 /// which is enough to refuse a result whose job has been reclaimed or retried —

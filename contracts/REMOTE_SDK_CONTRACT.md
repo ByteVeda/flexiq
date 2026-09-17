@@ -229,6 +229,16 @@ belong to the connection, not to a job. **A frame that should carry a lease and
 does not is dropped**, and what it was reporting is a job that ran without its
 result being recorded.
 
+"In force" is settled by the acknowledgement, for the whole attach. A scheduler
+holds no lease book until its scheduler role starts, which can be *after* an
+executor has attached — so the same peer can be acknowledged `lease` on one
+attach and not the next. Whichever it was, that answer binds both ends: the
+scheduler dispatches no lease it did not acknowledge, and checks for none. So
+"echo iff the ack listed `lease`" and "echo whatever the `job` frame carried"
+are the same rule, and a client may implement either. The second is the safer
+default: a scheduler predating the fix for #932 derived the two answers
+separately and could dispatch a lease it never acknowledged.
+
 An executor client:
 
 - **MUST** treat an unrecognised `oneof` arm as skippable, in both directions.

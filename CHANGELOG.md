@@ -45,6 +45,24 @@ their entries below keep that name.
   the only shell writing `null`, and a reader that had to special-case it is a reader that would
   eventually not.
 
+### Fixed
+
+- **An executor that honoured the `lease` acknowledgement lost every frame** (#932). The
+  scheduler decided whether to *check* an attached executor's frames for a lease from its
+  `hello`, but whether to *advertise* `lease` back in `hello_ack` from whether it held a lease
+  book at that instant — and the book is installed when the scheduler role starts, which can be
+  after an executor has attached. An executor acknowledged in that window sends no lease,
+  exactly as the contract tells it to, and had every frame about every job read as a superseded
+  attempt and dropped: successes, failures, progress, logs. The job was never settled and waited
+  for the reaper. Both halves now come from one decision — a capability is in force only where
+  the executor advertised it *and* that attach's acknowledgement carried it — so a dispatch
+  never requires a lease the acknowledgement did not promise. An executor attaching before the
+  role starts is fenced on `(owner, attempt)` alone for that connection, which is the documented
+  give-up for a peer without `lease`, and renegotiates on its next attach.
+- **The refusal these frames logged asserted a re-dispatch it had not checked for**, sending
+  whoever read it looking for a second execution that never happened. A frame carrying no lease
+  and one carrying a superseded lease are different faults and now read differently.
+
 ## 2.0.0
 
 Three things a queue could not do before: checkpoint work *inside* a job, be reached by a process
