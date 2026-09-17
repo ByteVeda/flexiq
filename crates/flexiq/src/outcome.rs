@@ -35,15 +35,17 @@ impl From<TaskError> for Abort {
 
 /// The canonical JSON a failed job records, per `BINDING_CONTRACT.md`.
 ///
-/// Rust has no exception type to name and no stack trace to attach, so `errtype`
-/// is the constant `"TaskError"` and `traceback` is null. Both fields are still
-/// written: a reader in another language matches on their presence, and omitting
-/// them would make a Rust failure the one shape that needs a special case.
+/// Rust has no exception type to name, so `errtype` is the constant
+/// `"TaskError"`; it has no stack trace to attach either, which the contract
+/// spells `[]` — the empty-frames case, not a missing key and not `null`. Both
+/// fields are still written: a reader in another language matches on their
+/// presence, and omitting them would make a Rust failure the one shape that
+/// needs a special case.
 pub(crate) fn task_error_json(err: &TaskError) -> String {
     serde_json::json!({
         "errtype": "TaskError",
         "message": err.message,
-        "traceback": serde_json::Value::Null,
+        "traceback": [],
     })
     .to_string()
 }
@@ -60,7 +62,23 @@ mod tests {
 
         assert_eq!(parsed["errtype"], "TaskError");
         assert_eq!(parsed["message"], "card declined");
-        assert_eq!(parsed["traceback"], serde_json::Value::Null);
+        assert_eq!(
+            parsed["traceback"],
+            serde_json::json!([]),
+            "the contract's no-frames case is an empty array, never null"
+        );
+    }
+
+    /// The contract pins the three keys, their order and the absence of
+    /// whitespace, so a reader in another shell can match on the bytes.
+    #[test]
+    fn task_error_json_is_byte_exact() {
+        let encoded = task_error_json(&TaskError::fatal("it broke"));
+
+        assert_eq!(
+            encoded,
+            r#"{"errtype":"TaskError","message":"it broke","traceback":[]}"#
+        );
     }
 
     #[test]

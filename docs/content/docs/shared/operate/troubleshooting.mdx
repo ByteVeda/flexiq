@@ -1415,11 +1415,12 @@ A failed job's `error` is the contract's JSON rather than a bare message, so a
 reader in any shell gets the same shape:
 
 ```json
-{ "errtype": "TaskError", "message": "card declined", "traceback": null }
+{ "errtype": "TaskError", "message": "card declined", "traceback": [] }
 ```
 
-`errtype` is always `"TaskError"` and `traceback` is always null — Rust has no
-exception type to name and no stack to attach. The message is whatever
+`errtype` is always `"TaskError"` and `traceback` is always `[]` — Rust has no
+exception type to name and no stack to attach, and `[]` is the contract's
+no-frames case. The message is whatever
 `TaskError::retryable` or `TaskError::fatal` was given, and which of the two the
 body chose is what decided whether the job retried or dead-lettered on the spot.
 

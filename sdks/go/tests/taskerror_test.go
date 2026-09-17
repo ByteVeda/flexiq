@@ -64,8 +64,9 @@ func TestTaskErrorSurfacesUnstructuredVerbatim(t *testing.T) {
 // TestTaskErrorFillsAbsentSiblings covers the contract's fallback rule, which
 // turns on `message` alone: a document carrying one is the canonical shape, and
 // an absent, null or wrong-typed sibling is a default to fill rather than
-// grounds to reject the whole document as prose. The first case is verbatim
-// what a Rust worker records for a failed task.
+// grounds to reject the whole document as prose. The first case is what a Rust
+// worker recorded before #930 taught it the contract's empty-frames shape, and
+// rows written by one are still out there to be read.
 func TestTaskErrorFillsAbsentSiblings(t *testing.T) {
 	cases := []struct {
 		raw           string

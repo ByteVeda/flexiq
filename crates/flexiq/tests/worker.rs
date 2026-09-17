@@ -110,6 +110,11 @@ fn a_failure_records_the_contract_json() {
         serde_json::from_str(&recorded).expect("the recorded error is JSON");
     assert_eq!(parsed["errtype"], "TaskError");
     assert_eq!(parsed["message"], "nope");
+    assert_eq!(
+        parsed["traceback"],
+        serde_json::json!([]),
+        "the key is required and its no-frames form is [], never null"
+    );
 }
 
 /// A fatal error is not retried, however many retries the job has left.
