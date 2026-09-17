@@ -1357,10 +1357,10 @@ impl Shared {
         // this job is *currently* dispatched under, and the scheduler wrote
         // that entry before it handed the job over.
         //
-        // Withheld from a peer that never advertised [`CAP_LEASE`], because a
-        // value it will not echo is a value the scheduler must not then require
-        // — the give-up has to be symmetric or it becomes a silent rejection of
-        // every result that executor sends.
+        // Withheld where the attach did not negotiate [`CAP_LEASE`], because a
+        // value the peer will not echo is a value the scheduler must not then
+        // require — the give-up has to be symmetric or it becomes a silent
+        // rejection of every result that executor sends.
         let lease = executor
             .leases
             .then(|| self.lease_book()?.current(&job.id))
