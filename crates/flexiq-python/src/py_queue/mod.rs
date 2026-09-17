@@ -18,12 +18,12 @@ use flexiq_core::periodic::next_cron_time;
 use flexiq_core::scheduler::retention::RetentionConfig;
 #[cfg(feature = "postgres")]
 use flexiq_core::storage::postgres::PostgresStorage;
-use flexiq_core::storage::records::{DebounceOptions, NewPeriodicTask};
 #[cfg(feature = "redis")]
 use flexiq_core::storage::redis_backend::RedisStorage;
 use flexiq_core::storage::sqlite::SqliteStorage;
 use flexiq_core::storage::{Storage, StorageBackend};
 use flexiq_core::worker::WorkerDispatcher;
+use flexiq_core::{DebounceOptions, NewPeriodicTask};
 
 use crate::py_job::PyJob;
 

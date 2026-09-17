@@ -1,10 +1,6 @@
 //! Per-enqueue options, and the one place they become a [`NewJob`].
 
-// `DebounceOptions` is not on core's root re-export list, unlike every other
-// record beside it. Named through its module rather than adding a re-export in
-// this branch; filed as a follow-up.
-use flexiq_core::storage::records::DebounceOptions;
-use flexiq_core::{now_millis, NewJob};
+use flexiq_core::{now_millis, DebounceOptions, NewJob};
 
 /// The debounce window, whole.
 ///
