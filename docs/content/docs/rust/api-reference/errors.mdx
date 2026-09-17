@@ -104,13 +104,14 @@ A failed job's `error` column carries the contract's JSON, so a reader in any
 other SDK gets a structured error rather than a bare string:
 
 ```json
-{ "errtype": "TaskError", "message": "card declined", "traceback": null }
+{ "errtype": "TaskError", "message": "card declined", "traceback": [] }
 ```
 
-Rust has no exception type to name and no stack trace to attach, so `errtype`
-is the constant `"TaskError"` and `traceback` is always `null`. Both fields are
-still written: a reader matches on their presence, and omitting them would make
-a Rust failure the one shape that needs a special case.
+Rust has no exception type to name, so `errtype` is the constant `"TaskError"`;
+it has no stack trace to attach either, which the contract spells `[]` — its
+no-frames case. Both fields are still written: a reader matches on their
+presence, and omitting them would make a Rust failure the one shape that needs a
+special case.
 
 ## `QueueError`
 

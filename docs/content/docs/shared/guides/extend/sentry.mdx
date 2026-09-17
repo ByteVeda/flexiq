@@ -98,7 +98,7 @@ The Rust SDK ships no Sentry integration, and has no middleware to hang one on.
 Initialize the `sentry` crate in your own `main` and report from inside the task
 body, which is the only place the real error still exists: by the time a failure
 reaches the queue it is a `TaskError` — a message and a retryable flag, recorded
-as `{"errtype": "TaskError", "message": …, "traceback": null}` — with the error's
+as `{"errtype": "TaskError", "message": …, "traceback": []}` — with the error's
 type and any backtrace already gone.
 
 ```rust

@@ -37,6 +37,14 @@ their entries below keep that name.
   target's own work (#846 tracks reaching it); and push dispatch does not honour `HTTP_PROXY` /
   `HTTPS_PROXY` / `ALL_PROXY`, since a proxy would resolve the target outside the egress guard.
 
+### Fixed
+
+- **A failed Rust task records an empty traceback, not a null one** (#930). `flexiq`'s failure
+  formatter wrote `"traceback": null`, a third shape the binding contract does not describe — it
+  specifies an array of strings, `[]` when the language or runtime has no frames to offer. Rust was
+  the only shell writing `null`, and a reader that had to special-case it is a reader that would
+  eventually not.
+
 ## 2.0.0
 
 Three things a queue could not do before: checkpoint work *inside* a job, be reached by a process
