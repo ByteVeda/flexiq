@@ -2,8 +2,7 @@
 //! logic modules so `queue`/`worker` read as intent, not plumbing.
 
 use flexiq_core::job::now_millis;
-use flexiq_core::storage::records::DebounceOptions;
-use flexiq_core::{Job, NewJob};
+use flexiq_core::{DebounceOptions, Job, NewJob};
 use napi::bindgen_prelude::{Buffer, Result};
 use napi_derive::napi;
 

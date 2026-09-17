@@ -29,6 +29,13 @@ their entries below keep that name.
   `cancel()` abandons the request and fences the target's answer out rather than stopping the
   target's own work (#846 tracks reaching it); and push dispatch does not honour `HTTP_PROXY` /
   `HTTPS_PROXY` / `ALL_PROXY`, since a proxy would resolve the target outside the egress guard.
+- **`DebounceOptions` and `TaskHandler` are reachable from the crate root** (#921). Both belong on
+  `flexiq-core`'s curated root re-export — the blessed import path new code is meant to prefer —
+  and both were missing: `DebounceOptions` is a parameter of `Storage::enqueue_debounced`, and
+  `TaskHandler` is the enum `TaskRegistry` stores and `NativeDispatcher` matches on. A consumer
+  had to name each through its module. `flexiq` re-exports core's root wholesale, so they are
+  `flexiq::DebounceOptions` and `flexiq::TaskHandler` too. Purely additive; the module paths
+  still resolve.
 
 ### Fixed
 

@@ -111,7 +111,7 @@ impl FlexiQ {
         call: TaskCall<T>,
     ) -> Result<(
         flexiq_core::NewJob,
-        Option<flexiq_core::storage::records::DebounceOptions>,
+        Option<flexiq_core::DebounceOptions>,
         bool,
     )> {
         let TaskCall {

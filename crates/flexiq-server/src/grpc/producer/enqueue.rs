@@ -172,7 +172,7 @@ enum Dispatch {
     /// A `unique_key`, so the enqueue may return a job that was already active.
     Unique,
     /// A debounce window to open or slide.
-    Debounced(flexiq_core::storage::records::DebounceOptions),
+    Debounced(flexiq_core::DebounceOptions),
 }
 
 impl Prepared {

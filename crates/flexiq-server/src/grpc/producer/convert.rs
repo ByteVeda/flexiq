@@ -10,7 +10,7 @@
 //! would be twenty chances to divide by the wrong thousand.
 
 use flexiq_core::job::{Job, JobStatus, NewJob};
-use flexiq_core::storage::records::DebounceOptions;
+use flexiq_core::DebounceOptions;
 use flexiq_workflows::{WorkflowNode, WorkflowNodeStatus, WorkflowRun, WorkflowState};
 use prost_types::{Duration as ProtoDuration, Timestamp};
 
