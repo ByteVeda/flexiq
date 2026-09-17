@@ -2132,6 +2132,45 @@ fn an_executor_that_negotiated_the_lease_capability_is_dispatched_one() {
 }
 
 #[test]
+fn a_step_commit_from_an_executor_that_never_negotiated_steps_is_refused() {
+    // The steps half of the same symmetry. A peer that did not negotiate
+    // `CAP_STEPS` is sent no `job_steps` snapshot, so it runs every step
+    // un-memoized; storing its commit would leave a memo it is never handed
+    // back, and the next attempt re-runs the side effect with a record on file
+    // saying it was already done. `CAP_STEPS` refuses that rather than degrade
+    // to it, so the scheduler has to check the executor's half too — its own
+    // step store being present is not enough.
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage(&storage);
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["charge"], 1).expect("attach");
+
+    let job = claimed_job(&storage, "charge", "scheduler-test");
+
+    with_running(&dispatcher, 4, |jobs, _results| {
+        let job_id = job.id.clone();
+        jobs.blocking_send(job.clone()).expect("dispatch");
+        assert_eq!(executor.expect_job().0, job_id);
+
+        executor.commit_step(&job_id, 0, "charge#0", b"receipt");
+        let (_, ok, _, _, failure) = executor.expect_step_ack();
+        assert!(!ok, "a commit from an attach without steps must be refused");
+        assert_eq!(
+            failure,
+            Some(StepFailure::Permanent),
+            "a capability is settled at the handshake, so retrying cannot make it true"
+        );
+    });
+
+    assert!(
+        storage
+            .get_job_steps(&job.id, None)
+            .expect("steps")
+            .is_empty(),
+        "a refused commit must never reach storage"
+    );
+}
+
+#[test]
 fn a_step_commit_under_a_stale_lease_is_refused_without_waiting() {
     // Refused rather than merely dropped: the executor is blocked on the ack,
     // and `Superseded` is what ends that attempt now instead of at the end of

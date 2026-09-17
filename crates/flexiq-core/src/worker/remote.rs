@@ -1712,6 +1712,34 @@ impl Shared {
             return;
         };
 
+        // The executor's half of the same negotiation, and it has to be checked
+        // rather than assumed: a peer that did not negotiate [`CAP_STEPS`] is
+        // sent no `job_steps` snapshot, so every step it runs is un-memoized.
+        // Applying its commit would store a memo it will never be handed back —
+        // the next attempt re-runs the side effect with a record on file saying
+        // it was already done, which is precisely the silent loss [`CAP_STEPS`]
+        // refuses rather than degrades to.
+        //
+        // `Config` classifies [`StepFailure::Permanent`], which is right: a
+        // capability is settled at the handshake, so retrying on this
+        // connection cannot make it true.
+        if !executor.steps {
+            log::warn!(
+                "[flexiq] executor {} sent a step commit without negotiating steps on this \
+                 attach; refusing it — it is sent no snapshot, so the commit would be a memo \
+                 it never sees",
+                executor.id
+            );
+            reply(refusal(
+                job_id,
+                seq,
+                QueueError::Config(
+                    "this attach did not negotiate the steps capability".to_string(),
+                ),
+            ));
+            return;
+        }
+
         let Some(dispatched) = executor.running(&job_id) else {
             log::warn!(
                 "[flexiq] executor {} sent a step commit for job {job_id}, which it is not \
