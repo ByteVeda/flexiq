@@ -24,8 +24,11 @@
 
 use flexiq_core::step::StepFailure;
 use flexiq_core::worker::protocol::{ExecutorMessage, SchedulerMessage};
+#[cfg(feature = "http-target")]
+use flexiq_core::SettledOutcome;
 use flexiq_core::{Lease, StepKind};
 use prost_types::{Duration, Timestamp};
+use tonic::Status;
 
 use crate::grpc::pb::executor as pb;
 
@@ -68,7 +71,7 @@ fn nanos_from_duration(duration: Option<Duration>) -> i64 {
 /// `div_euclid`, not `/`: a `Timestamp`'s nanos must be non-negative, and a
 /// truncating division would produce -1 second and +something nanos for any
 /// instant before the epoch.
-fn timestamp_from_millis(millis: i64) -> Timestamp {
+pub fn timestamp_from_millis(millis: i64) -> Timestamp {
     Timestamp {
         seconds: millis.div_euclid(1_000),
         nanos: (millis.rem_euclid(1_000) * 1_000_000) as i32,
@@ -527,6 +530,95 @@ fn step_failure_from_wire(failure: i32) -> Option<StepFailure> {
         Ok(pb::StepFailure::Superseded) => Some(StepFailure::Superseded),
         Ok(pb::StepFailure::Unspecified) | Err(_) => None,
     }
+}
+
+// ── The reporting RPCs ────────────────────────────────────────────
+//
+// Gated on `http-target`: the only caller is the push dispatch path, and
+// `SettledOutcome` lives behind the same feature.
+//
+// These read the *same* frames the attach stream carries, deliberately: a
+// target reporting a success over a unary RPC and an executor reporting one
+// over a stream are saying the same thing, and a second set of messages would
+// be a second place for the two to drift.
+
+/// Read a lease off the wire, refusing anything this scheduler could not have
+/// minted.
+///
+/// Required, not optional: every one of these RPCs names a dispatch, and the
+/// lease is the only thing that says *which* dispatch. An absent or
+/// unmintable value is `FAILED_PRECONDITION` for the same reason a mismatched
+/// one is — neither has proved anything, and neither may be resent.
+#[cfg(feature = "http-target")]
+pub fn lease_from_bytes(bytes: &[u8]) -> Result<Lease, Status> {
+    Lease::from_wire(bytes).ok_or_else(|| {
+        Status::failed_precondition(
+            "this report carries no usable lease; echo back the x-flexiq-lease header the \
+             dispatch arrived with",
+        )
+    })
+}
+
+/// A requested extension as a `std::time::Duration`. Absent or non-positive is
+/// invalid: asking for no more time is not a request, it is a mistake.
+#[cfg(feature = "http-target")]
+pub fn extension_from_wire(extend_by: Option<Duration>) -> Result<std::time::Duration, Status> {
+    let millis = millis_from_duration(extend_by);
+    if millis <= 0 {
+        return Err(Status::invalid_argument(
+            "extend_by must be a positive duration",
+        ));
+    }
+    Ok(std::time::Duration::from_millis(millis as u64))
+}
+
+/// Read a `SettleRequest` into the job it names, the lease it presents and the
+/// outcome it reports.
+///
+/// A `oneof` with no arm set is `INVALID_ARGUMENT` rather than skipped.
+/// Skipping is right for a frame on a stream, where the next frame follows; a
+/// unary call that was asked to settle a job and recognised nothing it was
+/// given has not been asked anything, and answering `OK` would tell a target
+/// its result landed when it did not.
+#[cfg(feature = "http-target")]
+pub fn settle_request(
+    request: pb::SettleRequest,
+) -> Result<(String, Lease, SettledOutcome), Status> {
+    use pb::settle_request::Outcome;
+
+    let outcome = request.outcome.ok_or_else(|| {
+        Status::invalid_argument(
+            "a settle carries no outcome; set one of success, failure or cancelled",
+        )
+    })?;
+
+    Ok(match outcome {
+        Outcome::Success(frame) => (
+            frame.job_id,
+            lease_from_bytes(frame.lease.as_deref().unwrap_or_default())?,
+            SettledOutcome::Success {
+                result: frame.result,
+                wall_time_ns: nanos_from_duration(frame.wall_time),
+            },
+        ),
+        Outcome::Failure(frame) => (
+            frame.job_id,
+            lease_from_bytes(frame.lease.as_deref().unwrap_or_default())?,
+            SettledOutcome::Failure {
+                error: frame.error,
+                should_retry: frame.should_retry,
+                timed_out: frame.timed_out,
+                wall_time_ns: nanos_from_duration(frame.wall_time),
+            },
+        ),
+        Outcome::Cancelled(frame) => (
+            frame.job_id,
+            lease_from_bytes(frame.lease.as_deref().unwrap_or_default())?,
+            SettledOutcome::Cancelled {
+                wall_time_ns: nanos_from_duration(frame.wall_time),
+            },
+        ),
+    })
 }
 
 #[cfg(test)]

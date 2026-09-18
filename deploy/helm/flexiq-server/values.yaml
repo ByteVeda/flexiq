@@ -188,6 +188,17 @@ push:
   # FLEXIQ_PUSH_TARGET_* variable through extraEnv below, reading a
   # secret-bearing one from a Secret you create via valueFrom.secretKeyRef.
   auth: none
+  # How a target reports work that outlived the request it arrived on.
+  #
+  # "off" (the default) refuses a 202 Accepted: the job dead-letters in one
+  # attempt with a reason an operator can grep. "grpc" accepts it and waits for
+  # a Settle callback on the executor door — which is why it requires
+  # grpc.enabled, checked at render time and again at boot.
+  #
+  # Turning this on means sizing push.capacity for concurrent *jobs* rather
+  # than concurrent requests: an accepted dispatch holds its slot until it is
+  # settled.
+  settle: "off"
   # No Service and no containerPort: a push target dials out, so this role has
   # no listener for either to front.
 

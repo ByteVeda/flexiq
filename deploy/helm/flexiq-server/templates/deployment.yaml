@@ -210,6 +210,10 @@ spec:
             - name: FLEXIQ_PUSH_TARGET_AUTH
               value: {{ .Values.push.auth | quote }}
             {{- end }}
+            {{- if ne .Values.push.settle "off" }}
+            - name: FLEXIQ_PUSH_TARGET_SETTLE
+              value: {{ .Values.push.settle | quote }}
+            {{- end }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}

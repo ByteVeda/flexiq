@@ -704,6 +704,14 @@ impl HttpDispatchTarget {
         &self.shared.target
     }
 
+    /// Whether this target accepts a `202` and waits for a later settle.
+    ///
+    /// Read by `flexiq-server` to decide whether to serve the executor door at
+    /// all: with callbacks off there is nothing for a target to report to.
+    pub fn accepts_settle_callbacks(&self) -> bool {
+        self.shared.config.settle_callbacks
+    }
+
     /// How many dispatches this process has accepted and is still waiting on.
     ///
     /// Process-local by construction — the waiting attempts live here — so a
@@ -809,6 +817,79 @@ impl HttpDispatchTarget {
             Ok(None) => Err(SettleRefused::Fenced),
             Err(error) => Err(SettleRefused::Storage(error.to_string())),
         }
+    }
+
+    /// Report progress for a dispatch this target accepted.
+    ///
+    /// Fire and forget, like the frame it mirrors: `Ok` means the report was
+    /// taken, not that a row was written, because a task that only wanted to
+    /// report progress must never be blocked by the scheduler's database.
+    ///
+    /// **Not** gated on the durable fence, and the asymmetry is deliberate.
+    /// This advances an attempt rather than settling one, so the question is
+    /// "is this the dispatch we are holding open", which the in-process
+    /// registry answers — the same question `frame_is_current` asks of the
+    /// identical frame on the attach stream. Consuming the settle marker here
+    /// would settle the job on a progress report.
+    pub fn report_progress(
+        &self,
+        job_id: &str,
+        lease: &Lease,
+        progress: i32,
+    ) -> Result<(), SettleRefused> {
+        let namespace = self.accepted_namespace(job_id, lease)?;
+        let channel = self
+            .shared
+            .side_channel()
+            .ok_or(SettleRefused::Unsupported)?;
+        channel.update_progress(job_id, progress, namespace.as_deref());
+        Ok(())
+    }
+
+    /// Write one structured log line for a dispatch this target accepted. As
+    /// [`report_progress`](Self::report_progress), and fenced the same way.
+    pub fn write_task_log(
+        &self,
+        job_id: &str,
+        lease: &Lease,
+        task_name: &str,
+        level: &str,
+        message: &str,
+        extra: Option<&str>,
+    ) -> Result<(), SettleRefused> {
+        let namespace = self.accepted_namespace(job_id, lease)?;
+        let channel = self
+            .shared
+            .side_channel()
+            .ok_or(SettleRefused::Unsupported)?;
+        channel.write_task_log(
+            job_id,
+            task_name,
+            level,
+            message,
+            extra,
+            namespace.as_deref(),
+        );
+        Ok(())
+    }
+
+    /// The namespace of an accepted dispatch, once the lease has been checked
+    /// against the one it was made under.
+    fn accepted_namespace(
+        &self,
+        job_id: &str,
+        lease: &Lease,
+    ) -> Result<Option<String>, SettleRefused> {
+        let accepted = self.shared.accepted.lock().unwrap_or_else(recover);
+        let held = accepted.get(job_id).ok_or(SettleRefused::NotHere)?;
+        if held
+            .lease
+            .as_ref()
+            .is_some_and(|expected| expected != lease)
+        {
+            return Err(SettleRefused::Fenced);
+        }
+        Ok(held.namespace.clone())
     }
 }
 

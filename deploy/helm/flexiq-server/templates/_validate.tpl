@@ -38,6 +38,12 @@ template time instead of letting the pod CrashLoopBackOff on it.
 {{- if not .Values.push.allow -}}
 {{- fail "flexiq-server: push.enabled requires push.allow — a guard whose default is derived from the value it guards is not a guard. List every host and CIDR the scheduler may dispatch a job to." -}}
 {{- end -}}
+{{/* Mirrors Config::from_map: a 202 is a hand-off to somewhere, and the
+     executor door is that somewhere. Refused at render rather than letting the
+     pod crash-loop on the same check at boot. */}}
+{{- if and (ne (.Values.push.settle | default "off") "off") (not .Values.grpc.enabled) -}}
+{{- fail "flexiq-server: push.settle=grpc needs grpc.enabled — the executor door is what a push target reports a later outcome through. Enable grpc, or set push.settle to off." -}}
+{{- end -}}
 {{/*
 A push shutdown spends push.drain twice — once waiting for in-flight
 dispatches, again for each to settle once abandoned — so anything at or under

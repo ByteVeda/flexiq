@@ -102,6 +102,23 @@ impl Config {
                  FLEXIQ_PUSH_TARGET_URL (push dispatch), or any combination"
             );
         }
+        // Settle callbacks need somewhere for the target to report *to*, and
+        // the executor door is that place. Refused here rather than starting a
+        // deployment that accepts a 202 and then has no inbound surface for
+        // the answer — which fails only once a job is already given away.
+        if config
+            .push
+            .as_ref()
+            .is_some_and(|push| push.settle_callbacks)
+            && config.grpc.is_none()
+        {
+            bail!(
+                "{}=grpc needs the gRPC listener: it is the door a push target reports \
+                 through. Set FLEXIQ_GRPC_LISTEN, or unset the variable to refuse a 202.",
+                push::SETTLE_VAR
+            );
+        }
+
         // The webhook is the one role that touches no storage — it rewrites pod
         // specs and never reads a job — so it alone may run without a DSN.
         if config.dsn.is_none()

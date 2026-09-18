@@ -57,6 +57,9 @@ pub const DRAIN_VAR: &str = "FLEXIQ_PUSH_TARGET_DRAIN";
 pub const MAX_REQUEST_BYTES_VAR: &str = "FLEXIQ_PUSH_TARGET_MAX_REQUEST_BYTES";
 /// Ceiling on one response body read back, in bytes.
 pub const MAX_RESPONSE_BYTES_VAR: &str = "FLEXIQ_PUSH_TARGET_MAX_RESPONSE_BYTES";
+/// Whether a `202 Accepted` hands the job off to be settled later, and over
+/// what. `off` (the default) or `grpc`.
+pub const SETTLE_VAR: &str = "FLEXIQ_PUSH_TARGET_SETTLE";
 /// Which outbound-auth scheme to sign dispatches with.
 pub const AUTH_VAR: &str = "FLEXIQ_PUSH_TARGET_AUTH";
 /// Bearer secret, for `AUTH_VAR=bearer`.
@@ -142,6 +145,14 @@ pub struct PushTargetConfig {
     pub max_response_bytes: usize,
     /// How the scheduler proves to the target that it is the scheduler.
     pub auth: PushAuthConfig,
+    /// Whether a `202 Accepted` hands the job off to be settled later.
+    ///
+    /// Off by default. A `202` has always been a refusal that dead-letters in
+    /// one attempt with a greppable reason, so turning it into a wait silently
+    /// would change a shipped promise — and the bug it would hide is a
+    /// framework answering `202` by default, which is exactly what the
+    /// mandatory outcome header exists to catch.
+    pub settle_callbacks: bool,
 }
 
 /// What the operator asked for the scheduler to authenticate a push with —
@@ -386,6 +397,7 @@ pub fn from_env(env: &Env) -> Result<Option<PushTargetConfig>> {
          went",
     )?;
     let auth = parse_auth(env)?;
+    let settle_callbacks = parse_settle(env)?;
 
     Ok(Some(PushTargetConfig {
         url,
@@ -397,7 +409,28 @@ pub fn from_env(env: &Env) -> Result<Option<PushTargetConfig>> {
         max_request_bytes,
         max_response_bytes,
         auth,
+        settle_callbacks,
     }))
+}
+
+/// Read [`SETTLE_VAR`]: `off` (the default) or `grpc`.
+///
+/// Spelled as a transport rather than a boolean because it names *where* a
+/// target reports, and there is exactly one answer today. A `true` would have
+/// to be reinterpreted the day there is a second, and a wire this specific
+/// should not be renegotiated through a flag that means "yes".
+fn parse_settle(env: &Env) -> Result<bool> {
+    let Some(raw) = env.get(SETTLE_VAR) else {
+        return Ok(false);
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "off" => Ok(false),
+        "grpc" => Ok(true),
+        other => bail!(
+            "{SETTLE_VAR}={other} is not a settle transport. Use `grpc` to accept a 202 and \
+             wait for a callback on the executor door, or `off` to refuse one."
+        ),
+    }
 }
 
 /// Jobs the target may run at once — required, because nothing about a push
@@ -999,6 +1032,7 @@ mod tests {
                 secret: Secret::new(hmac_secret),
                 key_id: Some("key-1".to_string()),
             },
+            settle_callbacks: false,
         };
         let rendered = format!("{config:?}");
         assert!(

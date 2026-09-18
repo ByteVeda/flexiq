@@ -27,6 +27,7 @@ use flexiq_core::{
     now_millis, HttpDispatchTarget, HttpTargetConfig, JobStatus, NewJob, Storage, StorageBackend,
     StorageSideChannel,
 };
+use flexiq_server::config::push::SETTLE_VAR;
 use flexiq_server::config::{Config, Env};
 use flexiq_server::runtime::scheduler::{DispatchPath, SchedulerSettings, SchedulerSupervisor};
 
@@ -447,9 +448,11 @@ fn a_target_that_returns_202_dead_letters_with_a_reason_an_operator_can_read() {
         error.contains(ACCEPTED_NOT_SETTLED),
         "the reason must carry the greppable prefix, got: {error}"
     );
+    // Names the variable rather than the issue that used to track it: #845 is
+    // implemented, so the actionable thing is the switch that turns it on.
     assert!(
-        error.contains("#845"),
-        "the reason must name the issue that tracks settling a 202, got: {error}"
+        error.contains(SETTLE_VAR),
+        "the reason must name the variable that turns callbacks on, got: {error}"
     );
 
     assert_eq!(
@@ -620,7 +623,7 @@ fn a_push_deployment_refuses_to_start_with_a_bad_allowlist() {
 /// in a build without that feature — see this commit's report.
 #[cfg(feature = "grpc")]
 #[test]
-fn the_executor_door_is_absent_under_push() {
+fn nothing_attaches_under_push() {
     fn env(pairs: &[(&str, &str)]) -> Env {
         pairs
             .iter()
@@ -643,11 +646,13 @@ fn the_executor_door_is_absent_under_push() {
         ("FLEXIQ_PUSH_TARGET_ALLOW", "push.example.com"),
     ]);
 
-    // `executors_can_attach` is the one predicate that gates both the
-    // `RemoteDispatcher` and the `ExecutorDoor` built from it, so a `false`
-    // here is the door not being built. The gRPC-only deployment below is the
-    // discriminator: the producer door is untouched either way, and it is the
-    // push target alone that takes the executor door away.
+    // `executors_can_attach` gates the `RemoteDispatcher`, so a `false` here
+    // is nothing being able to attach. It is no longer the same thing as the
+    // executor door being absent: since #845 a push deployment may still serve
+    // that door, settle-only, so a target can report on work that outlived its
+    // request. `Attach` and `Heartbeat` refuse there; the four reporting RPCs
+    // do not. The gRPC-only deployment below is the discriminator, and the
+    // producer door is untouched either way.
     assert!(
         !flexiq_server::runtime::executors_can_attach(
             &Config::from_map(&env(&push)).expect("a push + gRPC deployment is valid")

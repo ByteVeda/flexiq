@@ -69,11 +69,25 @@ pub fn push_target(
         // middleware toggles — the same argument the attach path's side
         // channel makes.
         side_channel: Some(Arc::new(StorageSideChannel::new(storage.clone()))),
+        settle_callbacks: config.settle_callbacks,
         // Everything else takes the core default, `allow_loopback` among them:
         // this path never turns it on, and the variable that asks for it is
         // refused outright rather than honoured.
         ..HttpTargetConfig::new(config.url.clone(), config.capacity, config.allow.clone())
     };
+    // Refused at boot, not at the first `202`. A deployment that accepts a
+    // hand-off it cannot fence would apply an unfenced settle, which is the
+    // one failure this whole path exists to prevent — and it would only find
+    // out under load, on a job it had already given away.
+    if config.settle_callbacks && !flexiq_core::Storage::supports_settle(storage) {
+        anyhow::bail!(
+            "{} asks for settle callbacks, but this storage backend cannot record the \
+             fence they are checked against. Use a backend that implements it, or unset \
+             the variable.",
+            crate::config::push::SETTLE_VAR
+        );
+    }
+
     HttpDispatchTarget::new(target)
         .map_err(anyhow::Error::from)
         .context("the push target named by FLEXIQ_PUSH_TARGET_URL could not be built")
@@ -155,6 +169,15 @@ pub fn run(config: Config) -> Result<()> {
     };
 
     // `Worker` holds exactly one dispatcher, so this is a choice.
+    // Kept past the `path` match below: a settle-only executor door needs the
+    // same target the scheduler dispatches through, because the waiting
+    // attempt that a settle relieves lives inside it.
+    #[cfg(feature = "http-target")]
+    let settle_target = push
+        .as_ref()
+        .filter(|target| target.accepts_settle_callbacks())
+        .cloned();
+
     #[cfg(feature = "http-target")]
     let path = match (dispatcher.clone(), push) {
         (Some(dispatcher), None) => Some(DispatchPath::Attach(dispatcher)),
@@ -286,8 +309,8 @@ pub fn run(config: Config) -> Result<()> {
             // `executors_can_attach` — so the `zip` below yields no door.
             if config.push.is_some() {
                 log::info!(
-                    "[flexiq] the gRPC executor door is disabled: this process dispatches to a \
-                     push target, so there is nothing for an executor to attach to. The \
+                    "[flexiq] nothing attaches to this process: it dispatches to a push \
+                     target. The executor door serves only the reporting RPCs, and the \
                      producer door is unaffected."
                 );
             }
@@ -307,6 +330,20 @@ pub fn run(config: Config) -> Result<()> {
                             )),
                         )
                     });
+
+            // Under push there is no dispatcher, so the door above is `None`.
+            // A deployment that accepts `202` still needs one: it is the only
+            // inbound surface a target has to report on work that outlived
+            // the request it arrived on.
+            #[cfg(feature = "http-target")]
+            let door = door.or_else(|| {
+                settle_target
+                    .clone()
+                    .zip(supervisor.clone())
+                    .map(|(target, supervisor)| {
+                        crate::grpc::ExecutorDoor::settle_only(target, supervisor)
+                    })
+            });
             roles.spawn(crate::grpc::serve(
                 grpc,
                 backend.storage.clone(),

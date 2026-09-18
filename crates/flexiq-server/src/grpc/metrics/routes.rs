@@ -68,7 +68,7 @@ async fn scrape(State(state): State<MetricsState>) -> Response {
     let mut body = crate::metrics::storage_gauges(
         per_queue,
         workers.len(),
-        state.door.as_ref().map(ExecutorDoor::capacity),
+        state.door.as_ref().and_then(ExecutorDoor::capacity),
     );
     body.push_str(&state.metrics.render());
 
