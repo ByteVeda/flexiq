@@ -185,6 +185,25 @@ impl ExecutorDoor {
         self.dispatcher.as_ref().map(RemoteDispatcher::capacity)
     }
 
+    /// Dispatches this replica accepted over push and has not settled.
+    ///
+    /// `None` on an attach door, which accepts none. **Per replica, not per
+    /// cluster**: the waiting attempts live in this process, and a cluster
+    /// total would mean a storage count on every scrape for a number an
+    /// operator reads per incident.
+    #[cfg(feature = "http-target")]
+    pub fn awaiting_settle(&self) -> Option<usize> {
+        self.target.as_ref().map(|target| target.awaiting_settle())
+    }
+
+    /// Without the push path there is no dispatch to accept, so there is
+    /// nothing to count. Present so the metrics route reads the same either
+    /// way rather than growing a `cfg` of its own.
+    #[cfg(not(feature = "http-target"))]
+    pub fn awaiting_settle(&self) -> Option<usize> {
+        None
+    }
+
     /// The live sessions, for tests and for a leak check.
     pub fn sessions(&self) -> &Arc<SessionRegistry> {
         &self.sessions

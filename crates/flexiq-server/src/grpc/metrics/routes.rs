@@ -69,6 +69,7 @@ async fn scrape(State(state): State<MetricsState>) -> Response {
         per_queue,
         workers.len(),
         state.door.as_ref().and_then(ExecutorDoor::capacity),
+        state.door.as_ref().and_then(ExecutorDoor::awaiting_settle),
     );
     body.push_str(&state.metrics.render());
 
