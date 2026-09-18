@@ -125,6 +125,25 @@ The rule to carry forward:
   is not evidence the marker is gone — clippy has nothing to warn about an `allow` that permits a
   warning which no longer fires either way.
 
+## A gap I call "out of scope" is the user's call, not mine
+
+**2026-09-18, #905.** The PR pinned a finite float to the 64-bit CBOR head and fixed the Java
+encoder that violated it, but left the same bug in the Go client documented as deliberately out
+of scope: fxamacker cannot be configured to widen a `float32`, and the pre-marshal route needs
+reflection that cannot rebuild a struct with unexported fields. A reviewer raised it, I declined
+it with that reasoning, and the user said: **do not file, fix that in the same PR.** The fix was
+a post-marshal pass over the encoded bytes — a route I had considered and set aside as too much
+machinery for the benefit. It took one file, ran green first try, and closed the last hole in a
+rule the PR had just written.
+
+The rule to carry forward:
+
+- **When a change states a rule, every runtime in the tree obeying it is part of the change.**
+  "This runtime cannot comply cheaply" is a cost to report, not a scope line to draw alone.
+- **Offer the expensive option instead of pre-declining it.** Name the cost, name the mechanism,
+  and let the user choose. I had the byte-pass design in hand before writing the decline.
+- A reviewer repeating something I scoped out is a signal to re-price it, not to restate why.
+
 ## One cargo build job at a time
 
 **2026-09-18, #948.** `CLAUDE.md` says `-j2` on a 13 GB machine, but the user stopped a
