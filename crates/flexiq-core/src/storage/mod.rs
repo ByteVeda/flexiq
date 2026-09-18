@@ -25,7 +25,7 @@ pub use traits::Storage;
 
 use crate::error::Result;
 use crate::job::{Job, NewJob};
-use crate::storage::records::{SettleClaimant, SettleGrant};
+use crate::storage::records::{SettleClaimant, SettleGrant, StaleJob};
 
 // ── Shared constants ───────────────────────────────────────────────────
 
@@ -719,7 +719,7 @@ macro_rules! impl_storage {
                 &self,
                 now: i64,
                 namespace: Option<&str>,
-            ) -> $crate::error::Result<Vec<$crate::job::Job>> {
+            ) -> $crate::error::Result<Vec<$crate::storage::records::StaleJob>> {
                 self.reap_stale_jobs(now, namespace)
             }
             fn reap_orphaned_jobs(
@@ -1723,7 +1723,7 @@ impl Storage for StorageBackend {
     fn purge_completed_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64> {
         delegate!(self, purge_completed_with_ttl, global_cutoff_ms)
     }
-    fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<Job>> {
+    fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<StaleJob>> {
         delegate!(self, reap_stale_jobs, now, namespace)
     }
     fn reap_orphaned_jobs(

@@ -56,8 +56,13 @@ pub const HDR_OUTCOME: &str = "x-flexiq-outcome";
 pub const HDR_RETRY: &str = "x-flexiq-retry";
 /// Content type of the request body: the tagged wire envelope, unchanged.
 pub const ENVELOPE_CONTENT_TYPE: &str = "application/vnd.flexiq.envelope";
-/// Prefix of the error a 202 dead-letters with, so an operator can grep for it.
-pub const ACCEPTED_NOT_SETTLED: &str = "push.accepted_not_settled";
+/// Prefix of the error an accepted-but-unsettled dispatch is recorded under,
+/// so an operator can grep for it.
+///
+/// Re-exported rather than defined here: the same string is written by the
+/// stale-job reaper, which is not behind this feature, so it is defined once
+/// where both can reach it. The path stays what it always was.
+pub use crate::scheduler::ACCEPTED_NOT_SETTLED;
 
 /// The key a target dedupes on: `<job id>.<attempt>.<lease>`, or
 /// `<job id>.<attempt>` when the scheduler held no lease.

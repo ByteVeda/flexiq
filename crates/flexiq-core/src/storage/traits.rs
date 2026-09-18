@@ -4,7 +4,7 @@ use crate::step::StepLimits;
 use crate::storage::records::{
     AttemptFence, CircuitBreakerState, DebounceOptions, JobError, JobStep, LockInfo, NewJobStep,
     NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SettleClaimant,
-    SettleGrant, SleepOutcome, StepCommit, Subscription, SubscriptionMode, TaskLogEntry,
+    SettleGrant, SleepOutcome, StaleJob, StepCommit, Subscription, SubscriptionMode, TaskLogEntry,
     TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
 };
 use crate::storage::{
@@ -266,10 +266,16 @@ pub trait Storage: Send + Sync + Clone {
     /// Purge archived jobs by the global/per-entry TTL, covering every terminal
     /// status on all backends.
     fn purge_completed_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64>;
-    /// Running jobs that exceeded their timeout, for the scheduler to fail or
+    /// Running jobs that exceeded their deadline, for the scheduler to fail or
     /// retry. Scoped so a scheduler never times out another namespace's job and
     /// then records the outcome under its own.
-    fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<Job>>;
+    ///
+    /// A job whose dispatch was accepted out of band is **excluded** while its
+    /// settle deadline is still in the future, and flagged
+    /// ([`StaleJob::awaiting_settle`]) once it is not. The two ways of being
+    /// late are different facts to an operator, and "accepted, never settled"
+    /// is the one this distinction exists to make visible.
+    fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<StaleJob>>;
     /// Running jobs whose execution-claim owner is not in `live_owner_ids` (the
     /// worker that claimed them has died). Read-only — paired with the dead
     /// owner so the caller can atomically reclaim before requeuing. Scoped like

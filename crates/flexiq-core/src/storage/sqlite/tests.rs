@@ -1618,7 +1618,7 @@ fn test_reap_stale_jobs_only_returns_expired() {
     // Well past the short job's deadline (t0 + 1) but before the long one's.
     let stale = storage.reap_stale_jobs(t0 + 1_000, None).unwrap();
     assert_eq!(stale.len(), 1);
-    assert_eq!(stale[0].task_name, "short_timeout");
+    assert_eq!(stale[0].job.task_name, "short_timeout");
 }
 
 #[test]

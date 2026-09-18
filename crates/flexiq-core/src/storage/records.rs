@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::job::Job;
+
 /// One recorded failure attempt for a job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobError {
@@ -726,6 +728,24 @@ pub enum SettleClaimant {
         /// The scheduler's clock at the moment it decided to give up.
         now: i64,
     },
+}
+
+/// A running job the reaper found past its deadline.
+///
+/// Carries more than the job because the two ways of being late are different
+/// facts to an operator: a job that simply ran long, and a dispatch a target
+/// accepted and never came back for.
+#[derive(Debug, Clone)]
+pub struct StaleJob {
+    /// The job itself, assembled narrow — the reaper needs the timeout
+    /// arithmetic and the identity, never the payload.
+    pub job: Job,
+    /// The dispatch was accepted out of band and never settled.
+    ///
+    /// The difference between "retried" and "accepted, never settled" in the
+    /// error an operator reads. False for every job dispatched the ordinary
+    /// way, which is every job on every topology but push-with-callbacks.
+    pub awaiting_settle: bool,
 }
 
 /// One committed step of a job, as read back at attempt start.
