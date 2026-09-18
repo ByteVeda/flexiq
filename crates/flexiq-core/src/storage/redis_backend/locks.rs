@@ -3,8 +3,11 @@ use redis::Commands;
 use super::{map_err, RedisStorage};
 use crate::error::Result;
 use crate::job::now_millis;
+use crate::job::JobStatus;
 use crate::lease::mint_claim_epoch;
-use crate::storage::records::LockInfo;
+use crate::storage::records::{LockInfo, SettleClaimant, SettleGrant};
+
+use super::steps::{epoch_arg, fence};
 
 /// Render the value an execution claim is stored under.
 ///
@@ -363,6 +366,11 @@ impl RedisStorage {
 
     /// Purge execution claims older than the cutoff via the time-indexed sorted
     /// set. Returns the count removed.
+    ///
+    /// A claim still awaiting a settle is **kept regardless of age**, for the
+    /// reason the Diesel copy states: dropping the row takes the epoch with it,
+    /// an absent epoch is not a mismatch, and the fence would then authorize
+    /// the stale answer it exists to refuse.
     pub fn purge_execution_claims(&self, older_than_ms: i64) -> Result<u64> {
         let mut conn = self.conn()?;
         let index_key = self.key(&["exec_claims", "by_time"]);
@@ -376,14 +384,171 @@ impl RedisStorage {
             return Ok(0);
         }
 
+        // One round trip for the markers rather than one per id: the sweep runs
+        // on every reap tick and a per-id GET would make its cost the size of
+        // the expired set.
+        let marker_keys: Vec<String> = expired_ids
+            .iter()
+            .map(|id| self.key(&["claim_settle", id]))
+            .collect();
+        let markers: Vec<Option<i64>> = conn.mget(&marker_keys).map_err(map_err)?;
+        let now = now_millis();
+
         let pipe = &mut redis::pipe();
-        for id in &expired_ids {
+        let mut removed = 0u64;
+        for (id, marker) in expired_ids.iter().zip(markers) {
+            if marker.is_some_and(|deadline| deadline >= now) {
+                continue;
+            }
             let ckey = self.key(&["exec_claim", id]);
             pipe.del(&ckey);
             pipe.zrem(&index_key, id);
+            removed += 1;
+        }
+        if removed == 0 {
+            return Ok(0);
         }
         pipe.query::<()>(&mut conn).map_err(map_err)?;
 
-        Ok(expired_ids.len() as u64)
+        Ok(removed)
+    }
+
+    /// Record that a dispatch was accepted out of band, and how long the
+    /// scheduler will wait for its outcome.
+    ///
+    /// The deadline is a **separate key** rather than a fourth field on the
+    /// claim value. #719 recorded why the claim string cannot grow one: every
+    /// reader takes the owner as everything before the last `:`, so an owner
+    /// containing one (`"host:pid"`, pinned by the contract suite) would
+    /// silently truncate. A separate key also makes the consume below a single
+    /// test-and-delete instead of a rewrite of the claim.
+    pub fn await_settle(
+        &self,
+        job_id: &str,
+        owner: &str,
+        attempt: i32,
+        epoch: Option<i64>,
+        deadline_ms: i64,
+        namespace: Option<&str>,
+    ) -> Result<Option<i64>> {
+        let mut conn = self.conn()?;
+        let reply: Vec<String> = redis::Script::new(&await_settle_script())
+            .key(self.key(&["job", job_id]))
+            .key(self.key(&["exec_claim", job_id]))
+            .key(self.key(&["exec_claims", "by_time"]))
+            .key(self.key(&["claim_settle", job_id]))
+            .arg(job_id)
+            .arg(owner)
+            .arg(attempt)
+            .arg(now_millis())
+            .arg(JobStatus::Running.wire_name())
+            .arg(namespace.unwrap_or(""))
+            .arg(epoch_arg(epoch))
+            .arg(deadline_ms)
+            .invoke(&mut conn)
+            .map_err(map_err)?;
+
+        match (reply.first().map(String::as_str), reply.get(1)) {
+            (Some("ok"), Some(deadline)) => Ok(deadline.parse::<i64>().ok()),
+            _ => Ok(None),
+        }
+    }
+
+    /// Consume the settle marker, if the claimant is entitled to it.
+    ///
+    /// One script, so the test and the delete cannot be split: three callers
+    /// race for this and exactly one may be told `Granted`.
+    pub fn claim_settle(
+        &self,
+        job_id: &str,
+        claimant: SettleClaimant,
+        namespace: Option<&str>,
+    ) -> Result<SettleGrant> {
+        let mut conn = self.conn()?;
+        // Two arguments, one of which is always empty: `redis::Script` has no
+        // null, and a single field would make "no epoch" and "no deadline" the
+        // same value — which is exactly the collapse `SettleClaimant` exists to
+        // prevent.
+        let (epoch, expires_at) = match claimant {
+            SettleClaimant::Lease(epoch) => (epoch.to_string(), String::new()),
+            SettleClaimant::Expired { now } => (String::new(), now.to_string()),
+        };
+
+        let granted: i64 = redis::Script::new(CLAIM_SETTLE)
+            .key(self.key(&["job", job_id]))
+            .key(self.key(&["exec_claim", job_id]))
+            .key(self.key(&["claim_settle", job_id]))
+            .arg(namespace.unwrap_or(""))
+            .arg(epoch)
+            .arg(expires_at)
+            .invoke(&mut conn)
+            .map_err(map_err)?;
+
+        Ok(if granted == 1 {
+            SettleGrant::Granted
+        } else {
+            SettleGrant::Refused
+        })
     }
 }
+
+/// `await_settle`: the shared fence, then a monotonic write of the deadline.
+///
+/// `KEYS[4]` is the marker. `ARGV[8]` is the proposed deadline; `ARGV[7]` is
+/// the caller's epoch, which the fence reads as its last argument.
+fn await_settle_script() -> String {
+    format!(
+        r#"{fence}
+    local proposed = tonumber(ARGV[8])
+    local held = tonumber(redis.call('GET', KEYS[4]))
+    -- Monotonic, like the Diesel copy: a deadline that only moves forward
+    -- keeps the reaper's job-side predicate a correct superset of this one,
+    -- and makes a retransmitted accept a no-op rather than a shortening.
+    if held and held > proposed then proposed = held end
+    -- The key outlives the deadline on purpose. Its own expiry is housekeeping
+    -- for a row nothing will read again; correctness is the stored value,
+    -- which `claim_settle` compares against the scheduler's clock.
+    redis.call('SET', KEYS[4], tostring(proposed), 'PX', 86400000)
+    return {{'ok', tostring(proposed)}}
+"#,
+        fence = fence(true, 7)
+    )
+}
+
+/// `claim_settle`: test and delete the marker in one statement.
+///
+/// `ARGV[1]` namespace scope (empty = unscoped) · `ARGV[2]` the presented
+/// epoch, empty for the scheduler · `ARGV[3]` the scheduler's clock, empty for
+/// a peer. Exactly one of the last two is set.
+const CLAIM_SETTLE: &str = r#"
+    local deadline = redis.call('GET', KEYS[3])
+    if not deadline then return 0 end
+
+    -- The namespace guard is on the job, not the claim: the claim carries no
+    -- namespace, and a scheduler must never settle another tenant's job.
+    if ARGV[1] ~= '' then
+        local jobdoc = redis.call('GET', KEYS[1])
+        if not jobdoc then return 0 end
+        local job_ns = cjson.decode(jobdoc).namespace
+        if job_ns == cjson.null then job_ns = '' end
+        if job_ns ~= ARGV[1] then return 0 end
+    end
+
+    if ARGV[2] ~= '' then
+        -- Strict: the claim's epoch must be present and equal. This is
+        -- `lease_authorizes` in Lua — an absent epoch proves nothing, so a
+        -- claim without one must not match.
+        local claim = redis.call('GET', KEYS[2])
+        if not claim then return 0 end
+        local claim_epoch = string.match(claim, ':%d+%.(%d+)$')
+        if not claim_epoch or claim_epoch ~= ARGV[2] then return 0 end
+    else
+        -- The scheduler may only collect a marker whose deadline has actually
+        -- passed, compared here rather than by the caller so an extension that
+        -- committed a millisecond ago wins.
+        if tonumber(deadline) > tonumber(ARGV[3]) then return 0 end
+    end
+
+    redis.call('DEL', KEYS[3])
+    return 1
+"#;

@@ -25,6 +25,7 @@ pub use traits::Storage;
 
 use crate::error::Result;
 use crate::job::{Job, NewJob};
+use crate::storage::records::{SettleClaimant, SettleGrant};
 
 // ── Shared constants ───────────────────────────────────────────────────
 
@@ -1269,6 +1270,28 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Option<i64>> {
                 self.reclaim_execution(job_id, expected_owner, new_owner)
             }
+            fn supports_settle(&self) -> bool {
+                true
+            }
+            fn await_settle(
+                &self,
+                job_id: &str,
+                owner: &str,
+                attempt: i32,
+                epoch: Option<i64>,
+                deadline_ms: i64,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<Option<i64>> {
+                self.await_settle(job_id, owner, attempt, epoch, deadline_ms, namespace)
+            }
+            fn claim_settle(
+                &self,
+                job_id: &str,
+                claimant: $crate::storage::records::SettleClaimant,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<$crate::storage::records::SettleGrant> {
+                self.claim_settle(job_id, claimant, namespace)
+            }
             fn supports_steps(&self) -> bool {
                 self.supports_steps()
             }
@@ -2155,6 +2178,37 @@ impl Storage for StorageBackend {
         new_owner: &str,
     ) -> Result<Option<i64>> {
         delegate!(self, reclaim_execution, job_id, expected_owner, new_owner)
+    }
+    fn supports_settle(&self) -> bool {
+        delegate!(self, supports_settle)
+    }
+    fn await_settle(
+        &self,
+        job_id: &str,
+        owner: &str,
+        attempt: i32,
+        epoch: Option<i64>,
+        deadline_ms: i64,
+        namespace: Option<&str>,
+    ) -> Result<Option<i64>> {
+        delegate!(
+            self,
+            await_settle,
+            job_id,
+            owner,
+            attempt,
+            epoch,
+            deadline_ms,
+            namespace
+        )
+    }
+    fn claim_settle(
+        &self,
+        job_id: &str,
+        claimant: SettleClaimant,
+        namespace: Option<&str>,
+    ) -> Result<SettleGrant> {
+        delegate!(self, claim_settle, job_id, claimant, namespace)
     }
     fn supports_steps(&self) -> bool {
         delegate!(self, supports_steps)

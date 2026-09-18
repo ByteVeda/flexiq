@@ -8,9 +8,15 @@
 macro_rules! impl_diesel_step_ops {
     ($storage_type:ty, $conn_type:ty) => {
         impl $storage_type {
-            /// Resolve the `(owner, attempt)` fence, inside the caller's
+            /// Resolve the `(owner, attempt, epoch)` fence, inside the caller's
             /// transaction, and return the job's namespace so a row can
             /// denormalise it.
+            ///
+            /// `pub(crate)` and named for the fence rather than for steps,
+            /// because steps are no longer its only caller: a dispatch accepted
+            /// out of band is fenced on the same triple before it may record
+            /// how long the scheduler will wait for it. See
+            /// `Storage::await_settle`.
             ///
             /// The four cases, in the order they are checked:
             ///
@@ -51,7 +57,7 @@ macro_rules! impl_diesel_step_ops {
             /// on — or under a job that no longer exists. SQLite needs no lock:
             /// `write_transaction` is `BEGIN IMMEDIATE`, which serializes
             /// writers outright.
-            fn resolve_step_fence(
+            pub(crate) fn resolve_attempt_fence(
                 conn: &mut $conn_type,
                 job_id: &str,
                 owner: &str,
@@ -265,7 +271,7 @@ macro_rules! impl_diesel_step_ops {
                 }
 
                 self.write_transaction(|conn| {
-                    let job_namespace = Self::resolve_step_fence(
+                    let job_namespace = Self::resolve_attempt_fence(
                         conn,
                         step.job_id,
                         owner,
@@ -346,7 +352,7 @@ macro_rules! impl_diesel_step_ops {
 
                 let limits = limits.clamped();
                 self.write_transaction(|conn| {
-                    let job_namespace = Self::resolve_step_fence(
+                    let job_namespace = Self::resolve_attempt_fence(
                         conn,
                         step.job_id,
                         owner,
@@ -455,7 +461,7 @@ macro_rules! impl_diesel_step_ops {
                 use $crate::storage::records::AttemptFence;
 
                 let mut conn = self.conn()?;
-                match Self::resolve_step_fence(
+                match Self::resolve_attempt_fence(
                     &mut conn, job_id, owner, attempt, epoch, namespace, false,
                 ) {
                     Ok(_) => Ok(AttemptFence::Authorized),
