@@ -87,8 +87,17 @@ final class DefiniteLengthCbor {
     }
 
     /**
-     * Writes the narrowest representation the node already holds, so a value keeps the width it was
-     * serialized with instead of being widened or rounded on the way out.
+     * Writes each number in the width the wire contract pins — which is not the same rule for the
+     * two kinds of number.
+     *
+     * <p>An integer keeps the narrowest representation the node already holds, because the contract
+     * pins the shortest form that holds the value. A float goes the other way and is always widened
+     * to 64 bits ({@code 0xfb}): a Java {@code float} would otherwise reach the wire as a 4-byte
+     * CBOR float ({@code 0xfa}) where the same value sent as a {@code double} takes 8. Widening is
+     * lossless — every {@code float} is exactly a {@code double} — and those bytes are what the
+     * automatic {@code auto:} key hashes, so the narrower width would interoperate fine and
+     * silently stop idempotent enqueues deduping across runtimes. A non-finite float is exempt from
+     * the pinned width and lands wide here like any other.
      */
     private static void writeNumber(JsonNode node, JsonGenerator generator) throws IOException {
         if (node.isInt()) {
@@ -99,9 +108,7 @@ final class DefiniteLengthCbor {
             generator.writeNumber(node.shortValue());
         } else if (node.isBigInteger()) {
             generator.writeNumber(node.bigIntegerValue());
-        } else if (node.isFloat()) {
-            generator.writeNumber(node.floatValue());
-        } else if (node.isDouble()) {
+        } else if (node.isFloat() || node.isDouble()) {
             generator.writeNumber(node.doubleValue());
         } else if (node.isBigDecimal()) {
             generator.writeNumber(node.decimalValue());

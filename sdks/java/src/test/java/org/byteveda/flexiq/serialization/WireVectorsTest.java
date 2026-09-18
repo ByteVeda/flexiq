@@ -126,6 +126,19 @@ class WireVectorsTest {
         assertTrue(!encoded.contains("bf"), "no indefinite-length container header may appear: " + encoded);
     }
 
+    /**
+     * Guards the other encoding choice those bytes depend on.
+     *
+     * <p>The {@code float} vector is pinned as a {@code double}, and the contract pins that width
+     * for every float. A payload argument declared {@code float} is the one way to reach the
+     * narrower 4-byte form, and nothing in the vector file can express the distinction — JSON has a
+     * single number type — so the assertion lives here.
+     */
+    @Test
+    void widensAFloatArgumentToThePinnedWidth() {
+        assertEquals("028281fb3ff8000000000000a0", hex(cbor.serializeCall(1.5f)));
+    }
+
     /** Payloads written before the definite-length fix must still decode. */
     @Test
     void decodesLegacyIndefiniteLengthPayloads() {
@@ -159,9 +172,25 @@ class WireVectorsTest {
 
             assertEquals(testCase.get("hex").asText(), hex(cbor.serializeCall(payload)));
         } else {
-            JsonNode decoded = JSON.valueToTree(call);
+            JsonNode decoded = widenFloats(JSON.valueToTree(call));
             assertEquals(testCase.get("args"), decoded.get(0));
             assertEquals(testCase.get("kwargs"), decoded.get(1));
+        }
+    }
+
+    /**
+     * Rewrites every float in a decoded tree as a double, through a JSON round trip.
+     *
+     * <p>A payload written at half or single precision decodes to a Java {@code float}, and
+     * Jackson's node equality is by type — a {@code FloatNode} does not equal a {@code DoubleNode}
+     * carrying the same value. These vectors pin the value a narrower width decodes to, not the
+     * Java type it lands in, and the width a writer must use is asserted on the encoding side.
+     */
+    private static JsonNode widenFloats(JsonNode decoded) {
+        try {
+            return JSON.readTree(JSON.writeValueAsString(decoded));
+        } catch (IOException e) {
+            throw new AssertionError("a decoded vector is not JSON-representable: " + decoded, e);
         }
     }
 

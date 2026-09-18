@@ -57,12 +57,27 @@ class DefiniteLengthCborTest {
     }
 
     @Test
-    void keepsNumericWidths() throws Exception {
+    void keepsIntegerWidths() throws Exception {
         assertEquals("01", encode(1));
         assertEquals("1b0020000000000001", encode(9007199254740993L));
         assertEquals("fb3ff8000000000000", encode(1.5d));
         assertEquals("c249010000000000000001", encode(new BigInteger("18446744073709551617")));
         assertEquals("20", encode(-1));
+    }
+
+    /**
+     * The one number the encoder widens instead of keeping.
+     *
+     * <p>A Java {@code float} is the only way a caller can reach the 4-byte CBOR float
+     * ({@code 0xfa}) the contract forbids, and it is reachable at any depth, so the widening
+     * belongs in the tree walk rather than at the top. Widening is lossless: {@code 0.1f} keeps its
+     * own value rather than being rounded to {@code 0.1d}.
+     */
+    @Test
+    void widensAFloatToSixtyFourBits() throws Exception {
+        assertEquals("fb3ff8000000000000", encode(1.5f));
+        assertEquals(encode((double) 0.1f), encode(0.1f));
+        assertEquals("a16161fb3ff8000000000000", encode(Map.of("a", 1.5f)));
     }
 
     @Test
