@@ -43,7 +43,9 @@ their entries below keep that name.
   `flexiq_core::X` — and, through `flexiq`'s wholesale re-export, as `flexiq::X`. The pub/sub four
   were the conspicuous gap: `Subscription` and `NewSubscription` were on the list but the `Topic`
   trio and the `SubscriptionMode` that travels with them were not, so converting one subscription
-  meant naming both paths in one file. Purely additive; the module paths still resolve.
+  meant naming both paths in one file. Purely additive; the module paths still resolve. The list
+  has now been declared complete twice while it was not, so a test diffs the root re-export group
+  against `records.rs` and fails on the next record that misses it.
 
 ### Fixed
 
