@@ -158,7 +158,7 @@ knowing before you build against one topology and assume it generalizes:
 |---|---|
 | Native | The handler observes the storage flag and stops. |
 | Attach | The scheduler sends a `cancel` frame; the executor stops. |
-| Push | The request is abandoned, the attempt settles `Cancelled`, the target keeps running and its side effects still happen, and its result is fenced out on arrival. |
+| Push | The request is abandoned, the attempt settles `Cancelled`, the target keeps running and its side effects still happen, and its result is fenced out on arrival. Unchanged for an accepted dispatch: the attempt is given up, and the target's later `Settle` is refused on the fence. |
 
 An executor built against this page — attach, over `flexiq.executor.v1` or the
 socket protocol either one — is the middle row: cancellation is real, because
@@ -168,6 +168,30 @@ reach into the target's process and stop it.
 [Issue #846](https://github.com/ByteVeda/flexiq/issues/846) is the tracked
 follow-up that changes the push row — until it lands, that gap is a known one,
 not an oversight.
+
+## The reporting RPCs, for work that outlived its request
+
+`Attach` is not the only way into this door. A [push target](/server/operate/push)
+never attaches — the scheduler dials *out* to it — but a job that cannot finish
+inside the platform's request deadline still has to report somehow, so four
+unary RPCs exist for exactly that:
+
+| RPC | What it does |
+|---|---|
+| `Settle` | Reports the outcome of a dispatch the target answered `202 Accepted` to. Single-use for the attempt it names. |
+| `ExtendLease` | Asks for longer before the attempt is considered lost. Repeatable; clamped to an hour per call. |
+| `ReportProgress` | The `progress` frame, off the stream. |
+| `WriteTaskLog` | The `task_log` frame, off the stream. |
+
+They carry the **same frames** the stream does — a `SuccessFrame` reported over
+`Settle` and one sent over `Attach` say the same thing — and they are fenced on
+the same lease. `Settle` has no `slept` arm: a push dispatch has no step
+session to resume.
+
+On a push deployment the door serves only these four. `Attach` and `Heartbeat`
+answer `FAILED_PRECONDITION` there, because there is nothing to attach *to* —
+the service surface stays constant and the refusal says which deployment you
+reached, rather than making "does this RPC exist" a configuration question.
 
 ## Heartbeat is a separate RPC
 
