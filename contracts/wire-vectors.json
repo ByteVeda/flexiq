@@ -25,9 +25,10 @@
     "    `round_trip_only` and DO assert bytes: 9007199254740993 loses a digit in",
     "    JSON, and a byte string has no JSON form.",
     "  - A conforming writer must not produce the bytes at all, and every reader",
-    "    must still accept them. `float-narrow` is the only one: half precision",
-    "    is a width the rules below forbid a writer to choose and require a",
-    "    reader to read.",
+    "    must still accept them. The two `float-narrow-*` cases are these: half",
+    "    and single precision are widths the rules below forbid a writer to choose",
+    "    and require a reader to read. Both are pinned, because a reader that",
+    "    accepts one and refuses the other passes neither obligation.",
     "",
     "`round_trip_only` asserting bytes is deliberate, not an oversight. Definite",
     "length and shortest-form integers are contract rules, so there is exactly one",
@@ -142,9 +143,16 @@
   ],
   "decode_only": [
     {
-      "name": "float-narrow",
-      "description": "The same 1.5 at half precision (f9 3e00) — the width a writer must not choose and a reader must accept.",
+      "name": "float-narrow-half",
+      "description": "The same 1.5 at half precision (f9 3e00) — a width a writer must not choose and a reader must accept.",
       "hex": "028281f93e00a0",
+      "args": [1.5],
+      "kwargs": {}
+    },
+    {
+      "name": "float-narrow-single",
+      "description": "The same 1.5 at single precision (fa 3fc00000). Pinned beside the half-precision case because a reader that takes one width and refuses the other satisfies neither obligation.",
+      "hex": "028281fa3fc00000a0",
       "args": [1.5],
       "kwargs": {}
     },

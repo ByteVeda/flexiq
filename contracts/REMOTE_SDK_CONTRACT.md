@@ -56,7 +56,7 @@ The file is `$schema_version: 1` and carries twelve vectors in two arrays.
 | Array | Cases | The obligation |
 |---|---|---|
 | `encode` | 10 | A client **MUST** decode every one. It **MUST** produce the exact `hex` for every case its own call API can express. |
-| `decode_only` | 3 | Three cases the file cannot state as an `encode` case. A client **MUST** decode each, and **MUST NOT** produce the bytes of `float-narrow`. |
+| `decode_only` | 4 | Four cases the file cannot state as an `encode` case. A client **MUST** decode each, and **MUST NOT** produce the bytes of either `float-narrow-*`. |
 
 The exemptions are stated, not implied:
 
@@ -65,11 +65,13 @@ The exemptions are stated, not implied:
 - A case marked `round_trip_only` pins no value, because JSON cannot hold one —
   `int-beyond-double-precision` is `2^53 + 1` and `byte-string` is a CBOR byte
   string. A client **MUST** re-encode what it decoded to the same `hex`.
-- The `float-narrow` case is the one whose bytes a client **MUST NOT** produce.
-  It is `1.5` at half precision, and it is there because the rule has two halves:
-  a writer emits 64-bit floats only, and a reader accepts the narrower widths
-  anyway — a payload enqueued before this rule, or by a client that has not
-  adopted it, still has to run.
+- The two `float-narrow-*` cases are the ones whose bytes a client **MUST NOT**
+  produce. They are `1.5` at half and at single precision, and they are there
+  because the rule has two halves: a writer emits 64-bit floats only, and a reader
+  accepts both narrower widths anyway — a payload enqueued before this rule, or by
+  a client that has not adopted it, still has to run. Both widths are pinned
+  because a reader that takes one and refuses the other would pass a one-case
+  suite and still fail on live payloads.
 
 **A hex string is never edited to make a test pass.** A diff to one is a
 wire-format change, and it breaks every job already enqueued.
@@ -382,9 +384,9 @@ integers past ±9007199254740991 (`2^53 − 1`), non-finite numbers, byte string
 and CBOR tags. Two of those four are pinned as vectors —
 `int-beyond-double-precision` and `byte-string`, the two `round_trip_only`
 entries under `decode_only` — while a non-finite number and a CBOR tag have no
-vector, because neither has a JSON form to state one in. `decode_only`'s third
-entry, `float-narrow`, is there for an unrelated reason: it is the width a writer
-**MUST NOT** choose.
+vector, because neither has a JSON form to state one in. `decode_only`'s other two
+entries, `float-narrow-half` and `float-narrow-single`, are there for an unrelated
+reason: they are the widths a writer **MUST NOT** choose.
 `structured` also normalises object key order, which moves the bytes
 without moving the meaning — a client using `structured` **SHOULD** set
 `unique_key` itself rather than rely on an `auto:` key matching another

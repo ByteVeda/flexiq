@@ -215,16 +215,20 @@ fn the_pinned_float_decodes() {
     assert_eq!(f, 1.5);
 }
 
-/// Case `float-narrow`: the same value at half precision.
+/// Cases `float-narrow-half` and `float-narrow-single`: the same value narrower.
 ///
-/// The width a writer must not choose and a reader must accept anyway — a
+/// The widths a writer must not choose and a reader must accept anyway — a
 /// payload enqueued before the rule, or by a client that has not adopted it,
-/// still has to run. `f9 3e 00` is 1.5 in binary16.
+/// still has to run. `f9 3e 00` is 1.5 in binary16 and `fa 3f c0 00 00` is 1.5 in
+/// binary32. Both, because a reader that takes one and refuses the other would
+/// pass a one-case suite and still fail on a live payload.
 #[test]
 fn a_narrower_float_decodes_to_the_same_value() {
-    let payload = hex::decode("028281f93e00a0").expect("valid hex");
-    let (f,): (f64,) = decode_args(&payload).expect("decodes");
-    assert_eq!(f, 1.5);
+    for hex_text in ["028281f93e00a0", "028281fa3fc00000a0"] {
+        let payload = hex::decode(hex_text).expect("valid hex");
+        let (f,): (f64,) = decode_args(&payload).expect("decodes");
+        assert_eq!(f, 1.5, "{hex_text} did not decode to 1.5");
+    }
 }
 
 /// Case `int-beyond-double-precision`: 9007199254740993, one past 2^53.
@@ -242,9 +246,9 @@ fn an_integer_past_double_precision_keeps_its_last_digit() {
 ///
 /// `round_trip_only` is the file's way of saying JSON cannot state the value, so
 /// the assertion is that this crate's two halves agree rather than that a
-/// literal matches. `float-narrow` is the one `decode_only` case left out: its
-/// bytes are the width a writer must not emit, so re-encoding what it decodes
-/// to the same bytes is the opposite of what this crate must do.
+/// literal matches. The two `float-narrow-*` cases are the `decode_only` ones
+/// left out: their bytes are widths a writer must not emit, so re-encoding what
+/// they decode to the same bytes is the opposite of what this crate must do.
 #[test]
 fn every_decode_only_vector_round_trips() {
     for hex_text in [

@@ -31,8 +31,9 @@ Readers MUST accept all three widths.** A non-finite float is a stated exemption
 ## Tasks
 
 - [x] 1. `contracts/wire-vectors.json` — move `float` from `decode_only` into
-      `encode` (bytes now pinned); add `float-narrow` (`f9 3e00` for 1.5, the
-      reader's half of the rule); rewrite the header comment so `decode_only`
+      `encode` (bytes now pinned); add `float-narrow-half` (`f9 3e00`) and
+      `float-narrow-single` (`fa 3fc00000`), the reader's half of the rule at both
+      widths a writer may not use; rewrite the header comment so `decode_only`
       states its two reasons — JSON cannot hold the value, or a conforming writer
       must not produce those bytes — and add the float rule beside the
       definite-length and shortest-integer ones.
@@ -41,7 +42,7 @@ Readers MUST accept all three widths.** A non-finite float is a stated exemption
       integers, with `1.5` spelled both ways, plus the non-finite exemption as a
       bullet of its own.
 - [x] 3. `contracts/REMOTE_SDK_CONTRACT.md` — encode count 9 → 10; replace the
-      `float` exemption bullet with the `float-narrow` obligation; narrow the
+      `float` exemption bullet with the `float-narrow-*` obligation; narrow the
       float exception in conformance claim 2 to a non-finite one; add the rule to
       the restated encoder rules.
 - [x] 4. Rust core — `wire/value.rs` doc comment, `wire/cbor.rs` module doc (a
@@ -72,7 +73,7 @@ Readers MUST accept all three widths.** A non-finite float is a stated exemption
 
 **Done, and every suite asserts the new vector.** `float` is an `encode` case, so
 its bytes are now pinned in Rust core, the Rust SDK, Python, Node, Java and Go,
-and `float-narrow` pins the reader's half. One encoder was actually
+and the two `float-narrow-*` cases pin the reader's half. One encoder was actually
 non-conforming: a Java `float` reached the wire as `fa`, at any depth in a
 payload, so `f(1.5f)` and `f(1.5d)` produced different `auto:` keys for the same
 call. `DefiniteLengthCbor` widens in the tree walk, which covers every depth.
@@ -105,10 +106,22 @@ single payload, so its round-trip assertion re-encodes `args[0]` alone. The two
 existing round-trip cases are single-argument and nothing said why.
 
 **Half precision decodes to a Java `float`, and Jackson node equality is by
-type.** `FloatNode(1.5)` does not equal `DoubleNode(1.5)`, so `float-narrow`
+type.** `FloatNode(1.5)` does not equal `DoubleNode(1.5)`, so `float-narrow-half`
 failed the shared decode comparison until it widened the decoded tree through a
 JSON round trip. The vector pins the value a narrower width decodes to, not the
 Java type it lands in.
+
+### Review feedback on PR #952
+
+**Taken: a single-precision narrow-float vector.** One narrow case pinned only
+`f9`, so a reader could accept half and double precision, pass every vector, and
+still refuse a legacy `fa` payload it is obliged to read. `float-narrow-single`
+(`028281fa3fc00000a0`) now sits beside `float-narrow-half`, and the pair named the
+existing case: `float-narrow` became `float-narrow-half`.
+
+**Declined: widening a Go `float32` at the encoder boundary.** See the section
+below — the reason is a library capability, not an oversight, and it is why the
+same gap in Java *was* fixed here. Tracked separately rather than folded in.
 
 ### Out of scope, deliberately
 
