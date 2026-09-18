@@ -67,12 +67,24 @@ handler-binding model.
   purely a payload contract.
 - CBOR maps and arrays MUST carry a definite-length header — `a0` for an empty
   map, `80` for an empty array — never the indefinite-length form (`bf ... ff`,
-  `9f ... ff`); readers MUST accept both. Integers MUST use the shortest form
-  that holds the value. Both forms decode identically, so a divergent writer
-  still interoperates — but the automatic `auto:` idempotency key hashes the
-  serialized payload, so it would silently stop idempotent enqueues deduping
-  across SDKs. Every call body ends in the kwargs map, so the divergence would
-  shift every payload's key at once.
+  `9f ... ff`). Integers MUST use the shortest form that holds the value. A
+  finite float goes the other way: it MUST carry the 64-bit head `fb`, never `f9`
+  or `fa`, even where a narrower width would round-trip the value exactly —
+  `1.5` is `fb 3f f8 00 00 00 00 00 00`, not `f9 3e 00`. Readers MUST accept
+  every form a writer is forbidden to emit. Each of those alternatives decodes to
+  the same value, so a divergent writer still interoperates — but the automatic
+  `auto:` idempotency key hashes the serialized payload, so it would silently
+  stop idempotent enqueues deduping across SDKs. Every call body ends in the
+  kwargs map, so a container or integer divergence would shift every payload's
+  key at once, and a float one shifts the key of every call that takes a float.
+- **A non-finite float is exempt from that width, and so are a NaN's payload
+  bits.** RFC 8949's preferred serialization spells an infinity or a NaN in two
+  bytes and CBOR libraries hard-code it — some cannot be told to write one wide,
+  others cannot be told to write one narrow — so no width is pinnable for either,
+  and a runtime's own NaN need not carry another's payload. A call that takes one
+  may therefore derive a different `auto:` key in each SDK; a caller that needs
+  deduplication sets `unique_key`. Neither value is reachable through a
+  JSON-shaped producer at all.
 
 **Test vectors** (hex, `0x02`-tagged CBOR):
 - call `f(1, "a")`, no kwargs → `02 82 82 01 61 61 a0` — `[ [1, "a"], {} ]`
