@@ -26,7 +26,7 @@ Readers MUST accept all three widths.** A non-finite float is a stated exemption
 | Python (`cbor2`, non-canonical) | `fb` | no `float32` type |
 | Node (`cbor-x`, `useFloat32` unset) | `fb` | no `float32` type |
 | Java (`DefiniteLengthCbor`) | `fb` for a `double` | **`fa` for a `float` — the bug** |
-| Go (`sdks/go/wire.go`) | `fb` (`ShortestFloatNone`) | `fa` — out of scope, see below |
+| Go (`sdks/go/wire.go`) | `fb` (`ShortestFloatNone`) | **`fa` — the other bug** |
 
 ## Tasks
 
@@ -57,8 +57,10 @@ Readers MUST accept all three widths.** A non-finite float is a stated exemption
       double; javadoc explains the asymmetry (integers narrow, floats widen);
       regression tests at the top level and nested, plus `serializeCall(1.5f)`
       against the pinned vector.
-- [x] 8. Go — the float rule stated in `wire.go`'s comment block, and a test
-      pinning both halves of it.
+- [x] 8. Go — the float rule stated in `wire.go`'s comment block, a test pinning
+      both halves of it, and `floatwidth.go` widening a `float32` after
+      marshalling, which is the only place fxamacker leaves the width to the Go
+      kind rather than the option.
 - [x] 9. Python and Node — comment the encoder option each rule depends on
       (`cbor2`'s `canonical`, `cbor-x`'s `useFloat32`).
 - [x] 10. Docs — `docs/content/docs/server/clients.mdx` restates the encoder
@@ -119,16 +121,33 @@ still refuse a legacy `fa` payload it is obliged to read. `float-narrow-single`
 (`028281fa3fc00000a0`) now sits beside `float-narrow-half`, and the pair named the
 existing case: `float-narrow` became `float-narrow-half`.
 
-**Declined: widening a Go `float32` at the encoder boundary.** See the section
-below — the reason is a library capability, not an oversight, and it is why the
-same gap in Java *was* fixed here. Tracked separately rather than folded in.
+**Taken after all: widening a Go `float32`.** Declined first as out of scope, then
+folded in at the user's call. `ShortestFloatNone` is guarded on
+`reflect.Float64` in fxamacker's encoder (`encode.go:1123`), so a `float32`
+always took the narrow path and there is no option for it. Widening *before*
+marshalling is what is genuinely impossible — reaching a `float32` nested inside a
+struct means rebuilding the value, and `reflect.StructOf` cannot carry unexported
+fields — so the widening happens **after**, in `sdks/go/floatwidth.go`: one walk
+over the encoded item rewriting each finite `f9`/`fa` head to `fb`. It runs on
+`EncodeCall`'s args, on each keyword value and on `EncodeResult`.
 
-### Out of scope, deliberately
+Three things that shaped it:
 
-**A Go `float32` still encodes as `fa`.** `fxamacker/cbor` marshals Go values
-directly, so widening one nested inside a struct would mean rebuilding the value
-through reflection, and refusing it would mean a read-only reflect walk on every
-enqueue. Neither belongs in a change whose subject is the contract. The Go client
-derives no `auto:` key of its own — it is a remote producer and a caller sets
-`unique_key` — so the gap cannot bite the way Java's did. `wire.go` names it
-where the encoder options are chosen, and it wants its own issue.
+- **A non-finite float must survive untouched.** The pass reads each narrow float
+  back with `decMode` and leaves infinities and NaNs exactly as written, which is
+  the contract's exemption and what `NaNConvert`/`InfConvert` chose deliberately.
+- **Skip the walk when no float can be there.** Neither `0xf9` nor `0xfa` can
+  occur anywhere in a payload without a float — no UTF-8 byte is either — so a
+  single `bytes.IndexByte` pair returns the input untouched for every float-free
+  payload.
+- **Indefinite-length input is refused, not walked.** The first draft carried a
+  break-scanning path for it; `IndefLengthForbidden` rejects such a
+  `cbor.RawMessage` before the pass sees it, so that path was dead code. A head
+  it cannot reach is now an error rather than a guess.
+
+### Nothing left out
+
+Every runtime in the tree now emits `fb` for a finite float at any depth, whatever
+its own float type: Rust core writes one width, the Rust SDK widens in
+`serialize_f32`, Python and Node have no 32-bit float, Java widens in its tree
+walk, and Go widens the encoded bytes.

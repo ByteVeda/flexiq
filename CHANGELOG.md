@@ -59,9 +59,12 @@ their entries below keep that name.
   carries the 64-bit head `fb`, never `f9` or `fa`; readers still accept the narrower widths, and
   the `float` case moved into `encode` where its bytes are asserted by every SDK suite, beside two
   new `float-narrow-*` cases pinning the half- and single-precision payloads a reader must still
-  accept and a writer must not produce. One encoder needed fixing to comply: a Java `float` argument reached
-  the wire as a 4-byte CBOR float where the same value passed as a `double` took 8, at any depth
-  in a payload. A **non-finite** float is a stated exemption rather than part of the rule — CBOR
+  accept and a writer must not produce. Two encoders needed fixing to comply, both over a 32-bit
+  float. A Java `float` argument reached the wire as a 4-byte CBOR float where the same value
+  passed as a `double` took 8, at any depth in a payload; a Go `float32` did the same, because
+  `ShortestFloatNone` governs a `float64` only and there is no encoder option for the narrower
+  kind — so the Go client widens the encoded bytes on the way out. A **non-finite** float is a
+  stated exemption rather than part of the rule — CBOR
   libraries hard-code RFC 8949's two-byte spelling of an infinity and a NaN, some without a way to
   write one wide and others without a way to write one narrow — so a payload carrying one still
   wants `unique_key`. Neither value can reach the `structured` gRPC door, which refuses both.
