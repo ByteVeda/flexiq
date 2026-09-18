@@ -6,8 +6,7 @@
 
 use axum::extract::State;
 use axum::Json;
-use flexiq_core::storage::records::TaskMetric;
-use flexiq_core::{now_millis, Storage};
+use flexiq_core::{now_millis, Storage, TaskMetric};
 use serde_json::{json, Map, Value};
 
 use crate::dashboard::blocking::on_storage;

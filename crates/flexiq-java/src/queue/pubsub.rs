@@ -6,8 +6,7 @@
 
 use flexiq_core::job::now_millis;
 use flexiq_core::pubsub::publish_to_topic;
-use flexiq_core::storage::records::{NewSubscription, SubscriptionMode};
-use flexiq_core::Storage;
+use flexiq_core::{NewSubscription, Storage, SubscriptionMode};
 use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{jboolean, jint, jlong, jstring, JNI_FALSE};
 use jni::JNIEnv;

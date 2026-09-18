@@ -9,9 +9,9 @@ use flexiq_core::resilience::rate_limiter::RateLimitConfig;
 use flexiq_core::resilience::retry::RetryPolicy;
 use flexiq_core::scheduler::shed::OnExcess;
 use flexiq_core::scheduler::{JobResult, ResultOutcome, Scheduler, SchedulerConfig, TaskConfig};
-use flexiq_core::storage::records::{WorkerRegistration, WorkerStatus};
 use flexiq_core::storage::Storage;
 use flexiq_core::worker::registry_fingerprint;
+use flexiq_core::{WorkerRegistration, WorkerStatus};
 
 use super::PyQueue;
 #[cfg(not(feature = "native-async"))]

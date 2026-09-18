@@ -2,8 +2,8 @@ use pyo3::prelude::*;
 
 use flexiq_core::job::now_millis;
 use flexiq_core::pubsub::{publish_to_topic, DeliveryDefaults, PublishRequest};
-use flexiq_core::storage::records::{NewSubscription, SubscriptionMode};
 use flexiq_core::storage::Storage;
+use flexiq_core::{NewSubscription, SubscriptionMode};
 
 /// Strictly parse a caller-supplied subscription mode. Unlike the lenient reader
 /// used for persisted rows, a typo here is a caller error, not a legacy value.

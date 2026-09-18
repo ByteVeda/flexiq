@@ -4,8 +4,7 @@
 
 use flexiq_core::job::now_millis;
 use flexiq_core::pubsub::{publish_to_topic, DeliveryDefaults, PublishRequest};
-use flexiq_core::storage::records::{NewSubscription, SubscriptionMode};
-use flexiq_core::Storage;
+use flexiq_core::{NewSubscription, Storage, SubscriptionMode};
 use napi::bindgen_prelude::{spawn_blocking, Buffer, Result};
 use napi_derive::napi;
 

@@ -10,7 +10,10 @@ repos:
 
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --all-targets --all-features -- -D warnings
+        # `cargo clippy` takes no `-j`, so the cap has to come from the
+        # environment; a shell is needed because pre-commit execs `entry`
+        # directly rather than through one.
+        entry: bash -c 'CARGO_BUILD_JOBS=1 cargo clippy --all-targets --all-features -- -D warnings'
         language: system
         types: [rust]
         pass_filenames: false

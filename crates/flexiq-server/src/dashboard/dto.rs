@@ -7,8 +7,10 @@
 //! - every timestamp is Unix **milliseconds**, never seconds;
 //! - listings are blob-free — `payload` and `result` never leave the server.
 
-use flexiq_core::storage::records::{CircuitBreakerState, JobError, TaskLogEntry};
-use flexiq_core::{DeadJob, Job, QueueStats, ReplayEntry, SubscriptionBacklogStats, WorkerInfo};
+use flexiq_core::{
+    CircuitBreakerState, DeadJob, Job, JobError, QueueStats, ReplayEntry, SubscriptionBacklogStats,
+    TaskLogEntry, WorkerInfo,
+};
 use serde_json::{json, Value};
 
 /// Longest error summary surfaced in a listing, matching the SDK dashboards.

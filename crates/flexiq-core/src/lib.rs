@@ -77,7 +77,8 @@ pub use storage::postgres::PostgresStorage;
 pub use storage::records::{
     AttemptFence, CircuitBreakerState, DebounceOptions, JobError, JobStep, LockInfo, NewJobStep,
     NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SleepOutcome,
-    StepCommit, StepKind, Subscription, TaskLogEntry, TaskMetric, WorkerInfo,
+    StepCommit, StepKind, Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic,
+    TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
 };
 #[cfg(feature = "redis")]
 pub use storage::redis_backend::RedisStorage;

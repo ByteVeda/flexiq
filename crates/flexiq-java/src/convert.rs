@@ -7,11 +7,11 @@ use base64::Engine;
 use flexiq_core::job::{now_millis, Job, NewJob};
 use flexiq_core::pubsub::{DeliveryDefaults, PublishRequest};
 use flexiq_core::resilience::circuit_breaker::CircuitState;
-use flexiq_core::storage::records::{
+use flexiq_core::storage::{DeadJob, QueueStats, SubscriptionBacklogStats};
+use flexiq_core::{
     CircuitBreakerState, DebounceOptions, JobError, LockInfo, PeriodicTask, ReplayEntry,
     Subscription, TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo,
 };
-use flexiq_core::storage::{DeadJob, QueueStats, SubscriptionBacklogStats};
 use serde::{Deserialize, Serialize};
 
 use crate::error::BindingError;

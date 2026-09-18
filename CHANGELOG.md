@@ -36,6 +36,16 @@ their entries below keep that name.
   had to name each through its module. `flexiq` re-exports core's root wholesale, so they are
   `flexiq::DebounceOptions` and `flexiq::TaskHandler` too. Purely additive; the module paths
   still resolve.
+- **The last six records reach the crate root, completing the list** (#948). The entry above said
+  every record beside `DebounceOptions` was already re-exported; six were not. `SubscriptionMode`,
+  `Topic`, `TopicMessage`, `TopicLogStats`, `WorkerRegistration` and `WorkerStatus` are now on
+  `flexiq-core`'s root re-export, so all 25 of `storage::records`' public types are reachable as
+  `flexiq_core::X` — and, through `flexiq`'s wholesale re-export, as `flexiq::X`. The pub/sub four
+  were the conspicuous gap: `Subscription` and `NewSubscription` were on the list but the `Topic`
+  trio and the `SubscriptionMode` that travels with them were not, so converting one subscription
+  meant naming both paths in one file. Purely additive; the module paths still resolve. The list
+  has now been declared complete twice while it was not, so a test diffs the root re-export group
+  against `records.rs` and fails on the next record that misses it.
 
 ### Fixed
 

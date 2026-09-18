@@ -1,7 +1,7 @@
 //! JS shapes for operational inspection: circuit breakers, replay history,
 //! and the job dependency DAG.
 
-use flexiq_core::storage::records::{CircuitBreakerState, ReplayEntry};
+use flexiq_core::{CircuitBreakerState, ReplayEntry};
 use napi_derive::napi;
 
 use super::JsJob;

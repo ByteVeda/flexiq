@@ -24,7 +24,7 @@ use flexiq_core::step::{
     classify_step_failure, PendingStep, StepDecision, StepFailure, StepKey, StepLimits, StepSleep,
     StepStore,
 };
-use flexiq_core::storage::records::{JobStep, NewJobStep, SleepOutcome, StepCommit};
+use flexiq_core::{JobStep, NewJobStep, SleepOutcome, StepCommit};
 
 /// Attribute every step exception carries, naming what the attempt should do.
 ///

@@ -24,8 +24,8 @@ use pyo3::types::PyBytes;
 use flexiq_core::error::QueueError;
 use flexiq_core::job::Job;
 use flexiq_core::step::{refusal_error, StepFailure, StepLimits, StepSession, StepStore};
-use flexiq_core::storage::records::{JobStep, NewJobStep, SleepOutcome, StepCommit, StepKind};
 use flexiq_core::worker::protocol::{decode_step_snapshot, SchedulerMessage};
+use flexiq_core::{JobStep, NewJobStep, SleepOutcome, StepCommit, StepKind};
 
 use crate::py_step::{step_error, BoxedStepSession, BoxedStepStore, PyStepSession};
 

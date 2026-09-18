@@ -5,6 +5,7 @@ mod rust {
     #[cfg(feature = "http-target")]
     mod http_target_tests;
     mod remote_tests;
+    mod root_reexport_tests;
     mod storage_tests;
     mod worker_tests;
 }

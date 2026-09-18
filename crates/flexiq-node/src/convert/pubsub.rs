@@ -1,7 +1,7 @@
 //! JS-facing shapes for topic subscriptions and log messages.
 
-use flexiq_core::storage::records::{Subscription, Topic, TopicLogStats, TopicMessage};
 use flexiq_core::storage::SubscriptionBacklogStats;
+use flexiq_core::{Subscription, Topic, TopicLogStats, TopicMessage};
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 

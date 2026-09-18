@@ -23,7 +23,7 @@ use jni::JNIEnv;
 use tokio::sync::Notify;
 
 use flexiq_core::job::now_millis;
-use flexiq_core::storage::records::{NewSubscription, WorkerRegistration};
+use flexiq_core::{NewSubscription, WorkerRegistration};
 
 use crate::backend::QueueHandle;
 use crate::convert::{
@@ -296,7 +296,7 @@ fn register_subscriptions(
             max_retries: spec.max_retries,
             timeout_ms: spec.timeout_ms,
             // Fan-out by default; the log-mode param is threaded in a later step.
-            mode: flexiq_core::storage::records::SubscriptionMode::Fanout,
+            mode: flexiq_core::SubscriptionMode::Fanout,
         };
         storage.register_subscription(&row)?;
     }

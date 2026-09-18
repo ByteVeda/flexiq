@@ -1,6 +1,6 @@
 //! Marshalling for task logs / published partial results.
 
-use flexiq_core::storage::records::TaskLogEntry;
+use flexiq_core::TaskLogEntry;
 use napi_derive::napi;
 
 /// JS-facing view of a task log entry. A published partial result is a log with

@@ -4,8 +4,7 @@
 
 use flexiq_core::job::now_millis;
 use flexiq_core::periodic::{next_cron_time, next_cron_time_tz};
-use flexiq_core::storage::records::NewPeriodicTask;
-use flexiq_core::Storage;
+use flexiq_core::{NewPeriodicTask, Storage};
 use napi::bindgen_prelude::{Buffer, Result};
 use napi_derive::napi;
 
