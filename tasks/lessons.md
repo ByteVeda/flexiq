@@ -134,6 +134,11 @@ constraint, and it is the user's to set.
 
 The rule to carry forward:
 
-- **Pass `-j1` to every `cargo build` / `cargo check` / `cargo test` / `cargo clippy` in this
-  repo,** and never run two cargo invocations concurrently. `CARGO_BUILD_JOBS=1` for the
-  clippy invocation that takes no `-j`.
+- **Pass `-j1` to every `cargo build` / `cargo check` / `cargo test` / `cargo clippy` you
+  run,** and never run two cargo invocations concurrently. `cargo clippy` takes no `-j`,
+  so it needs `CARGO_BUILD_JOBS=1` in the environment instead.
+- **The cap belongs on anything that compiles on its own too.** The `cargo-clippy`
+  pre-commit hook ran uncapped, which made the rule true of typed commands and false of
+  every commit; it now carries `CARGO_BUILD_JOBS=1`.
+- The `-j2` in `tasks/plans/*` and in the untracked `CLAUDE.md` is **not** covered: a plan
+  is a record of what was run at the time, and rewriting one would falsify it.
