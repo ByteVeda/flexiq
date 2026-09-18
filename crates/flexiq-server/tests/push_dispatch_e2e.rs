@@ -22,10 +22,12 @@ use axum::http::{HeaderMap, Response, StatusCode};
 use axum::routing::post;
 use axum::Router;
 use flexiq_core::net::Allowlist;
-use flexiq_core::worker::http_target::{ACCEPTED_NOT_SETTLED, HDR_JOB_ID, HDR_OUTCOME, HDR_TASK};
+use flexiq_core::worker::http_target::{
+    ACCEPTED_NOT_SETTLED, HDR_JOB_ID, HDR_LEASE, HDR_OUTCOME, HDR_TASK,
+};
 use flexiq_core::{
-    now_millis, HttpDispatchTarget, HttpTargetConfig, JobStatus, NewJob, Storage, StorageBackend,
-    StorageSideChannel,
+    now_millis, HttpDispatchTarget, HttpTargetConfig, JobStatus, Lease, NewJob, SettleRefused,
+    SettledOutcome, Storage, StorageBackend, StorageSideChannel, MAX_LEASE_EXTENSION,
 };
 use flexiq_server::config::push::SETTLE_VAR;
 use flexiq_server::config::{Config, Env};
@@ -256,16 +258,24 @@ fn target(url: &str, capacity: u32, storage: &StorageBackend) -> HttpTargetConfi
 /// `DispatchPath::Push`, with no attach listener anywhere.
 struct Deployment {
     supervisor: Arc<SchedulerSupervisor>,
+    /// The same target the scheduler dispatches through.
+    ///
+    /// Kept because a settle is delivered *to the dispatcher*, not to the
+    /// scheduler: the waiting attempt that a settle relieves holds the permit
+    /// and the result channel, which is why the gRPC door needs this handle
+    /// too.
+    target: Arc<HttpDispatchTarget>,
 }
 
 impl Deployment {
     /// Build the supervisor without starting it.
     fn build(storage: &StorageBackend, config: HttpTargetConfig, workers: Option<usize>) -> Self {
-        let target = HttpDispatchTarget::new(config).expect("the stub target must build");
+        let target = Arc::new(HttpDispatchTarget::new(config).expect("the stub target must build"));
         Self {
+            target: Arc::clone(&target),
             supervisor: Arc::new(SchedulerSupervisor::new(
                 storage.clone(),
-                DispatchPath::Push(Arc::new(target)),
+                DispatchPath::Push(target),
                 SchedulerSettings {
                     queues: vec!["default".to_string()],
                     namespace: None,
@@ -664,5 +674,401 @@ fn nothing_attaches_under_push() {
             &Config::from_map(&env(&base)).expect("a gRPC-only deployment is valid")
         ),
         "without a push target the gRPC door still carries executors"
+    );
+}
+
+// ── Settle callbacks (#845) ─────────────────────────────────────────
+//
+// A 202 hands the job off: the request ends, the target keeps working, and it
+// reports later. Everything below is about the fence, because a late settle
+// arriving after the attempt was retried elsewhere is the *normal* failure
+// mode of this design rather than an edge case.
+
+/// A target that accepts a 202 and waits for the callback.
+fn settle_target(url: &str, capacity: u32, storage: &StorageBackend) -> HttpTargetConfig {
+    HttpTargetConfig {
+        settle_callbacks: true,
+        ..target(url, capacity, storage)
+    }
+}
+
+/// Wait for a job to be accepted, and answer with the lease it was dispatched
+/// under — which is what a real target reads off `x-flexiq-lease`.
+fn accepted_lease(stub: &PushTarget, deployment: &Deployment) -> Lease {
+    poll_until(Duration::from_secs(15), || {
+        deployment.target.awaiting_settle() == 1
+    })
+    .expect("the target must be waiting for a settle");
+
+    let received = stub.received();
+    let raw = received
+        .first()
+        .and_then(|dispatch| dispatch.header(HDR_LEASE))
+        .expect("a dispatch carries a lease")
+        .to_string();
+    Lease::from_wire(raw.as_bytes()).expect("the header is a lease this scheduler minted")
+}
+
+#[test]
+fn a_202_is_settled_by_a_later_callback() {
+    let storage = temp_storage("push-settle-later");
+    let job = storage
+        .enqueue(new_job("settled_late"))
+        .expect("enqueue the job");
+
+    let stub = PushTarget::start(Reply::status(202));
+    let deployment = Deployment::start(&storage, settle_target(&stub.url, 2, &storage), None);
+    let lease = accepted_lease(&stub, &deployment);
+
+    // The request is long over; nothing is holding the connection.
+    assert_eq!(
+        storage
+            .get_job(&job.id, None)
+            .expect("read the job")
+            .expect("the job exists")
+            .status,
+        JobStatus::Running,
+        "an accepted dispatch stays Running until it is settled"
+    );
+
+    deployment
+        .target
+        .settle(
+            &job.id,
+            &lease,
+            SettledOutcome::Success {
+                result: Some(b"\x02\xf6".to_vec()),
+                wall_time_ns: 1_000,
+            },
+        )
+        .expect("a settle under the dispatch's own lease is applied");
+
+    poll_until(Duration::from_secs(15), || {
+        storage
+            .get_job(&job.id, None)
+            .ok()
+            .flatten()
+            .is_some_and(|job| job.status == JobStatus::Complete)
+    })
+    .expect("the settled job must complete");
+
+    assert_eq!(
+        stub.received().len(),
+        1,
+        "the job is dispatched once; the answer came out of band"
+    );
+    deployment.stop();
+}
+
+#[test]
+fn a_settle_is_single_use_for_the_attempt_it_names() {
+    let storage = temp_storage("push-settle-once");
+    let job = storage
+        .enqueue(new_job("settled_twice"))
+        .expect("enqueue the job");
+
+    let stub = PushTarget::start(Reply::status(202));
+    let deployment = Deployment::start(&storage, settle_target(&stub.url, 2, &storage), None);
+    let lease = accepted_lease(&stub, &deployment);
+
+    let outcome = || SettledOutcome::Cancelled { wall_time_ns: 1 };
+    deployment
+        .target
+        .settle(&job.id, &lease, outcome())
+        .expect("the first settle wins the marker");
+
+    // The second is refused, and it must be refused by the *durable consume* —
+    // not merely by the registry entry having been removed. Mutation check:
+    // this assertion has to survive the registry, so it is the marker that is
+    // gone. Both refusals are `Fenced`, never a success.
+    let second = deployment.target.settle(&job.id, &lease, outcome());
+    assert!(
+        matches!(
+            second,
+            Err(SettleRefused::Fenced) | Err(SettleRefused::NotHere)
+        ),
+        "a second settle under one lease must be refused, got {second:?}"
+    );
+
+    deployment.stop();
+}
+
+#[test]
+fn a_settle_under_a_superseded_lease_is_refused() {
+    let storage = temp_storage("push-settle-stale");
+    let job = storage
+        .enqueue(new_job("settled_stale"))
+        .expect("enqueue the job");
+
+    let stub = PushTarget::start(Reply::status(202));
+    let deployment = Deployment::start(&storage, settle_target(&stub.url, 2, &storage), None);
+    let live = accepted_lease(&stub, &deployment);
+
+    // A lease this scheduler could have minted, for a dispatch it never made.
+    // Deliberately *well-formed*: a value that failed to decode would be
+    // refused by `Lease::from_wire` and would prove nothing about the fence.
+    let stale_epoch = live.epoch().expect("a minted lease carries an epoch") ^ 1;
+    let stale = Lease::from_epoch(stale_epoch);
+
+    let refused = deployment.target.settle(
+        &job.id,
+        &stale,
+        SettledOutcome::Success {
+            result: None,
+            wall_time_ns: 1,
+        },
+    );
+    assert!(
+        matches!(refused, Err(SettleRefused::Fenced)),
+        "a settle naming another dispatch must be fenced out, got {refused:?}"
+    );
+
+    // And it changed nothing: the job is still running, still awaiting its own
+    // settle. A refusal that had settled the job would be the double
+    // settlement the fence exists to prevent.
+    assert_eq!(
+        storage
+            .get_job(&job.id, None)
+            .expect("read the job")
+            .expect("the job exists")
+            .status,
+        JobStatus::Running,
+        "a refused settle must not move the job"
+    );
+    assert_eq!(
+        deployment.target.awaiting_settle(),
+        1,
+        "the real dispatch is still waiting"
+    );
+
+    // The live lease still works, which proves the refusal above consumed
+    // nothing rather than merely answering late.
+    deployment
+        .target
+        .settle(
+            &job.id,
+            &live,
+            SettledOutcome::Success {
+                result: None,
+                wall_time_ns: 1,
+            },
+        )
+        .expect("the current dispatch can still settle");
+
+    deployment.stop();
+}
+
+#[test]
+fn a_settle_for_another_replicas_dispatch_says_so() {
+    // The one refusal that is not about staleness: the caller's lease may be
+    // perfectly current and simply have reached the wrong scheduler. An
+    // operator reading "already settled" would go looking for a race that
+    // never happened.
+    let storage = temp_storage("push-settle-elsewhere");
+    let stub = PushTarget::start(Reply::status(202));
+    let deployment = Deployment::start(&storage, settle_target(&stub.url, 2, &storage), None);
+
+    let refused = deployment.target.settle(
+        "a-job-this-replica-never-dispatched",
+        &Lease::from_epoch(7),
+        SettledOutcome::Cancelled { wall_time_ns: 1 },
+    );
+    assert!(
+        matches!(refused, Err(SettleRefused::NotHere)),
+        "a settle for an unknown dispatch is a routing problem, got {refused:?}"
+    );
+
+    deployment.stop();
+}
+
+#[test]
+fn an_extension_moves_the_deadline_and_is_clamped() {
+    let storage = temp_storage("push-settle-extend");
+    let job = storage
+        .enqueue(new_job("extended"))
+        .expect("enqueue the job");
+
+    let stub = PushTarget::start(Reply::status(202));
+    let deployment = Deployment::start(&storage, settle_target(&stub.url, 2, &storage), None);
+    let lease = accepted_lease(&stub, &deployment);
+
+    let before = now_millis();
+    let granted = deployment
+        .target
+        .extend_lease(&job.id, &lease, Duration::from_secs(600))
+        .expect("the current dispatch may ask for longer");
+    assert!(
+        granted >= before + 600_000,
+        "an extension must actually move the deadline out"
+    );
+
+    // Clamped, not refused: asking for a week gets an hour and is told so.
+    let clamped = deployment
+        .target
+        .extend_lease(&job.id, &lease, Duration::from_secs(7 * 24 * 3_600))
+        .expect("an over-long request is clamped rather than refused");
+    assert!(
+        clamped <= now_millis() + MAX_LEASE_EXTENSION.as_millis() as i64,
+        "an extension past the ceiling must be clamped to it"
+    );
+
+    // A stale lease buys nothing: a superseded attempt must not be able to
+    // keep a claim alive under the attempt that replaced it.
+    let stale = Lease::from_epoch(lease.epoch().expect("an epoch") ^ 1);
+    assert!(
+        deployment
+            .target
+            .extend_lease(&job.id, &stale, Duration::from_secs(60))
+            .is_err(),
+        "a superseded attempt cannot buy itself more time"
+    );
+
+    // Settled before the deployment stops, so the test leaves no attempt
+    // parked on an hour-long deadline. That case is real, and
+    // `a_shutdown_releases_an_accepted_dispatch` is where it is proved —
+    // on a drain budget short enough to assert against.
+    deployment
+        .target
+        .settle(
+            &job.id,
+            &lease,
+            SettledOutcome::Success {
+                result: None,
+                wall_time_ns: 1,
+            },
+        )
+        .expect("the extended dispatch settles normally");
+
+    deployment.stop();
+}
+
+#[test]
+fn a_shutdown_releases_an_accepted_dispatch() {
+    // An accepted dispatch can be parked on a deadline hours away, and a
+    // shutdown must not wait for it. The abandon signal is what reaches it —
+    // and if it ever stops reaching it, this deployment stops shutting down
+    // at all, which is why the budget is asserted rather than assumed.
+    let storage = temp_storage("push-settle-drain");
+    let job = storage.enqueue(new_job("parked")).expect("enqueue the job");
+
+    let stub = PushTarget::start(Reply::status(202));
+    let config = HttpTargetConfig {
+        // Short, so the two drains this path spends are a second, not a
+        // minute. The budget being spent twice is push's own shape.
+        shutdown_drain: Duration::from_millis(500),
+        ..settle_target(&stub.url, 2, &storage)
+    };
+    let deployment = Deployment::start(&storage, config, None);
+    let lease = accepted_lease(&stub, &deployment);
+
+    deployment
+        .target
+        .extend_lease(&job.id, &lease, Duration::from_secs(3_600))
+        .expect("park it well past the test's own patience");
+
+    let started = std::time::Instant::now();
+    deployment.stop();
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "a shutdown must abandon a parked accepted dispatch, not wait out its deadline"
+    );
+}
+
+#[test]
+fn an_accepted_dispatch_that_is_never_settled_says_so() {
+    let storage = temp_storage("push-settle-never");
+    // A short timeout, so the settle deadline the accept records is one the
+    // test can outlive.
+    let mut job = new_job("never_settled");
+    job.timeout_ms = 1_500;
+    job.max_retries = 0;
+    let job = storage.enqueue(job).expect("enqueue the job");
+
+    let stub = PushTarget::start(Reply::status(202));
+    let deployment = Deployment::start(&storage, settle_target(&stub.url, 2, &storage), None);
+
+    poll_until(Duration::from_secs(20), || {
+        !storage
+            .list_dead(10, 0, None)
+            .expect("read the dead-letter queue")
+            .is_empty()
+    })
+    .expect("an accepted dispatch that is never settled must eventually fail");
+
+    let dead = storage
+        .list_dead(10, 0, None)
+        .expect("read the dead-letter queue");
+    assert_eq!(dead[0].original_job_id, job.id);
+    let error = dead[0]
+        .error
+        .clone()
+        .expect("a dead-letter carries a reason");
+    assert!(
+        error.contains(ACCEPTED_NOT_SETTLED),
+        "the reason keeps the greppable prefix, got: {error}"
+    );
+    // The distinction #845 asks for: an operator must be able to tell
+    // "accepted, never settled" from an ordinary timeout.
+    assert!(
+        error.contains("accepted") && error.contains("never settled"),
+        "the reason must say the target took the job and went quiet, got: {error}"
+    );
+    assert!(
+        !error.contains(SETTLE_VAR),
+        "this is not the callbacks-are-off refusal, got: {error}"
+    );
+
+    deployment.stop();
+}
+
+#[test]
+fn settle_callbacks_need_the_grpc_door() {
+    // A 202 is a hand-off to somewhere, and the executor door is that
+    // somewhere. Refused at boot rather than starting a deployment that
+    // accepts a hand-off and then has no inbound surface for the answer.
+    fn env(pairs: &[(&str, &str)]) -> Env {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    let mut push = vec![
+        ("FLEXIQ_DSN", ":memory:"),
+        (
+            "FLEXIQ_PUSH_TARGET_URL",
+            "https://push.example.com/dispatch",
+        ),
+        ("FLEXIQ_PUSH_TARGET_CAPACITY", "4"),
+        ("FLEXIQ_PUSH_TARGET_ALLOW", "push.example.com"),
+    ];
+    assert!(
+        Config::from_map(&env(&push)).is_ok(),
+        "push without callbacks needs no door"
+    );
+
+    push.push((SETTLE_VAR, "grpc"));
+    let refused = Config::from_map(&env(&push)).expect_err("callbacks without a door are refused");
+    assert!(
+        refused.to_string().contains("FLEXIQ_GRPC_LISTEN"),
+        "the refusal must name the listener to set, got: {refused}"
+    );
+
+    push.extend([
+        ("FLEXIQ_GRPC_LISTEN", "127.0.0.1:0"),
+        ("FLEXIQ_NAMESPACE", "push-tests"),
+    ]);
+    assert!(
+        Config::from_map(&env(&push)).is_ok(),
+        "callbacks plus the door is a valid deployment"
+    );
+
+    // And a transport this build does not speak is named rather than ignored.
+    let mut bogus = push.clone();
+    bogus.retain(|(key, _)| *key != SETTLE_VAR);
+    bogus.push((SETTLE_VAR, "carrier-pigeon"));
+    assert!(
+        Config::from_map(&env(&bogus)).is_err(),
+        "an unknown settle transport must be refused, not read as off"
     );
 }

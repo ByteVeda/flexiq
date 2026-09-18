@@ -671,6 +671,62 @@ mod tests {
         );
     }
 
+    /// Both refusals a settle-only door gives are `FAILED_PRECONDITION`, and
+    /// neither is `UNIMPLEMENTED`: the build serves every RPC, and it is the
+    /// deployment that has no use for some of them. `UNIMPLEMENTED` would send
+    /// an operator to upgrade a server that is already the right version.
+    #[test]
+    fn a_settle_only_door_refuses_by_precondition() {
+        assert_eq!(nothing_attaches().code(), tonic::Code::FailedPrecondition);
+        assert_eq!(settle_disabled().code(), tonic::Code::FailedPrecondition);
+        // Each names what to do about it, and they are different things.
+        assert!(nothing_attaches().message().contains("nothing attaches"));
+        assert!(settle_disabled()
+            .message()
+            .contains("FLEXIQ_PUSH_TARGET_SETTLE"));
+    }
+
+    /// A report that lost its fence must never be resent, so none of these may
+    /// be `ABORTED` — which sits in the retry-with-backoff class. Resending one
+    /// is the double execution the fence exists to refuse.
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn no_settle_refusal_is_retryable() {
+        use flexiq_core::SettleRefused;
+        for refused in [
+            SettleRefused::NotHere,
+            SettleRefused::Fenced,
+            SettleRefused::Unsupported,
+            SettleRefused::Storage("the database is unhappy".to_string()),
+        ] {
+            let status = settle_refusal(refused);
+            assert_eq!(
+                status.code(),
+                tonic::Code::FailedPrecondition,
+                "unexpected code for {status:?}"
+            );
+        }
+
+        // And the storage arm says nothing about the storage: the detail is
+        // logged, never handed to a peer.
+        let leaked = settle_refusal(SettleRefused::Storage("host=db user=root".to_string()));
+        assert!(!leaked.message().contains("host=db"));
+    }
+
+    /// "Not on this replica" and "already settled" are different problems with
+    /// different fixes, and an operator told the wrong one goes looking for a
+    /// race that never happened.
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_misrouted_settle_is_not_reported_as_a_stale_one() {
+        use flexiq_core::SettleRefused;
+        let elsewhere = settle_refusal(SettleRefused::NotHere);
+        let stale = settle_refusal(SettleRefused::Fenced);
+        assert_ne!(elsewhere.message(), stale.message());
+        assert!(elsewhere.message().contains("replica"));
+        assert!(stale.message().contains("do not retry"));
+    }
+
     #[test]
     fn a_refusal_says_which_kind_it_was() {
         // The socket handshake is deliberately mute; this door is not reachable
