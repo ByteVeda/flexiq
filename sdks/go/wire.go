@@ -60,9 +60,10 @@ type Call struct {
 //     is the contract's stated exemption and keeps RFC 8949's preferred
 //     two-byte form, which is what NaNConvert and InfConvert say here.
 //
-// One gap is left, deliberately: a Go float32 still encodes as a 4-byte float,
-// because fxamacker marshals a Go value directly and widening one nested inside
-// a struct would mean rebuilding the value through reflection. Pass float64.
+// ShortestFloatNone covers a Go float64 and not a float32, whose kind takes the
+// narrow path whatever the option says. A float32 is therefore widened after
+// marshalling instead — see floatwidth.go, which is where that half of the rule
+// lives.
 //
 // Sorting stays off. A CBOR map is unordered, but the bytes are not: the
 // contract pins an object argument's keys in the order the caller wrote them,
@@ -134,6 +135,10 @@ func EncodeCall(args []any, kwargs map[string]any) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("flexiq: encode call args: %w", err)
 	}
+	encodedArgs, err = widenNarrowFloats(encodedArgs)
+	if err != nil {
+		return nil, fmt.Errorf("flexiq: encode call args: %w", err)
+	}
 	encodedKwargs, err := encodeKwargs(kwargs)
 	if err != nil {
 		return nil, err
@@ -157,7 +162,11 @@ func encodeKwargs(kwargs map[string]any) (cbor.RawMessage, error) {
 		if err != nil {
 			return nil, fmt.Errorf("flexiq: encode keyword argument %q: %w", key, err)
 		}
-		encoded[key] = raw
+		widened, err := widenNarrowFloats(raw)
+		if err != nil {
+			return nil, fmt.Errorf("flexiq: encode keyword argument %q: %w", key, err)
+		}
+		encoded[key] = widened
 	}
 
 	body, err := kwargsMode.Marshal(encoded)
@@ -272,6 +281,10 @@ func splitCall(payload []byte) ([]cbor.RawMessage, map[string]cbor.RawMessage, e
 // reason [EncodeCall] gives. Nothing hashes a result, so it costs nothing here.
 func EncodeResult(v any) ([]byte, error) {
 	body, err := encMode.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("flexiq: encode result: %w", err)
+	}
+	body, err = widenNarrowFloats(body)
 	if err != nil {
 		return nil, fmt.Errorf("flexiq: encode result: %w", err)
 	}

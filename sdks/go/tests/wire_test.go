@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fxamacker/cbor/v2"
+
 	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 )
 
@@ -147,6 +149,7 @@ func TestFloatWidths(t *testing.T) {
 		want string
 	}{
 		{"finite", 1.5, "028281fb3ff8000000000000a0"},
+		{"finite float32", float32(1.5), "028281fb3ff8000000000000a0"},
 		{"infinity", math.Inf(1), "028281f97c00a0"},
 		{"negative infinity", math.Inf(-1), "028281f9fc00a0"},
 		{"nan", math.NaN(), "028281f97e00a0"},
@@ -160,6 +163,158 @@ func TestFloatWidths(t *testing.T) {
 				t.Errorf("got %s, want %s", hex.EncodeToString(got), tc.want)
 			}
 		})
+	}
+}
+
+// TestFloat32IsWidenedAtEveryDepth is the half of the rule fxamacker cannot be
+// configured into: ShortestFloatNone keeps a float64 wide but a float32 takes the
+// narrow path regardless, so the widening runs over the encoded bytes and has to
+// reach a float32 wherever one can sit.
+func TestFloat32IsWidenedAtEveryDepth(t *testing.T) {
+	const wide = "fb3ff8000000000000"
+
+	for _, tc := range []struct {
+		name   string
+		args   []any
+		kwargs map[string]any
+		want   string
+	}{
+		{"positional", []any{float32(1.5)}, nil, "028281" + wide + "a0"},
+		{"keyword", nil, map[string]any{"k": float32(1.5)}, "028280a1616b" + wide},
+		{
+			"struct field",
+			[]any{struct {
+				A float32 `cbor:"a"`
+			}{A: 1.5}},
+			nil,
+			"028281a16161" + wide + "a0",
+		},
+		{"slice element", []any{[]float32{1.5}}, nil, "02828181" + wide + "a0"},
+		{"map value", []any{map[string]float32{"a": 1.5}}, nil, "028281a16161" + wide + "a0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := flexiq.EncodeCall(tc.args, tc.kwargs)
+			if err != nil {
+				t.Fatalf("EncodeCall: %v", err)
+			}
+			if hex.EncodeToString(got) != tc.want {
+				t.Errorf("got %s, want %s", hex.EncodeToString(got), tc.want)
+			}
+		})
+	}
+}
+
+// TestFloat32IsWidenedInsideNestedContainers goes deeper than a hand-computed
+// envelope is worth: the assertion is that no narrow float survives anywhere and
+// that both of them came out wide.
+func TestFloat32IsWidenedInsideNestedContainers(t *testing.T) {
+	type nested struct {
+		Inner []float32      `cbor:"inner"`
+		Deep  map[string]any `cbor:"deep"`
+	}
+
+	got, err := flexiq.EncodeCall(
+		[]any{nested{Inner: []float32{1.5}, Deep: map[string]any{"d": float32(1.5)}}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("EncodeCall: %v", err)
+	}
+
+	encoded := hex.EncodeToString(got)
+	if strings.Contains(encoded, "fa3fc00000") || strings.Contains(encoded, "f93e00") {
+		t.Errorf("a narrow float survived: %s", encoded)
+	}
+	if count := strings.Count(encoded, "fb3ff8000000000000"); count != 2 {
+		t.Errorf("want two 64-bit floats, got %d in %s", count, encoded)
+	}
+}
+
+// TestWideningLeavesEverythingElseAlone is the risk the byte pass carries: it
+// walks a payload it did not parse before, so anything it mishandles is silent
+// corruption rather than an error. Every encode vector already asserts its bytes
+// through that pass, and these are the shapes the vectors do not reach.
+func TestWideningLeavesEverythingElseAlone(t *testing.T) {
+	// A byte string whose contents are exactly a narrow float head and argument.
+	// The walk has to honour the string's length instead of rewriting what it
+	// finds inside it — a text string cannot carry the trap, no UTF-8 byte being
+	// 0xf9 or 0xfa, but a byte string can.
+	literal := []byte{0xfa, 0x3f, 0xc0, 0x00, 0x00, 0xf9, 0x3e, 0x00}
+	encoded, err := flexiq.EncodeResult(literal)
+	if err != nil {
+		t.Fatalf("EncodeResult: %v", err)
+	}
+	var survived []byte
+	if err := flexiq.DecodeResult(encoded, &survived); err != nil {
+		t.Fatalf("DecodeResult: %v (%s)", err, hex.EncodeToString(encoded))
+	}
+	if !bytes.Equal(survived, literal) {
+		t.Errorf("a byte string was rewritten: got %x, want %x", survived, literal)
+	}
+
+	// A tag, a nesting the vectors do not reach, and the two float widths side by
+	// side. Each has to come out as something a decoder still reads.
+	for _, value := range []any{
+		new(big.Int).SetUint64(math.MaxUint64),
+		map[string]any{"a": []any{1, "b", nil, true, []byte{0xfa}}},
+		struct {
+			A map[string][]any `cbor:"a"`
+		}{A: map[string][]any{"b": {[]any{[]any{0.5}}}}},
+	} {
+		encoded, err := flexiq.EncodeResult(value)
+		if err != nil {
+			t.Fatalf("EncodeResult(%v): %v", value, err)
+		}
+		var back any
+		if err := flexiq.DecodeResult(encoded, &back); err != nil {
+			t.Errorf("DecodeResult(%v): %v — the widening pass produced bytes no decoder accepts: %s",
+				value, err, hex.EncodeToString(encoded))
+		}
+	}
+
+	// Both widths in one call: only the narrow one moves.
+	mixed, err := flexiq.EncodeCall([]any{float32(1.5), 2.5}, nil)
+	if err != nil {
+		t.Fatalf("EncodeCall: %v", err)
+	}
+	if got, want := hex.EncodeToString(mixed), "028282fb3ff8000000000000fb4004000000000000a0"; got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
+// TestWideningReachesPreEncodedBytes covers the one way a narrow float arrives
+// without a Go float32 behind it.
+//
+// A cbor.RawMessage is bytes the caller assembled, and the contract binds a
+// payload's bytes however they were assembled — so the pass normalises those too,
+// inside a container and behind a tag. An indefinite-length container is the
+// exception: IndefLengthForbidden rejects one before the pass sees it, which is
+// what keeps that shape off the wire.
+func TestWideningReachesPreEncodedBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  cbor.RawMessage
+		want string
+	}{
+		{"bare", cbor.RawMessage{0xfa, 0x3f, 0xc0, 0x00, 0x00}, "02fb3ff8000000000000"},
+		{"in an array", cbor.RawMessage{0x81, 0xfa, 0x3f, 0xc0, 0x00, 0x00}, "0281fb3ff8000000000000"},
+		{"behind a tag", cbor.RawMessage{0xc1, 0xfa, 0x3f, 0xc0, 0x00, 0x00}, "02c1fb3ff8000000000000"},
+		{"half precision", cbor.RawMessage{0xf9, 0x3e, 0x00}, "02fb3ff8000000000000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := flexiq.EncodeResult(tc.raw)
+			if err != nil {
+				t.Fatalf("EncodeResult: %v", err)
+			}
+			if hex.EncodeToString(got) != tc.want {
+				t.Errorf("got %s, want %s", hex.EncodeToString(got), tc.want)
+			}
+		})
+	}
+
+	indefinite := cbor.RawMessage{0x9f, 0xfa, 0x3f, 0xc0, 0x00, 0x00, 0xff}
+	if _, err := flexiq.EncodeResult(indefinite); err == nil {
+		t.Error("an indefinite-length raw message must be refused, not widened")
 	}
 }
 
