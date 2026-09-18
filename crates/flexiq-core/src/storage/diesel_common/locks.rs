@@ -272,6 +272,10 @@ macro_rules! impl_diesel_lock_ops {
                                 .assume_not_null()
                                 .le(now),
                         ),
+                        // No further filter: giving up is unconditional. The
+                        // `settle_deadline_ms IS NOT NULL` guard above is what
+                        // still makes it single-use.
+                        SettleClaimant::Abandoned => consume,
                     };
 
                     let affected = consume

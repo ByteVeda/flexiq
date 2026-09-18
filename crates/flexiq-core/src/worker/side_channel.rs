@@ -25,7 +25,9 @@ use std::time::{Duration, Instant};
 
 use crate::error::{QueueError, Result};
 use crate::step::StepLimits;
-use crate::storage::records::{JobStep, NewJobStep, SleepOutcome, StepCommit};
+use crate::storage::records::{
+    JobStep, NewJobStep, SettleClaimant, SettleGrant, SleepOutcome, StepCommit,
+};
 use crate::storage::{Storage, StorageBackend};
 
 /// How long a resolved toggle list is reused before it is re-read.
@@ -114,6 +116,57 @@ pub trait SideChannel: Send + Sync + 'static {
         let _ = (step, owner, attempt, epoch, wake_at, namespace);
         Err(steps_unsupported())
     }
+
+    // ── Dispatches settled out of band ─────────────────────────────
+
+    /// Whether this channel can fence a dispatch settled out of band.
+    ///
+    /// `false` refuses `202 Accepted` outright rather than accepting a job it
+    /// could not later fence — the same shape as
+    /// [`supports_steps`](Self::supports_steps), and for the same reason.
+    fn supports_settle(&self) -> bool {
+        false
+    }
+
+    /// Record that a dispatch was accepted out of band, and how long this
+    /// scheduler will wait for its outcome.
+    ///
+    /// `owner`, `attempt` and `epoch` come from the dispatch this scheduler
+    /// recorded, exactly as they do for a step commit: a target that could
+    /// name its own would be naming the fence it is about to be judged by.
+    fn await_settle(
+        &self,
+        job_id: &str,
+        owner: &str,
+        attempt: i32,
+        epoch: Option<i64>,
+        deadline_ms: i64,
+        namespace: Option<&str>,
+    ) -> Result<Option<i64>> {
+        let _ = (job_id, owner, attempt, epoch, deadline_ms, namespace);
+        Err(settle_unsupported())
+    }
+
+    /// Consume the settle marker, if `claimant` is entitled to it.
+    ///
+    /// Fallible and **refusing by default**, unlike the fire-and-forget
+    /// methods above: this is the gate that decides who may settle an accepted
+    /// dispatch, and a channel that cannot evaluate it must not be able to
+    /// grant it.
+    fn claim_settle(
+        &self,
+        job_id: &str,
+        claimant: SettleClaimant,
+        namespace: Option<&str>,
+    ) -> Result<SettleGrant> {
+        let _ = (job_id, claimant, namespace);
+        Err(settle_unsupported())
+    }
+}
+
+/// What a channel with no settle store answers.
+fn settle_unsupported() -> QueueError {
+    QueueError::Config("this scheduler does not implement the settle store".to_string())
 }
 
 /// What a channel with no step store answers. Permanent by
@@ -196,6 +249,32 @@ fn recover<T>(poisoned: PoisonError<T>) -> T {
 }
 
 impl SideChannel for StorageSideChannel {
+    fn supports_settle(&self) -> bool {
+        self.storage.supports_settle()
+    }
+
+    fn await_settle(
+        &self,
+        job_id: &str,
+        owner: &str,
+        attempt: i32,
+        epoch: Option<i64>,
+        deadline_ms: i64,
+        namespace: Option<&str>,
+    ) -> Result<Option<i64>> {
+        self.storage
+            .await_settle(job_id, owner, attempt, epoch, deadline_ms, namespace)
+    }
+
+    fn claim_settle(
+        &self,
+        job_id: &str,
+        claimant: SettleClaimant,
+        namespace: Option<&str>,
+    ) -> Result<SettleGrant> {
+        self.storage.claim_settle(job_id, claimant, namespace)
+    }
+
     fn update_progress(&self, job_id: &str, progress: i32, namespace: Option<&str>) {
         // Checked here rather than left to storage: the in-process SDK paths
         // reject or clamp before they ever call storage, so an attached

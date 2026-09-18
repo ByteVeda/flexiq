@@ -728,6 +728,15 @@ pub enum SettleClaimant {
         /// The scheduler's clock at the moment it decided to give up.
         now: i64,
     },
+    /// The scheduler, giving the dispatch up on purpose and regardless of its
+    /// deadline: a cancel, or a shutdown that ran out of drain.
+    ///
+    /// Unconditional, which is why it is a variant rather than an
+    /// [`Expired`](Self::Expired) with a distant clock. Only the process
+    /// holding the dispatch reaches it — a decision to stop waiting is not
+    /// something a peer may assert, and the reaper must never have it, because
+    /// the reaper's whole job is to respect the deadline it is checking.
+    Abandoned,
 }
 
 /// A running job the reaper found past its deadline.

@@ -472,6 +472,9 @@ impl RedisStorage {
         let (epoch, expires_at) = match claimant {
             SettleClaimant::Lease(epoch) => (epoch.to_string(), String::new()),
             SettleClaimant::Expired { now } => (String::new(), now.to_string()),
+            // Both empty: no lease to prove and no deadline to respect, which
+            // the script reads as the unconditional give-up.
+            SettleClaimant::Abandoned => (String::new(), String::new()),
         };
 
         let granted: i64 = redis::Script::new(CLAIM_SETTLE)
@@ -542,12 +545,14 @@ const CLAIM_SETTLE: &str = r#"
         if not claim then return 0 end
         local claim_epoch = string.match(claim, ':%d+%.(%d+)$')
         if not claim_epoch or claim_epoch ~= ARGV[2] then return 0 end
-    else
+    elseif ARGV[3] ~= '' then
         -- The scheduler may only collect a marker whose deadline has actually
         -- passed, compared here rather than by the caller so an extension that
         -- committed a millisecond ago wins.
         if tonumber(deadline) > tonumber(ARGV[3]) then return 0 end
     end
+    -- Neither set is the unconditional give-up: a cancel, or a shutdown that
+    -- ran out of drain. Reachable only from the process holding the dispatch.
 
     redis.call('DEL', KEYS[3])
     return 1

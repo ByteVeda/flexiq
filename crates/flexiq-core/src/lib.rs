@@ -88,7 +88,9 @@ pub use storage::Storage;
 pub use storage::StorageBackend;
 pub use storage::{DeadJob, QueueStats, SubscriptionBacklogStats};
 #[cfg(feature = "http-target")]
-pub use worker::http_target::{HttpDispatchTarget, HttpTargetConfig, HttpTargetError};
+pub use worker::http_target::{
+    HttpDispatchTarget, HttpTargetConfig, HttpTargetError, SettleRefused, SettledOutcome,
+};
 pub use worker::registry_fingerprint;
 pub use worker::{
     AttachAddress, AttachError, AttachedExecutor, Capacity, Dispatch, ExecutorClient,
