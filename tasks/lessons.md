@@ -124,3 +124,16 @@ The rule to carry forward:
   marker and remove it in that same commit.** A green `cargo clippy --all-targets --all-features`
   is not evidence the marker is gone — clippy has nothing to warn about an `allow` that permits a
   warning which no longer fires either way.
+
+## One cargo build job at a time
+
+**2026-09-18, #948.** `CLAUDE.md` says `-j2` on a 13 GB machine, but the user stopped a
+`cargo test --workspace -j2` mid-run and gave a tighter rule: **one job, never more.** `-j2`
+is not a floor to keep because a file wrote it down — the machine's real budget is the
+constraint, and it is the user's to set.
+
+The rule to carry forward:
+
+- **Pass `-j1` to every `cargo build` / `cargo check` / `cargo test` / `cargo clippy` in this
+  repo,** and never run two cargo invocations concurrently. `CARGO_BUILD_JOBS=1` for the
+  clippy invocation that takes no `-j`.
