@@ -65,6 +65,14 @@ fn the_round_trip_only_vectors_are_reachable_from_rust() {
         hex(&encode_call(&[WireValue::Bytes(vec![1, 2])], &[])),
         bytes
     );
+
+    // A non-finite float is the third thing `structured` refuses and the one the
+    // vectors cannot state, its width being unpinnable across runtimes. Reachable
+    // here all the same.
+    assert_eq!(
+        hex(&encode_call(&[WireValue::Float(f64::INFINITY)], &[])),
+        "028281fb7ff0000000000000a0"
+    );
 }
 
 fn load() -> Vectors {

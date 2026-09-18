@@ -1,11 +1,19 @@
 //! A CBOR (RFC 8949) writer for [`WireValue`], and nothing else.
 //!
-//! Two rules from `BINDING_CONTRACT.md` are structural here rather than
-//! configurable, because a writer that gets either wrong still interoperates
-//! and silently stops `auto:` idempotency keys deduping across SDKs:
+//! Three rules from `BINDING_CONTRACT.md` are structural here rather than
+//! configurable, because a writer that gets any of them wrong still
+//! interoperates and silently stops `auto:` idempotency keys deduping across
+//! SDKs:
 //!
 //! * every array and map carries a **definite-length** head;
-//! * every integer argument uses the **shortest form** that holds it.
+//! * every integer argument uses the **shortest form** that holds it;
+//! * every finite float takes the **64-bit** head, a narrower width being the
+//!   one shortest form the contract forbids.
+//!
+//! A non-finite float is exempt from the third — CBOR libraries hard-code RFC
+//! 8949's two-byte spelling for an infinity and a NaN, so no width is pinnable
+//! across runtimes. This writer emits one wide anyway, because it has a single
+//! float head and a branch would buy an exemption nothing needs.
 //!
 //! There is no reader. Nothing in this crate decodes a payload — the shells do,
 //! each with its language's CBOR library.
@@ -34,7 +42,9 @@ const HEAD_FALSE: u8 = 0xf4;
 const HEAD_TRUE: u8 = 0xf5;
 /// `null`.
 const HEAD_NULL: u8 = 0xf6;
-/// A 64-bit float follows.
+/// A 64-bit float follows. The only float head this writer emits: `f9` and `fa`
+/// round-trip many values just as exactly and hash differently, so the contract
+/// pins this one for every finite float.
 const HEAD_F64: u8 = 0xfb;
 
 /// Append the CBOR encoding of `value` to `out`.
@@ -162,6 +172,26 @@ mod tests {
         assert_eq!(hex(&WireValue::Bool(true)), "f5");
         assert_eq!(hex(&WireValue::Bool(false)), "f4");
         assert_eq!(hex(&WireValue::Float(1.5)), "fb3ff8000000000000");
+    }
+
+    /// Every float takes the 64-bit head, whatever a narrower one would hold.
+    ///
+    /// 1.5 is exact in binary16 (`f9 3e 00`), which is the width a canonical CBOR
+    /// writer would pick and the contract forbids. The non-finite pair is not
+    /// pinned by the contract — no CBOR library agrees on its width — so these
+    /// two assertions are about this writer alone, and exist so that giving it a
+    /// narrowing branch has to be a deliberate act.
+    #[test]
+    fn floats_are_never_narrowed() {
+        for value in [1.5, 0.0, f64::INFINITY, f64::NAN] {
+            let encoded = hex(&WireValue::Float(value));
+            assert!(
+                encoded.starts_with("fb") && encoded.len() == 18,
+                "{value} encoded as {encoded}"
+            );
+        }
+        assert_eq!(hex(&WireValue::Float(f64::INFINITY)), "fb7ff0000000000000");
+        assert_eq!(hex(&WireValue::Float(f64::NAN)), "fb7ff8000000000000");
     }
 
     #[test]

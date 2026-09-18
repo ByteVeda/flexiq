@@ -101,6 +101,30 @@ fn negative_int() {
     assert_eq!(encode(&[arg(&-1_i64), arg(&-1000_i64)]), "028282203903e7a0");
 }
 
+/// Case `float`: `f(1.5)`, and the `f32` that has to reach the same bytes.
+///
+/// An integer takes the shortest form that holds it and a float takes the
+/// widest, which is the one asymmetry in the encoding rules. 1.5 is exact in
+/// binary16, so a writer picking the shortest float would send `f9 3e 00` — it
+/// would interoperate and it would hash differently, which is #905. The `f32`
+/// argument is the other half: the shell widens rather than narrows, so the
+/// parameter's Rust type cannot move a payload's `auto:` key.
+#[test]
+fn float() {
+    assert_eq!(encode(&[arg(&1.5_f64)]), "028281fb3ff8000000000000a0");
+    assert_eq!(encode(&[arg(&1.5_f32)]), "028281fb3ff8000000000000a0");
+}
+
+/// Not a vector: a non-finite float's width is the rule's stated exemption,
+/// because CBOR libraries hard-code RFC 8949's two-byte spelling and mostly
+/// cannot be told not to. This crate writes one wide, like every other float, so
+/// the assertion is about this crate rather than the contract.
+#[test]
+fn float_non_finite() {
+    assert_eq!(encode(&[arg(&f64::INFINITY)]), "028281fb7ff0000000000000a0");
+    assert_eq!(encode(&[arg(&f64::NAN)]), "028281fb7ff8000000000000a0");
+}
+
 /// Cases `kwargs-only` and `positional-and-kwargs`.
 ///
 /// A Rust producer never writes these — the language has no keyword arguments,
@@ -191,11 +215,11 @@ fn the_pinned_float_decodes() {
     assert_eq!(f, 1.5);
 }
 
-/// The same value at half precision.
+/// Case `float-narrow`: the same value at half precision.
 ///
-/// Not a vector — the file pins one width and says a writer may choose a
-/// narrower one, so this is the half of that rule a reader has to satisfy and
-/// no vector can express. `f9 3e 00` is 1.5 in binary16.
+/// The width a writer must not choose and a reader must accept anyway — a
+/// payload enqueued before the rule, or by a client that has not adopted it,
+/// still has to run. `f9 3e 00` is 1.5 in binary16.
 #[test]
 fn a_narrower_float_decodes_to_the_same_value() {
     let payload = hex::decode("028281f93e00a0").expect("valid hex");
@@ -214,15 +238,16 @@ fn an_integer_past_double_precision_keeps_its_last_digit() {
     assert_eq!(n, 9_007_199_254_740_993);
 }
 
-/// Every `decode_only` vector, decoded and re-encoded to the same bytes.
+/// Every `round_trip_only` vector, decoded and re-encoded to the same bytes.
 ///
-/// `round_trip_only` is the file's way of saying a value has no cross-language
-/// spelling — a byte string surfaces differently in every runtime — so the
-/// assertion is that this crate's two halves agree, not that a literal matches.
+/// `round_trip_only` is the file's way of saying JSON cannot state the value, so
+/// the assertion is that this crate's two halves agree rather than that a
+/// literal matches. `float-narrow` is the one `decode_only` case left out: its
+/// bytes are the width a writer must not emit, so re-encoding what it decodes
+/// to the same bytes is the opposite of what this crate must do.
 #[test]
 fn every_decode_only_vector_round_trips() {
     for hex_text in [
-        "028281fb3ff8000000000000a0", // float
         "0282811b0020000000000001a0", // int-beyond-double-precision
         "028281420102a0",             // byte-string
     ] {
