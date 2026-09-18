@@ -19,8 +19,10 @@ pub enum WireValue {
     /// A signed integer. Encoded as major type 0 when non-negative and major
     /// type 1 otherwise, always in the shortest form that holds it.
     Integer(i64),
-    /// A double. Always written as a 64-bit float: narrowing is legal for a
-    /// writer but changes bytes for no benefit here.
+    /// A double. Always written as a 64-bit float: for a finite one the contract
+    /// forbids a writer to narrow, because the `auto:` key hashes the bytes and a
+    /// narrower width is a different hash for the same value. A non-finite one is
+    /// exempt from the width and written wide anyway.
     Float(f64),
     /// A UTF-8 string.
     Text(String),

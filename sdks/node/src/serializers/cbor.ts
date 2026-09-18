@@ -28,6 +28,10 @@ export class CborSerializer implements Serializer {
   // off). `variableMapSize` emits minimal (canonical) map headers so output
   // matches other SDKs' encoders.
   // `useTag259ForMaps` is honored at runtime but missing from cbor-x's typings.
+  // `useFloat32` stays unset, which is cbor-x for "always a 64-bit float": the
+  // contract pins that head even where a narrower one would round-trip the value
+  // exactly, because the `auto:` idempotency key hashes these bytes and a
+  // narrower float would interoperate while hashing differently.
   private readonly encoder = new Encoder({
     useRecords: false,
     useTag259ForMaps: false,

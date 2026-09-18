@@ -195,8 +195,9 @@ FlexiQ flexiq = FlexiQ.builder()
 
 Also CBOR — the codec is fixed, so there is no more compact format to opt into.
 The size knob a Rust caller does have is the shape of the arguments: an integer
-travels in CBOR's shortest form, and an `f32` is widened to a 64-bit float
-because core always writes one, so the narrower type buys nothing on the wire.
+travels in CBOR's shortest form, while an `f32` is widened to a 64-bit float
+because the wire contract pins that width for every float, so the narrower type
+buys nothing on the wire.
 
   </Tab>
 </CodeTabs>

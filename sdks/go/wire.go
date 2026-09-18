@@ -44,8 +44,8 @@ type Call struct {
 	Kwargs map[string]any
 }
 
-// encMode and decMode pin the two encoder rules the cross-SDK contract states,
-// neither of which is a matter of style:
+// encMode and decMode pin the three encoder rules the cross-SDK contract states,
+// none of which is a matter of style:
 //
 //   - Definite-length containers only. Both forms decode identically, so a
 //     writer that emits the indefinite form still interoperates — which is the
@@ -54,6 +54,16 @@ type Call struct {
 //     would shift every payload's key at once and silently stop idempotent
 //     enqueues deduping across runtimes.
 //   - Shortest-form integers, for the same reason.
+//   - 64-bit finite floats, which is the same reason pointing the other way: a
+//     finite float carries the 8-byte head even where a narrower width would
+//     round-trip the value exactly, so ShortestFloat is None. A non-finite one
+//     is the contract's stated exemption and keeps RFC 8949's preferred
+//     two-byte form, which is what NaNConvert and InfConvert say here.
+//
+// ShortestFloatNone covers a Go float64 and not a float32, whose kind takes the
+// narrow path whatever the option says. A float32 is therefore widened after
+// marshalling instead — see floatwidth.go, which is where that half of the rule
+// lives.
 //
 // Sorting stays off. A CBOR map is unordered, but the bytes are not: the
 // contract pins an object argument's keys in the order the caller wrote them,
@@ -125,6 +135,10 @@ func EncodeCall(args []any, kwargs map[string]any) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("flexiq: encode call args: %w", err)
 	}
+	encodedArgs, err = widenNarrowFloats(encodedArgs)
+	if err != nil {
+		return nil, fmt.Errorf("flexiq: encode call args: %w", err)
+	}
 	encodedKwargs, err := encodeKwargs(kwargs)
 	if err != nil {
 		return nil, err
@@ -148,7 +162,11 @@ func encodeKwargs(kwargs map[string]any) (cbor.RawMessage, error) {
 		if err != nil {
 			return nil, fmt.Errorf("flexiq: encode keyword argument %q: %w", key, err)
 		}
-		encoded[key] = raw
+		widened, err := widenNarrowFloats(raw)
+		if err != nil {
+			return nil, fmt.Errorf("flexiq: encode keyword argument %q: %w", key, err)
+		}
+		encoded[key] = widened
 	}
 
 	body, err := kwargsMode.Marshal(encoded)
@@ -263,6 +281,10 @@ func splitCall(payload []byte) ([]cbor.RawMessage, map[string]cbor.RawMessage, e
 // reason [EncodeCall] gives. Nothing hashes a result, so it costs nothing here.
 func EncodeResult(v any) ([]byte, error) {
 	body, err := encMode.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("flexiq: encode result: %w", err)
+	}
+	body, err = widenNarrowFloats(body)
 	if err != nil {
 		return nil, fmt.Errorf("flexiq: encode result: %w", err)
 	}

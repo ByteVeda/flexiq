@@ -55,8 +55,8 @@ The file is `$schema_version: 1` and carries twelve vectors in two arrays.
 
 | Array | Cases | The obligation |
 |---|---|---|
-| `encode` | 9 | A client **MUST** decode every one. It **MUST** produce the exact `hex` for every case its own call API can express. |
-| `decode_only` | 3 | Three cases this file cannot state as an `args` value. A client **MUST** decode each. |
+| `encode` | 10 | A client **MUST** decode every one. It **MUST** produce the exact `hex` for every case its own call API can express. |
+| `decode_only` | 4 | Four cases the file cannot state as an `encode` case. A client **MUST** decode each, and **MUST NOT** produce the bytes of either `float-narrow-*`. |
 
 The exemptions are stated, not implied:
 
@@ -65,12 +65,13 @@ The exemptions are stated, not implied:
 - A case marked `round_trip_only` pins no value, because JSON cannot hold one —
   `int-beyond-double-precision` is `2^53 + 1` and `byte-string` is a CBOR byte
   string. A client **MUST** re-encode what it decoded to the same `hex`.
-- The `float` case pins the value and not the bytes: an encoder may legitimately
-  choose a narrower width. **It is the one place the vectors leave bytes free,
-  and that has a consequence.** An `auto:` idempotency key is a hash over the
-  serialized payload, so two conforming encoders can derive different keys for
-  the same float argument. A client whose payloads carry floats **SHOULD** set
-  `unique_key` itself rather than rely on `auto:` agreeing across runtimes.
+- The two `float-narrow-*` cases are the ones whose bytes a client **MUST NOT**
+  produce. They are `1.5` at half and at single precision, and they are there
+  because the rule has two halves: a writer emits 64-bit floats only, and a reader
+  accepts both narrower widths anyway — a payload enqueued before this rule, or by
+  a client that has not adopted it, still has to run. Both widths are pinned
+  because a reader that takes one and refuses the other would pass a one-case
+  suite and still fail on live payloads.
 
 **A hex string is never edited to make a test pass.** A diff to one is a
 wire-format change, and it breaks every job already enqueued.
@@ -107,11 +108,11 @@ described as having established more:
 1. Its encoder and decoder agree with every other FlexiQ runtime about the bytes
    this contract pins.
 2. Its `auto:` idempotency keys will match theirs **for those payloads**, that
-   key being a hash over the same bytes. **A float argument is the exception**:
-   its width is not pinned, so two conforming clients can derive different keys
-   for the same call and each enqueue its own active job. A client whose
-   payloads carry floats **SHOULD** set `unique_key` rather than rely on
-   `auto:`.
+   key being a hash over the same bytes. A float argument used to be the
+   exception, because its width was left free; the vectors pin it, so it is one
+   no longer. A **non-finite** float still is, its width and a NaN's payload bits
+   being the caller's runtime's — a client whose payloads carry one **SHOULD** set
+   `unique_key`.
 3. Nothing about its RPC behaviour. Retry discipline, error branching and
    capability honesty are not vector-testable, and they are the rest of this
    document.
@@ -341,18 +342,29 @@ a result of true       02 f5
 a result of 2^53       02 1b 00 20 00 00 00 00 00 00
 ```
 
-Two encoder rules, and **neither is a matter of style**:
+Three encoder rules, and **none is a matter of style**:
 
 - **Definite-length containers only** — `a0` for an empty map, `80` for an empty
-  array, never the indefinite forms `bf … ff` / `9f … ff`. Readers **MUST**
-  accept both; writers **MUST NOT** emit them.
+  array, never the indefinite forms `bf … ff` / `9f … ff`.
 - **Shortest-form integers.**
+- **64-bit finite floats only** — a finite float **MUST** carry the head `fb`,
+  never `f9` or `fa`, even where a narrower width would round-trip the value
+  exactly. `1.5` is `fb 3f f8 00 00 00 00 00 00`, not `f9 3e 00`. A **non-finite**
+  float is exempt, and so are a NaN's payload bits: RFC 8949's preferred
+  serialization spells an infinity or a NaN in two bytes and CBOR libraries
+  hard-code it, some of them without a way to write one wide and others without a
+  way to write one narrow, so no width is pinnable for either. A client **MAY**
+  write a non-finite float in any width and **MUST** read every width.
 
-Both forms decode identically, so a divergent writer still interoperates — which
-is the danger. The `auto:` idempotency key is a hash over these bytes, so a
-divergence silently stops idempotent enqueues deduping across clients, and every
-call body ends in the kwargs map, so it would shift every payload's key at once.
-A streaming CBOR writer left at its defaults is the usual way this happens.
+Readers **MUST** accept every form a writer is forbidden to emit; writers
+**MUST NOT** emit one. Each alternative decodes to the same value, so a divergent
+writer still interoperates — which is the danger. The `auto:` idempotency key is
+a hash over these bytes, so a divergence silently stops idempotent enqueues
+deduping across clients, and every call body ends in the kwargs map, so a
+container or integer divergence would shift every payload's key at once. A
+streaming CBOR writer left at its defaults is the usual way the first two
+happen; the third is a writer that emits the shortest float that round-trips, or
+a language whose 32-bit float type reaches the encoder unwidened.
 
 ### Enqueueing without a CBOR library
 
@@ -372,8 +384,9 @@ integers past ±9007199254740991 (`2^53 − 1`), non-finite numbers, byte string
 and CBOR tags. Two of those four are pinned as vectors —
 `int-beyond-double-precision` and `byte-string`, the two `round_trip_only`
 entries under `decode_only` — while a non-finite number and a CBOR tag have no
-vector, because neither has a JSON form to state one in. `decode_only`'s third
-entry, `float`, is there for an unrelated reason: its width is not pinned.
+vector, because neither has a JSON form to state one in. `decode_only`'s other two
+entries, `float-narrow-half` and `float-narrow-single`, are there for an unrelated
+reason: they are the widths a writer **MUST NOT** choose.
 `structured` also normalises object key order, which moves the bytes
 without moving the meaning — a client using `structured` **SHOULD** set
 `unique_key` itself rather than rely on an `auto:` key matching another

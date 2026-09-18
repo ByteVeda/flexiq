@@ -123,6 +123,11 @@ class CborSerializer:
     """
 
     def dumps(self, obj: Any) -> bytes:
+        # Never pass ``canonical=True``: it sorts map keys and narrows a float to
+        # the shortest width that round-trips, and the contract pins the caller's
+        # key order and the 64-bit float head. Both still decode to the same
+        # value, and the ``auto:`` idempotency key hashes these bytes, so either
+        # would silently stop idempotent enqueues deduping across SDKs.
         return _CODEC_CBOR + cbor2.dumps(obj)
 
     def loads(self, data: bytes) -> Any:
