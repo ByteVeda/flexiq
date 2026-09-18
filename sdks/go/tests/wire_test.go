@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -129,6 +130,36 @@ func TestRoundTripOnlyVectors(t *testing.T) {
 	}
 	if found != 2 {
 		t.Errorf("expected 2 round_trip_only vectors, found %d — the contract's exemptions moved", found)
+	}
+}
+
+// TestFloatWidths pins both halves of the float rule: a finite float takes the
+// 64-bit head even where a narrower width would round-trip it exactly — 1.5 is
+// exact in binary16, and a narrower float interoperates while hashing
+// differently, which is how it would silently move an `auto:` idempotency key —
+// while a non-finite one keeps RFC 8949's two-byte form, the exemption the
+// vectors state because CBOR libraries do not agree and mostly cannot be told
+// to.
+func TestFloatWidths(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		arg  any
+		want string
+	}{
+		{"finite", 1.5, "028281fb3ff8000000000000a0"},
+		{"infinity", math.Inf(1), "028281f97c00a0"},
+		{"negative infinity", math.Inf(-1), "028281f9fc00a0"},
+		{"nan", math.NaN(), "028281f97e00a0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := flexiq.EncodeCall([]any{tc.arg}, nil)
+			if err != nil {
+				t.Fatalf("EncodeCall: %v", err)
+			}
+			if hex.EncodeToString(got) != tc.want {
+				t.Errorf("got %s, want %s", hex.EncodeToString(got), tc.want)
+			}
+		})
 	}
 }
 

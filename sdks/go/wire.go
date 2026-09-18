@@ -44,8 +44,8 @@ type Call struct {
 	Kwargs map[string]any
 }
 
-// encMode and decMode pin the two encoder rules the cross-SDK contract states,
-// neither of which is a matter of style:
+// encMode and decMode pin the three encoder rules the cross-SDK contract states,
+// none of which is a matter of style:
 //
 //   - Definite-length containers only. Both forms decode identically, so a
 //     writer that emits the indefinite form still interoperates — which is the
@@ -54,6 +54,15 @@ type Call struct {
 //     would shift every payload's key at once and silently stop idempotent
 //     enqueues deduping across runtimes.
 //   - Shortest-form integers, for the same reason.
+//   - 64-bit finite floats, which is the same reason pointing the other way: a
+//     finite float carries the 8-byte head even where a narrower width would
+//     round-trip the value exactly, so ShortestFloat is None. A non-finite one
+//     is the contract's stated exemption and keeps RFC 8949's preferred
+//     two-byte form, which is what NaNConvert and InfConvert say here.
+//
+// One gap is left, deliberately: a Go float32 still encodes as a 4-byte float,
+// because fxamacker marshals a Go value directly and widening one nested inside
+// a struct would mean rebuilding the value through reflection. Pass float64.
 //
 // Sorting stays off. A CBOR map is unordered, but the bytes are not: the
 // contract pins an object argument's keys in the order the caller wrote them,
