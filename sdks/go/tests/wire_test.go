@@ -230,30 +230,34 @@ func TestFloat32IsWidenedInsideNestedContainers(t *testing.T) {
 	}
 }
 
-// TestWideningLeavesEverythingElseAlone is the risk the byte pass carries: it
-// walks a payload it did not parse before, so anything it mishandles is silent
-// corruption rather than an error. Every encode vector already asserts its bytes
-// through that pass, and these are the shapes the vectors do not reach.
-func TestWideningLeavesEverythingElseAlone(t *testing.T) {
-	// A byte string whose contents are exactly a narrow float head and argument.
-	// The walk has to honour the string's length instead of rewriting what it
-	// finds inside it — a text string cannot carry the trap, no UTF-8 byte being
-	// 0xf9 or 0xfa, but a byte string can.
+// The three tests below are the risk the byte pass carries: it walks a payload
+// nothing parsed before, so anything it mishandles is silent corruption rather
+// than an error. Every encode vector already asserts its bytes through that pass,
+// and these are the shapes the vectors do not reach.
+func TestWideningLeavesAByteStringAlone(t *testing.T) {
+	// Contents that are exactly a narrow float head and argument. The walk has to
+	// honour the string's length instead of rewriting what it finds inside — a
+	// text string cannot carry the trap, no UTF-8 byte being 0xf9 or 0xfa, but a
+	// byte string can.
 	literal := []byte{0xfa, 0x3f, 0xc0, 0x00, 0x00, 0xf9, 0x3e, 0x00}
+
 	encoded, err := flexiq.EncodeResult(literal)
 	if err != nil {
 		t.Fatalf("EncodeResult: %v", err)
 	}
+
 	var survived []byte
-	if err := flexiq.DecodeResult(encoded, &survived); err != nil {
-		t.Fatalf("DecodeResult: %v (%s)", err, hex.EncodeToString(encoded))
+	if decodeErr := flexiq.DecodeResult(encoded, &survived); decodeErr != nil {
+		t.Fatalf("DecodeResult: %v (%s)", decodeErr, hex.EncodeToString(encoded))
 	}
 	if !bytes.Equal(survived, literal) {
 		t.Errorf("a byte string was rewritten: got %x, want %x", survived, literal)
 	}
+}
 
-	// A tag, a nesting the vectors do not reach, and the two float widths side by
-	// side. Each has to come out as something a decoder still reads.
+// TestWideningKeepsEveryShapeDecodable covers a tag and a nesting the vectors do
+// not reach. Each has to come out as something a decoder still reads.
+func TestWideningKeepsEveryShapeDecodable(t *testing.T) {
 	for _, value := range []any{
 		new(big.Int).SetUint64(math.MaxUint64),
 		map[string]any{"a": []any{1, "b", nil, true, []byte{0xfa}}},
@@ -265,14 +269,17 @@ func TestWideningLeavesEverythingElseAlone(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EncodeResult(%v): %v", value, err)
 		}
+
 		var back any
-		if err := flexiq.DecodeResult(encoded, &back); err != nil {
+		if decodeErr := flexiq.DecodeResult(encoded, &back); decodeErr != nil {
 			t.Errorf("DecodeResult(%v): %v — the widening pass produced bytes no decoder accepts: %s",
-				value, err, hex.EncodeToString(encoded))
+				value, decodeErr, hex.EncodeToString(encoded))
 		}
 	}
+}
 
-	// Both widths in one call: only the narrow one moves.
+// TestWideningMovesOnlyTheNarrowFloat puts both widths in one call.
+func TestWideningMovesOnlyTheNarrowFloat(t *testing.T) {
 	mixed, err := flexiq.EncodeCall([]any{float32(1.5), 2.5}, nil)
 	if err != nil {
 		t.Fatalf("EncodeCall: %v", err)

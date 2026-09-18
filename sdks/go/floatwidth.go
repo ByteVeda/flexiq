@@ -141,7 +141,7 @@ func (w *floatWidener) item() error {
 func (w *floatWidener) primitive(initial, ai byte) error {
 	switch ai {
 	case aiTwoBytes, aiFourBytes:
-		return w.float(initial, ai)
+		return w.float(ai)
 	case aiEightBytes:
 		w.out = append(w.out, initial)
 		return w.copy(8)
@@ -162,7 +162,7 @@ func (w *floatWidener) primitive(initial, ai byte) error {
 //
 // The value is read back with decMode rather than converted by hand: the same
 // library that wrote these bytes knows what a subnormal in either width means.
-func (w *floatWidener) float(initial, ai byte) error {
+func (w *floatWidener) float(ai byte) error {
 	width := 2
 	if ai == aiFourBytes {
 		width = 4
