@@ -5,9 +5,8 @@
 
 use std::sync::Arc;
 
-use flexiq_core::storage::records::WorkerRegistration;
 use flexiq_core::worker::{registry_fingerprint, WorkerDispatcher};
-use flexiq_core::{Scheduler, SchedulerConfig, Storage, StorageBackend};
+use flexiq_core::{Scheduler, SchedulerConfig, Storage, StorageBackend, WorkerRegistration};
 use napi::bindgen_prelude::{spawn, spawn_blocking, within_runtime_if_available, Result};
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi_derive::napi;

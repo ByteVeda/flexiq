@@ -1,6 +1,6 @@
 //! JS-facing shape for distributed lock info. Timestamps are Unix milliseconds.
 
-use flexiq_core::storage::records::LockInfo;
+use flexiq_core::LockInfo;
 use napi_derive::napi;
 
 /// JS-facing view of a held distributed lock.

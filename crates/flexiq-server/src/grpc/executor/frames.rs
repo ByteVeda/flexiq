@@ -23,9 +23,8 @@
 //! thing to keep in step. The conversion drops it in both directions.
 
 use flexiq_core::step::StepFailure;
-use flexiq_core::storage::records::StepKind;
 use flexiq_core::worker::protocol::{ExecutorMessage, SchedulerMessage};
-use flexiq_core::Lease;
+use flexiq_core::{Lease, StepKind};
 use prost_types::{Duration, Timestamp};
 
 use crate::grpc::pb::executor as pb;

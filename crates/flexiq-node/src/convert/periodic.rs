@@ -1,6 +1,6 @@
 //! JS-facing shape for a registered periodic task. Timestamps are Unix milliseconds.
 
-use flexiq_core::storage::records::PeriodicTask;
+use flexiq_core::PeriodicTask;
 use napi_derive::napi;
 
 /// JS-facing view of a periodic task (omits the opaque args/kwargs payloads).

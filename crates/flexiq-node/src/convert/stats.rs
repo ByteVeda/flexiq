@@ -1,7 +1,7 @@
 //! JS-facing shapes for inspection/management results.
 
-use flexiq_core::storage::records::{JobError, TaskMetric, WorkerInfo};
 use flexiq_core::storage::{DeadJob, QueueStats};
+use flexiq_core::{JobError, TaskMetric, WorkerInfo};
 use napi_derive::napi;
 
 /// Queue job counts by status.

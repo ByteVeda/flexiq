@@ -4,8 +4,7 @@
 
 use flexiq_core::job::now_millis;
 use flexiq_core::periodic::{next_cron_time, next_cron_time_tz};
-use flexiq_core::storage::records::NewPeriodicTask;
-use flexiq_core::Storage;
+use flexiq_core::{NewPeriodicTask, Storage};
 use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{jboolean, jlong, jstring, JNI_FALSE};
 use jni::JNIEnv;
