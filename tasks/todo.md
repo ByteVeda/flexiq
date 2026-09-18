@@ -11,7 +11,8 @@ already there. Six were not: `SubscriptionMode`, `Topic`, `TopicMessage`,
       and `flexiq-server` to the root path, including the grouped import in
       `flexiq-java/src/convert.rs` that #921 could not move
 - [x] 3. Guard the list with a test so it cannot drift a third time
-- [x] 4. `cargo fmt --check`, `clippy --all-targets --all-features -D warnings`,
+- [x] 4. `cargo fmt --all -- --check`,
+      `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
       `cargo test --workspace`
 
 ## Review
