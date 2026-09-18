@@ -688,6 +688,46 @@ pub enum AttemptFence {
     Superseded,
 }
 
+/// Whether a caller may settle a dispatch that was accepted out of band.
+///
+/// The answer to exactly one question, asked by three callers that cannot see
+/// each other: a `Settle` on the replica that dispatched, a `Settle` on any
+/// other replica, and the settle deadline passing. The marker is removed in
+/// the same statement that tests it, so exactly one of them is told `Granted`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettleGrant {
+    /// The marker was consumed. This caller settles the attempt, and is the
+    /// only one that may.
+    Granted,
+    /// No marker: this dispatch was never accepted, or another caller already
+    /// took it. A caller told this **emits nothing at all** — not a result,
+    /// not a failure, not a timeout.
+    Refused,
+}
+
+/// Who is asking to settle an accepted dispatch, and on what authority.
+///
+/// Two claimants with different proofs, and neither can present the other's. A
+/// peer holds a lease and no clock the scheduler trusts; the scheduler holds a
+/// clock and no lease. Collapsing them into one nullable epoch would make "no
+/// lease" the same argument as "the deadline passed", and the reaper would be
+/// able to take a marker out from under a target still inside its deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettleClaimant {
+    /// A peer presenting a lease, granted only on a strict epoch match. See
+    /// [`crate::lease::lease_authorizes`] — strict, unlike
+    /// [`crate::lease::epochs_agree`], because here the lease *is* the
+    /// authority rather than evidence against one.
+    Lease(i64),
+    /// The scheduler, after the settle deadline passed. Granted only when the
+    /// stored deadline is at or before `now`, evaluated inside the same
+    /// statement — so an extension that landed a millisecond earlier wins.
+    Expired {
+        /// The scheduler's clock at the moment it decided to give up.
+        now: i64,
+    },
+}
+
 /// One committed step of a job, as read back at attempt start.
 ///
 /// There is no `status` and no `error`: a step whose closure raised is never

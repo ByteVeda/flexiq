@@ -229,6 +229,7 @@ diesel::table! {
         worker_id -> Text,
         claimed_at -> BigInt,
         epoch -> Nullable<BigInt>,
+        settle_deadline_ms -> Nullable<BigInt>,
     }
 }
 

@@ -56,7 +56,7 @@ pub use http::auth::{AuthError, OutboundAuth, Signer, SigningRequest};
 #[cfg(feature = "http-target")]
 pub use http::{DispatchClient, EgressPolicy, EgressRefusal};
 pub use job::{now_millis, Job, JobCompletion, JobStatus, NewJob};
-pub use lease::{mint_claim_epoch, Lease, LeaseBook};
+pub use lease::{lease_authorizes, mint_claim_epoch, Lease, LeaseBook, MAX_LEASE_EXTENSION};
 pub use resilience::circuit_breaker::{CircuitBreakerConfig, CircuitState};
 pub use resilience::rate_limiter::RateLimitConfig;
 pub use resilience::retry::RetryPolicy;
@@ -76,9 +76,9 @@ pub use storage::cursor::Page;
 pub use storage::postgres::PostgresStorage;
 pub use storage::records::{
     AttemptFence, CircuitBreakerState, DebounceOptions, JobError, JobStep, LockInfo, NewJobStep,
-    NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SleepOutcome,
-    StepCommit, StepKind, Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic,
-    TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
+    NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SettleClaimant,
+    SettleGrant, SleepOutcome, StepCommit, StepKind, Subscription, SubscriptionMode, TaskLogEntry,
+    TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
 };
 #[cfg(feature = "redis")]
 pub use storage::redis_backend::RedisStorage;
