@@ -136,10 +136,12 @@ Three things that shaped it:
 - **A non-finite float must survive untouched.** The pass reads each narrow float
   back with `decMode` and leaves infinities and NaNs exactly as written, which is
   the contract's exemption and what `NaNConvert`/`InfConvert` chose deliberately.
-- **Skip the walk when no float can be there.** Neither `0xf9` nor `0xfa` can
-  occur anywhere in a payload without a float — no UTF-8 byte is either — so a
-  single `bytes.IndexByte` pair returns the input untouched for every float-free
-  payload.
+- **Skip the walk when no float can be there.** A narrow float head *is* `0xf9` or
+  `0xfa`, so a `bytes.IndexByte` pair that finds neither proves there is nothing to
+  rewrite and returns the input untouched. The implication runs one way only:
+  either byte can appear as content rather than a head — inside a byte string, in a
+  multi-byte argument, in an `fb` float's own mantissa — so its presence decides
+  nothing and the walk is what tells a head apart.
 - **Indefinite-length input is refused, not walked.** The first draft carried a
   break-scanning path for it; `IndefLengthForbidden` rejects such a
   `cbor.RawMessage` before the pass sees it, so that path was dead code. A head

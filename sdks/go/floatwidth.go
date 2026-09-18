@@ -53,10 +53,13 @@ var errTruncated = errors.New("truncated CBOR item")
 
 // widenNarrowFloats rewrites every finite narrow float in one CBOR item.
 //
-// The returned slice is the input itself when there is nothing to rewrite, which
-// is every payload that carries no float at all: neither 0xf9 nor 0xfa can occur
-// anywhere in the bytes — not as a head, not inside a string — so the structural
-// walk is skipped entirely.
+// The pre-check is one-directional, which is the only reason it is safe. A narrow
+// float head *is* one of these two bytes, so if neither appears anywhere in the
+// item there is no narrow float to rewrite and the input is returned untouched.
+// The converse does not hold: either byte can appear as content rather than a
+// head — inside a byte string, in a multi-byte argument, in a 64-bit float's own
+// mantissa — so its presence decides nothing, and the structural walk below is
+// what tells a head from a byte that merely looks like one.
 func widenNarrowFloats(item []byte) ([]byte, error) {
 	if bytes.IndexByte(item, byte(majorPrimitve)<<5|aiTwoBytes) < 0 &&
 		bytes.IndexByte(item, byte(majorPrimitve)<<5|aiFourBytes) < 0 {
