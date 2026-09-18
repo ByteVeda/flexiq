@@ -73,8 +73,8 @@ type session struct {
 	slots    *slots
 
 	token []byte
-	// leaseAcked is what the acknowledgement said, and it does NOT gate the
-	// echo. See stampLease.
+	// leaseAcked is what the acknowledgement said. Logged at attach, and it
+	// does NOT gate the echo. See stampLease.
 	leaseAcked bool
 	sideOn     bool
 	// stepsOn does gate its capability, and must: a scheduler that will not
@@ -442,17 +442,23 @@ func (s *session) sideChannelOn() bool { return s.sideOn }
 // cannot write over the attempt that replaced it. It is never inspected, never
 // constructed here, and never reused across attempts.
 //
-// **The acknowledgement does not gate this, and must not.** The scheduler
-// decides whether to check our frames for a lease from what `hello` advertised,
-// but only advertises the capability back once it holds a lease book — and it
-// installs that book when its scheduler role starts, which can be after an
-// executor has already attached. An executor that took the acknowledgement
-// literally in that window would send no lease, be read as a stale attempt, and
-// have every frame about every job dropped.
+// **The acknowledgement does not gate this**, deliberately. The rule is the
+// dispatch's, not the handshake's: a job frame that carried a lease gets it
+// echoed, and one that did not gets nothing.
 //
-// So the rule is the dispatch's, not the handshake's: a job frame that carried
-// a lease gets it echoed. Echoing one the scheduler does not check costs a
-// field it ignores; withholding one it does check costs the job's result.
+// Against a current scheduler the two rules agree — it dispatches no lease it
+// did not acknowledge — so this is simply the cheaper of the two to implement,
+// needing no handshake state at the send site. Against a scheduler older than
+// the fix for #932 the two rules disagree, and only this one is safe: such a
+// scheduler decides whether to *check* our frames for a lease from what `hello`
+// advertised, but only advertises the capability back once it holds a lease
+// book, which it installs when its scheduler role starts — possibly after we
+// attached. A client that took that acknowledgement literally would send no
+// lease, be read as a stale attempt, and have every frame about every job
+// dropped.
+//
+// Echoing a lease the scheduler does not check costs a field it ignores;
+// withholding one it does check costs the job's result.
 func (s *session) stampLease(jobID string, req *executorv1.AttachRequest) {
 	s.mu.Lock()
 	lease := s.leases[jobID]

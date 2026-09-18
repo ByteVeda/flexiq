@@ -389,15 +389,22 @@ struct Executor {
     registry_fingerprint: Option<String>,
     slots: u32,
     free: AtomicU32,
-    /// Whether this executor advertised [`CAP_STEPS`]. A snapshot is sent only
-    /// to a peer that claimed it: a fleet that never uses steps should not pay
-    /// a storage read per dispatch, and an unclaimed frame would only be
+    /// Whether [`CAP_STEPS`] was negotiated on this attach. A snapshot is sent
+    /// only to a peer that claimed it: a fleet that never uses steps should not
+    /// pay a storage read per dispatch, and an unclaimed frame would only be
     /// skipped at the far end anyway.
     steps: bool,
-    /// Whether this executor advertised [`CAP_LEASE`], and so echoes the lease
-    /// on every frame that settles or advances an attempt. A peer that did not
-    /// is dispatched without one and fenced by storage alone — the give-up
-    /// [`CAP_LEASE`] documents.
+    /// Whether [`CAP_LEASE`] was negotiated on this attach, and so whether this
+    /// executor echoes the lease on every frame that settles or advances an
+    /// attempt. A peer that did not is dispatched without one and fenced by
+    /// storage alone — the give-up [`CAP_LEASE`] documents.
+    ///
+    /// Both halves, never just the peer's. What this executor advertised says
+    /// it *can* echo a lease; what the `hello_ack` carried is what it was told
+    /// to expect. An executor that attaches before the scheduler role installs
+    /// the lease book is acknowledged without the capability, and one obeying
+    /// the contract then sends no lease — so recording the peer's half alone
+    /// would read every frame it ever sends as stale and drop it.
     leases: bool,
     /// Job id → what was dispatched. Taking an entry is the exactly-once token
     /// for emitting that job's single `JobResult`; holding one is also this
@@ -903,10 +910,17 @@ impl Shared {
         // past this budget.
         connection.set_read_timeout(None)?;
 
+        // Read once and kept, because everything below has to agree with what
+        // went out on this frame. `capabilities` answers from state that moves:
+        // the lease book is installed when the scheduler role starts, which can
+        // be after an executor has attached. Asking a second time would let the
+        // acknowledgement promise one thing and the check expect another.
+        let acknowledged = self.capabilities();
+
         writer.write_header(&SchedulerMessage::HelloAck {
             scheduler_id: self.config.scheduler_id.clone(),
             protocol_version: PROTOCOL_VERSION,
-            capabilities: self.capabilities(),
+            capabilities: acknowledged.clone(),
         })?;
 
         if protocol_version != PROTOCOL_VERSION {
@@ -928,6 +942,15 @@ impl Shared {
         // gets the check for free: there is nothing extra for it to send.
         let registry_fingerprint = registry_fingerprint(&tasks);
 
+        // A behaviour is in force only where both sides said so. The peer's
+        // half alone is not enough: `hello_ack` is what the scheduler will do
+        // on the executor's behalf, and an executor holding us to it must be
+        // held to the same list — not to one this side has since grown.
+        let negotiated = |capability: &str| {
+            capabilities.iter().any(|cap| cap == capability)
+                && acknowledged.iter().any(|cap| cap == capability)
+        };
+
         let executor = Arc::new(Executor {
             id: executor_id.clone(),
             sdk,
@@ -936,8 +959,8 @@ impl Shared {
             registry_fingerprint,
             slots,
             free: AtomicU32::new(slots),
-            steps: capabilities.iter().any(|cap| cap == CAP_STEPS),
-            leases: capabilities.iter().any(|cap| cap == CAP_LEASE),
+            steps: negotiated(CAP_STEPS),
+            leases: negotiated(CAP_LEASE),
             in_flight: Mutex::new(HashMap::new()),
             draining: AtomicBool::new(false),
             writer: Mutex::new(writer),
@@ -1044,7 +1067,7 @@ impl Shared {
     /// - no entry for the job — nothing was dispatched under a lease, or the
     ///   dispatch has already settled, and in both cases the storage fence is
     ///   what still decides;
-    /// - no lease on the frame from a peer that never advertised [`CAP_LEASE`] —
+    /// - no lease on the frame from a peer that never negotiated [`CAP_LEASE`] —
     ///   the documented give-up.
     fn frame_is_current(&self, executor: &Executor, job_id: &str, lease: Option<&Lease>) -> bool {
         let Some(book) = self.lease_book() else {
@@ -1059,17 +1082,33 @@ impl Shared {
         }
     }
 
-    /// Report a frame that named a dispatch which is no longer current.
+    /// Report a frame [`frame_is_current`](Self::frame_is_current) refused.
     ///
-    /// `error!`, not `warn!`: the frame itself is dropped, but behind it is a
-    /// second execution of a job that had already been handed to someone else.
-    fn report_stale(&self, executor: &Executor, job_id: &str, frame: &str) {
-        log::error!(
-            "[flexiq] executor {} sent a {frame} for job {job_id} under a lease that is no \
-             longer current; refusing it — the job was re-dispatched while that attempt was \
-             still running",
-            executor.id
-        );
+    /// Two faults reach here and they read nothing like each other, so neither
+    /// borrows the other's words. A frame under a superseded lease is a second
+    /// execution of a job already handed to someone else; a frame carrying no
+    /// lease at all, from a peer that negotiated [`CAP_LEASE`], names no
+    /// dispatch — nothing was necessarily re-dispatched, and saying so sends
+    /// whoever reads the log looking for a re-dispatch that never happened.
+    ///
+    /// `error!` either way: the frame is dropped, and what it was reporting —
+    /// a result, a step, a job's progress — is lost with it.
+    fn report_refused(&self, executor: &Executor, job_id: &str, frame: &str, had_lease: bool) {
+        if had_lease {
+            log::error!(
+                "[flexiq] executor {} sent a {frame} for job {job_id} under a lease that is no \
+                 longer current; refusing it — the job was re-dispatched while that attempt was \
+                 still running",
+                executor.id
+            );
+        } else {
+            log::error!(
+                "[flexiq] executor {} sent a {frame} for job {job_id} with no lease, having \
+                 negotiated `lease` on this attach; refusing it — the frame names no dispatch, \
+                 so it cannot be told from one a superseded attempt would send",
+                executor.id
+            );
+        }
     }
 
     /// Milliseconds since the dispatcher was created — a monotonic clock for
@@ -1318,10 +1357,10 @@ impl Shared {
         // this job is *currently* dispatched under, and the scheduler wrote
         // that entry before it handed the job over.
         //
-        // Withheld from a peer that never advertised [`CAP_LEASE`], because a
-        // value it will not echo is a value the scheduler must not then require
-        // — the give-up has to be symmetric or it becomes a silent rejection of
-        // every result that executor sends.
+        // Withheld where the attach did not negotiate [`CAP_LEASE`], because a
+        // value the peer will not echo is a value the scheduler must not then
+        // require — the give-up has to be symmetric or it becomes a silent
+        // rejection of every result that executor sends.
         let lease = executor
             .leases
             .then(|| self.lease_book()?.current(&job.id))
@@ -1496,7 +1535,7 @@ impl Shared {
                 lease,
             } => {
                 if !self.frame_is_current(executor, &job_id, lease.as_ref()) {
-                    self.report_stale(executor, &job_id, "progress report");
+                    self.report_refused(executor, &job_id, "progress report", lease.is_some());
                     return;
                 }
                 self.apply_progress(executor, &job_id, progress);
@@ -1511,7 +1550,7 @@ impl Shared {
                 lease,
             } => {
                 if !self.frame_is_current(executor, &job_id, lease.as_ref()) {
-                    self.report_stale(executor, &job_id, "task log line");
+                    self.report_refused(executor, &job_id, "task log line", lease.is_some());
                     return;
                 }
                 // `extra_len` is what says whether there was a blob at all: an
@@ -1540,10 +1579,15 @@ impl Shared {
 
         // Checked before the frame becomes a `JobResult`, because that is the
         // last point at which it still says which dispatch it came from: a
-        // `JobResult` names only a job.
-        let stale = message
-            .leased_job()
-            .is_some_and(|(job_id, lease)| !self.frame_is_current(executor, job_id, lease));
+        // `JobResult` names only a job. `Some(had_lease)` for a refused frame,
+        // carrying the one thing past this point the refusal still has to say —
+        // which of the two faults it was.
+        let refused = match message.leased_job() {
+            Some((job_id, lease)) if !self.frame_is_current(executor, job_id, lease) => {
+                Some(lease.is_some())
+            }
+            _ => None,
+        };
 
         let Some(result) = message.into_job_result(payload) else {
             log::warn!(
@@ -1583,8 +1627,8 @@ impl Shared {
         // until the connection dies. Only the *result* is dropped.
         executor.free.fetch_add(1, Ordering::Relaxed);
         self.capacity_changed.notify_waiters();
-        if stale {
-            self.report_stale(executor, result.job_id(), "result");
+        if let Some(had_lease) = refused {
+            self.report_refused(executor, result.job_id(), "result", had_lease);
             return;
         }
         self.emit(result);
@@ -1668,6 +1712,34 @@ impl Shared {
             return;
         };
 
+        // The executor's half of the same negotiation, and it has to be checked
+        // rather than assumed: a peer that did not negotiate [`CAP_STEPS`] is
+        // sent no `job_steps` snapshot, so every step it runs is un-memoized.
+        // Applying its commit would store a memo it will never be handed back —
+        // the next attempt re-runs the side effect with a record on file saying
+        // it was already done, which is precisely the silent loss [`CAP_STEPS`]
+        // refuses rather than degrades to.
+        //
+        // `Config` classifies [`StepFailure::Permanent`], which is right: a
+        // capability is settled at the handshake, so retrying on this
+        // connection cannot make it true.
+        if !executor.steps {
+            log::warn!(
+                "[flexiq] executor {} sent a step commit without negotiating steps on this \
+                 attach; refusing it — it is sent no snapshot, so the commit would be a memo \
+                 it never sees",
+                executor.id
+            );
+            reply(refusal(
+                job_id,
+                seq,
+                QueueError::Config(
+                    "this attach did not negotiate the steps capability".to_string(),
+                ),
+            ));
+            return;
+        }
+
         let Some(dispatched) = executor.running(&job_id) else {
             log::warn!(
                 "[flexiq] executor {} sent a step commit for job {job_id}, which it is not \
@@ -1687,7 +1759,7 @@ impl Shared {
         // here rather than left to the fence so the stale attempt ends now,
         // instead of at the end of its ack timeout.
         if !self.frame_is_current(executor, &job_id, lease.as_ref()) {
-            self.report_stale(executor, &job_id, "step commit");
+            self.report_refused(executor, &job_id, "step commit", lease.is_some());
             let lost = QueueError::ClaimLost(job_id.clone());
             reply(refusal(job_id, seq, lost));
             return;

@@ -2023,6 +2023,153 @@ fn an_executor_that_never_claimed_the_lease_capability_still_reports() {
     });
 }
 
+/// An executor attached in the window before the scheduler role installs the
+/// lease book: it advertises `lease`, the acknowledgement withholds it, and the
+/// book arrives a moment later.
+///
+/// The shape of #932. Returned already handshaken, with the ack asserted, so
+/// both tests below start from the state that matters.
+fn dispatcher_with_a_late_lease_book(book: &Arc<LeaseBook>) -> (RemoteDispatcher, FakeExecutor) {
+    let dispatcher = dispatcher_with(Duration::from_secs(5));
+    let mut executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["resize"], 2, &[CAP_LEASE])
+            .expect("attach");
+    assert!(
+        !executor
+            .expect_ack_capabilities()
+            .contains(&CAP_LEASE.to_string()),
+        "a scheduler holding no book must not acknowledge the capability"
+    );
+
+    // The scheduler role starts, and from here this scheduler does hold leases.
+    dispatcher.set_lease_book(book.clone());
+    (dispatcher, executor)
+}
+
+#[test]
+fn a_leaseless_frame_lands_when_the_acknowledgement_withheld_the_capability() {
+    // What #932 costs, from the client that reads the contract literally:
+    // `hello_ack.capabilities` is what the scheduler will do on its behalf, it
+    // was not acknowledged `lease`, so it sends none. Reading only its half of
+    // the handshake makes every frame it ever sends look stale — successes,
+    // failures, progress, logs — and the job waits for the reaper.
+    let book = Arc::new(LeaseBook::default());
+    let (dispatcher, mut executor) = dispatcher_with_a_late_lease_book(&book);
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        book.issue("job-1", Lease::from_epoch(1));
+        jobs.blocking_send(make_job("job-1", "resize", b""))
+            .expect("dispatch");
+        assert_eq!(executor.expect_job().0, "job-1");
+
+        // Withheld explicitly rather than left to what the dispatch carried:
+        // echoing the dispatch's value is the *workaround* #928's client
+        // applies, and a test that leans on it would assert nothing about the
+        // client this issue is about.
+        executor.lease = None;
+        executor.succeed("job-1", "resize", None);
+
+        assert_eq!(
+            kind(&expect_result(results)),
+            "success",
+            "a frame with no lease, from an attach that was told there are none, must land"
+        );
+    });
+}
+
+#[test]
+fn an_acknowledgement_without_the_lease_capability_dispatches_no_lease() {
+    // The cause, one level up from the cost above: the check and the
+    // advertisement come from one decision, so a dispatch cannot require what
+    // the acknowledgement did not promise.
+    let book = Arc::new(LeaseBook::default());
+    let (dispatcher, mut executor) = dispatcher_with_a_late_lease_book(&book);
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        book.issue("job-1", Lease::from_epoch(1));
+        jobs.blocking_send(make_job("job-1", "resize", b""))
+            .expect("dispatch");
+        assert_eq!(executor.expect_job().0, "job-1");
+        assert!(
+            executor.lease.is_none(),
+            "an attach that was not acknowledged `lease` is dispatched none either — \
+             the ack and the dispatch have to say the same thing"
+        );
+
+        executor.succeed("job-1", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+}
+
+#[test]
+fn an_executor_that_negotiated_the_lease_capability_is_dispatched_one() {
+    // The other side of the pair, so neither of the two above can pass by
+    // dropping leases wholesale: with the book already installed the ack
+    // promises the capability and the dispatch carries the value.
+    let book = Arc::new(LeaseBook::default());
+    let (dispatcher, mut executor) = dispatcher_with_leases(&book);
+    assert!(
+        executor
+            .expect_ack_capabilities()
+            .contains(&CAP_LEASE.to_string()),
+        "a scheduler holding a book acknowledges the capability"
+    );
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        book.issue("job-1", Lease::from_epoch(1));
+        jobs.blocking_send(make_job("job-1", "resize", b""))
+            .expect("dispatch");
+        assert_eq!(executor.expect_job().0, "job-1");
+        assert_eq!(
+            executor.lease,
+            Some(Lease::from_epoch(1)),
+            "a negotiated attach is dispatched the lease it will echo back"
+        );
+
+        executor.succeed("job-1", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+}
+
+#[test]
+fn a_step_commit_from_an_executor_that_never_negotiated_steps_is_refused() {
+    // The steps half of the same symmetry. A peer that did not negotiate
+    // `CAP_STEPS` is sent no `job_steps` snapshot, so it runs every step
+    // un-memoized; storing its commit would leave a memo it is never handed
+    // back, and the next attempt re-runs the side effect with a record on file
+    // saying it was already done. `CAP_STEPS` refuses that rather than degrade
+    // to it, so the scheduler has to check the executor's half too — its own
+    // step store being present is not enough.
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage(&storage);
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["charge"], 1).expect("attach");
+
+    let job = claimed_job(&storage, "charge", "scheduler-test");
+
+    with_running(&dispatcher, 4, |jobs, _results| {
+        let job_id = job.id.clone();
+        jobs.blocking_send(job.clone()).expect("dispatch");
+        assert_eq!(executor.expect_job().0, job_id);
+
+        executor.commit_step(&job_id, 0, "charge#0", b"receipt");
+        let (_, ok, _, _, failure) = executor.expect_step_ack();
+        assert!(!ok, "a commit from an attach without steps must be refused");
+        assert_eq!(
+            failure,
+            Some(StepFailure::Permanent),
+            "a capability is settled at the handshake, so retrying cannot make it true"
+        );
+    });
+
+    assert!(
+        storage
+            .get_job_steps(&job.id, None)
+            .expect("steps")
+            .is_empty(),
+        "a refused commit must never reach storage"
+    );
+}
+
 #[test]
 fn a_step_commit_under_a_stale_lease_is_refused_without_waiting() {
     // Refused rather than merely dropped: the executor is blocked on the ack,

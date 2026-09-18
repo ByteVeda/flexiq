@@ -72,6 +72,20 @@ pub const CAP_STEPS: &str = "steps";
 /// executor advertises it in `hello` so a scheduler never *requires* a lease
 /// from a peer that will not echo one.
 ///
+/// **Both lists, and settled for the whole attach.** The capability is in force
+/// only where it appears in the executor's `hello` *and* this scheduler's
+/// `hello_ack`; neither half alone decides. The acknowledgement is not a
+/// demand — `capabilities` lists `lease` whenever a book is installed, including
+/// to a peer that never claimed it, and that peer is dispatched no lease and is
+/// right to send none.
+///
+/// The scheduler's half can differ between two attaches of the same peer, since
+/// the book arrives when the scheduler role starts, which can be after an
+/// executor has attached. Whichever it was, that intersection binds both ends:
+/// a lease is dispatched only where the capability was negotiated, and checked
+/// for only there. An executor is therefore safe echoing whatever its `job`
+/// frame carried — the value and the negotiation cannot disagree.
+///
 /// **What an executor without it gives up.** It still attaches and still runs
 /// jobs. Its results are fenced on the claim's `(owner, attempt, epoch)` alone,
 /// which is enough to refuse a result whose job has been reclaimed or retried —
@@ -201,8 +215,9 @@ pub enum SchedulerMessage {
         /// The lease this dispatch is made under, opaque to the executor and
         /// required back on every frame that settles or advances the attempt.
         ///
-        /// Absent when the executor did not advertise [`CAP_LEASE`], or when
-        /// the scheduler has no lease to name — a pool that was handed no
+        /// Absent when the attach did not negotiate [`CAP_LEASE`] — either
+        /// side's half missing is enough — or when the scheduler has no lease
+        /// to name, a pool that was handed no
         /// [`LeaseBook`](crate::lease::LeaseBook). Either way the executor
         /// echoes what it was given, which is nothing.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -214,7 +229,7 @@ pub enum SchedulerMessage {
     ///
     /// The snapshot rides the dispatch rather than being fetched per step:
     /// there is exactly one read per attempt, and it is the scheduler's. Sent
-    /// only to an executor that advertised [`CAP_STEPS`], and only when the job
+    /// only where the attach negotiated [`CAP_STEPS`], and only when the job
     /// has steps — no frame means an empty snapshot, never an unknown one.
     ///
     /// The blob cannot live in the header: a snapshot can be megabytes and a

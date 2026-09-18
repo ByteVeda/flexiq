@@ -44,6 +44,27 @@ their entries below keep that name.
   specifies an array of strings, `[]` when the language or runtime has no frames to offer. Rust was
   the only shell writing `null`, and a reader that had to special-case it is a reader that would
   eventually not.
+- **An executor that honoured the `lease` acknowledgement lost every frame** (#932). The
+  scheduler decided whether to *check* an attached executor's frames for a lease from its
+  `hello`, but whether to *advertise* `lease` back in `hello_ack` from whether it held a lease
+  book at that instant — and the book is installed when the scheduler role starts, which can be
+  after an executor has attached. An executor acknowledged in that window sends no lease,
+  exactly as the contract tells it to, and had every frame about every job read as a superseded
+  attempt and dropped: successes, failures, progress, logs. The job was never settled and waited
+  for the reaper. Both halves now come from one decision — a capability is in force only where
+  the executor advertised it *and* that attach's acknowledgement carried it — so a dispatch
+  never requires a lease the acknowledgement did not promise. An executor attaching before the
+  role starts is fenced on `(owner, attempt)` alone for that connection, which is the documented
+  give-up for a peer without `lease`, and renegotiates on its next attach.
+- **The refusal these frames logged asserted a re-dispatch it had not checked for**, sending
+  whoever read it looking for a second execution that never happened. A frame carrying no lease
+  and one carrying a superseded lease are different faults and now read differently.
+- **A step commit from an executor that never negotiated `steps` was applied** (#932). The same
+  asymmetry, one capability over: the scheduler checked that *it* had a step store but not that
+  the executor had claimed the capability. Such a peer is sent no `job_steps` snapshot, so it
+  runs every step un-memoized — and storing its commit left a memo it would never be handed
+  back, so the next attempt re-ran the side effect with a record on file saying it was already
+  done. `steps` refuses rather than degrades, so the commit is now refused permanently.
 
 ## 2.0.0
 
