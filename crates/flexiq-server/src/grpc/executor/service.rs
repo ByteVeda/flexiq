@@ -375,6 +375,52 @@ impl ExecutorService for ExecutorDoor {
 
         Ok(Response::new(pb::HeartbeatResponse {}))
     }
+
+    async fn settle(
+        &self,
+        request: Request<pb::SettleRequest>,
+    ) -> Result<Response<pb::SettleResponse>, Status> {
+        let _ = request;
+        Err(settle_disabled())
+    }
+
+    async fn extend_lease(
+        &self,
+        request: Request<pb::ExtendLeaseRequest>,
+    ) -> Result<Response<pb::ExtendLeaseResponse>, Status> {
+        let _ = request;
+        Err(settle_disabled())
+    }
+
+    async fn report_progress(
+        &self,
+        request: Request<pb::ReportProgressRequest>,
+    ) -> Result<Response<pb::ReportProgressResponse>, Status> {
+        let _ = request;
+        Err(settle_disabled())
+    }
+
+    async fn write_task_log(
+        &self,
+        request: Request<pb::WriteTaskLogRequest>,
+    ) -> Result<Response<pb::WriteTaskLogResponse>, Status> {
+        let _ = request;
+        Err(settle_disabled())
+    }
+}
+
+/// The answer the four reporting RPCs give on a deployment that does not
+/// accept `202`.
+///
+/// `FAILED_PRECONDITION` rather than `UNIMPLEMENTED`: the RPC exists and this
+/// build serves it, but the deployment has not turned settle callbacks on, so
+/// there is no accepted dispatch for one to name. `UNIMPLEMENTED` would read as
+/// "upgrade the server", which is the wrong thing to go and do.
+fn settle_disabled() -> Status {
+    Status::failed_precondition(
+        "settle callbacks are not enabled on this deployment; \
+         set FLEXIQ_PUSH_TARGET_SETTLE=grpc on the scheduler that dispatches",
+    )
 }
 
 #[cfg(test)]
