@@ -1037,6 +1037,52 @@ fn test_settle_marker_round_trip(s: &impl Storage) {
     s.complete(&job_id, None, None).unwrap();
 }
 
+fn test_settle_marker_has_exactly_one_winner_under_contention(s: &impl Storage) {
+    // The sequential tests prove replay is refused. They cannot prove the
+    // property the whole design rests on — that two callbacks racing one
+    // marker produce *one* winner — because a check-then-act bug passes every
+    // sequential test there is. This one races them on purpose.
+    let q = "q-settle-contended";
+    let (job_id, epoch) = running_under_claim(s, q, "settle-owner");
+    s.await_settle(
+        &job_id,
+        "settle-owner",
+        0,
+        Some(epoch),
+        now_millis() + 60_000,
+        None,
+    )
+    .unwrap();
+
+    const RACERS: usize = 8;
+    let start = std::sync::Barrier::new(RACERS);
+    let granted = std::sync::atomic::AtomicUsize::new(0);
+
+    std::thread::scope(|scope| {
+        for _ in 0..RACERS {
+            scope.spawn(|| {
+                // Released together, so the claims genuinely overlap rather
+                // than queueing behind each other's setup.
+                start.wait();
+                if matches!(
+                    s.claim_settle(&job_id, SettleClaimant::Lease(epoch), None),
+                    Ok(SettleGrant::Granted)
+                ) {
+                    granted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            });
+        }
+    });
+
+    assert_eq!(
+        granted.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "exactly one of {RACERS} concurrent claims may win the marker"
+    );
+
+    s.complete(&job_id, None, None).unwrap();
+}
+
 fn test_settle_marker_refuses_a_lease_that_is_not_this_claims(s: &impl Storage) {
     let q = "q-settle-foreign-lease";
     let (job_id, epoch) = running_under_claim(s, q, "settle-owner");
@@ -2620,6 +2666,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_reap_stale_jobs(s);
     test_reap_skips_and_flags_a_dispatch_awaiting_settle(s);
     test_settle_marker_round_trip(s);
+    test_settle_marker_has_exactly_one_winner_under_contention(s);
     test_settle_marker_refuses_a_lease_that_is_not_this_claims(s);
     test_settle_marker_waits_for_its_deadline(s);
     test_settle_marker_survives_the_claim_purge(s);
