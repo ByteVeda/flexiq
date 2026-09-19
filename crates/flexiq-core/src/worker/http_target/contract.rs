@@ -110,7 +110,7 @@ pub enum Outcome {
 ///
 /// Distinct from [`Outcome`] because "accepted" settles nothing: it says the
 /// attempt continues somewhere the request cannot see. Keeping it out of
-/// `Outcome` is what lets [`into_result`] stay total over the three outcomes
+/// `Outcome` is what lets `into_result` stay total over the three outcomes
 /// that *are* settlements, with no unreachable arm to get wrong later.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Disposition {

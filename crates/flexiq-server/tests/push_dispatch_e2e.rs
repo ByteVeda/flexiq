@@ -1058,17 +1058,41 @@ fn settle_callbacks_need_the_grpc_door() {
         ("FLEXIQ_GRPC_LISTEN", "127.0.0.1:0"),
         ("FLEXIQ_NAMESPACE", "push-tests"),
     ]);
-    assert!(
-        Config::from_map(&env(&push)).is_ok(),
-        "callbacks plus the door is a valid deployment"
-    );
+    // Only a build that *has* the door can pair with it. Without the feature
+    // `FLEXIQ_GRPC_LISTEN` is refused outright by `config::grpc::from_env`
+    // ("built without the `grpc` cargo feature"), which is the right answer
+    // and a different one — so the assertion is per-build rather than one that
+    // quietly means two things.
+    let paired = Config::from_map(&env(&push));
+    if cfg!(feature = "grpc") {
+        assert!(
+            paired.is_ok(),
+            "callbacks plus the door is a valid deployment"
+        );
+    } else {
+        let refused = paired.expect_err("a build with no door cannot serve one");
+        assert!(
+            refused.to_string().contains("grpc"),
+            "the refusal must name the missing feature, got: {refused}"
+        );
+    }
 
     // And a transport this build does not speak is named rather than ignored.
-    let mut bogus = push.clone();
-    bogus.retain(|(key, _)| *key != SETTLE_VAR);
+    //
+    // Built *without* the gRPC vars on purpose: with them, a build lacking the
+    // feature refuses at `grpc::from_env` before `parse_settle` is ever
+    // reached, and this assertion would pass for the wrong reason. The error
+    // is matched on the value, so only the settle parser can produce it.
+    let mut bogus: Vec<(&str, &str)> = push
+        .iter()
+        .copied()
+        .filter(|(key, _)| !matches!(*key, SETTLE_VAR | "FLEXIQ_GRPC_LISTEN"))
+        .collect();
     bogus.push((SETTLE_VAR, "carrier-pigeon"));
+    let refused = Config::from_map(&env(&bogus))
+        .expect_err("an unknown settle transport must be refused, not read as off");
     assert!(
-        Config::from_map(&env(&bogus)).is_err(),
-        "an unknown settle transport must be refused, not read as off"
+        refused.to_string().contains("carrier-pigeon"),
+        "the refusal must echo the value it did not understand, got: {refused}"
     );
 }
