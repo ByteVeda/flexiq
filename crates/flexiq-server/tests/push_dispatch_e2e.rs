@@ -25,6 +25,7 @@ use flexiq_core::net::Allowlist;
 use flexiq_core::worker::http_target::{
     ACCEPTED_NOT_SETTLED, HDR_JOB_ID, HDR_LEASE, HDR_OUTCOME, HDR_TASK,
 };
+use flexiq_core::worker::WorkerDispatcher;
 use flexiq_core::{
     now_millis, HttpDispatchTarget, HttpTargetConfig, JobStatus, Lease, NewJob, SettleRefused,
     SettledOutcome, Storage, StorageBackend, StorageSideChannel, MAX_LEASE_EXTENSION,
@@ -938,6 +939,64 @@ fn an_extension_moves_the_deadline_and_is_clamped() {
             },
         )
         .expect("the extended dispatch settles normally");
+
+    deployment.stop();
+}
+
+#[test]
+fn cancelling_an_accepted_dispatch_settles_it_and_fences_the_callback() {
+    // The scheduler-side cancel — `notify_cancel`, not anything reaching into
+    // the target's process, which is still #846's. It must answer the same way
+    // in both windows: a cancel before the target accepted settles
+    // `Cancelled`, so a cancel after it accepted has to as well, or push would
+    // promise one thing and do another depending on timing the caller cannot
+    // see.
+    let storage = temp_storage("push-settle-cancel");
+    let job = storage
+        .enqueue(new_job("cancelled_after_accept"))
+        .expect("enqueue the job");
+
+    let stub = PushTarget::start(Reply::status(202));
+    let deployment = Deployment::start(&storage, settle_target(&stub.url, 2, &storage), None);
+    let lease = accepted_lease(&stub, &deployment);
+
+    deployment.target.notify_cancel(&job.id);
+
+    poll_until(Duration::from_secs(15), || {
+        storage
+            .get_job(&job.id, None)
+            .ok()
+            .flatten()
+            .is_some_and(|job| job.status == JobStatus::Cancelled)
+    })
+    .expect("a cancelled accepted dispatch must settle Cancelled");
+
+    // Not retried into a second attempt: a cancel is a decision, and the
+    // shutdown drain's retryable abandonment is a different claimant sharing
+    // the same authority to take the marker.
+    assert_eq!(
+        stub.received().len(),
+        1,
+        "a cancel must not put the job back for another dispatch"
+    );
+
+    // And the marker went with it, so the target's eventual callback is
+    // fenced out rather than landing on a job that is already settled.
+    let refused = deployment.target.settle(
+        &job.id,
+        &lease,
+        SettledOutcome::Success {
+            result: None,
+            wall_time_ns: 1,
+        },
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(SettleRefused::Fenced) | Err(SettleRefused::NotHere)
+        ),
+        "a settle after a cancel must be refused, got {refused:?}"
+    );
 
     deployment.stop();
 }

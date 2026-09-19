@@ -125,8 +125,8 @@ pub(super) async fn run_one(
         Ok((Disposition::Accepted, _)) => {
             match await_settlement(&shared, &dispatch, &notify).await {
                 // Nobody else won the marker, so this task still owes exactly
-                // one result — the timeout it has been waiting for.
-                Some(refusal) => Err(refusal),
+                // one result — whatever it was that ended the wait.
+                Some(settlement) => settlement,
                 // Someone else consumed the marker and emitted for us. Owing
                 // nothing is the one correct contribution a loser can make.
                 None => {
@@ -226,20 +226,22 @@ async fn guarded_attempt(
 /// Wait for a dispatch the target accepted to be settled from outside the
 /// request that carried it.
 ///
-/// Returns `None` when somebody else won the settle marker — a `Settle` that
-/// arrived, a cancel, or a shutdown — in which case this attempt emits
-/// nothing at all. Returns `Some(refusal)` when *this* task won it and
-/// therefore still owes exactly one result.
+/// Returns `None` when somebody else won the settle marker, in which case this
+/// attempt emits nothing at all. Returns `Some(settlement)` when *this* task
+/// won it and therefore still owes exactly one result — an outcome for a
+/// cancel, a refusal for a drain or a deadline.
 ///
-/// The three-way race is arbitrated durably, never here: a local `Settle`, the
-/// stale-job reaper (which may be another replica, or this one after a
-/// restart), and the deadline below all have to consume one marker, and only
-/// the winner may speak for the attempt.
+/// The race is arbitrated durably, never here. Two claimants can take the
+/// marker: a `Settle` reaching this replica, and this process giving the
+/// dispatch up — below, or in the stale-job reaper after a restart. A `Settle`
+/// that reached a *different* replica is not one of them: it is refused as
+/// `NotHere` and consumes nothing, because the permit and the result channel
+/// live in the process that dispatched.
 async fn await_settlement(
     shared: &Arc<Shared>,
     dispatch: &Dispatch,
     notify: &Notify,
-) -> Option<Refusal> {
+) -> Option<Result<(Outcome, Vec<u8>), Refusal>> {
     let job = &dispatch.job;
     let namespace = job.namespace.as_deref();
 
@@ -247,10 +249,10 @@ async fn await_settlement(
         // Refused at config time, so reaching this means the config check and
         // this path disagree. Fail the job rather than wait on a marker that
         // was never written.
-        return Some(Refusal::Accepted202);
+        return Some(Err(Refusal::Accepted202));
     };
     let Some(owner) = shared.claim_owner() else {
-        return Some(Refusal::Accepted202);
+        return Some(Err(Refusal::Accepted202));
     };
 
     // Registered before the marker is written: a `Settle` racing the write
@@ -294,7 +296,7 @@ async fn await_settlement(
                 shared.target,
                 job.id
             );
-            return Some(Refusal::Accepted202);
+            return Some(Err(Refusal::Accepted202));
         }
     }
 
@@ -306,15 +308,32 @@ async fn await_settlement(
     shared.mark_accepted_ready(&job.id);
 
     let mut abandon = shared.abandon_signal();
-    let claimant = tokio::select! {
+    // Two things travel together here and must not be conflated: the
+    // *claimant*, which is the authority to take the marker, and the
+    // *settlement*, which is what the job ends up as. A cancel and a drain
+    // are the same authority — this process giving the dispatch up on
+    // purpose, regardless of its deadline — and different settlements.
+    let (claimant, settlement) = tokio::select! {
         biased;
         // Somebody settled it. Nothing left to consume and nothing to emit.
         _ = relieved => return None,
-        // An operator cancelled, or the drain ran out. Both are this process
-        // giving the dispatch up on purpose, regardless of its deadline.
-        () = notify.notified() => SettleClaimant::Abandoned,
-        _ = abandon.wait_for(|abandoned| *abandoned) => SettleClaimant::Abandoned,
-        () = sleep_until_deadline(deadline_ms) => SettleClaimant::Expired { now: now_millis() },
+        // An operator cancelled. Settles `Cancelled`, exactly as a cancel
+        // does before the target accepted — the per-topology table in this
+        // module's docs promises one answer for push, not one per window.
+        () = notify.notified() => (
+            SettleClaimant::Abandoned,
+            Ok((Outcome::Cancelled, Vec::new())),
+        ),
+        // The drain ran out. Retryable: the job was not cancelled, this
+        // process simply stopped being able to wait for it.
+        _ = abandon.wait_for(|abandoned| *abandoned) => (
+            SettleClaimant::Abandoned,
+            Err(Refusal::Abandoned),
+        ),
+        () = sleep_until_deadline(deadline_ms) => (
+            SettleClaimant::Expired { now: now_millis() },
+            Err(Refusal::AcceptedNotSettled),
+        ),
     };
 
     let consumed = blocking_settle(&channel, {
@@ -326,10 +345,7 @@ async fn await_settlement(
 
     match consumed {
         // This task won the marker, so it owes the one result.
-        Ok(SettleGrant::Granted) => Some(match claimant {
-            SettleClaimant::Abandoned => Refusal::Abandoned,
-            _ => Refusal::AcceptedNotSettled,
-        }),
+        Ok(SettleGrant::Granted) => Some(settlement),
         // A `Settle` landed in the gap between the timer firing and the
         // consume. It settled the job; this task has nothing to add.
         Ok(SettleGrant::Refused) => None,
