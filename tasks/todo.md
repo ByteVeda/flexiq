@@ -10,9 +10,14 @@ and it reports later through a `Settle` RPC on the executor door.
 
 **The thing that must be right** is the fence. A `Settle` arriving after its
 lease expired and the job was retried elsewhere must be refused, not applied.
-Three racers can settle an accepted dispatch — a local `Settle`, a `Settle` on
-another replica, and the deadline passing — and each must first atomically
-consume one durable marker. Exactly one wins; the rest emit nothing.
+Two claimants can consume an accepted dispatch's marker — a `Settle` reaching
+the replica that dispatched, and that dispatch being given up (its deadline
+passing, a cancel, or a shutdown) — and each must consume the marker in the
+statement that tests it. Exactly one wins; the loser emits nothing.
+
+A `Settle` that reaches a *different* replica is **not** a third claimant: it
+is refused as `NotHere` and consumes nothing, because the waiting attempt with
+the permit and the result channel lives in the process that dispatched.
 
 Two decisions carry the rest:
 

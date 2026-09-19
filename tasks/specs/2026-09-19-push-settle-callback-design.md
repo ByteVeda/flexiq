@@ -86,26 +86,32 @@ The cost is stated rather than hidden: a slot is occupied by work that holds no
 connection, so a deployment that uses 202 sizes capacity for concurrent *jobs*,
 not concurrent requests.
 
-### 1.2 The three-way race (D4)
+### 1.2 The race for the marker (D4)
 
-An accepted dispatch can be settled by three things that cannot see each other:
+An accepted dispatch can be given up by two things that cannot see each other:
 
 1. a `Settle` reaching the replica that dispatched it,
-2. a `Settle` reaching a **different** replica,
-3. the settle deadline passing, observed either by the waiting task or by the
-   stale-job reaper after this process died.
+2. that dispatch being abandoned — the settle deadline passing, a cancel, or a
+   shutdown — observed either by the waiting task or, after this process died,
+   by the stale-job reaper on any replica.
 
-All three must resolve to exactly one outcome. The in-process registry cannot
-arbitrate — cases 2 and 3-after-a-crash never touch it. So the arbiter is
-durable: each racer must first **atomically consume the settle marker**, and
-only the one that consumed it may emit. That is `Storage::claim_settle`, and it
-is what makes the settle single-use for the attempt it names, as #845 requires.
+Both must resolve to exactly one outcome, and the in-process registry cannot
+arbitrate: case 2-after-a-crash never touches it. So the arbiter is durable —
+each must **atomically consume the settle marker**, and only the one that
+consumed it may emit. That is `Storage::claim_settle`, and it is what makes the
+settle single-use for the attempt it names, as #845 requires.
 
-This is also what keeps a cross-replica settle honest. `Scheduler::authorize_finished`
-resolves its fence from an in-memory `DispatchRecord` and fails open when there
-is none — which is exactly the situation on a replica that did not dispatch.
-The durable consume has already run by then, under stricter rules, so the
-fail-open is harmless here rather than load-bearing.
+**A `Settle` that reaches a different replica is not a third claimant.** It is
+refused as `NotHere` before any storage call, and consumes nothing. It could
+not be a claimant even if it wanted to be: the waiting attempt holds the
+semaphore permit and the result channel, and both live in the process that
+dispatched. §5.3 states the routing consequence.
+
+`Scheduler::authorize_finished` resolves its fence from an in-memory
+`DispatchRecord` and fails open when there is none. That is harmless here
+rather than load-bearing: every settle that reaches storage has already
+consumed the marker under stricter rules, and one that reached the wrong
+replica never got that far.
 
 ---
 
