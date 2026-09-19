@@ -1,5 +1,6 @@
 pub mod codel;
 mod maintenance;
+pub use maintenance::ACCEPTED_NOT_SETTLED;
 mod poller;
 pub(crate) mod result_handler;
 pub mod retention;

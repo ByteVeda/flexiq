@@ -128,7 +128,7 @@ mod base64_bytes {
 /// fence is a prefix: pinning it to a low index would renumber every
 /// script-specific argument that follows, and those numbers are load-bearing —
 /// `sleep_job_script` even passes *KEYS positions* as `ARGV` values.
-fn fence(reassert: bool, epoch_argv: usize) -> String {
+pub(super) fn fence(reassert: bool, epoch_argv: usize) -> String {
     let mut lua = FENCE.replace("ARGV[EPOCH]", &format!("ARGV[{epoch_argv}]"));
     if reassert {
         lua.push_str(&FENCE_REASSERT.replace("ARGV[EPOCH]", &format!("ARGV[{epoch_argv}]")));
@@ -190,7 +190,7 @@ const FENCE_REASSERT: &str = r#"
 /// The empty string is "I hold no lease", which the fence reads as an absence
 /// rather than a mismatch. `redis::Script` has no null argument, so the absence
 /// has to be a value the script can recognise, and an epoch is always digits.
-fn epoch_arg(epoch: Option<i64>) -> String {
+pub(super) fn epoch_arg(epoch: Option<i64>) -> String {
     epoch.map(|e| e.to_string()).unwrap_or_default()
 }
 

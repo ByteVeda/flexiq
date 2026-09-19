@@ -89,9 +89,27 @@ impl Rotation {
 }
 
 /// The executor door's state.
+///
+/// Two shapes, because a deployment has one dispatch path and the door has to
+/// serve whichever it is:
+///
+/// * **Attach** — executors dial in and hold a stream. Every RPC is served.
+/// * **Settle-only** — the scheduler dials *out* to a push target, and the
+///   door exists solely so that target can report on work that outlived the
+///   request it arrived on. There is nothing to attach *to*, so `Attach` and
+///   `Heartbeat` refuse.
+///
+/// Not one type per shape: a client reads one service descriptor, and a door
+/// that served a different set of RPCs depending on configuration would make
+/// "is this RPC available" a deployment question rather than a version one.
+/// Refusing by precondition keeps the surface constant and the answer honest.
 #[derive(Clone)]
 pub struct ExecutorDoor {
-    dispatcher: RemoteDispatcher,
+    /// `None` on a push deployment: nothing attaches.
+    dispatcher: Option<RemoteDispatcher>,
+    /// `None` on an attach deployment: nothing was dialled out to.
+    #[cfg(feature = "http-target")]
+    target: Option<Arc<flexiq_core::HttpDispatchTarget>>,
     supervisor: Arc<SchedulerSupervisor>,
     sessions: Arc<SessionRegistry>,
     rotation: Rotation,
@@ -114,10 +132,33 @@ impl ExecutorDoor {
         rotation: Rotation,
     ) -> Self {
         Self {
-            dispatcher,
+            dispatcher: Some(dispatcher),
+            #[cfg(feature = "http-target")]
+            target: None,
             supervisor,
             sessions: Arc::new(SessionRegistry::default()),
             rotation,
+        }
+    }
+
+    /// Serve only the reporting RPCs, for a push deployment where nothing
+    /// attaches.
+    ///
+    /// The door is the one inbound surface a push target has. Without it a job
+    /// that answered `202 Accepted` would have nowhere to report, which is why
+    /// turning settle callbacks on requires the gRPC listener.
+    #[cfg(feature = "http-target")]
+    pub fn settle_only(
+        target: Arc<flexiq_core::HttpDispatchTarget>,
+        supervisor: Arc<SchedulerSupervisor>,
+    ) -> Self {
+        Self {
+            dispatcher: None,
+            target: Some(target),
+            supervisor,
+            sessions: Arc::new(SessionRegistry::default()),
+            // Nothing holds a stream, so there is nothing to rotate.
+            rotation: Rotation::new(None),
         }
     }
 
@@ -137,8 +178,30 @@ impl ExecutorDoor {
     /// The door is where the dispatcher reaches this listener at all — nothing
     /// else on it holds one — so the gauges the dashboard publishes are only
     /// reachable here.
-    pub fn capacity(&self) -> flexiq_core::Capacity {
-        self.dispatcher.capacity()
+    /// `None` on a settle-only door: it has no attached capacity to report,
+    /// and a zero would read as "attached, with no slots" rather than "nothing
+    /// attaches here".
+    pub fn capacity(&self) -> Option<flexiq_core::Capacity> {
+        self.dispatcher.as_ref().map(RemoteDispatcher::capacity)
+    }
+
+    /// Dispatches this replica accepted over push and has not settled.
+    ///
+    /// `None` on an attach door, which accepts none. **Per replica, not per
+    /// cluster**: the waiting attempts live in this process, and a cluster
+    /// total would mean a storage count on every scrape for a number an
+    /// operator reads per incident.
+    #[cfg(feature = "http-target")]
+    pub fn awaiting_settle(&self) -> Option<usize> {
+        self.target.as_ref().map(|target| target.awaiting_settle())
+    }
+
+    /// Without the push path there is no dispatch to accept, so there is
+    /// nothing to count. Present so the metrics route reads the same either
+    /// way rather than growing a `cfg` of its own.
+    #[cfg(not(feature = "http-target"))]
+    pub fn awaiting_settle(&self) -> Option<usize> {
+        None
     }
 
     /// The live sessions, for tests and for a leak check.
@@ -179,6 +242,11 @@ impl ExecutorService for ExecutorDoor {
         &self,
         request: Request<Streaming<pb::AttachRequest>>,
     ) -> Result<Response<Self::AttachStream>, Status> {
+        // A settle-only door has nothing to attach *to*. Refused before a
+        // stream is opened, so a client is told on its first RPC rather than
+        // holding a connection that will never carry a job.
+        let dispatcher = self.dispatcher.clone().ok_or_else(nothing_attaches)?;
+
         let peer = request
             .remote_addr()
             .map_or_else(|| "grpc:unknown".to_string(), |addr| format!("grpc:{addr}"));
@@ -262,7 +330,6 @@ impl ExecutorService for ExecutorDoor {
         });
 
         tokio::spawn({
-            let dispatcher = self.dispatcher.clone();
             let supervisor = Arc::clone(&self.supervisor);
             let sessions = Arc::clone(&self.sessions);
             let session = session.clone();
@@ -351,6 +418,10 @@ impl ExecutorService for ExecutorDoor {
         &self,
         request: Request<pb::HeartbeatRequest>,
     ) -> Result<Response<pb::HeartbeatResponse>, Status> {
+        if self.dispatcher.is_none() {
+            return Err(nothing_attaches());
+        }
+
         let request = request.into_inner();
         let Some(endpoint) = self.sessions.get(&request.session) else {
             return Err(Status::not_found(
@@ -374,6 +445,209 @@ impl ExecutorService for ExecutorDoor {
             })?;
 
         Ok(Response::new(pb::HeartbeatResponse {}))
+    }
+
+    async fn settle(
+        &self,
+        request: Request<pb::SettleRequest>,
+    ) -> Result<Response<pb::SettleResponse>, Status> {
+        #[cfg(feature = "http-target")]
+        {
+            let target = self.target.as_ref().ok_or_else(settle_disabled)?;
+            let (job_id, lease, outcome) = frames::settle_request(request.into_inner())?;
+            // Blocking: the fence is a storage write, and this runtime also
+            // carries the dispatch requests. The same reason the dashboard's
+            // reads go through `blocking`.
+            let target = Arc::clone(target);
+            crate::grpc::blocking::run(move || {
+                target
+                    .settle(&job_id, &lease, outcome)
+                    .map_err(settle_refusal)
+            })
+            .await?;
+            return Ok(Response::new(pb::SettleResponse {}));
+        }
+        #[cfg(not(feature = "http-target"))]
+        {
+            let _ = request;
+            Err(settle_disabled())
+        }
+    }
+
+    async fn extend_lease(
+        &self,
+        request: Request<pb::ExtendLeaseRequest>,
+    ) -> Result<Response<pb::ExtendLeaseResponse>, Status> {
+        #[cfg(feature = "http-target")]
+        {
+            let target = self.target.as_ref().ok_or_else(settle_disabled)?;
+            let request = request.into_inner();
+            let lease = frames::lease_from_bytes(&request.lease)?;
+            let extend_by = frames::extension_from_wire(request.extend_by)?;
+            let job_id = request.job_id;
+
+            let target = Arc::clone(target);
+            let deadline = crate::grpc::blocking::run(move || {
+                target
+                    .extend_lease(&job_id, &lease, extend_by)
+                    .map_err(settle_refusal)
+            })
+            .await?;
+            return Ok(Response::new(pb::ExtendLeaseResponse {
+                deadline: Some(frames::timestamp_from_millis(deadline)),
+            }));
+        }
+        #[cfg(not(feature = "http-target"))]
+        {
+            let _ = request;
+            Err(settle_disabled())
+        }
+    }
+
+    async fn report_progress(
+        &self,
+        request: Request<pb::ReportProgressRequest>,
+    ) -> Result<Response<pb::ReportProgressResponse>, Status> {
+        #[cfg(feature = "http-target")]
+        {
+            let target = self.target.as_ref().ok_or_else(settle_disabled)?;
+            let frame = request
+                .into_inner()
+                .progress
+                .ok_or_else(|| Status::invalid_argument("a progress report carries no frame"))?;
+            let lease = frames::lease_from_bytes(frame.lease.as_deref().unwrap_or_default())?;
+
+            let target = Arc::clone(target);
+            // Fire and forget, like the frame it mirrors: an empty response
+            // means the frame was taken, not that a row was written. A task
+            // that only wanted to report progress must never block on us.
+            crate::grpc::blocking::run(move || {
+                target
+                    .report_progress(&frame.job_id, &lease, frame.progress)
+                    .map_err(settle_refusal)
+            })
+            .await?;
+            return Ok(Response::new(pb::ReportProgressResponse {}));
+        }
+        #[cfg(not(feature = "http-target"))]
+        {
+            let _ = request;
+            Err(settle_disabled())
+        }
+    }
+
+    async fn write_task_log(
+        &self,
+        request: Request<pb::WriteTaskLogRequest>,
+    ) -> Result<Response<pb::WriteTaskLogResponse>, Status> {
+        #[cfg(feature = "http-target")]
+        {
+            let target = self.target.as_ref().ok_or_else(settle_disabled)?;
+            let frame = request
+                .into_inner()
+                .task_log
+                .ok_or_else(|| Status::invalid_argument("a task log carries no frame"))?;
+            let lease = frames::lease_from_bytes(frame.lease.as_deref().unwrap_or_default())?;
+
+            let target = Arc::clone(target);
+            crate::grpc::blocking::run(move || {
+                // `extra` is pre-encoded JSON that is not guaranteed UTF-8 on
+                // the wire. The scheduler's existing rule is to drop an
+                // unreadable blob and keep the line, which is what `None` does
+                // here — losing the whole frame over it would be worse.
+                let extra = frame
+                    .extra
+                    .as_deref()
+                    .and_then(|bytes| std::str::from_utf8(bytes).ok());
+                target
+                    .write_task_log(
+                        &frame.job_id,
+                        &lease,
+                        &frame.task_name,
+                        &frame.level,
+                        &frame.message,
+                        extra,
+                    )
+                    .map_err(settle_refusal)
+            })
+            .await?;
+            return Ok(Response::new(pb::WriteTaskLogResponse {}));
+        }
+        #[cfg(not(feature = "http-target"))]
+        {
+            let _ = request;
+            Err(settle_disabled())
+        }
+    }
+}
+
+/// The answer the four reporting RPCs give on a deployment that does not
+/// accept `202`.
+///
+/// `FAILED_PRECONDITION` rather than `UNIMPLEMENTED`: the RPC exists and this
+/// build serves it, but the deployment has not turned settle callbacks on, so
+/// there is no accepted dispatch for one to name. `UNIMPLEMENTED` would read as
+/// "upgrade the server", which is the wrong thing to go and do.
+/// What `Attach` and `Heartbeat` answer on a settle-only door.
+///
+/// `FAILED_PRECONDITION` rather than `UNIMPLEMENTED`, for the reason
+/// [`settle_disabled`] gives: the build serves the RPC, the deployment has no
+/// use for it. `UNIMPLEMENTED` would send an operator to upgrade a server that
+/// is already the right version.
+fn nothing_attaches() -> Status {
+    Status::failed_precondition(
+        "this deployment dispatches by pushing to a target, so nothing attaches here; \
+         the executor door serves only the reporting RPCs",
+    )
+}
+
+fn settle_disabled() -> Status {
+    Status::failed_precondition(
+        "settle callbacks are not enabled on this deployment; \
+         set FLEXIQ_PUSH_TARGET_SETTLE=grpc on the scheduler that dispatches",
+    )
+}
+
+/// Map a refusal from the dispatch target onto a status code.
+///
+/// Everything that lost a fence is `FAILED_PRECONDITION`, never `ABORTED`:
+/// `ABORTED` sits in the retry-with-backoff class, and a report that lost its
+/// fence must not be resent — resending it is the double execution the fence
+/// exists to refuse. The messages differ because the operator actions differ.
+///
+/// [`SettleRefused::NotReady`] is the single exception, and the exception is
+/// the point: nothing has been decided there, so it is `UNAVAILABLE` and the
+/// caller is expected to come back. Folding it in with the rest would have a
+/// target discard a good result because the scheduler had not finished writing
+/// its own bookkeeping.
+#[cfg(feature = "http-target")]
+fn settle_refusal(refused: flexiq_core::SettleRefused) -> Status {
+    use flexiq_core::SettleRefused;
+    match refused {
+        SettleRefused::NotReady => Status::unavailable(
+            "this dispatch was accepted a moment ago and is not ready to be reported on \
+             yet; retry shortly",
+        ),
+        // Not a stale lease: the caller may be perfectly current and simply
+        // have reached the wrong replica. Said plainly, because the fix is an
+        // operator's routing and not the target's code.
+        SettleRefused::NotHere => Status::failed_precondition(
+            "no accepted dispatch for this job on this replica; a settle must reach the \
+             scheduler that dispatched the job, so run one scheduler replica or route \
+             these calls to it",
+        ),
+        SettleRefused::Fenced => Status::failed_precondition(
+            "this dispatch was already settled, or the lease names an attempt that has been \
+             superseded; do not retry",
+        ),
+        SettleRefused::Unsupported => settle_disabled(),
+        SettleRefused::Storage(error) => {
+            log::warn!("[flexiq] a settle could not be fenced: {error}");
+            // Deliberately not `UNAVAILABLE`, which is retryable: we do not
+            // know whether the marker was consumed, and a resend under that
+            // doubt is the one thing the fence must not permit.
+            Status::failed_precondition("the settle fence could not be evaluated; do not retry")
+        }
     }
 }
 
@@ -405,6 +679,72 @@ mod tests {
             seen.len() > 1,
             "a fleet that started together must not rotate together"
         );
+    }
+
+    /// Both refusals a settle-only door gives are `FAILED_PRECONDITION`, and
+    /// neither is `UNIMPLEMENTED`: the build serves every RPC, and it is the
+    /// deployment that has no use for some of them. `UNIMPLEMENTED` would send
+    /// an operator to upgrade a server that is already the right version.
+    #[test]
+    fn a_settle_only_door_refuses_by_precondition() {
+        assert_eq!(nothing_attaches().code(), tonic::Code::FailedPrecondition);
+        assert_eq!(settle_disabled().code(), tonic::Code::FailedPrecondition);
+        // Each names what to do about it, and they are different things.
+        assert!(nothing_attaches().message().contains("nothing attaches"));
+        assert!(settle_disabled()
+            .message()
+            .contains("FLEXIQ_PUSH_TARGET_SETTLE"));
+    }
+
+    /// A report that lost its fence must never be resent, so none of these may
+    /// be `ABORTED` — which sits in the retry-with-backoff class. Resending one
+    /// is the double execution the fence exists to refuse.
+    /// The one refusal a caller *should* retry, kept apart from the rest on
+    /// purpose: nothing has been decided when it is returned.
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_report_that_arrived_too_early_is_retryable() {
+        let status = settle_refusal(flexiq_core::SettleRefused::NotReady);
+        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert!(status.message().contains("retry"));
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn no_settled_refusal_is_retryable() {
+        use flexiq_core::SettleRefused;
+        for refused in [
+            SettleRefused::NotHere,
+            SettleRefused::Fenced,
+            SettleRefused::Unsupported,
+            SettleRefused::Storage("the database is unhappy".to_string()),
+        ] {
+            let status = settle_refusal(refused);
+            assert_eq!(
+                status.code(),
+                tonic::Code::FailedPrecondition,
+                "unexpected code for {status:?}"
+            );
+        }
+
+        // And the storage arm says nothing about the storage: the detail is
+        // logged, never handed to a peer.
+        let leaked = settle_refusal(SettleRefused::Storage("host=db user=root".to_string()));
+        assert!(!leaked.message().contains("host=db"));
+    }
+
+    /// "Not on this replica" and "already settled" are different problems with
+    /// different fixes, and an operator told the wrong one goes looking for a
+    /// race that never happened.
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_misrouted_settle_is_not_reported_as_a_stale_one() {
+        use flexiq_core::SettleRefused;
+        let elsewhere = settle_refusal(SettleRefused::NotHere);
+        let stale = settle_refusal(SettleRefused::Fenced);
+        assert_ne!(elsewhere.message(), stale.message());
+        assert!(elsewhere.message().contains("replica"));
+        assert!(stale.message().contains("do not retry"));
     }
 
     #[test]

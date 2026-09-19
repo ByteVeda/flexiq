@@ -49,6 +49,20 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
+/// The furthest one `ExtendLease` call may push a settle deadline out.
+///
+/// Per call, and not in total. A target that needs six hours asks six times,
+/// and its asking is the liveness signal — a target that stops asking is one
+/// the deadline collects. A total cap would instead make a long, healthy job
+/// indistinguishable from a wedged one, and an unbounded single call would let
+/// one request park a claim past any operator's patience.
+///
+/// Requests over this are **clamped, not refused**: refusing would make "ask
+/// again with a smaller number" the correct client behaviour, which is a retry
+/// loop written into the contract for no benefit. The stored deadline is
+/// echoed back so a caller plans against what landed.
+pub const MAX_LEASE_EXTENSION: std::time::Duration = std::time::Duration::from_secs(3_600);
+
 /// Mint the epoch a fresh execution claim is recorded under.
 ///
 /// Random rather than a counter or a timestamp: the comparison is equality, so
@@ -73,11 +87,38 @@ pub fn mint_claim_epoch() -> i64 {
 /// The gap this leaves is stated rather than hidden: an executor that carries
 /// no lease is fenced on `(owner, attempt)` alone, exactly as it was before
 /// this existed.
+///
+/// See [`lease_authorizes`] for the strict form, and why a caller with nothing
+/// else to fence on must not use this one.
 pub fn epochs_agree(claim: Option<i64>, result: Option<i64>) -> bool {
     match (claim, result) {
         (Some(claim), Some(result)) => claim == result,
         _ => true,
     }
+}
+
+/// Whether a presented lease *authorizes* a settle.
+///
+/// Strict where [`epochs_agree`] is permissive, and the difference is the whole
+/// point of having two functions. They answer different questions:
+///
+/// * `epochs_agree` asks "is there evidence this dispatch is stale". An absence
+///   is not evidence, so it agrees — which is what lets a pool holding no lease
+///   keep reporting results at all.
+/// * This asks "has this caller proved it is the dispatch it claims to be". A
+///   claim with no epoch, no claim row at all, and a value that does not match
+///   are three different ways of having proved nothing, and all three refuse.
+///
+/// The second question only arises where the lease *is* the authority rather
+/// than a check on one: an out-of-band settle arrives with no connection, no
+/// stream and no in-memory dispatch record behind it, so there is nothing else
+/// left to fence on. A caller that reaches for `epochs_agree` here would accept
+/// a settle from anyone who knows a job id.
+///
+/// The two are deliberately adjacent so a reader sees both before collapsing
+/// them into one.
+pub fn lease_authorizes(claim: Option<i64>, presented: Option<i64>) -> bool {
+    matches!((claim, presented), (Some(claim), Some(presented)) if claim == presented)
 }
 
 /// A lease on one dispatch of one job, as it travels the wire.
@@ -241,6 +282,32 @@ mod tests {
         // real minted token must not survive as a well-formed-looking `Lease`.
         assert!(Lease::from_wire(&[0xff, 0xfe]).is_none());
         assert!(Lease::from_wire(b"not a lease").is_none());
+    }
+
+    #[test]
+    fn the_two_fences_disagree_on_exactly_the_absences() {
+        // The whole reason both exist. `epochs_agree` is asked "is there
+        // evidence this is stale" and an absence is not evidence;
+        // `lease_authorizes` is asked "has this caller proved anything" and an
+        // absence proves nothing. They must agree only when both sides are
+        // present — anywhere else, collapsing them into one function silently
+        // picks a side.
+        for (claim, presented) in [(None, None), (Some(7), None), (None, Some(7))] {
+            assert!(
+                epochs_agree(claim, presented),
+                "epochs_agree must not read {claim:?}/{presented:?} as a mismatch"
+            );
+            assert!(
+                !lease_authorizes(claim, presented),
+                "lease_authorizes must refuse {claim:?}/{presented:?}: nothing was proved"
+            );
+        }
+
+        // Both present is the one case they answer identically.
+        for (claim, presented, expected) in [(Some(7), Some(7), true), (Some(7), Some(8), false)] {
+            assert_eq!(epochs_agree(claim, presented), expected);
+            assert_eq!(lease_authorizes(claim, presented), expected);
+        }
     }
 
     #[test]

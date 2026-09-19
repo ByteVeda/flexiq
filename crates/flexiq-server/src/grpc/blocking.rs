@@ -86,3 +86,38 @@ where
         }
     }
 }
+
+/// Run `work` on the blocking pool, for a call that is not a `Storage` method
+/// but still blocks on one underneath.
+///
+/// The settle RPCs go through here: `HttpDispatchTarget::settle` takes a
+/// storage fence and a channel send, neither of which is async, and parking a
+/// tonic worker thread on a database round trip is the thing this module
+/// exists to stop.
+pub async fn run<T, E, F>(work: F) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E> + Send + 'static,
+    T: Send + 'static,
+    E: Send + 'static + From<PanicDuringCall>,
+{
+    match tokio::task::spawn_blocking(work).await {
+        Ok(result) => result,
+        Err(error) => {
+            log::error!("grpc: a blocking task failed to run: {error}");
+            Err(PanicDuringCall.into())
+        }
+    }
+}
+
+/// The closure panicked, or the runtime is shutting down.
+///
+/// A type rather than a `Status` so `run` stays usable by a caller whose error
+/// is its own; each one says what a failure to *run* means on its wire.
+#[derive(Debug, Clone, Copy)]
+pub struct PanicDuringCall;
+
+impl From<PanicDuringCall> for Status {
+    fn from(_: PanicDuringCall) -> Self {
+        WireError::internal().into()
+    }
+}

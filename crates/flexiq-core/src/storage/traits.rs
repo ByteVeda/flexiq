@@ -3,9 +3,9 @@ use crate::job::{Job, NewJob};
 use crate::step::StepLimits;
 use crate::storage::records::{
     AttemptFence, CircuitBreakerState, DebounceOptions, JobError, JobStep, LockInfo, NewJobStep,
-    NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SleepOutcome,
-    StepCommit, Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicLogStats,
-    TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
+    NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SettleClaimant,
+    SettleGrant, SleepOutcome, StaleJob, StepCommit, Subscription, SubscriptionMode, TaskLogEntry,
+    TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
 };
 use crate::storage::{
     DeadJob, DispatchOrder, QueueStats, RetentionCounts, RetentionCutoffs, SubscriptionBacklogStats,
@@ -266,10 +266,16 @@ pub trait Storage: Send + Sync + Clone {
     /// Purge archived jobs by the global/per-entry TTL, covering every terminal
     /// status on all backends.
     fn purge_completed_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64>;
-    /// Running jobs that exceeded their timeout, for the scheduler to fail or
+    /// Running jobs that exceeded their deadline, for the scheduler to fail or
     /// retry. Scoped so a scheduler never times out another namespace's job and
     /// then records the outcome under its own.
-    fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<Job>>;
+    ///
+    /// A job whose dispatch was accepted out of band is **excluded** while its
+    /// settle deadline is still in the future, and flagged
+    /// ([`StaleJob::awaiting_settle`]) once it is not. The two ways of being
+    /// late are different facts to an operator, and "accepted, never settled"
+    /// is the one this distinction exists to make visible.
+    fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<StaleJob>>;
     /// Running jobs whose execution-claim owner is not in `live_owner_ids` (the
     /// worker that claimed them has died). Read-only — paired with the dead
     /// owner so the caller can atomically reclaim before requeuing. Scoped like
@@ -755,6 +761,76 @@ pub trait Storage: Send + Sync + Clone {
         expected_owner: &str,
         new_owner: &str,
     ) -> Result<Option<i64>>;
+
+    // ── Dispatches settled out of band ─────────────────────────────
+
+    /// Whether this backend implements the settle marker.
+    ///
+    /// `false` refuses `FLEXIQ_PUSH_TARGET_SETTLE=grpc` at boot rather than
+    /// accepting `202`s it cannot fence. Mirrors [`Storage::supports_steps`],
+    /// and for the same reason: a fence that degrades to "no marker recorded"
+    /// is a fence that authorizes everything.
+    fn supports_settle(&self) -> bool {
+        false
+    }
+
+    /// Record that a dispatch was accepted out of band, and say how long the
+    /// scheduler will wait for its outcome.
+    ///
+    /// Written when a push target answers `202 Accepted`, and again on every
+    /// `ExtendLease`. **Monotonic**: a deadline never moves backwards, so a
+    /// retransmitted accept and an extension that races a later one are both
+    /// safe, and the `jobs` predicate the reaper selects on stays a correct
+    /// superset of this one.
+    ///
+    /// Fenced on the same `(owner, attempt, epoch)` triple as every other write
+    /// on a dispatch, and for the same reason: an attempt that has been
+    /// superseded must not be able to buy itself more time.
+    ///
+    /// Returns the deadline actually stored — the shape `claim_execution` uses
+    /// for "you did not win this" — or `None` when the fence refused.
+    fn await_settle(
+        &self,
+        job_id: &str,
+        owner: &str,
+        attempt: i32,
+        epoch: Option<i64>,
+        deadline_ms: i64,
+        namespace: Option<&str>,
+    ) -> Result<Option<i64>> {
+        let _ = (job_id, owner, attempt, epoch, deadline_ms, namespace);
+        Ok(None)
+    }
+
+    /// Consume the settle marker for `job_id`, if `claimant` is entitled to it.
+    ///
+    /// Three callers race for this and none can see the others: a `Settle` on
+    /// the replica that dispatched, a `Settle` on any other replica, and the
+    /// deadline passing. The marker is removed in the same statement that tests
+    /// it, so exactly one is told [`SettleGrant::Granted`] — which is what
+    /// makes a settle single-use for the attempt it names.
+    ///
+    /// A caller told [`SettleGrant::Refused`] **emits nothing at all**: not a
+    /// result, not a failure, not a timeout. Someone else already settled this
+    /// attempt, and a second opinion about it is the double settle the marker
+    /// exists to prevent.
+    ///
+    /// Unlike [`Storage::authorize_attempt`], the default here **refuses**.
+    /// That default protects a job from being stuck `Running` forever and so
+    /// must fail open; this one is the only thing standing between an
+    /// unfenced settle and a job's result, and a backend that cannot evaluate
+    /// it must not be able to authorize one. A deployment whose backend
+    /// answers `supports_settle() == false` is refused at boot rather than
+    /// discovering this at the first `202`.
+    fn claim_settle(
+        &self,
+        job_id: &str,
+        claimant: SettleClaimant,
+        namespace: Option<&str>,
+    ) -> Result<SettleGrant> {
+        let _ = (job_id, claimant, namespace);
+        Ok(SettleGrant::Refused)
+    }
 
     // ── Durable inline steps ──────────────────────────────────────
 

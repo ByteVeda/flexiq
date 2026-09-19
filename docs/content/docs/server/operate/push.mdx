@@ -57,6 +57,7 @@ are then required together.
 | `FLEXIQ_PUSH_TARGET_MAX_REQUEST_BYTES` | `8388608` (8 MiB) | Ceiling on one job's request body |
 | `FLEXIQ_PUSH_TARGET_MAX_RESPONSE_BYTES` | `1048576` (1 MiB) | Ceiling on one response body read back |
 | `FLEXIQ_PUSH_TARGET_AUTH` | `none` | `none` \| `bearer` \| `hmac` \| `oidc` \| `sigv4` |
+| `FLEXIQ_PUSH_TARGET_SETTLE` | `off` | `off` \| `grpc` — whether a `202 Accepted` hands the job off to be settled later |
 
 The three second-valued variables and the two byte caps each take a minimum of
 `1`. None of the five is a "no limit" switch. For a duration, `0` is a deadline
@@ -163,14 +164,12 @@ scheme, and it runs whether or not you think you need it:
   in truncated form, because a partial body is not what the target said and
   must not become a job result.
 
-## A job has to finish inside one HTTP request
+## Work that outlives one HTTP request
 
-There is no durable-step equivalent under push, and no way to hand a job off
-mid-flight and pick it back up later: the whole task runs inside the single
-request the scheduler is holding open, for as long as
-`FLEXIQ_PUSH_TARGET_TIMEOUT` and the job's own timeout allow. That ceiling is
-yours to set, but the platform in front of your target sets one of its own, and
-it wins if it is the shorter of the two:
+By default the whole task runs inside the single request the scheduler is
+holding open, for as long as `FLEXIQ_PUSH_TARGET_TIMEOUT` and the job's own
+timeout allow. That ceiling is yours to set, but the platform in front of your
+target sets one of its own, and it wins if it is the shorter of the two:
 
 - **Cloud Run** caps a request at 60 minutes; the default is 5.
 - A **Lambda function URL** is bounded by the function's own timeout, which
@@ -183,15 +182,76 @@ it wins if it is the shorter of the two:
   account's throttle quota in that Region. Behind API Gateway, the budget is
   seconds, not minutes.
 
-A task that legitimately needs longer than the shortest of these has no path
-forward under push today;
-[issue #845](https://github.com/ByteVeda/flexiq/issues/845) is the tracked
-follow-up for a job that outlives one request.
+For a task that needs longer than the shortest of these, set
+`FLEXIQ_PUSH_TARGET_SETTLE=grpc`. The target then answers `202 Accepted`, the
+request ends, and it reports the outcome afterwards:
 
-A target that answers `202 Accepted` — "I took it, I have not finished" — does
-not buy more time either: push dispatch has nothing further to wait on, and
-treats an accepted-but-unsettled job as a failure rather than polling for a
-later answer.
+```
+scheduler → POST target                 job, attempt, lease
+target    → 202 Accepted                "I have it, I will call back"
+   …work runs past the platform's deadline; the connection is gone…
+target    → ExtendLease(job, lease)     optional, repeatable
+target    → Settle(job, lease, outcome) exactly once
+```
+
+`Settle` and `ExtendLease` are RPCs on the **executor door**, so a target that
+uses this path is a gRPC client for those two calls and the deployment must
+also run `FLEXIQ_GRPC_LISTEN`. That pairing is checked at boot; a deployment
+that asks for callbacks without a door refuses to start rather than accepting
+a hand-off it has no inbound surface for.
+
+### What it costs
+
+- **Capacity now bounds concurrent *jobs*, not concurrent requests.** An
+  accepted dispatch keeps its slot until it is settled, because that slot is
+  the only backpressure push has — without it, a target that answers `202`
+  instantly would have the scheduler claim the whole queue.
+- **The target needs a credential.** The lease fences the call, but it does not
+  authenticate it: the executor door is behind an `execute`-scoped API token
+  like any other client of it. Both are required, and neither substitutes for
+  the other.
+- **A settle must reach the replica that dispatched.** The waiting attempt
+  lives in that process. A call that lands elsewhere is refused by name, so run
+  one scheduler replica or route these calls to it.
+
+### The deadline, and asking for longer
+
+The scheduler waits until the job's own `timeout_ms`, measured from when the
+attempt started — the same deadline a non-202 dispatch gets. A target that
+needs longer calls `ExtendLease` before it passes, and keeps calling: the
+ceiling is **one hour per call**, deliberately not a total, so that asking is
+what tells the scheduler the target is still alive. A request over the ceiling
+is clamped rather than refused, and the response carries the deadline that was
+actually stored — plan against that, not against what you asked for.
+
+### When it goes wrong
+
+`Settle` answers `FAILED_PRECONDITION`, and a target **must not** retry it,
+when the attempt was already settled — by the deadline, by an operator
+requeue, or by a retry that ran elsewhere. This is the normal failure mode of
+the design rather than an edge case: a target that runs long will eventually
+lose a race to the deadline, and this is how it finds out its work was thrown
+away.
+
+A job that is accepted and never settled fails at its deadline with an error
+carrying the `push.accepted_not_settled` prefix and saying the target accepted
+it and never came back — distinct from an ordinary timeout on purpose, so
+"accepted, never settled" is something an operator can see rather than infer.
+The gRPC listener's `/metrics` also carries
+`flexiq_push_awaiting_settle`, the number of dispatches **this replica** has
+accepted and not yet settled.
+
+### With callbacks off
+
+`202` stays a refusal: the job dead-letters after one attempt with a reason
+naming the variable to set. That is deliberate — a framework answering `202`
+by default is exactly the bug the mandatory `x-flexiq-outcome` header exists to
+catch, and silently waiting on it would cost the job its whole deadline instead
+of failing fast.
+
+Durable steps remain attach-only either way: there is no step session here to
+resume, which is why `x-flexiq-outcome: slept` is refused on the request path
+and `Settle` has no `slept` arm.
 
 ## `cancel()` does not stop the target's work
 

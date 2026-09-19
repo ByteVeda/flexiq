@@ -38,6 +38,7 @@ pub fn storage_gauges(
     per_queue: HashMap<String, QueueStats>,
     workers: usize,
     capacity: Option<Capacity>,
+    awaiting_settle: Option<usize>,
 ) -> String {
     let mut body = String::new();
     body.push_str("# HELP flexiq_jobs Jobs by queue and status.\n");
@@ -81,6 +82,15 @@ pub fn storage_gauges(
         ));
     }
 
+    if let Some(awaiting) = awaiting_settle {
+        body.push_str(
+            "# HELP flexiq_push_awaiting_settle Dispatches this replica accepted and has not \
+             settled.\n",
+        );
+        body.push_str("# TYPE flexiq_push_awaiting_settle gauge\n");
+        body.push_str(&format!("flexiq_push_awaiting_settle {awaiting}\n"));
+    }
+
     body
 }
 
@@ -104,6 +114,7 @@ mod tests {
             ]),
             0,
             None,
+            None,
         );
         let alpha = body.find("queue=\"alpha\"").expect("alpha is emitted");
         let beta = body.find("queue=\"beta\"").expect("beta is emitted");
@@ -119,6 +130,7 @@ mod tests {
             HashMap::from([("od\"d\\one".to_string(), stats(1))]),
             0,
             None,
+            None,
         );
         assert!(
             body.contains("queue=\"od\\\"d\\\\one\""),
@@ -129,7 +141,7 @@ mod tests {
     /// Zero executors and "this process attaches none" are different answers.
     #[test]
     fn the_executor_gauges_are_absent_without_a_dispatcher() {
-        let without = storage_gauges(HashMap::new(), 0, None);
+        let without = storage_gauges(HashMap::new(), 0, None, None);
         assert!(!without.contains("flexiq_executors"));
 
         let with = storage_gauges(
@@ -140,7 +152,20 @@ mod tests {
                 total_slots: 0,
                 free_slots: 0,
             }),
+            None,
         );
         assert!(with.contains("flexiq_executors 0"));
+    }
+
+    /// Same distinction, for the push gauge: "none outstanding" and "this
+    /// deployment accepts none" are different answers, and a zero would say
+    /// the first when the truth is the second.
+    #[test]
+    fn the_awaiting_settle_gauge_is_absent_without_a_push_target() {
+        let without = storage_gauges(HashMap::new(), 0, None, None);
+        assert!(!without.contains("flexiq_push_awaiting_settle"));
+
+        let with = storage_gauges(HashMap::new(), 0, None, Some(0));
+        assert!(with.contains("flexiq_push_awaiting_settle 0"));
     }
 }

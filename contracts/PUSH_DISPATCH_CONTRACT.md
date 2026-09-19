@@ -20,8 +20,13 @@ against `flexiq-core` in the same process. `contracts/REMOTE_SDK_CONTRACT.md`
 is what a client dials **in** to `flexiq-server` through, over gRPC or its
 JSON facade. Push dispatch is the third shape: `flexiq-server` dials **out**,
 so nothing an executor or a producer client does applies here — a push target
-holds no database credential, attaches to no stream, and speaks nothing but
-plain HTTP.
+holds no database credential and attaches to no stream.
+
+**One exception, and it is opt-in.** A target that cannot finish inside the
+platform's request deadline answers `202 Accepted` and reports the outcome
+afterwards, over gRPC, through the executor door. That path is described in
+[Work that outlives the request](#work-that-outlives-the-request); everything
+else in this document is plain HTTP and stays that way.
 
 The payload format is shared with both. `Job.payload` and a success result are
 the same tagged wire envelope `REMOTE_SDK_CONTRACT.md`'s
@@ -126,7 +131,7 @@ The target answers with an HTTP status and, on success, an
 | 2xx (not 202) | `slept` | **Refused.** A push dispatch has no step session to resume; treated as a failure | no |
 | 2xx (not 202) | absent | **Refused**: `MissingOutcome` | no |
 | 2xx (not 202) | unrecognized value | **Refused**: `UnknownOutcome`, the value echoed back (truncated past 64 characters) | no |
-| `202` | — | **Refused**: `Accepted202` — push dispatch has nothing further to wait on for a job the target says it hasn't settled yet (see #845) | no |
+| `202` | — | **Accepted**, when settle callbacks are on: the job stays `Running` and the scheduler waits for a `Settle` until the settle deadline. Body ignored. **Refused**: `Accepted202` when they are off | on the deadline, as a timeout |
 | `3xx` | — | **Refused**: `Redirect` — never followed | no |
 | `4xx` | — | **Refused**: `ClientError` | only `408`, `425`, `429` |
 | `5xx`, or a status outside `1xx`–`5xx` | — | **Refused**: `ServerError` | yes |
@@ -149,6 +154,112 @@ promised; a slower answer is fenced out and the attempt already re-dispatched
 elsewhere. A response body over the operator's configured ceiling is refused
 as too large rather than read in truncated form — a partial body is not what
 the target said, and it does not become a job result.
+
+## Work that outlives the request
+
+A job that cannot finish inside the platform's request deadline — 60 minutes
+on Cloud Run, 15 on Lambda — cannot report its result on the connection that
+started it. A target in that position answers `202 Accepted` and reports
+afterwards:
+
+```
+scheduler → POST target                 job, attempt, lease
+target    → 202 Accepted                "I have it, I will call back"
+   …work runs past the deadline; the connection is gone…
+target    → ExtendLease(job, lease)     optional, repeatable
+target    → Settle(job, lease, outcome) exactly once
+```
+
+**This is off by default.** The operator turns it on with
+`FLEXIQ_PUSH_TARGET_SETTLE=grpc`; while it is off a `202` is refused as
+`Accepted202`, exactly as before. A target **MUST NOT** answer `202` unless
+it is going to call back — a framework that returns `202` by default is the
+bug the mandatory `x-flexiq-outcome` header exists to catch, and under settle
+callbacks it costs the job its whole deadline instead of one fast failure.
+
+### Reporting
+
+`Settle`, `ExtendLease`, `ReportProgress` and `WriteTaskLog` are RPCs on
+`flexiq.executor.v1.ExecutorService`, the executor door. So a target that uses
+this path is, for these four calls only, a gRPC client — and the deployment it
+POSTs from **MUST** also run the gRPC listener. There is no HTTP form of these
+calls and there will not be one; `REMOTE_SDK_CONTRACT.md` and the JSON facade
+both serve `flexiq.v1` and never the executor package.
+
+A target **MUST** present two things, and neither substitutes for the other:
+
+- **An executor-scoped bearer token**, as `authorization: Bearer <token>`. It
+  authenticates the caller. This is the same credential an attached executor
+  uses and is issued the same way.
+- **The lease**, from the `x-flexiq-lease` request header, echoed into the
+  frame's `lease` field. It fences the call: it says which dispatch of which
+  attempt is being reported on.
+
+### What the fence refuses
+
+A `Settle` is **single-use for the attempt it names**. The scheduler records
+one marker per accepted dispatch and removes it in the same statement that
+tests it, so exactly one of a `Settle` and the scheduler giving the dispatch up
+— its deadline passing, a cancel, or a shutdown — can win.
+
+A `Settle` **MUST** reach the scheduler replica that dispatched the job: the
+attempt waiting for it lives in that process. One that lands elsewhere is
+refused with a message saying so, and consumes nothing. Run a single scheduler
+replica, or route these calls to the one that dispatched.
+
+A call that arrives in the moment between the `202` and the scheduler
+recording its marker is `UNAVAILABLE`, and a target **SHOULD** retry it
+shortly: nothing has been decided, and that is the only status here that means
+so.
+
+A call that lost the race is `FAILED_PRECONDITION`, and a target **MUST NOT**
+retry it. Losing the fence means the attempt was already settled — by a
+retry that ran elsewhere, by an operator requeue, or by the deadline — and
+resending would be the double execution the fence exists to refuse. The same
+code answers a lease that is absent, undecodable, or not the one this claim
+was won under.
+
+This is the normal failure mode of the design rather than an edge case: a
+target that runs long **will** eventually lose a race to the deadline, and
+`FAILED_PRECONDITION` is how it finds out its work was thrown away.
+
+### The deadline, and asking for longer
+
+An accepted dispatch is waited on until a deadline that starts at the job's
+own `timeout_ms`, measured from when the attempt started — the same deadline
+that governs a non-202 dispatch. A target that needs longer **MUST** call
+`ExtendLease` before it passes, or the job is reaped and retried under it.
+
+`extend_by` is measured from now, not from the current deadline, because a
+target knows how long it still needs and does not know what deadline the
+scheduler is holding. It is **clamped to one hour per call**, not refused, and
+the response carries the deadline that was actually stored — a target
+**MUST** plan against that value and not against what it asked for.
+
+The ceiling is per call and not in total: a target that needs six hours asks
+six times, and its asking is what tells the scheduler it is still alive. A
+target that stops asking is one the deadline collects.
+
+### Progress and task logs
+
+A target with an accepted dispatch **MAY** call `ReportProgress` and
+`WriteTaskLog`. Both are fire and forget: an empty response means the frame
+was taken, not that a row was written, and a task that only wanted to report
+progress **MUST NOT** block on either.
+
+Both are refused silently if the dispatch is not the one this scheduler is
+holding open — including when the call reaches a replica other than the one
+that dispatched. That costs a progress update and nothing else, which is why
+they are not fenced as strictly as `Settle`.
+
+### What a 202 does not buy
+
+- **No durable steps.** `slept` has no arm on `Settle`, for the same reason
+  `x-flexiq-outcome: slept` is refused on the request path: there is no step
+  session here to resume.
+- **No second result.** A target that answers `202` and *also* returns a body
+  has not settled anything; the body is ignored.
+- **No escape from cancel's semantics.** See below.
 
 ## A worked example
 
@@ -317,16 +428,22 @@ Lambda function URLs' and API Gateway's native answer.
 
 ## What this contract does not promise
 
-- **No progress and no task-log equivalent.** An attached executor's
-  `progress` and `task_log` frames have no push-dispatch counterpart; a push
-  target that wants to report progress has to do it through its own
-  observability, not through FlexiQ.
+- **No progress and no task-log equivalent over HTTP.** An attached
+  executor's `progress` and `task_log` frames have no counterpart on the
+  request path, and never will: the POST is one round trip and there is
+  nowhere to put them. A target that has answered `202` may report both
+  through the executor door — see
+  [Work that outlives the request](#work-that-outlives-the-request) — and a
+  target that has not must use its own observability.
 - **No durable steps.** `job_steps` and `step_ack` exist only inside an
   attached executor's stream. A push target that answers `x-flexiq-outcome:
-  slept` is refused outright — there is no step session here to resume.
+  slept` is refused outright — there is no step session here to resume, and
+  `Settle` has no `slept` arm for the same reason.
 - **`cancel()` does not stop the target's work.** It abandons the request,
   settles the attempt `Cancelled`, and fences the target's eventual answer out
   on arrival — the target's process keeps running and its side effects still
-  happen. See the per-topology table in
+  happen. An accepted dispatch inherits this unchanged: a cancel that ends
+  the attempt leaves the target's later `Settle` to be refused on the fence,
+  and the work it did still ran. See the per-topology table in
   [Custom executors](https://docs.byteveda.org/flexiq/python/custom-executors)
   and issue #846, which is the follow-up that changes this.

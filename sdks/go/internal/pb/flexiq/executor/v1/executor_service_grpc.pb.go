@@ -43,8 +43,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ExecutorService_Attach_FullMethodName    = "/flexiq.executor.v1.ExecutorService/Attach"
-	ExecutorService_Heartbeat_FullMethodName = "/flexiq.executor.v1.ExecutorService/Heartbeat"
+	ExecutorService_Attach_FullMethodName         = "/flexiq.executor.v1.ExecutorService/Attach"
+	ExecutorService_Heartbeat_FullMethodName      = "/flexiq.executor.v1.ExecutorService/Heartbeat"
+	ExecutorService_Settle_FullMethodName         = "/flexiq.executor.v1.ExecutorService/Settle"
+	ExecutorService_ExtendLease_FullMethodName    = "/flexiq.executor.v1.ExecutorService/ExtendLease"
+	ExecutorService_ReportProgress_FullMethodName = "/flexiq.executor.v1.ExecutorService/ReportProgress"
+	ExecutorService_WriteTaskLog_FullMethodName   = "/flexiq.executor.v1.ExecutorService/WriteTaskLog"
 )
 
 // ExecutorServiceClient is the client API for ExecutorService service.
@@ -107,6 +111,40 @@ type ExecutorServiceClient interface {
 	// stream, and a heartbeat that overtakes it is read *as* the handshake and
 	// refuses the attach. Wait for `hello_ack`.
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
+	// Report the outcome of a dispatch that outlived the request it arrived on.
+	//
+	// For a push target, which is handed a job over HTTP and answers `202
+	// Accepted` because the work will not finish inside the platform's request
+	// deadline. The connection that started the job is gone by the time this is
+	// called; the lease inside the frame is what says which dispatch of which
+	// attempt is being settled.
+	//
+	// **Single-use, and fenced.** The scheduler records one settle marker per
+	// accepted dispatch and removes it in the same statement that tests it, so
+	// exactly one of this RPC, the same RPC on another replica, and the settle
+	// deadline passing can win. A call that lost that race is
+	// FAILED_PRECONDITION — never ABORTED, which sits in the retry-with-backoff
+	// class: a settle that lost its fence must not be resent, because resending
+	// it is the double execution the fence exists to refuse.
+	Settle(ctx context.Context, in *SettleRequest, opts ...grpc.CallOption) (*SettleResponse, error)
+	// Ask for longer before the attempt is considered lost.
+	//
+	// An accepted dispatch is waited on until a deadline, and a target that
+	// needs longer than the job's timeout must be able to say so or the job is
+	// retried under it. Repeatable: the ceiling is per call, not in total, so a
+	// target that needs six hours asks six times and its asking is the liveness
+	// signal. A target that stops asking is one the deadline will collect.
+	ExtendLease(ctx context.Context, in *ExtendLeaseRequest, opts ...grpc.CallOption) (*ExtendLeaseResponse, error)
+	// Report progress for an accepted dispatch.
+	//
+	// The frame the attach stream carries, off the stream — a push target has no
+	// stream to put it on. Fire and forget, as it is there: a task that only
+	// wanted to report progress must never block on the scheduler to do it, and
+	// an empty response says the frame was taken, not that a row was written.
+	ReportProgress(ctx context.Context, in *ReportProgressRequest, opts ...grpc.CallOption) (*ReportProgressResponse, error)
+	// Write one structured log line for an accepted dispatch. As
+	// ReportProgress, and with the same fire-and-forget meaning.
+	WriteTaskLog(ctx context.Context, in *WriteTaskLogRequest, opts ...grpc.CallOption) (*WriteTaskLogResponse, error)
 }
 
 type executorServiceClient struct {
@@ -134,6 +172,46 @@ func (c *executorServiceClient) Heartbeat(ctx context.Context, in *HeartbeatRequ
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HeartbeatResponse)
 	err := c.cc.Invoke(ctx, ExecutorService_Heartbeat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) Settle(ctx context.Context, in *SettleRequest, opts ...grpc.CallOption) (*SettleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SettleResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_Settle_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) ExtendLease(ctx context.Context, in *ExtendLeaseRequest, opts ...grpc.CallOption) (*ExtendLeaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExtendLeaseResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_ExtendLease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) ReportProgress(ctx context.Context, in *ReportProgressRequest, opts ...grpc.CallOption) (*ReportProgressResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportProgressResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_ReportProgress_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) WriteTaskLog(ctx context.Context, in *WriteTaskLogRequest, opts ...grpc.CallOption) (*WriteTaskLogResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WriteTaskLogResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_WriteTaskLog_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -200,6 +278,40 @@ type ExecutorServiceServer interface {
 	// stream, and a heartbeat that overtakes it is read *as* the handshake and
 	// refuses the attach. Wait for `hello_ack`.
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
+	// Report the outcome of a dispatch that outlived the request it arrived on.
+	//
+	// For a push target, which is handed a job over HTTP and answers `202
+	// Accepted` because the work will not finish inside the platform's request
+	// deadline. The connection that started the job is gone by the time this is
+	// called; the lease inside the frame is what says which dispatch of which
+	// attempt is being settled.
+	//
+	// **Single-use, and fenced.** The scheduler records one settle marker per
+	// accepted dispatch and removes it in the same statement that tests it, so
+	// exactly one of this RPC, the same RPC on another replica, and the settle
+	// deadline passing can win. A call that lost that race is
+	// FAILED_PRECONDITION — never ABORTED, which sits in the retry-with-backoff
+	// class: a settle that lost its fence must not be resent, because resending
+	// it is the double execution the fence exists to refuse.
+	Settle(context.Context, *SettleRequest) (*SettleResponse, error)
+	// Ask for longer before the attempt is considered lost.
+	//
+	// An accepted dispatch is waited on until a deadline, and a target that
+	// needs longer than the job's timeout must be able to say so or the job is
+	// retried under it. Repeatable: the ceiling is per call, not in total, so a
+	// target that needs six hours asks six times and its asking is the liveness
+	// signal. A target that stops asking is one the deadline will collect.
+	ExtendLease(context.Context, *ExtendLeaseRequest) (*ExtendLeaseResponse, error)
+	// Report progress for an accepted dispatch.
+	//
+	// The frame the attach stream carries, off the stream — a push target has no
+	// stream to put it on. Fire and forget, as it is there: a task that only
+	// wanted to report progress must never block on the scheduler to do it, and
+	// an empty response says the frame was taken, not that a row was written.
+	ReportProgress(context.Context, *ReportProgressRequest) (*ReportProgressResponse, error)
+	// Write one structured log line for an accepted dispatch. As
+	// ReportProgress, and with the same fire-and-forget meaning.
+	WriteTaskLog(context.Context, *WriteTaskLogRequest) (*WriteTaskLogResponse, error)
 	mustEmbedUnimplementedExecutorServiceServer()
 }
 
@@ -215,6 +327,18 @@ func (UnimplementedExecutorServiceServer) Attach(grpc.BidiStreamingServer[Attach
 }
 func (UnimplementedExecutorServiceServer) Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Heartbeat not implemented")
+}
+func (UnimplementedExecutorServiceServer) Settle(context.Context, *SettleRequest) (*SettleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Settle not implemented")
+}
+func (UnimplementedExecutorServiceServer) ExtendLease(context.Context, *ExtendLeaseRequest) (*ExtendLeaseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ExtendLease not implemented")
+}
+func (UnimplementedExecutorServiceServer) ReportProgress(context.Context, *ReportProgressRequest) (*ReportProgressResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportProgress not implemented")
+}
+func (UnimplementedExecutorServiceServer) WriteTaskLog(context.Context, *WriteTaskLogRequest) (*WriteTaskLogResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WriteTaskLog not implemented")
 }
 func (UnimplementedExecutorServiceServer) mustEmbedUnimplementedExecutorServiceServer() {}
 func (UnimplementedExecutorServiceServer) testEmbeddedByValue()                         {}
@@ -262,6 +386,78 @@ func _ExecutorService_Heartbeat_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExecutorService_Settle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SettleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).Settle(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_Settle_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).Settle(ctx, req.(*SettleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExecutorService_ExtendLease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExtendLeaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).ExtendLease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_ExtendLease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).ExtendLease(ctx, req.(*ExtendLeaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExecutorService_ReportProgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportProgressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).ReportProgress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_ReportProgress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).ReportProgress(ctx, req.(*ReportProgressRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExecutorService_WriteTaskLog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WriteTaskLogRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).WriteTaskLog(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_WriteTaskLog_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).WriteTaskLog(ctx, req.(*WriteTaskLogRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ExecutorService_ServiceDesc is the grpc.ServiceDesc for ExecutorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -272,6 +468,22 @@ var ExecutorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Heartbeat",
 			Handler:    _ExecutorService_Heartbeat_Handler,
+		},
+		{
+			MethodName: "Settle",
+			Handler:    _ExecutorService_Settle_Handler,
+		},
+		{
+			MethodName: "ExtendLease",
+			Handler:    _ExecutorService_ExtendLease_Handler,
+		},
+		{
+			MethodName: "ReportProgress",
+			Handler:    _ExecutorService_ReportProgress_Handler,
+		},
+		{
+			MethodName: "WriteTaskLog",
+			Handler:    _ExecutorService_WriteTaskLog_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

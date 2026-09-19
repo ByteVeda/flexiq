@@ -591,7 +591,7 @@ fn a_scheduler_never_reaps_another_namespaces_job() {
         .reap_stale_jobs(past_every_timeout, Some(TENANT_A))
         .unwrap();
     assert_eq!(stale_for_a.len(), 1);
-    assert_eq!(stale_for_a[0].id, a_id);
+    assert_eq!(stale_for_a[0].job.id, a_id);
 
     let orphans_for_a = storage
         .reap_orphaned_jobs(&["live-worker".to_string()], now_millis(), Some(TENANT_A))

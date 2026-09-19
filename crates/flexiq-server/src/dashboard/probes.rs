@@ -114,6 +114,11 @@ pub async fn metrics(
         per_queue,
         workers.len(),
         state.dispatcher.as_ref().map(|d| d.capacity()),
+        // The dashboard listener never holds the push target; the gRPC
+        // listener's `/metrics` is where an accepted-dispatch count is
+        // reachable. Absent rather than zero, which would read as "none
+        // outstanding" instead of "not observable here".
+        None,
     );
 
     Ok((

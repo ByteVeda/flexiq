@@ -2153,11 +2153,30 @@ macro_rules! impl_diesel_job_ops {
                 Ok(global + per_entry)
             }
 
-            /// Find stale running jobs that exceeded their timeout.
+            /// Find stale running jobs that exceeded their deadline.
             ///
             /// Scoped to `namespace`, so a scheduler never times out another
             /// namespace's job and records the outcome under its own.
-            pub fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<Job>> {
+            ///
+            /// Two indexed queries rather than a join, the shape
+            /// `reap_orphaned_jobs` already uses for these two tables: `jobs`
+            /// and `execution_claims` are not declared joinable. The first
+            /// finds every job past `started_at + timeout_ms`; the second reads
+            /// those jobs' settle markers, which both **removes** the ones
+            /// still inside a deadline a target extended and **flags** the ones
+            /// that had a marker at all.
+            ///
+            /// The job-side predicate stays a correct superset because a marker
+            /// is initialised to the job's own deadline and only ever moves
+            /// forward: a job inside its settle deadline has necessarily passed
+            /// `started_at + timeout_ms` already.
+            pub fn reap_stale_jobs(
+                &self,
+                now: i64,
+                namespace: Option<&str>,
+            ) -> Result<Vec<$crate::storage::records::StaleJob>> {
+                use $crate::storage::records::StaleJob;
+
                 let mut conn = self.conn()?;
 
                 // Push the `started_at + timeout_ms < now` deadline into SQL so
@@ -2175,10 +2194,35 @@ macro_rules! impl_diesel_job_ops {
                 }
                 let rows: Vec<NarrowJobRow> =
                     query.select(NarrowJobRow::as_select()).load(&mut conn)?;
+                if rows.is_empty() {
+                    return Ok(Vec::new());
+                }
+
+                let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+                let markers: Vec<(String, Option<i64>)> = execution_claims::table
+                    .filter(execution_claims::job_id.eq_any(&ids))
+                    .filter(execution_claims::settle_deadline_ms.is_not_null())
+                    .select((
+                        execution_claims::job_id,
+                        execution_claims::settle_deadline_ms,
+                    ))
+                    .load(&mut conn)?;
+                let awaiting: std::collections::HashMap<String, i64> = markers
+                    .into_iter()
+                    .filter_map(|(id, deadline)| deadline.map(|d| (id, d)))
+                    .collect();
 
                 Ok(rows
                     .into_iter()
-                    .map(|narrow| Job::from_narrow(narrow, Vec::new(), None))
+                    .filter_map(|narrow| match awaiting.get(&narrow.id) {
+                        // Still being waited for. Not stale, however long the
+                        // job's own timeout says it has been running.
+                        Some(&deadline) if deadline > now => None,
+                        awaiting_settle => Some(StaleJob {
+                            awaiting_settle: awaiting_settle.is_some(),
+                            job: Job::from_narrow(narrow, Vec::new(), None),
+                        }),
+                    })
                     .collect())
             }
 

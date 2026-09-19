@@ -74,23 +74,24 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use crossbeam_channel::Sender;
-use tokio::sync::{watch, Notify, Semaphore};
+use tokio::sync::{oneshot, watch, Notify, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::http::{DispatchClient, EgressPolicy, OutboundAuth, Signer};
-use crate::job::Job;
-use crate::lease::{Lease, LeaseBook};
+use crate::job::{now_millis, Job};
+use crate::lease::{Lease, LeaseBook, MAX_LEASE_EXTENSION};
 use crate::net::Allowlist;
 use crate::scheduler::JobResult;
+use crate::storage::records::{SettleClaimant, SettleGrant};
 use crate::worker::{Capacity, SideChannel, WorkerDispatcher};
 
 mod attempt;
 mod contract;
 pub use contract::{
-    idempotency_key, Outcome, Refusal, ACCEPTED_NOT_SETTLED, ENVELOPE_CONTENT_TYPE, HDR_ATTEMPT,
-    HDR_DEADLINE_MS, HDR_DISABLED_MIDDLEWARE, HDR_IDEMPOTENCY_KEY, HDR_JOB_ID, HDR_LEASE,
-    HDR_MAX_ATTEMPTS, HDR_METADATA, HDR_NAMESPACE, HDR_OUTCOME, HDR_PROTOCOL_VERSION, HDR_QUEUE,
-    HDR_RETRY, HDR_TASK,
+    idempotency_key, Disposition, Outcome, Refusal, ACCEPTED_NOT_SETTLED, ENVELOPE_CONTENT_TYPE,
+    HDR_ATTEMPT, HDR_DEADLINE_MS, HDR_DISABLED_MIDDLEWARE, HDR_IDEMPOTENCY_KEY, HDR_JOB_ID,
+    HDR_LEASE, HDR_MAX_ATTEMPTS, HDR_METADATA, HDR_NAMESPACE, HDR_OUTCOME, HDR_PROTOCOL_VERSION,
+    HDR_QUEUE, HDR_RETRY, HDR_TASK,
 };
 
 /// How to reach one push target, and what it is allowed to do.
@@ -139,6 +140,18 @@ pub struct HttpTargetConfig {
     /// `None` dispatches with an empty disable list, which is what an embedder
     /// with no dashboard wants.
     pub side_channel: Option<std::sync::Arc<dyn SideChannel>>,
+    /// Whether a `202 Accepted` hands the job off to be settled later.
+    ///
+    /// Off by default, and deliberately. A `202` has always been a refusal
+    /// that dead-letters in one attempt with a greppable reason, so turning it
+    /// into a wait silently would change a shipped promise — and the class of
+    /// bug it would hide is a framework answering `202` by default, which is
+    /// exactly what the mandatory `x-flexiq-outcome` header exists to catch.
+    ///
+    /// Requires a [`side_channel`](Self::side_channel) that
+    /// [supports the settle marker](SideChannel::supports_settle): a dispatch
+    /// that cannot be fenced must not be accepted.
+    pub settle_callbacks: bool,
 }
 
 impl HttpTargetConfig {
@@ -182,6 +195,8 @@ impl HttpTargetConfig {
             // the resolved disable list on every dispatch, and one that does
             // not dispatches with an empty one.
             side_channel: None,
+            // Opt-in: see the field's docs for why this cannot default on.
+            settle_callbacks: false,
         }
     }
 }
@@ -393,6 +408,54 @@ struct Shared {
     leases: Mutex<Option<Arc<LeaseBook>>>,
     /// One wake-up channel per in-flight job, for [`WorkerDispatcher::notify_cancel`].
     cancels: Mutex<HashMap<String, Arc<Notify>>>,
+    /// The owner every claim this scheduler wins is recorded under, once a
+    /// worker has told us. Needed because `await_settle` is a fenced write on
+    /// the scheduler's behalf, and the fence is `(owner, attempt, epoch)`.
+    claim_owner: Mutex<Option<String>>,
+    /// The channel `run` was handed, so a settle arriving outside any attempt
+    /// can hand the scheduler its result. `None` before `run` starts.
+    results: Mutex<Option<Sender<JobResult>>>,
+    /// Dispatches this process accepted and is still waiting to be settled.
+    ///
+    /// Process-local, and that is the whole of it: the waiting attempt task,
+    /// its permit and its result channel all live here, so a `Settle` has to
+    /// reach the replica that dispatched. A call that lands elsewhere is
+    /// refused by name rather than half-applied.
+    accepted: Mutex<HashMap<String, Accepted>>,
+}
+
+/// One dispatch the target accepted and has not settled.
+struct Accepted {
+    /// The lease the dispatch was made under, so a settle naming another one
+    /// is refused before it reaches storage.
+    lease: Option<Lease>,
+    /// The job's namespace, which every fenced write has to be scoped by.
+    namespace: Option<String>,
+    /// The task this job runs, needed to build the `JobResult` a later settle
+    /// emits — a settle frame names it, but the scheduler's record is what the
+    /// result must carry.
+    task_name: String,
+    /// The attempt the dispatch was made at, the second part of the fence.
+    attempt: i32,
+    /// Retry budget, carried so a settled failure lands on the same
+    /// retry-or-dead-letter decision an in-request failure would.
+    max_retries: i32,
+    /// Whether the durable settle marker this dispatch is fenced on exists yet.
+    ///
+    /// The entry is registered *before* the marker is written, so that a
+    /// callback racing the write has somewhere to land rather than being lost.
+    /// It must not be told `Fenced` in that window: the contract says a fenced
+    /// report is never resent, so the target would throw away a result nothing
+    /// had refused. Until this flips, a report is
+    /// [`NotReady`](SettleRefused::NotReady) — the one refusal here that is
+    /// retryable, because nothing has been decided yet.
+    ready: bool,
+    /// Wakes the waiting attempt so it stops waiting and releases its permit.
+    ///
+    /// Carries nothing: whoever consumed the settle marker also emits the
+    /// result, so this says "you are relieved", not "here is the answer". A
+    /// channel that carried the outcome would make two places able to emit it.
+    relieve: Option<oneshot::Sender<()>>,
 }
 
 impl Shared {
@@ -435,6 +498,121 @@ impl Shared {
     /// A receiver that resolves once the drain budget has expired.
     fn abandon_signal(&self) -> watch::Receiver<bool> {
         self.abandon.subscribe()
+    }
+
+    /// The owner claims are recorded under, once a worker has installed one.
+    fn claim_owner(&self) -> Option<String> {
+        self.claim_owner.lock().unwrap_or_else(recover).clone()
+    }
+
+    /// The side channel, if this deployment installed one.
+    fn side_channel(&self) -> Option<&Arc<dyn SideChannel>> {
+        self.config.side_channel.as_ref()
+    }
+
+    /// Record a dispatch as accepted, returning the handle its attempt waits on.
+    fn register_accepted(&self, job: &Job, lease: Option<Lease>) -> oneshot::Receiver<()> {
+        let (relieve, wait) = oneshot::channel();
+        self.accepted.lock().unwrap_or_else(recover).insert(
+            job.id.clone(),
+            Accepted {
+                lease,
+                namespace: job.namespace.clone(),
+                task_name: job.task_name.clone(),
+                attempt: job.retry_count,
+                max_retries: job.max_retries,
+                ready: false,
+                relieve: Some(relieve),
+            },
+        );
+        wait
+    }
+
+    /// Mark an accepted dispatch's settle marker as durable, so reports on it
+    /// stop being answered "not ready yet".
+    fn mark_accepted_ready(&self, job_id: &str) {
+        if let Some(held) = self.accepted.lock().unwrap_or_else(recover).get_mut(job_id) {
+            held.ready = true;
+        }
+    }
+
+    /// The attempt an accepted dispatch was made at.
+    fn accepted_attempt(&self, job_id: &str) -> Option<i32> {
+        self.accepted
+            .lock()
+            .unwrap_or_else(recover)
+            .get(job_id)
+            .map(|held| held.attempt)
+    }
+
+    /// Wake the attempt waiting on an accepted dispatch so it stops waiting
+    /// and releases its permit.
+    ///
+    /// Carries no outcome: whoever consumed the settle marker has already
+    /// emitted the result, and a second path to `result_tx` is the second
+    /// settlement the marker exists to prevent.
+    fn relieve_accepted(&self, job_id: &str) {
+        let relieve = self
+            .accepted
+            .lock()
+            .unwrap_or_else(recover)
+            .get_mut(job_id)
+            .and_then(|held| held.relieve.take());
+        if let Some(relieve) = relieve {
+            // The receiver is gone when the attempt already stopped waiting —
+            // it lost the race for the marker, and has nothing left to do.
+            let _ = relieve.send(());
+        }
+    }
+
+    /// Emit the result of a dispatch settled out of band.
+    ///
+    /// Called only by whoever consumed the settle marker. The channel is the
+    /// one `run` was handed: a settle and the attempt that accepted it put
+    /// their results in the same place, so the scheduler cannot tell them
+    /// apart — which is the point.
+    fn emit_settled(&self, job_id: &str, outcome: SettledOutcome) {
+        let (task_name, attempt, max_retries) = {
+            let accepted = self.accepted.lock().unwrap_or_else(recover);
+            match accepted.get(job_id) {
+                Some(held) => (held.task_name.clone(), held.attempt, held.max_retries),
+                // Consumed between the caller's read and this one. Nothing to
+                // build a result from, and the marker is spent either way.
+                None => return,
+            }
+        };
+        let result = outcome.into_result(job_id, &task_name, attempt, max_retries);
+        let sent = self
+            .results
+            .lock()
+            .unwrap_or_else(recover)
+            .as_ref()
+            .map(|tx| tx.send(result));
+        if !matches!(sent, Some(Ok(()))) {
+            log::error!(
+                "[flexiq] job {job_id} was settled out of band but its result could not be \
+                 handed to the scheduler; the stale-job reaper will retry the job"
+            );
+        }
+    }
+
+    /// Forget an accepted dispatch, but only when the lease still matches.
+    ///
+    /// Guarded like [`Shared::unregister_cancel`]: a straggler tidying up
+    /// after itself must not evict the entry a newer dispatch just installed.
+    fn unregister_accepted(&self, job_id: &str, lease: Option<&Lease>) {
+        let mut accepted = self.accepted.lock().unwrap_or_else(recover);
+        if accepted
+            .get(job_id)
+            .is_some_and(|held| held.lease.as_ref() == lease)
+        {
+            accepted.remove(job_id);
+        }
+    }
+
+    /// How many dispatches this process has accepted and not yet settled.
+    fn accepted_count(&self) -> usize {
+        self.accepted.lock().unwrap_or_else(recover).len()
     }
 
     /// Whether the dispatch this attempt made is still the current one.
@@ -515,6 +693,9 @@ impl HttpDispatchTarget {
                 abandon,
                 leases: Mutex::new(None),
                 cancels: Mutex::new(HashMap::new()),
+                claim_owner: Mutex::new(None),
+                results: Mutex::new(None),
+                accepted: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -541,7 +722,344 @@ impl HttpDispatchTarget {
     pub fn target(&self) -> &str {
         &self.shared.target
     }
+
+    /// Whether this target accepts a `202` and waits for a later settle.
+    ///
+    /// Read by `flexiq-server` to decide whether to serve the executor door at
+    /// all: with callbacks off there is nothing for a target to report to.
+    pub fn accepts_settle_callbacks(&self) -> bool {
+        self.shared.config.settle_callbacks
+    }
+
+    /// How many dispatches this process has accepted and is still waiting on.
+    ///
+    /// Process-local by construction — the waiting attempts live here — so a
+    /// metric built on it is "accepted here", never a cluster total.
+    pub fn awaiting_settle(&self) -> usize {
+        self.shared.accepted_count()
+    }
+
+    /// Settle a dispatch this target accepted, from outside the request that
+    /// carried it.
+    ///
+    /// The whole of #845 in one method. In order, and the order matters:
+    ///
+    /// 1. The dispatch must be one *this* process is holding open. The waiting
+    ///    attempt owns the permit and the result channel, so a call that
+    ///    reached another replica is refused by name rather than half-applied.
+    /// 2. The lease must be the one the dispatch was made under, checked here
+    ///    against the registry and again, durably, in the consume below.
+    /// 3. The settle marker is consumed. Whoever consumes it emits the result
+    ///    — that is what makes a settle single-use, and what stops the
+    ///    deadline and this call from both answering for one dispatch.
+    /// 4. Only then is the result emitted and the waiting attempt relieved.
+    pub fn settle(&self, job_id: &str, lease: &Lease, outcome: SettledOutcome) -> SettleResult {
+        let shared = &self.shared;
+
+        let (expected, namespace) = {
+            let accepted = shared.accepted.lock().unwrap_or_else(recover);
+            match accepted.get(job_id) {
+                // Read under the same lock as the lease: a readiness checked
+                // separately could go stale between the two reads, which is
+                // the race this flag exists to close.
+                Some(held) if !held.ready => return Err(SettleRefused::NotReady),
+                Some(held) => (held.lease.clone(), held.namespace.clone()),
+                None => return Err(SettleRefused::NotHere),
+            }
+        };
+
+        // Checked before storage so the common misdirection — a settle for a
+        // dispatch that already lost its lease — is answered without a write.
+        // The durable consume below is what actually enforces it.
+        let Some(epoch) = lease.epoch() else {
+            return Err(SettleRefused::Fenced);
+        };
+        if expected.as_ref().is_some_and(|held| held != lease) {
+            return Err(SettleRefused::Fenced);
+        }
+
+        let channel = shared.side_channel().ok_or(SettleRefused::Unsupported)?;
+        match channel.claim_settle(job_id, SettleClaimant::Lease(epoch), namespace.as_deref()) {
+            Ok(SettleGrant::Granted) => {}
+            Ok(SettleGrant::Refused) => return Err(SettleRefused::Fenced),
+            Err(error) => return Err(SettleRefused::Storage(error.to_string())),
+        }
+
+        shared.emit_settled(job_id, outcome);
+        shared.relieve_accepted(job_id);
+        Ok(())
+    }
+
+    /// Push an accepted dispatch's deadline out, returning the deadline that
+    /// was actually stored.
+    ///
+    /// Clamped to [`MAX_LEASE_EXTENSION`] rather than refused: making "ask
+    /// again with a smaller number" the correct client behaviour would be a
+    /// retry loop written into the contract for no benefit.
+    pub fn extend_lease(
+        &self,
+        job_id: &str,
+        lease: &Lease,
+        extend_by: Duration,
+    ) -> Result<i64, SettleRefused> {
+        let shared = &self.shared;
+
+        let (expected, namespace) = {
+            let accepted = shared.accepted.lock().unwrap_or_else(recover);
+            match accepted.get(job_id) {
+                // Read under the same lock as the lease: a readiness checked
+                // separately could go stale between the two reads, which is
+                // the race this flag exists to close.
+                Some(held) if !held.ready => return Err(SettleRefused::NotReady),
+                Some(held) => (held.lease.clone(), held.namespace.clone()),
+                None => return Err(SettleRefused::NotHere),
+            }
+        };
+        let Some(epoch) = lease.epoch() else {
+            return Err(SettleRefused::Fenced);
+        };
+        if expected.as_ref().is_some_and(|held| held != lease) {
+            return Err(SettleRefused::Fenced);
+        }
+
+        let owner = shared.claim_owner().ok_or(SettleRefused::Unsupported)?;
+        let channel = shared.side_channel().ok_or(SettleRefused::Unsupported)?;
+        let attempt = shared
+            .accepted_attempt(job_id)
+            .ok_or(SettleRefused::NotHere)?;
+
+        let granted = extend_by.min(MAX_LEASE_EXTENSION);
+        let deadline = now_millis().saturating_add(granted.as_millis() as i64);
+        match channel.await_settle(
+            job_id,
+            &owner,
+            attempt,
+            Some(epoch),
+            deadline,
+            namespace.as_deref(),
+        ) {
+            // Monotonic in storage, so this is the stored value and not
+            // necessarily the one just proposed.
+            Ok(Some(stored)) => Ok(stored),
+            Ok(None) => Err(SettleRefused::Fenced),
+            Err(error) => Err(SettleRefused::Storage(error.to_string())),
+        }
+    }
+
+    /// Report progress for a dispatch this target accepted.
+    ///
+    /// Fire and forget, like the frame it mirrors: `Ok` means the report was
+    /// taken, not that a row was written, because a task that only wanted to
+    /// report progress must never be blocked by the scheduler's database.
+    ///
+    /// **Not** gated on the durable fence, and the asymmetry is deliberate.
+    /// This advances an attempt rather than settling one, so the question is
+    /// "is this the dispatch we are holding open", which the in-process
+    /// registry answers — the same question `frame_is_current` asks of the
+    /// identical frame on the attach stream. Consuming the settle marker here
+    /// would settle the job on a progress report.
+    pub fn report_progress(
+        &self,
+        job_id: &str,
+        lease: &Lease,
+        progress: i32,
+    ) -> Result<(), SettleRefused> {
+        let namespace = self.accepted_namespace(job_id, lease)?;
+        let channel = self
+            .shared
+            .side_channel()
+            .ok_or(SettleRefused::Unsupported)?;
+        channel.update_progress(job_id, progress, namespace.as_deref());
+        Ok(())
+    }
+
+    /// Write one structured log line for a dispatch this target accepted. As
+    /// [`report_progress`](Self::report_progress), and fenced the same way.
+    pub fn write_task_log(
+        &self,
+        job_id: &str,
+        lease: &Lease,
+        task_name: &str,
+        level: &str,
+        message: &str,
+        extra: Option<&str>,
+    ) -> Result<(), SettleRefused> {
+        let namespace = self.accepted_namespace(job_id, lease)?;
+        let channel = self
+            .shared
+            .side_channel()
+            .ok_or(SettleRefused::Unsupported)?;
+        channel.write_task_log(
+            job_id,
+            task_name,
+            level,
+            message,
+            extra,
+            namespace.as_deref(),
+        );
+        Ok(())
+    }
+
+    /// The namespace of an accepted dispatch, once the lease has been checked
+    /// against the one it was made under.
+    fn accepted_namespace(
+        &self,
+        job_id: &str,
+        lease: &Lease,
+    ) -> Result<Option<String>, SettleRefused> {
+        let accepted = self.shared.accepted.lock().unwrap_or_else(recover);
+        let held = accepted.get(job_id).ok_or(SettleRefused::NotHere)?;
+        if !held.ready {
+            return Err(SettleRefused::NotReady);
+        }
+        if held
+            .lease
+            .as_ref()
+            .is_some_and(|expected| expected != lease)
+        {
+            return Err(SettleRefused::Fenced);
+        }
+        Ok(held.namespace.clone())
+    }
 }
+
+/// The outcome a target reports for a dispatch it accepted earlier.
+///
+/// The three settling frames, and only those: an accepted dispatch has no step
+/// session, so there is no `slept` here for the same reason there is no
+/// `x-flexiq-outcome: slept` on the request path.
+#[derive(Debug, Clone)]
+pub enum SettledOutcome {
+    /// The task completed. `None` means it returned nothing; `Some(vec![])`
+    /// means it returned an empty value. They are different answers.
+    Success {
+        /// The encoded result, as the tagged envelope.
+        result: Option<Vec<u8>>,
+        /// Wall-clock nanoseconds the attempt ran.
+        wall_time_ns: i64,
+    },
+    /// The task raised, or the target reports it that way.
+    Failure {
+        /// Canonical JSON `TaskError` when the target wrote one, free prose
+        /// otherwise.
+        error: String,
+        /// The target decides: only it saw the exception.
+        should_retry: bool,
+        /// Whether the failure was an execution timeout.
+        timed_out: bool,
+        /// Wall-clock nanoseconds the attempt ran.
+        wall_time_ns: i64,
+    },
+    /// The task observed a cancel and stopped.
+    Cancelled {
+        /// Wall-clock nanoseconds the attempt ran.
+        wall_time_ns: i64,
+    },
+}
+
+impl SettledOutcome {
+    /// Build the settled [`JobResult`], through the same
+    /// `ExecutorMessage::into_job_result` an in-request answer goes through.
+    ///
+    /// Deliberately not a second construction site: a job settled a minute
+    /// after its request ended has to reach the scheduler as the same shape as
+    /// one settled inside it, or the retry and dead-letter paths get two
+    /// subtly different inputs.
+    fn into_result(
+        self,
+        job_id: &str,
+        task_name: &str,
+        attempt: i32,
+        max_retries: i32,
+    ) -> JobResult {
+        let message = match self {
+            SettledOutcome::Success {
+                result,
+                wall_time_ns,
+            } => {
+                let payload = result.unwrap_or_default();
+                let result_len = (!payload.is_empty()).then_some(payload.len());
+                return settled(
+                    crate::worker::protocol::ExecutorMessage::Success {
+                        job_id: job_id.to_string(),
+                        result_len,
+                        task_name: task_name.to_string(),
+                        wall_time_ns,
+                        lease: None,
+                    },
+                    payload,
+                );
+            }
+            SettledOutcome::Failure {
+                error,
+                should_retry,
+                timed_out,
+                wall_time_ns,
+            } => crate::worker::protocol::ExecutorMessage::Failure {
+                job_id: job_id.to_string(),
+                error,
+                retry_count: attempt,
+                max_retries,
+                task_name: task_name.to_string(),
+                wall_time_ns,
+                should_retry,
+                timed_out,
+                lease: None,
+            },
+            SettledOutcome::Cancelled { wall_time_ns } => {
+                crate::worker::protocol::ExecutorMessage::Cancelled {
+                    job_id: job_id.to_string(),
+                    task_name: task_name.to_string(),
+                    wall_time_ns,
+                    lease: None,
+                }
+            }
+        };
+        settled(message, Vec::new())
+    }
+}
+
+/// See `contract::settle`: `into_job_result` answers `None` only for frames
+/// this module never builds.
+fn settled(message: crate::worker::protocol::ExecutorMessage, payload: Vec<u8>) -> JobResult {
+    message
+        .into_job_result(payload)
+        .expect("into_job_result returns None only for frames this module never builds")
+}
+
+/// Why an out-of-band settle was not applied.
+#[derive(Debug, Clone)]
+pub enum SettleRefused {
+    /// No accepted dispatch for this job in **this** process.
+    ///
+    /// Distinct from [`Fenced`](Self::Fenced) on purpose: the caller's lease
+    /// may be perfectly good and simply have arrived at the wrong replica,
+    /// which is an operator's routing problem and not a stale attempt. The two
+    /// want different answers from the person reading the error.
+    NotHere,
+    /// The dispatch is accepted but its durable settle marker is not written
+    /// yet — a callback that beat the scheduler's own bookkeeping.
+    ///
+    /// **The one refusal here a caller should retry.** Every other one means a
+    /// decision was made; this one means none has been. Telling a target
+    /// `Fenced` in this window would have it throw away a perfectly good
+    /// result on the strength of the contract's "never resend a fenced
+    /// report", and the attempt would then wait out its whole deadline having
+    /// refused the answer it was waiting for.
+    NotReady,
+    /// The lease is absent, undecodable, or not the one this dispatch was made
+    /// under — or the marker was already consumed. The attempt was settled by
+    /// someone else and this answer is thrown away.
+    Fenced,
+    /// This deployment cannot fence an out-of-band settle at all.
+    Unsupported,
+    /// The fence could not be evaluated. Refusing rather than guessing: the
+    /// one thing that must not happen is an unfenced settle landing.
+    Storage(String),
+}
+
+/// What [`HttpDispatchTarget::settle`] answers.
+pub type SettleResult = Result<(), SettleRefused>;
 
 /// Drive `tasks` to completion.
 async fn join_all(tasks: &mut JoinSet<()>) {
@@ -562,6 +1080,18 @@ impl WorkerDispatcher for HttpDispatchTarget {
             log::warn!(
                 "[flexiq] push target {} is dispatching without a lease book; call \
                  WorkerDispatcher::set_lease_book so a late target's answer can be fenced out",
+                self.shared.target
+            );
+        }
+
+        // Kept so a settle arriving outside any attempt still has somewhere to
+        // put its result: the gRPC door calls `settle` on this target, not on
+        // a task, and the two must reach the scheduler through one channel.
+        *self.shared.results.lock().unwrap_or_else(recover) = Some(result_tx.clone());
+
+        if self.shared.config.settle_callbacks {
+            log::info!(
+                "[flexiq] push target {} accepts 202 and waits for a settle callback",
                 self.shared.target
             );
         }
@@ -664,13 +1194,22 @@ impl WorkerDispatcher for HttpDispatchTarget {
         *self.shared.leases.lock().unwrap_or_else(recover) = Some(leases);
     }
 
-    /// Deliberately empty rather than left to the trait default.
+    /// Kept, because this dispatcher *does* perform a fenced write on the
+    /// scheduler's behalf once settle callbacks are on.
     ///
-    /// A push target performs no fenced write on the scheduler's behalf — no
-    /// step commits, no side-channel writes originate here — so the claim
-    /// owner has nowhere to go. Written out so the skip is visible at this
-    /// dispatcher rather than inherited silently.
-    fn set_claim_owner(&self, _owner: &str) {}
+    /// Accepting a `202` records a settle marker on the execution claim, and
+    /// that write is fenced on `(owner, attempt, epoch)` like every other
+    /// write on a dispatch. The owner is the one part of the triple this side
+    /// cannot derive: the attempt is the job's `retry_count` and the epoch is
+    /// the lease, but the owner belongs to whoever won the claim. An owner
+    /// this dispatcher made up would be an owner it could forge, which is the
+    /// whole reason the value arrives this way.
+    ///
+    /// (It was deliberately empty until #845, on the grounds that no fenced
+    /// write originated here. That stopped being true.)
+    fn set_claim_owner(&self, owner: &str) {
+        *self.shared.claim_owner.lock().unwrap_or_else(recover) = Some(owner.to_string());
+    }
 }
 
 #[cfg(test)]

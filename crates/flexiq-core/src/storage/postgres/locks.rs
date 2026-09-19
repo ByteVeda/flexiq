@@ -1,7 +1,7 @@
 use diesel::prelude::*;
 
 use super::super::models::*;
-use super::super::schema::{distributed_locks, execution_claims};
+use super::super::schema::{distributed_locks, execution_claims, jobs};
 use super::PostgresStorage;
 use crate::error::Result;
 use crate::job::now_millis;

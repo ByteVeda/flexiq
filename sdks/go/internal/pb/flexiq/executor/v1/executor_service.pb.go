@@ -1674,6 +1674,435 @@ func (x *SleptFrame) GetLease() []byte {
 	return nil
 }
 
+// The outcome of a dispatch being reported after the fact.
+type SettleRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The outcome, as the frame the attach stream already carries.
+	//
+	// Each of these names its own job, task and lease, so this message adds no
+	// field of its own: a job id here would be a second copy of one fact, free
+	// to disagree with the one inside the frame. The lease is required — a
+	// settle is exactly the frame the fence exists for.
+	//
+	// There is no `slept` arm and there will not be one. A push dispatch has no
+	// step session to resume, which is why `x-flexiq-outcome: slept` is refused
+	// on the request path too.
+	//
+	// Unlike a frame on the stream, an arm this build does not recognise is
+	// INVALID_ARGUMENT rather than skipped: skipping is right for a stream,
+	// where the next frame follows, but a unary call that was asked to settle a
+	// job and recognised nothing would answer OK and tell a target its result
+	// landed when it did not.
+	//
+	// Types that are valid to be assigned to Outcome:
+	//
+	//	*SettleRequest_Success
+	//	*SettleRequest_Failure
+	//	*SettleRequest_Cancelled
+	Outcome       isSettleRequest_Outcome `protobuf_oneof:"outcome"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SettleRequest) Reset() {
+	*x = SettleRequest{}
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SettleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SettleRequest) ProtoMessage() {}
+
+func (x *SettleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SettleRequest.ProtoReflect.Descriptor instead.
+func (*SettleRequest) Descriptor() ([]byte, []int) {
+	return file_flexiq_executor_v1_executor_service_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *SettleRequest) GetOutcome() isSettleRequest_Outcome {
+	if x != nil {
+		return x.Outcome
+	}
+	return nil
+}
+
+func (x *SettleRequest) GetSuccess() *SuccessFrame {
+	if x != nil {
+		if x, ok := x.Outcome.(*SettleRequest_Success); ok {
+			return x.Success
+		}
+	}
+	return nil
+}
+
+func (x *SettleRequest) GetFailure() *FailureFrame {
+	if x != nil {
+		if x, ok := x.Outcome.(*SettleRequest_Failure); ok {
+			return x.Failure
+		}
+	}
+	return nil
+}
+
+func (x *SettleRequest) GetCancelled() *CancelledFrame {
+	if x != nil {
+		if x, ok := x.Outcome.(*SettleRequest_Cancelled); ok {
+			return x.Cancelled
+		}
+	}
+	return nil
+}
+
+type isSettleRequest_Outcome interface {
+	isSettleRequest_Outcome()
+}
+
+type SettleRequest_Success struct {
+	Success *SuccessFrame `protobuf:"bytes,1,opt,name=success,proto3,oneof"`
+}
+
+type SettleRequest_Failure struct {
+	Failure *FailureFrame `protobuf:"bytes,2,opt,name=failure,proto3,oneof"`
+}
+
+type SettleRequest_Cancelled struct {
+	Cancelled *CancelledFrame `protobuf:"bytes,3,opt,name=cancelled,proto3,oneof"`
+}
+
+func (*SettleRequest_Success) isSettleRequest_Outcome() {}
+
+func (*SettleRequest_Failure) isSettleRequest_Outcome() {}
+
+func (*SettleRequest_Cancelled) isSettleRequest_Outcome() {}
+
+// Empty today. A message rather than nothing so it can grow a field without
+// becoming a new response type.
+type SettleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SettleResponse) Reset() {
+	*x = SettleResponse{}
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SettleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SettleResponse) ProtoMessage() {}
+
+func (x *SettleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SettleResponse.ProtoReflect.Descriptor instead.
+func (*SettleResponse) Descriptor() ([]byte, []int) {
+	return file_flexiq_executor_v1_executor_service_proto_rawDescGZIP(), []int{17}
+}
+
+type ExtendLeaseRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	JobId string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	// See JobFrame.lease.
+	Lease []byte `protobuf:"bytes,2,opt,name=lease,proto3" json:"lease,omitempty"`
+	// How much longer this attempt needs, measured from now.
+	//
+	// From now rather than from the current deadline, because a target knows how
+	// long it still needs and does not know what deadline the scheduler is
+	// holding. Clamped to a per-call ceiling rather than refused: a refusal
+	// would make "ask again with a smaller number" the correct client
+	// behaviour, which is a retry loop written into the contract for no benefit.
+	ExtendBy      *durationpb.Duration `protobuf:"bytes,3,opt,name=extend_by,json=extendBy,proto3" json:"extend_by,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtendLeaseRequest) Reset() {
+	*x = ExtendLeaseRequest{}
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtendLeaseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtendLeaseRequest) ProtoMessage() {}
+
+func (x *ExtendLeaseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtendLeaseRequest.ProtoReflect.Descriptor instead.
+func (*ExtendLeaseRequest) Descriptor() ([]byte, []int) {
+	return file_flexiq_executor_v1_executor_service_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ExtendLeaseRequest) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *ExtendLeaseRequest) GetLease() []byte {
+	if x != nil {
+		return x.Lease
+	}
+	return nil
+}
+
+func (x *ExtendLeaseRequest) GetExtendBy() *durationpb.Duration {
+	if x != nil {
+		return x.ExtendBy
+	}
+	return nil
+}
+
+type ExtendLeaseResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The deadline actually stored, which is not the one proposed when the
+	// request was clamped. Echoed for the reason StepAckFrame echoes wake_at:
+	// the caller must plan against what landed, not what it asked for.
+	Deadline      *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=deadline,proto3" json:"deadline,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtendLeaseResponse) Reset() {
+	*x = ExtendLeaseResponse{}
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtendLeaseResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtendLeaseResponse) ProtoMessage() {}
+
+func (x *ExtendLeaseResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtendLeaseResponse.ProtoReflect.Descriptor instead.
+func (*ExtendLeaseResponse) Descriptor() ([]byte, []int) {
+	return file_flexiq_executor_v1_executor_service_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ExtendLeaseResponse) GetDeadline() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Deadline
+	}
+	return nil
+}
+
+type ReportProgressRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Progress      *ProgressFrame         `protobuf:"bytes,1,opt,name=progress,proto3" json:"progress,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportProgressRequest) Reset() {
+	*x = ReportProgressRequest{}
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportProgressRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportProgressRequest) ProtoMessage() {}
+
+func (x *ReportProgressRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportProgressRequest.ProtoReflect.Descriptor instead.
+func (*ReportProgressRequest) Descriptor() ([]byte, []int) {
+	return file_flexiq_executor_v1_executor_service_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ReportProgressRequest) GetProgress() *ProgressFrame {
+	if x != nil {
+		return x.Progress
+	}
+	return nil
+}
+
+type ReportProgressResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportProgressResponse) Reset() {
+	*x = ReportProgressResponse{}
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportProgressResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportProgressResponse) ProtoMessage() {}
+
+func (x *ReportProgressResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportProgressResponse.ProtoReflect.Descriptor instead.
+func (*ReportProgressResponse) Descriptor() ([]byte, []int) {
+	return file_flexiq_executor_v1_executor_service_proto_rawDescGZIP(), []int{21}
+}
+
+type WriteTaskLogRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskLog       *TaskLogFrame          `protobuf:"bytes,1,opt,name=task_log,json=taskLog,proto3" json:"task_log,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WriteTaskLogRequest) Reset() {
+	*x = WriteTaskLogRequest{}
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WriteTaskLogRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WriteTaskLogRequest) ProtoMessage() {}
+
+func (x *WriteTaskLogRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WriteTaskLogRequest.ProtoReflect.Descriptor instead.
+func (*WriteTaskLogRequest) Descriptor() ([]byte, []int) {
+	return file_flexiq_executor_v1_executor_service_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *WriteTaskLogRequest) GetTaskLog() *TaskLogFrame {
+	if x != nil {
+		return x.TaskLog
+	}
+	return nil
+}
+
+type WriteTaskLogResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WriteTaskLogResponse) Reset() {
+	*x = WriteTaskLogResponse{}
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WriteTaskLogResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WriteTaskLogResponse) ProtoMessage() {}
+
+func (x *WriteTaskLogResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WriteTaskLogResponse.ProtoReflect.Descriptor instead.
+func (*WriteTaskLogResponse) Descriptor() ([]byte, []int) {
+	return file_flexiq_executor_v1_executor_service_proto_rawDescGZIP(), []int{23}
+}
+
 type HeartbeatRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The `flexiq-attach-session-bin` value from the Attach response's metadata.
@@ -1690,7 +2119,7 @@ type HeartbeatRequest struct {
 
 func (x *HeartbeatRequest) Reset() {
 	*x = HeartbeatRequest{}
-	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[16]
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1702,7 +2131,7 @@ func (x *HeartbeatRequest) String() string {
 func (*HeartbeatRequest) ProtoMessage() {}
 
 func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[16]
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1715,7 +2144,7 @@ func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_executor_v1_executor_service_proto_rawDescGZIP(), []int{16}
+	return file_flexiq_executor_v1_executor_service_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *HeartbeatRequest) GetSession() []byte {
@@ -1742,7 +2171,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[17]
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1754,7 +2183,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[17]
+	mi := &file_flexiq_executor_v1_executor_service_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1767,7 +2196,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_executor_v1_executor_service_proto_rawDescGZIP(), []int{17}
+	return file_flexiq_executor_v1_executor_service_proto_rawDescGZIP(), []int{25}
 }
 
 var File_flexiq_executor_v1_executor_service_proto protoreflect.FileDescriptor
@@ -1899,7 +2328,25 @@ const file_flexiq_executor_v1_executor_service_proto_rawDesc = "" +
 	"\awake_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x06wakeAt\x126\n" +
 	"\twall_time\x18\x04 \x01(\v2\x19.google.protobuf.DurationR\bwallTime\x12\x19\n" +
 	"\x05lease\x18\x05 \x01(\fH\x00R\x05lease\x88\x01\x01B\b\n" +
-	"\x06_lease\"K\n" +
+	"\x06_lease\"\xda\x01\n" +
+	"\rSettleRequest\x12<\n" +
+	"\asuccess\x18\x01 \x01(\v2 .flexiq.executor.v1.SuccessFrameH\x00R\asuccess\x12<\n" +
+	"\afailure\x18\x02 \x01(\v2 .flexiq.executor.v1.FailureFrameH\x00R\afailure\x12B\n" +
+	"\tcancelled\x18\x03 \x01(\v2\".flexiq.executor.v1.CancelledFrameH\x00R\tcancelledB\t\n" +
+	"\aoutcome\"\x10\n" +
+	"\x0eSettleResponse\"y\n" +
+	"\x12ExtendLeaseRequest\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x14\n" +
+	"\x05lease\x18\x02 \x01(\fR\x05lease\x126\n" +
+	"\textend_by\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\bextendBy\"M\n" +
+	"\x13ExtendLeaseResponse\x126\n" +
+	"\bdeadline\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\"V\n" +
+	"\x15ReportProgressRequest\x12=\n" +
+	"\bprogress\x18\x01 \x01(\v2!.flexiq.executor.v1.ProgressFrameR\bprogress\"\x18\n" +
+	"\x16ReportProgressResponse\"R\n" +
+	"\x13WriteTaskLogRequest\x12;\n" +
+	"\btask_log\x18\x01 \x01(\v2 .flexiq.executor.v1.TaskLogFrameR\ataskLog\"\x16\n" +
+	"\x14WriteTaskLogResponse\"K\n" +
 	"\x10HeartbeatRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\fR\asession\x12\x1d\n" +
 	"\n" +
@@ -1913,10 +2360,14 @@ const file_flexiq_executor_v1_executor_service_proto_rawDesc = "" +
 	"\x18STEP_FAILURE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16STEP_FAILURE_RETRYABLE\x10\x01\x12\x1a\n" +
 	"\x16STEP_FAILURE_PERMANENT\x10\x02\x12\x1b\n" +
-	"\x17STEP_FAILURE_SUPERSEDED\x10\x032\xc0\x01\n" +
+	"\x17STEP_FAILURE_SUPERSEDED\x10\x032\xbd\x04\n" +
 	"\x0fExecutorService\x12S\n" +
 	"\x06Attach\x12!.flexiq.executor.v1.AttachRequest\x1a\".flexiq.executor.v1.AttachResponse(\x010\x01\x12X\n" +
-	"\tHeartbeat\x12$.flexiq.executor.v1.HeartbeatRequest\x1a%.flexiq.executor.v1.HeartbeatResponseB\xe9\x01\n" +
+	"\tHeartbeat\x12$.flexiq.executor.v1.HeartbeatRequest\x1a%.flexiq.executor.v1.HeartbeatResponse\x12O\n" +
+	"\x06Settle\x12!.flexiq.executor.v1.SettleRequest\x1a\".flexiq.executor.v1.SettleResponse\x12^\n" +
+	"\vExtendLease\x12&.flexiq.executor.v1.ExtendLeaseRequest\x1a'.flexiq.executor.v1.ExtendLeaseResponse\x12g\n" +
+	"\x0eReportProgress\x12).flexiq.executor.v1.ReportProgressRequest\x1a*.flexiq.executor.v1.ReportProgressResponse\x12a\n" +
+	"\fWriteTaskLog\x12'.flexiq.executor.v1.WriteTaskLogRequest\x1a(.flexiq.executor.v1.WriteTaskLogResponseB\xe9\x01\n" +
 	"\x16com.flexiq.executor.v1B\x14ExecutorServiceProtoP\x01ZOgithub.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/executor/v1;executorv1\xa2\x02\x03FEX\xaa\x02\x12Flexiq.Executor.V1\xca\x02\x12Flexiq\\Executor\\V1\xe2\x02\x1eFlexiq\\Executor\\V1\\GPBMetadata\xea\x02\x14Flexiq::Executor::V1b\x06proto3"
 
 var (
@@ -1932,30 +2383,38 @@ func file_flexiq_executor_v1_executor_service_proto_rawDescGZIP() []byte {
 }
 
 var file_flexiq_executor_v1_executor_service_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_flexiq_executor_v1_executor_service_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_flexiq_executor_v1_executor_service_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_flexiq_executor_v1_executor_service_proto_goTypes = []any{
-	(StepKind)(0),                 // 0: flexiq.executor.v1.StepKind
-	(StepFailure)(0),              // 1: flexiq.executor.v1.StepFailure
-	(*AttachRequest)(nil),         // 2: flexiq.executor.v1.AttachRequest
-	(*AttachResponse)(nil),        // 3: flexiq.executor.v1.AttachResponse
-	(*HelloFrame)(nil),            // 4: flexiq.executor.v1.HelloFrame
-	(*HelloAckFrame)(nil),         // 5: flexiq.executor.v1.HelloAckFrame
-	(*JobFrame)(nil),              // 6: flexiq.executor.v1.JobFrame
-	(*JobStepsFrame)(nil),         // 7: flexiq.executor.v1.JobStepsFrame
-	(*StepAckFrame)(nil),          // 8: flexiq.executor.v1.StepAckFrame
-	(*CancelFrame)(nil),           // 9: flexiq.executor.v1.CancelFrame
-	(*ShutdownFrame)(nil),         // 10: flexiq.executor.v1.ShutdownFrame
-	(*ProgressFrame)(nil),         // 11: flexiq.executor.v1.ProgressFrame
-	(*TaskLogFrame)(nil),          // 12: flexiq.executor.v1.TaskLogFrame
-	(*SuccessFrame)(nil),          // 13: flexiq.executor.v1.SuccessFrame
-	(*FailureFrame)(nil),          // 14: flexiq.executor.v1.FailureFrame
-	(*CancelledFrame)(nil),        // 15: flexiq.executor.v1.CancelledFrame
-	(*StepCommitFrame)(nil),       // 16: flexiq.executor.v1.StepCommitFrame
-	(*SleptFrame)(nil),            // 17: flexiq.executor.v1.SleptFrame
-	(*HeartbeatRequest)(nil),      // 18: flexiq.executor.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),     // 19: flexiq.executor.v1.HeartbeatResponse
-	(*durationpb.Duration)(nil),   // 20: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil), // 21: google.protobuf.Timestamp
+	(StepKind)(0),                  // 0: flexiq.executor.v1.StepKind
+	(StepFailure)(0),               // 1: flexiq.executor.v1.StepFailure
+	(*AttachRequest)(nil),          // 2: flexiq.executor.v1.AttachRequest
+	(*AttachResponse)(nil),         // 3: flexiq.executor.v1.AttachResponse
+	(*HelloFrame)(nil),             // 4: flexiq.executor.v1.HelloFrame
+	(*HelloAckFrame)(nil),          // 5: flexiq.executor.v1.HelloAckFrame
+	(*JobFrame)(nil),               // 6: flexiq.executor.v1.JobFrame
+	(*JobStepsFrame)(nil),          // 7: flexiq.executor.v1.JobStepsFrame
+	(*StepAckFrame)(nil),           // 8: flexiq.executor.v1.StepAckFrame
+	(*CancelFrame)(nil),            // 9: flexiq.executor.v1.CancelFrame
+	(*ShutdownFrame)(nil),          // 10: flexiq.executor.v1.ShutdownFrame
+	(*ProgressFrame)(nil),          // 11: flexiq.executor.v1.ProgressFrame
+	(*TaskLogFrame)(nil),           // 12: flexiq.executor.v1.TaskLogFrame
+	(*SuccessFrame)(nil),           // 13: flexiq.executor.v1.SuccessFrame
+	(*FailureFrame)(nil),           // 14: flexiq.executor.v1.FailureFrame
+	(*CancelledFrame)(nil),         // 15: flexiq.executor.v1.CancelledFrame
+	(*StepCommitFrame)(nil),        // 16: flexiq.executor.v1.StepCommitFrame
+	(*SleptFrame)(nil),             // 17: flexiq.executor.v1.SleptFrame
+	(*SettleRequest)(nil),          // 18: flexiq.executor.v1.SettleRequest
+	(*SettleResponse)(nil),         // 19: flexiq.executor.v1.SettleResponse
+	(*ExtendLeaseRequest)(nil),     // 20: flexiq.executor.v1.ExtendLeaseRequest
+	(*ExtendLeaseResponse)(nil),    // 21: flexiq.executor.v1.ExtendLeaseResponse
+	(*ReportProgressRequest)(nil),  // 22: flexiq.executor.v1.ReportProgressRequest
+	(*ReportProgressResponse)(nil), // 23: flexiq.executor.v1.ReportProgressResponse
+	(*WriteTaskLogRequest)(nil),    // 24: flexiq.executor.v1.WriteTaskLogRequest
+	(*WriteTaskLogResponse)(nil),   // 25: flexiq.executor.v1.WriteTaskLogResponse
+	(*HeartbeatRequest)(nil),       // 26: flexiq.executor.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),      // 27: flexiq.executor.v1.HeartbeatResponse
+	(*durationpb.Duration)(nil),    // 28: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),  // 29: google.protobuf.Timestamp
 }
 var file_flexiq_executor_v1_executor_service_proto_depIdxs = []int32{
 	4,  // 0: flexiq.executor.v1.AttachRequest.hello:type_name -> flexiq.executor.v1.HelloFrame
@@ -1972,25 +2431,40 @@ var file_flexiq_executor_v1_executor_service_proto_depIdxs = []int32{
 	8,  // 11: flexiq.executor.v1.AttachResponse.step_ack:type_name -> flexiq.executor.v1.StepAckFrame
 	9,  // 12: flexiq.executor.v1.AttachResponse.cancel:type_name -> flexiq.executor.v1.CancelFrame
 	10, // 13: flexiq.executor.v1.AttachResponse.shutdown:type_name -> flexiq.executor.v1.ShutdownFrame
-	20, // 14: flexiq.executor.v1.JobFrame.timeout:type_name -> google.protobuf.Duration
-	21, // 15: flexiq.executor.v1.StepAckFrame.wake_at:type_name -> google.protobuf.Timestamp
+	28, // 14: flexiq.executor.v1.JobFrame.timeout:type_name -> google.protobuf.Duration
+	29, // 15: flexiq.executor.v1.StepAckFrame.wake_at:type_name -> google.protobuf.Timestamp
 	1,  // 16: flexiq.executor.v1.StepAckFrame.failure:type_name -> flexiq.executor.v1.StepFailure
-	20, // 17: flexiq.executor.v1.SuccessFrame.wall_time:type_name -> google.protobuf.Duration
-	20, // 18: flexiq.executor.v1.FailureFrame.wall_time:type_name -> google.protobuf.Duration
-	20, // 19: flexiq.executor.v1.CancelledFrame.wall_time:type_name -> google.protobuf.Duration
+	28, // 17: flexiq.executor.v1.SuccessFrame.wall_time:type_name -> google.protobuf.Duration
+	28, // 18: flexiq.executor.v1.FailureFrame.wall_time:type_name -> google.protobuf.Duration
+	28, // 19: flexiq.executor.v1.CancelledFrame.wall_time:type_name -> google.protobuf.Duration
 	0,  // 20: flexiq.executor.v1.StepCommitFrame.kind:type_name -> flexiq.executor.v1.StepKind
-	21, // 21: flexiq.executor.v1.StepCommitFrame.wake_at:type_name -> google.protobuf.Timestamp
-	21, // 22: flexiq.executor.v1.SleptFrame.wake_at:type_name -> google.protobuf.Timestamp
-	20, // 23: flexiq.executor.v1.SleptFrame.wall_time:type_name -> google.protobuf.Duration
-	2,  // 24: flexiq.executor.v1.ExecutorService.Attach:input_type -> flexiq.executor.v1.AttachRequest
-	18, // 25: flexiq.executor.v1.ExecutorService.Heartbeat:input_type -> flexiq.executor.v1.HeartbeatRequest
-	3,  // 26: flexiq.executor.v1.ExecutorService.Attach:output_type -> flexiq.executor.v1.AttachResponse
-	19, // 27: flexiq.executor.v1.ExecutorService.Heartbeat:output_type -> flexiq.executor.v1.HeartbeatResponse
-	26, // [26:28] is the sub-list for method output_type
-	24, // [24:26] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	29, // 21: flexiq.executor.v1.StepCommitFrame.wake_at:type_name -> google.protobuf.Timestamp
+	29, // 22: flexiq.executor.v1.SleptFrame.wake_at:type_name -> google.protobuf.Timestamp
+	28, // 23: flexiq.executor.v1.SleptFrame.wall_time:type_name -> google.protobuf.Duration
+	13, // 24: flexiq.executor.v1.SettleRequest.success:type_name -> flexiq.executor.v1.SuccessFrame
+	14, // 25: flexiq.executor.v1.SettleRequest.failure:type_name -> flexiq.executor.v1.FailureFrame
+	15, // 26: flexiq.executor.v1.SettleRequest.cancelled:type_name -> flexiq.executor.v1.CancelledFrame
+	28, // 27: flexiq.executor.v1.ExtendLeaseRequest.extend_by:type_name -> google.protobuf.Duration
+	29, // 28: flexiq.executor.v1.ExtendLeaseResponse.deadline:type_name -> google.protobuf.Timestamp
+	11, // 29: flexiq.executor.v1.ReportProgressRequest.progress:type_name -> flexiq.executor.v1.ProgressFrame
+	12, // 30: flexiq.executor.v1.WriteTaskLogRequest.task_log:type_name -> flexiq.executor.v1.TaskLogFrame
+	2,  // 31: flexiq.executor.v1.ExecutorService.Attach:input_type -> flexiq.executor.v1.AttachRequest
+	26, // 32: flexiq.executor.v1.ExecutorService.Heartbeat:input_type -> flexiq.executor.v1.HeartbeatRequest
+	18, // 33: flexiq.executor.v1.ExecutorService.Settle:input_type -> flexiq.executor.v1.SettleRequest
+	20, // 34: flexiq.executor.v1.ExecutorService.ExtendLease:input_type -> flexiq.executor.v1.ExtendLeaseRequest
+	22, // 35: flexiq.executor.v1.ExecutorService.ReportProgress:input_type -> flexiq.executor.v1.ReportProgressRequest
+	24, // 36: flexiq.executor.v1.ExecutorService.WriteTaskLog:input_type -> flexiq.executor.v1.WriteTaskLogRequest
+	3,  // 37: flexiq.executor.v1.ExecutorService.Attach:output_type -> flexiq.executor.v1.AttachResponse
+	27, // 38: flexiq.executor.v1.ExecutorService.Heartbeat:output_type -> flexiq.executor.v1.HeartbeatResponse
+	19, // 39: flexiq.executor.v1.ExecutorService.Settle:output_type -> flexiq.executor.v1.SettleResponse
+	21, // 40: flexiq.executor.v1.ExecutorService.ExtendLease:output_type -> flexiq.executor.v1.ExtendLeaseResponse
+	23, // 41: flexiq.executor.v1.ExecutorService.ReportProgress:output_type -> flexiq.executor.v1.ReportProgressResponse
+	25, // 42: flexiq.executor.v1.ExecutorService.WriteTaskLog:output_type -> flexiq.executor.v1.WriteTaskLogResponse
+	37, // [37:43] is the sub-list for method output_type
+	31, // [31:37] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_flexiq_executor_v1_executor_service_proto_init() }
@@ -2025,13 +2499,18 @@ func file_flexiq_executor_v1_executor_service_proto_init() {
 	file_flexiq_executor_v1_executor_service_proto_msgTypes[13].OneofWrappers = []any{}
 	file_flexiq_executor_v1_executor_service_proto_msgTypes[14].OneofWrappers = []any{}
 	file_flexiq_executor_v1_executor_service_proto_msgTypes[15].OneofWrappers = []any{}
+	file_flexiq_executor_v1_executor_service_proto_msgTypes[16].OneofWrappers = []any{
+		(*SettleRequest_Success)(nil),
+		(*SettleRequest_Failure)(nil),
+		(*SettleRequest_Cancelled)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flexiq_executor_v1_executor_service_proto_rawDesc), len(file_flexiq_executor_v1_executor_service_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   18,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

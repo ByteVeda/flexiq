@@ -210,6 +210,15 @@ spec:
             - name: FLEXIQ_PUSH_TARGET_AUTH
               value: {{ .Values.push.auth | quote }}
             {{- end }}
+            {{- /* `default "off"` to match _validate.tpl exactly: an empty or
+                   null value normalizes there and would pass validation, but a
+                   raw comparison here would emit FLEXIQ_PUSH_TARGET_SETTLE=""
+                   and `parse_settle` refuses that at boot. The two must agree
+                   on what "unset" means. */ -}}
+            {{- if ne (.Values.push.settle | default "off") "off" }}
+            - name: FLEXIQ_PUSH_TARGET_SETTLE
+              value: {{ .Values.push.settle | default "off" | quote }}
+            {{- end }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}

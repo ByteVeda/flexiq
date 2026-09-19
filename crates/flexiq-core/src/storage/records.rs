@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::job::Job;
+
 /// One recorded failure attempt for a job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobError {
@@ -686,6 +688,73 @@ pub enum AttemptFence {
     /// The claim names another worker, or the job has moved past this attempt.
     /// The only correct contribution a superseded attempt can make is none.
     Superseded,
+}
+
+/// Whether a caller may settle a dispatch that was accepted out of band.
+///
+/// The answer to exactly one question, asked by three callers that cannot see
+/// each other: a `Settle` on the replica that dispatched, a `Settle` on any
+/// other replica, and the settle deadline passing. The marker is removed in
+/// the same statement that tests it, so exactly one of them is told `Granted`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettleGrant {
+    /// The marker was consumed. This caller settles the attempt, and is the
+    /// only one that may.
+    Granted,
+    /// No marker: this dispatch was never accepted, or another caller already
+    /// took it. A caller told this **emits nothing at all** — not a result,
+    /// not a failure, not a timeout.
+    Refused,
+}
+
+/// Who is asking to settle an accepted dispatch, and on what authority.
+///
+/// Two claimants with different proofs, and neither can present the other's. A
+/// peer holds a lease and no clock the scheduler trusts; the scheduler holds a
+/// clock and no lease. Collapsing them into one nullable epoch would make "no
+/// lease" the same argument as "the deadline passed", and the reaper would be
+/// able to take a marker out from under a target still inside its deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettleClaimant {
+    /// A peer presenting a lease, granted only on a strict epoch match. See
+    /// [`crate::lease::lease_authorizes`] — strict, unlike
+    /// [`crate::lease::epochs_agree`], because here the lease *is* the
+    /// authority rather than evidence against one.
+    Lease(i64),
+    /// The scheduler, after the settle deadline passed. Granted only when the
+    /// stored deadline is at or before `now`, evaluated inside the same
+    /// statement — so an extension that landed a millisecond earlier wins.
+    Expired {
+        /// The scheduler's clock at the moment it decided to give up.
+        now: i64,
+    },
+    /// The scheduler, giving the dispatch up on purpose and regardless of its
+    /// deadline: a cancel, or a shutdown that ran out of drain.
+    ///
+    /// Unconditional, which is why it is a variant rather than an
+    /// [`Expired`](Self::Expired) with a distant clock. Only the process
+    /// holding the dispatch reaches it — a decision to stop waiting is not
+    /// something a peer may assert, and the reaper must never have it, because
+    /// the reaper's whole job is to respect the deadline it is checking.
+    Abandoned,
+}
+
+/// A running job the reaper found past its deadline.
+///
+/// Carries more than the job because the two ways of being late are different
+/// facts to an operator: a job that simply ran long, and a dispatch a target
+/// accepted and never came back for.
+#[derive(Debug, Clone)]
+pub struct StaleJob {
+    /// The job itself, assembled narrow — the reaper needs the timeout
+    /// arithmetic and the identity, never the payload.
+    pub job: Job,
+    /// The dispatch was accepted out of band and never settled.
+    ///
+    /// The difference between "retried" and "accepted, never settled" in the
+    /// error an operator reads. False for every job dispatched the ordinary
+    /// way, which is every job on every topology but push-with-callbacks.
+    pub awaiting_settle: bool,
 }
 
 /// One committed step of a job, as read back at attempt start.

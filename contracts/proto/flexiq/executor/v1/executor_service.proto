@@ -86,6 +86,44 @@ service ExecutorService {
   // stream, and a heartbeat that overtakes it is read *as* the handshake and
   // refuses the attach. Wait for `hello_ack`.
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // Report the outcome of a dispatch that outlived the request it arrived on.
+  //
+  // For a push target, which is handed a job over HTTP and answers `202
+  // Accepted` because the work will not finish inside the platform's request
+  // deadline. The connection that started the job is gone by the time this is
+  // called; the lease inside the frame is what says which dispatch of which
+  // attempt is being settled.
+  //
+  // **Single-use, and fenced.** The scheduler records one settle marker per
+  // accepted dispatch and removes it in the same statement that tests it, so
+  // exactly one of this RPC, the same RPC on another replica, and the settle
+  // deadline passing can win. A call that lost that race is
+  // FAILED_PRECONDITION — never ABORTED, which sits in the retry-with-backoff
+  // class: a settle that lost its fence must not be resent, because resending
+  // it is the double execution the fence exists to refuse.
+  rpc Settle(SettleRequest) returns (SettleResponse);
+
+  // Ask for longer before the attempt is considered lost.
+  //
+  // An accepted dispatch is waited on until a deadline, and a target that
+  // needs longer than the job's timeout must be able to say so or the job is
+  // retried under it. Repeatable: the ceiling is per call, not in total, so a
+  // target that needs six hours asks six times and its asking is the liveness
+  // signal. A target that stops asking is one the deadline will collect.
+  rpc ExtendLease(ExtendLeaseRequest) returns (ExtendLeaseResponse);
+
+  // Report progress for an accepted dispatch.
+  //
+  // The frame the attach stream carries, off the stream — a push target has no
+  // stream to put it on. Fire and forget, as it is there: a task that only
+  // wanted to report progress must never block on the scheduler to do it, and
+  // an empty response says the frame was taken, not that a row was written.
+  rpc ReportProgress(ReportProgressRequest) returns (ReportProgressResponse);
+
+  // Write one structured log line for an accepted dispatch. As
+  // ReportProgress, and with the same fire-and-forget meaning.
+  rpc WriteTaskLog(WriteTaskLogRequest) returns (WriteTaskLogResponse);
 }
 
 // Whether a step commit carries a memoized value or a deadline.
@@ -373,6 +411,68 @@ message SleptFrame {
   // See JobFrame.lease.
   optional bytes lease = 5;
 }
+
+// The outcome of a dispatch being reported after the fact.
+message SettleRequest {
+  // The outcome, as the frame the attach stream already carries.
+  //
+  // Each of these names its own job, task and lease, so this message adds no
+  // field of its own: a job id here would be a second copy of one fact, free
+  // to disagree with the one inside the frame. The lease is required — a
+  // settle is exactly the frame the fence exists for.
+  //
+  // There is no `slept` arm and there will not be one. A push dispatch has no
+  // step session to resume, which is why `x-flexiq-outcome: slept` is refused
+  // on the request path too.
+  //
+  // Unlike a frame on the stream, an arm this build does not recognise is
+  // INVALID_ARGUMENT rather than skipped: skipping is right for a stream,
+  // where the next frame follows, but a unary call that was asked to settle a
+  // job and recognised nothing would answer OK and tell a target its result
+  // landed when it did not.
+  oneof outcome {
+    SuccessFrame success = 1;
+    FailureFrame failure = 2;
+    CancelledFrame cancelled = 3;
+  }
+}
+
+// Empty today. A message rather than nothing so it can grow a field without
+// becoming a new response type.
+message SettleResponse {}
+
+message ExtendLeaseRequest {
+  string job_id = 1;
+  // See JobFrame.lease.
+  bytes lease = 2;
+  // How much longer this attempt needs, measured from now.
+  //
+  // From now rather than from the current deadline, because a target knows how
+  // long it still needs and does not know what deadline the scheduler is
+  // holding. Clamped to a per-call ceiling rather than refused: a refusal
+  // would make "ask again with a smaller number" the correct client
+  // behaviour, which is a retry loop written into the contract for no benefit.
+  google.protobuf.Duration extend_by = 3;
+}
+
+message ExtendLeaseResponse {
+  // The deadline actually stored, which is not the one proposed when the
+  // request was clamped. Echoed for the reason StepAckFrame echoes wake_at:
+  // the caller must plan against what landed, not what it asked for.
+  google.protobuf.Timestamp deadline = 1;
+}
+
+message ReportProgressRequest {
+  ProgressFrame progress = 1;
+}
+
+message ReportProgressResponse {}
+
+message WriteTaskLogRequest {
+  TaskLogFrame task_log = 1;
+}
+
+message WriteTaskLogResponse {}
 
 message HeartbeatRequest {
   // The `flexiq-attach-session-bin` value from the Attach response's metadata.

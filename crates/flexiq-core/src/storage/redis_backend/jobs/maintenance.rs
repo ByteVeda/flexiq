@@ -7,6 +7,7 @@ use redis::Commands;
 
 use crate::error::Result;
 use crate::job::{now_millis, Job, JobStatus};
+use crate::storage::records::StaleJob;
 use crate::storage::redis_backend::{map_err, RedisStorage, SCAN_BATCH};
 use crate::storage::{RetentionCounts, RetentionCutoffs};
 
@@ -352,14 +353,21 @@ impl RedisStorage {
         Ok(count)
     }
 
-    /// Running jobs that exceeded their timeout, for the scheduler to fail or
+    /// Running jobs that exceeded their deadline, for the scheduler to fail or
     /// retry. Scoped so a scheduler never times out another namespace's job.
-    pub fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<Job>> {
+    ///
+    /// A dispatch accepted out of band is skipped while its settle deadline is
+    /// still ahead, and flagged once it is not — the difference between
+    /// "retried" and "accepted, never settled" in what an operator reads. The
+    /// markers are read in one `MGET` after the timeout arithmetic has already
+    /// narrowed the set, so the extra round trip is one per sweep rather than
+    /// one per running job.
+    pub fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<StaleJob>> {
         let mut conn = self.conn()?;
         let status_key = self.key(&["jobs", "status", &(JobStatus::Running as i32).to_string()]);
         let job_ids: Vec<String> = conn.smembers(&status_key).map_err(map_err)?;
 
-        let mut stale = Vec::new();
+        let mut timed_out_jobs = Vec::new();
         for id in &job_ids {
             if let Some(job) = self.load_job(&mut conn, id)? {
                 if namespace.is_some_and(|scope| job.namespace.as_deref() != Some(scope)) {
@@ -371,13 +379,34 @@ impl RedisStorage {
                         None => true,
                     };
                     if timed_out {
-                        stale.push(job);
+                        timed_out_jobs.push(job);
                     }
                 }
             }
         }
+        if timed_out_jobs.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        Ok(stale)
+        let marker_keys: Vec<String> = timed_out_jobs
+            .iter()
+            .map(|job| self.key(&["claim_settle", &job.id]))
+            .collect();
+        let markers: Vec<Option<i64>> = conn.mget(&marker_keys).map_err(map_err)?;
+
+        Ok(timed_out_jobs
+            .into_iter()
+            .zip(markers)
+            .filter_map(|(job, marker)| match marker {
+                // Still being waited for. Not stale, however long the job's own
+                // timeout says it has been running.
+                Some(deadline) if deadline > now => None,
+                marker => Some(StaleJob {
+                    job,
+                    awaiting_settle: marker.is_some(),
+                }),
+            })
+            .collect())
     }
 
     /// Running jobs whose execution-claim owner is not in `live_owner_ids` (its

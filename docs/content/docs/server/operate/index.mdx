@@ -35,6 +35,11 @@ turns one on implicitly:
 | Admission webhook | `FLEXIQ_WEBHOOK_LISTEN` | The mutating webhook that injects executor sidecars | **No** |
 | Push dispatch | `FLEXIQ_PUSH_TARGET_URL` | Nothing — it dials out instead of serving | Yes |
 
+One pairing is not optional: `FLEXIQ_PUSH_TARGET_SETTLE=grpc` — which lets a
+target answer `202 Accepted` and report later — needs the gRPC door, because
+that door is the only inbound surface a push target has. Asking for one without
+the other is refused at boot.
+
 **At least one of the five must be set.** A process with no listener and no push
 target has no work to do, and it says so at boot rather than idling as a
 healthy-looking pod that serves nothing. A push-only deployment is a supported

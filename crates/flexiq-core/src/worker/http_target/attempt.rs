@@ -21,15 +21,18 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use tokio::sync::{watch, Notify, OwnedSemaphorePermit};
 
 use super::contract::{
-    self, Outcome, Refusal, ENVELOPE_CONTENT_TYPE, HDR_ATTEMPT, HDR_DEADLINE_MS,
+    self, Disposition, Outcome, Refusal, ENVELOPE_CONTENT_TYPE, HDR_ATTEMPT, HDR_DEADLINE_MS,
     HDR_DISABLED_MIDDLEWARE, HDR_IDEMPOTENCY_KEY, HDR_JOB_ID, HDR_LEASE, HDR_MAX_ATTEMPTS,
     HDR_METADATA, HDR_NAMESPACE, HDR_OUTCOME, HDR_PROTOCOL_VERSION, HDR_QUEUE, HDR_RETRY, HDR_TASK,
 };
 use super::Shared;
 use crate::http::{read_bounded, BodyRead, SigningRequest};
 use crate::job::{now_millis, Job};
+use crate::lease::Lease;
 use crate::scheduler::JobResult;
+use crate::storage::records::{SettleClaimant, SettleGrant};
 use crate::worker::protocol::{Dispatch, PROTOCOL_VERSION};
+use crate::worker::SideChannel;
 
 /// `Content-Type` header name. Spelled rather than taken from
 /// `reqwest::header::CONTENT_TYPE` so it reaches [`put`] as the same
@@ -113,7 +116,31 @@ pub(super) async fn run_one(
         None => Err(Refusal::NoBudget),
         Some(budget) => guarded_attempt(&shared, &mut dispatch, &notify, abandon, budget).await,
     };
+
+    // A `202` ends the request, not the attempt. This task keeps its permit
+    // and swaps what it is waiting on — so the "exactly one result per job"
+    // invariant above holds unchanged, and capacity keeps meaning "jobs
+    // outstanding at this target", which is the only backpressure push has.
+    let settled = match settled {
+        Ok((Disposition::Accepted, _)) => {
+            match await_settlement(&shared, &dispatch, &notify).await {
+                // Nobody else won the marker, so this task still owes exactly
+                // one result — whatever it was that ended the wait.
+                Some(settlement) => settlement,
+                // Someone else consumed the marker and emitted for us. Owing
+                // nothing is the one correct contribution a loser can make.
+                None => {
+                    shared.unregister_cancel(&dispatch.job.id, &notify);
+                    shared.unregister_accepted(&dispatch.job.id, dispatch.lease.as_ref());
+                    return;
+                }
+            }
+        }
+        Ok((Disposition::Settled(outcome), body)) => Ok((outcome, body)),
+        Err(refusal) => Err(refusal),
+    };
     shared.unregister_cancel(&dispatch.job.id, &notify);
+    shared.unregister_accepted(&dispatch.job.id, dispatch.lease.as_ref());
 
     let wall_time_ns = i64::try_from(started.elapsed().as_nanos()).unwrap_or(i64::MAX);
 
@@ -181,18 +208,200 @@ async fn guarded_attempt(
     notify: &Notify,
     mut abandon: watch::Receiver<bool>,
     budget: Duration,
-) -> Result<(Outcome, Vec<u8>), Refusal> {
+) -> Result<(Disposition, Vec<u8>), Refusal> {
     tokio::select! {
         // Biased, with the attempt first: when the target has already
         // answered, that answer is real information and beats a deadline or a
         // cancel that became ready in the same poll.
         biased;
         attempted = attempt(shared, dispatch, budget) => attempted,
-        () = notify.notified() => Ok((Outcome::Cancelled, Vec::new())),
+        () = notify.notified() => Ok((Disposition::Settled(Outcome::Cancelled), Vec::new())),
         // The drain budget expired. Settled, not aborted: an aborted task
         // emits nothing, and a job with no result is a lease nobody retires.
         _ = abandon.wait_for(|abandoned| *abandoned) => Err(Refusal::Abandoned),
         () = tokio::time::sleep(budget) => Err(Refusal::Deadline(budget)),
+    }
+}
+
+/// Wait for a dispatch the target accepted to be settled from outside the
+/// request that carried it.
+///
+/// Returns `None` when somebody else won the settle marker, in which case this
+/// attempt emits nothing at all. Returns `Some(settlement)` when *this* task
+/// won it and therefore still owes exactly one result — an outcome for a
+/// cancel, a refusal for a drain or a deadline.
+///
+/// The race is arbitrated durably, never here. Two claimants can take the
+/// marker: a `Settle` reaching this replica, and this process giving the
+/// dispatch up — below, or in the stale-job reaper after a restart. A `Settle`
+/// that reached a *different* replica is not one of them: it is refused as
+/// `NotHere` and consumes nothing, because the permit and the result channel
+/// live in the process that dispatched.
+async fn await_settlement(
+    shared: &Arc<Shared>,
+    dispatch: &Dispatch,
+    notify: &Notify,
+) -> Option<Result<(Outcome, Vec<u8>), Refusal>> {
+    let job = &dispatch.job;
+    let namespace = job.namespace.as_deref();
+
+    let Some(channel) = shared.side_channel().cloned() else {
+        // Refused at config time, so reaching this means the config check and
+        // this path disagree. Fail the job rather than wait on a marker that
+        // was never written.
+        return Some(Err(Refusal::Accepted202));
+    };
+    let Some(owner) = shared.claim_owner() else {
+        return Some(Err(Refusal::Accepted202));
+    };
+
+    // Registered before the marker is written: a `Settle` racing the write
+    // finds the entry and is refused on the fence, which is recoverable. The
+    // other order loses the settle entirely.
+    let relieved = shared.register_accepted(job, dispatch.lease.clone());
+
+    let epoch = dispatch.lease.as_ref().and_then(Lease::epoch);
+    // The deadline starts at the job's own, which is what the reaper measures
+    // against; `ExtendLease` is the only thing that moves it.
+    let deadline_ms = job
+        .started_at
+        .unwrap_or_else(now_millis)
+        .saturating_add(job.timeout_ms);
+    let recorded = blocking_settle(&channel, {
+        let job_id = job.id.clone();
+        let owner = owner.clone();
+        let namespace = namespace.map(str::to_owned);
+        let attempt = job.retry_count;
+        move |channel| {
+            channel.await_settle(
+                &job_id,
+                &owner,
+                attempt,
+                epoch,
+                deadline_ms,
+                namespace.as_deref(),
+            )
+        }
+    })
+    .await;
+
+    match recorded {
+        Ok(Some(_)) => {}
+        // The attempt was superseded between the dispatch and the answer. It
+        // may not buy itself time, and it may not settle either.
+        Ok(None) => return None,
+        Err(error) => {
+            log::error!(
+                "[flexiq] could not record that push target {} accepted job {}: {error}",
+                shared.target,
+                job.id
+            );
+            return Some(Err(Refusal::Accepted202));
+        }
+    }
+
+    // Only now may a callback be fenced. Until the marker is durable a report
+    // is answered "not ready, try again" rather than "fenced, do not retry":
+    // the target beat our own bookkeeping, and refusing it for good would
+    // throw away a result nothing had actually refused, leaving this attempt
+    // to wait out a deadline whose answer had already arrived.
+    shared.mark_accepted_ready(&job.id);
+
+    let mut abandon = shared.abandon_signal();
+    // Two things travel together here and must not be conflated: the
+    // *claimant*, which is the authority to take the marker, and the
+    // *settlement*, which is what the job ends up as. A cancel and a drain
+    // are the same authority — this process giving the dispatch up on
+    // purpose, regardless of its deadline — and different settlements.
+    let (claimant, settlement) = tokio::select! {
+        biased;
+        // Somebody settled it. Nothing left to consume and nothing to emit.
+        _ = relieved => return None,
+        // An operator cancelled. Settles `Cancelled`, exactly as a cancel
+        // does before the target accepted — the per-topology table in this
+        // module's docs promises one answer for push, not one per window.
+        () = notify.notified() => (
+            SettleClaimant::Abandoned,
+            Ok((Outcome::Cancelled, Vec::new())),
+        ),
+        // The drain ran out. Retryable: the job was not cancelled, this
+        // process simply stopped being able to wait for it.
+        _ = abandon.wait_for(|abandoned| *abandoned) => (
+            SettleClaimant::Abandoned,
+            Err(Refusal::Abandoned),
+        ),
+        () = sleep_until_deadline(deadline_ms) => (
+            SettleClaimant::Expired { now: now_millis() },
+            Err(Refusal::AcceptedNotSettled),
+        ),
+    };
+
+    let consumed = blocking_settle(&channel, {
+        let job_id = job.id.clone();
+        let namespace = namespace.map(str::to_owned);
+        move |channel| channel.claim_settle(&job_id, claimant, namespace.as_deref())
+    })
+    .await;
+
+    match consumed {
+        // This task won the marker, so it owes the one result.
+        Ok(SettleGrant::Granted) => Some(settlement),
+        // A `Settle` landed in the gap between the timer firing and the
+        // consume. It settled the job; this task has nothing to add.
+        Ok(SettleGrant::Refused) => None,
+        Err(error) => {
+            // Fail closed. Emitting a timeout without having won the marker is
+            // how one dispatch gets two outcomes, which is the single thing
+            // this whole path exists to prevent. The reaper recovers the job.
+            log::error!(
+                "[flexiq] could not resolve the settle fence for job {}: {error}; leaving it to \
+                 the stale-job reaper",
+                job.id
+            );
+            None
+        }
+    }
+}
+
+/// Run one synchronous side-channel call off the runtime.
+///
+/// Both settle calls reach a Diesel `write_transaction` or a Redis script, and
+/// this task runs on the runtime every dispatch request shares — the same
+/// argument [`resolve_toggles`] makes for a settings read. A slow or bursting
+/// backend must not be able to occupy runtime workers other dispatches need.
+async fn blocking_settle<T, F>(channel: &Arc<dyn SideChannel>, work: F) -> crate::error::Result<T>
+where
+    F: FnOnce(&Arc<dyn SideChannel>) -> crate::error::Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let channel = Arc::clone(channel);
+    tokio::task::spawn_blocking(move || work(&channel))
+        .await
+        .unwrap_or_else(|error| {
+            // Reported as a failure rather than unwrapped: this is the fence,
+            // and a panicking one must refuse rather than be taken at its word.
+            Err(crate::error::QueueError::Config(format!(
+                "the settle fence could not be evaluated: {error}"
+            )))
+        })
+}
+
+/// Sleep until a wall-clock deadline, re-derived from the clock the reaper
+/// reads rather than from a duration captured earlier.
+///
+/// An accepted dispatch can wait for hours, and a `Duration` computed once at
+/// the start would drift against `now_millis` across a suspend. Already past
+/// resolves immediately.
+async fn sleep_until_deadline(deadline_ms: i64) {
+    loop {
+        let remaining = deadline_ms.saturating_sub(now_millis());
+        if remaining <= 0 {
+            return;
+        }
+        // Capped per iteration so a far-future deadline is re-checked against
+        // the wall clock rather than trusted to one long timer.
+        let step = Duration::from_millis(remaining.min(60_000) as u64);
+        tokio::time::sleep(step).await;
     }
 }
 
@@ -206,7 +415,7 @@ async fn attempt(
     shared: &Shared,
     dispatch: &mut Dispatch,
     budget: Duration,
-) -> Result<(Outcome, Vec<u8>), Refusal> {
+) -> Result<(Disposition, Vec<u8>), Refusal> {
     dispatch.disabled_middleware = resolve_toggles(shared, &dispatch.job.task_name).await;
 
     let len = dispatch.job.payload.len();
@@ -274,7 +483,7 @@ async fn attempt(
 async fn exchange(
     shared: &Shared,
     request: reqwest::RequestBuilder,
-) -> Result<(Outcome, Vec<u8>), Refusal> {
+) -> Result<(Disposition, Vec<u8>), Refusal> {
     let response = request.send().await.map_err(|error| {
         // `without_url`: `Refusal::message` already names the target, and the
         // URL reqwest would otherwise interpolate is the one place an
@@ -291,7 +500,12 @@ async fn exchange(
     // a refusal: a status refusal is complete information no body can change,
     // and a 5xx with an oversized body has to stay a retryable `ServerError`
     // rather than become a fatal `ResponseTooLarge`.
-    let outcome = contract::classify(status, outcome.as_deref(), retry.as_deref())?;
+    let disposition = contract::classify(
+        status,
+        outcome.as_deref(),
+        retry.as_deref(),
+        shared.config.settle_callbacks,
+    )?;
 
     let cap = shared.config.max_response_bytes;
     // Both failure arms refuse rather than store short: a partial body is not
@@ -304,7 +518,7 @@ async fn exchange(
         BodyRead::Truncated => return Err(Refusal::ResponseTooLarge { cap }),
         BodyRead::Broken(error) => return Err(Refusal::ResponseIncomplete(error)),
     };
-    Ok((outcome, body))
+    Ok((disposition, body))
 }
 
 /// One header's value as an owned `String`, or `None` when it is absent or

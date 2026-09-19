@@ -6,11 +6,22 @@ use crate::periodic::{next_cron_time, next_cron_time_tz};
 use crate::scheduler::retention::{
     publish_effective_retention, EffectiveRetention, RetentionConfig, DEFAULT_NAMESPACE,
 };
+use crate::storage::records::{SettleClaimant, SettleGrant};
 use crate::storage::{
     dead_worker_cutoff, try_lead, Storage, RETENTION_LOCK, RETENTION_LOCK_TTL_MS,
 };
 
 use super::{JobResult, Scheduler};
+
+/// Prefix of the error a dispatch accepted out of band and never settled is
+/// recorded under, so an operator can grep for it.
+///
+/// Defined here rather than beside the push-dispatch wire constants it started
+/// out with, because the reaper is what writes it now and the reaper is not
+/// behind the `http-target` feature. One definition, re-exported from
+/// `worker::http_target` so its original path still resolves — two constants
+/// carrying one string would be free to disagree.
+pub const ACCEPTED_NOT_SETTLED: &str = "push.accepted_not_settled";
 
 /// Default max retries for periodic tasks.
 const PERIODIC_DEFAULT_MAX_RETRIES: i32 = 3;
@@ -109,8 +120,38 @@ impl Scheduler {
             .storage
             .reap_stale_jobs(now, self.namespace.as_deref())?;
 
-        for job in stale_jobs {
-            let error = format!("job timed out after {}ms", job.timeout_ms);
+        for stale in stale_jobs {
+            let job = stale.job;
+            let error = if stale.awaiting_settle {
+                // Consume the marker before failing the job. The reaper is one
+                // of three racers for an accepted dispatch and has no more
+                // authority than the others: if a `Settle` took the marker
+                // first, this attempt is already settled and a timeout on top
+                // of it would be a second outcome for one dispatch.
+                match self.storage.claim_settle(
+                    &job.id,
+                    SettleClaimant::Expired { now },
+                    self.namespace.as_deref(),
+                ) {
+                    Ok(SettleGrant::Granted) => {}
+                    Ok(SettleGrant::Refused) => continue,
+                    Err(e) => {
+                        // Fail closed, unlike the rest of this sweep: a storage
+                        // blip here would otherwise let the reaper settle a job
+                        // it did not win. The job stays `Running` and the next
+                        // tick tries again, which is the bounded cost.
+                        warn!("claim_settle for {} error: {e}", job.id);
+                        continue;
+                    }
+                }
+                format!(
+                    "{ACCEPTED_NOT_SETTLED}: the target accepted this job and never settled it \
+                     within {}ms",
+                    job.timeout_ms
+                )
+            } else {
+                format!("job timed out after {}ms", job.timeout_ms)
+            };
             let _ = self.handle_result(JobResult::Failure {
                 job_id: job.id.clone(),
                 error,

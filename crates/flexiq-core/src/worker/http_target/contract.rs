@@ -56,8 +56,13 @@ pub const HDR_OUTCOME: &str = "x-flexiq-outcome";
 pub const HDR_RETRY: &str = "x-flexiq-retry";
 /// Content type of the request body: the tagged wire envelope, unchanged.
 pub const ENVELOPE_CONTENT_TYPE: &str = "application/vnd.flexiq.envelope";
-/// Prefix of the error a 202 dead-letters with, so an operator can grep for it.
-pub const ACCEPTED_NOT_SETTLED: &str = "push.accepted_not_settled";
+/// Prefix of the error an accepted-but-unsettled dispatch is recorded under,
+/// so an operator can grep for it.
+///
+/// Re-exported rather than defined here: the same string is written by the
+/// stale-job reaper, which is not behind this feature, so it is defined once
+/// where both can reach it. The path stays what it always was.
+pub use crate::scheduler::ACCEPTED_NOT_SETTLED;
 
 /// The key a target dedupes on: `<job id>.<attempt>.<lease>`, or
 /// `<job id>.<attempt>` when the scheduler held no lease.
@@ -101,12 +106,34 @@ pub enum Outcome {
     Cancelled,
 }
 
+/// What a response means for the attempt, once the status has been read.
+///
+/// Distinct from [`Outcome`] because "accepted" settles nothing: it says the
+/// attempt continues somewhere the request cannot see. Keeping it out of
+/// `Outcome` is what lets `into_result` stay total over the three outcomes
+/// that *are* settlements, with no unreachable arm to get wrong later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Disposition {
+    /// The target reported what happened. The attempt is over.
+    Settled(Outcome),
+    /// The target answered `202 Accepted`: it has the job and will report
+    /// later, through the executor door. The attempt continues.
+    Accepted,
+}
+
 /// Why a response is not an outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
-    /// The target answered 202 Accepted: it took the job but has not
-    /// settled it, and a push dispatch has nothing further to wait on.
+    /// The target answered 202 Accepted while settle callbacks are off: it
+    /// took the job but has not settled it, and there is nothing to wait on.
     Accepted202,
+    /// The target accepted the job and never settled it before the deadline.
+    ///
+    /// Distinct from [`Accepted202`](Self::Accepted202): that one is "this
+    /// deployment does not wait", this one is "it waited and nothing came".
+    /// An operator reading a dead-letter needs to be able to tell those apart,
+    /// which is the whole of #845's visibility requirement.
+    AcceptedNotSettled,
     /// The target answered with a redirect, which is never followed.
     Redirect(u16),
     /// The target answered with a 4xx. Not retryable, except the three
@@ -203,6 +230,10 @@ impl Refusal {
             | Refusal::Abandoned => true,
             Refusal::ClientError(status) => matches!(status, 408 | 425 | 429),
             Refusal::Signing { retryable, .. } => *retryable,
+            // Retried: the target had the job and went quiet, which is
+            // exactly the case a retry is for. `Accepted202` is not, because
+            // there a conforming target was never going to answer at all.
+            Refusal::AcceptedNotSettled => true,
             Refusal::Accepted202
             | Refusal::Redirect(_)
             | Refusal::MissingOutcome
@@ -225,9 +256,13 @@ impl Refusal {
     pub fn message(&self, target: &str) -> String {
         match self {
             Refusal::Accepted202 => format!(
-                "{ACCEPTED_NOT_SETTLED}: target {target} answered 202 Accepted; push dispatch \
-                 treats an accepted-but-unsettled job as failed rather than waiting further \
-                 (see #845)"
+                "{ACCEPTED_NOT_SETTLED}: target {target} answered 202 Accepted but settle \
+                 callbacks are off, so there is nothing to wait on; set \
+                 FLEXIQ_PUSH_TARGET_SETTLE=grpc to accept a later answer"
+            ),
+            Refusal::AcceptedNotSettled => format!(
+                "{ACCEPTED_NOT_SETTLED}: target {target} accepted this job and never settled it \
+                 before its deadline"
             ),
             Refusal::Redirect(status) => format!(
                 "target {target} answered with a {status} redirect, which push dispatch does \
@@ -310,26 +345,36 @@ fn bound_outcome_value(value: &str) -> String {
     bounded
 }
 
-/// Read a response's status and outcome header into an outcome or a refusal.
+/// Read a response's status and outcome header into a disposition or a refusal.
+///
+/// `settle_enabled` decides what `202` means, and nothing else: with callbacks
+/// off it is the refusal it has always been, so a target that answers `202` by
+/// mistake still dead-letters in one attempt with a reason an operator can
+/// read, rather than silently occupying a slot until its deadline.
 pub fn classify(
     status: u16,
     outcome: Option<&str>,
     retry: Option<&str>,
-) -> Result<Outcome, Refusal> {
+    settle_enabled: bool,
+) -> Result<Disposition, Refusal> {
     // Checked before the 2xx arm below: 202 is itself in that range, but it
     // never settles a job, so it must never reach the outcome-header match.
     if status == 202 {
-        return Err(Refusal::Accepted202);
+        return if settle_enabled {
+            Ok(Disposition::Accepted)
+        } else {
+            Err(Refusal::Accepted202)
+        };
     }
     if (200..300).contains(&status) {
         return match outcome.map(str::trim) {
             None => Err(Refusal::MissingOutcome),
             Some(value) => match value.to_ascii_lowercase().as_str() {
-                "success" => Ok(Outcome::Success),
-                "failure" => Ok(Outcome::Failure {
+                "success" => Ok(Disposition::Settled(Outcome::Success)),
+                "failure" => Ok(Disposition::Settled(Outcome::Failure {
                     should_retry: parse_retry(retry),
-                }),
-                "cancelled" => Ok(Outcome::Cancelled),
+                })),
+                "cancelled" => Ok(Disposition::Settled(Outcome::Cancelled)),
                 "slept" => Err(Refusal::SleptRefused),
                 _ => Err(Refusal::UnknownOutcome(bound_outcome_value(value))),
             },
@@ -521,23 +566,56 @@ mod tests {
     }
 
     #[test]
-    fn a_202_is_refused_before_the_success_arm() {
+    fn a_202_is_read_before_the_success_arm() {
+        // 202 is itself inside 2xx, so it must never reach the outcome-header
+        // match — with callbacks either way.
         assert_eq!(
-            classify(202, Some("success"), None),
+            classify(202, Some("success"), None, false),
             Err(Refusal::Accepted202)
+        );
+        assert_eq!(
+            classify(202, Some("success"), None, true),
+            Ok(Disposition::Accepted)
+        );
+    }
+
+    #[test]
+    fn a_202_only_hands_off_when_callbacks_are_on() {
+        // The opt-in is the whole safety property: a framework answering 202
+        // by default must keep dead-lettering in one attempt with a reason an
+        // operator can grep, rather than silently occupying a slot until its
+        // deadline.
+        let refused = classify(202, None, None, false).unwrap_err();
+        assert_eq!(refused, Refusal::Accepted202);
+        assert!(!refused.should_retry(), "a conforming target never answers");
+        assert!(refused
+            .message("http://target")
+            .contains(ACCEPTED_NOT_SETTLED));
+
+        // And the deadline case is a different refusal with the same greppable
+        // prefix: "we do not wait" and "we waited and nothing came" are not
+        // the same fact.
+        let timed_out = Refusal::AcceptedNotSettled;
+        assert!(timed_out.should_retry(), "the target had it and went quiet");
+        assert!(timed_out
+            .message("http://target")
+            .contains(ACCEPTED_NOT_SETTLED));
+        assert_ne!(
+            timed_out.message("http://target"),
+            refused.message("http://target")
         );
     }
 
     #[test]
     fn a_2xx_without_an_outcome_header_is_refused() {
-        let error = classify(200, None, None).unwrap_err();
+        let error = classify(200, None, None, false).unwrap_err();
         assert_eq!(error, Refusal::MissingOutcome);
         assert!(error.message("http://target").contains(HDR_OUTCOME));
     }
 
     #[test]
     fn an_unknown_outcome_is_refused_and_echoes_what_it_saw() {
-        let error = classify(200, Some("exploded"), None).unwrap_err();
+        let error = classify(200, Some("exploded"), None, false).unwrap_err();
         assert_eq!(error, Refusal::UnknownOutcome("exploded".to_string()));
         assert!(error.message("http://target").contains("exploded"));
     }
@@ -547,7 +625,7 @@ mod tests {
         // Nothing upstream of `classify` bounds the header, and the echoed
         // value lands in `job_errors` and the dead-letter queue.
         let long_value = "x".repeat(500);
-        let error = classify(200, Some(&long_value), None).unwrap_err();
+        let error = classify(200, Some(&long_value), None, false).unwrap_err();
         match &error {
             Refusal::UnknownOutcome(echoed) => {
                 assert!(
@@ -563,17 +641,20 @@ mod tests {
     #[test]
     fn a_slept_outcome_is_refused() {
         assert_eq!(
-            classify(200, Some("slept"), None),
+            classify(200, Some("slept"), None, false),
             Err(Refusal::SleptRefused)
         );
     }
 
     #[test]
     fn the_outcome_header_is_read_case_insensitively() {
-        assert_eq!(classify(200, Some("SuCcEsS"), None), Ok(Outcome::Success));
         assert_eq!(
-            classify(200, Some("  success  "), None),
-            Ok(Outcome::Success)
+            classify(200, Some("SuCcEsS"), None, false),
+            Ok(Disposition::Settled(Outcome::Success))
+        );
+        assert_eq!(
+            classify(200, Some("  success  "), None, false),
+            Ok(Disposition::Settled(Outcome::Success))
         );
     }
 
@@ -589,7 +670,7 @@ mod tests {
             (429, true),
         ];
         for (status, retryable) in cases {
-            let error = classify(status, Some("success"), None).unwrap_err();
+            let error = classify(status, Some("success"), None, false).unwrap_err();
             assert_eq!(
                 error.should_retry(),
                 retryable,
@@ -627,15 +708,20 @@ mod tests {
 
     #[test]
     fn a_redirect_is_refused_rather_than_followed() {
-        assert_eq!(classify(302, None, None), Err(Refusal::Redirect(302)));
+        assert_eq!(
+            classify(302, None, None, false),
+            Err(Refusal::Redirect(302))
+        );
         assert!(!Refusal::Redirect(302).should_retry());
     }
 
     #[test]
     fn an_unparseable_retry_header_reads_as_absent() {
         assert_eq!(
-            classify(200, Some("failure"), Some("maybe")),
-            Ok(Outcome::Failure { should_retry: None })
+            classify(200, Some("failure"), Some("maybe"), false),
+            Ok(Disposition::Settled(Outcome::Failure {
+                should_retry: None
+            }))
         );
     }
 

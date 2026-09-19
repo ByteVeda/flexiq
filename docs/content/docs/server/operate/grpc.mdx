@@ -432,7 +432,15 @@ dead-lettering changes because the executor that ran it dialled in over gRPC.
   page that walks through writing one.
 </Callout>
 
-Two RPCs. `Attach` is one bidirectional stream for the lifetime of a
+Six RPCs, in two groups. `Attach` and `Heartbeat` are the attach topology;
+`Settle`, `ExtendLease`, `ReportProgress` and `WriteTaskLog` are for a
+[push target](/server/operate/push) reporting on work that outlived the request
+it arrived on. **A push deployment serves only the second group** — nothing
+attaches there, so `Attach` and `Heartbeat` answer `FAILED_PRECONDITION` and
+say which deployment you reached. See
+[Custom executors](/server/custom-executors) for what the four carry.
+
+`Attach` is one bidirectional stream for the lifetime of a
 connection: `AttachRequest`/`AttachResponse` are each a `oneof` over the worker
 frame protocol's frames — `hello` in, `hello_ack` out, then jobs out and
 results in until either side ends it. `Heartbeat` is a separate unary RPC,

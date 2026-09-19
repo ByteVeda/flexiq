@@ -11,8 +11,8 @@ use flexiq_core::error::QueueError;
 use flexiq_core::job::{now_millis, JobCompletion, JobStatus, NewJob};
 use flexiq_core::step::{classify_step_failure, StepLimits, StepSession, StepSleep};
 use flexiq_core::storage::records::{
-    DebounceOptions, NewJobStep, SleepOutcome, StepCommit, StepKind, SubscriptionMode,
-    WorkerRegistration, WorkerStatus,
+    DebounceOptions, NewJobStep, SettleClaimant, SettleGrant, SleepOutcome, StepCommit, StepKind,
+    SubscriptionMode, WorkerRegistration, WorkerStatus,
 };
 use flexiq_core::storage::{DeadJob, RetentionCutoffs, Storage};
 use flexiq_core::{SqliteStorage, RETRY_BUDGET_EXHAUSTED};
@@ -895,12 +895,304 @@ fn test_reap_stale_jobs(s: &impl Storage) {
     s.dequeue(q, t0, None).unwrap().unwrap(); // Running, started_at = t0
 
     let stale = s.reap_stale_jobs(t0 + 1000, None).unwrap();
+    let found = stale
+        .iter()
+        .find(|s| s.job.id == job.id)
+        .expect("a running job past its timeout must be reaped");
     assert!(
-        stale.iter().any(|j| j.id == job.id),
-        "a running job past its timeout must be reaped"
+        !found.awaiting_settle,
+        "an ordinary job was never accepted out of band"
     );
     // Clean up so this Running job doesn't bleed into later shared-instance tests.
     s.complete(&job.id, None, None).unwrap();
+}
+
+fn test_reap_skips_and_flags_a_dispatch_awaiting_settle(s: &impl Storage) {
+    // The operator-visible half of #845: a target that accepted a job and went
+    // quiet must read as "accepted, never settled", not as "retried" — and
+    // while it is still inside the deadline it asked for, it must not be
+    // reaped at all.
+    let q = "q-reap-awaiting-settle";
+    let mut nj = make_job(q, "settle_task");
+    nj.timeout_ms = 1;
+    let job = s.enqueue(nj).unwrap();
+    let t0 = now_millis();
+    s.dequeue(q, t0, None).unwrap().unwrap();
+    let epoch = s.claim_execution(&job.id, "settle-owner").unwrap().unwrap();
+
+    // Past its own timeout, so the job-side predicate already selects it.
+    let later = t0 + 1_000;
+    s.await_settle(
+        &job.id,
+        "settle-owner",
+        0,
+        Some(epoch),
+        later + 60_000,
+        None,
+    )
+    .unwrap();
+
+    assert!(
+        !s.reap_stale_jobs(later, None)
+            .unwrap()
+            .iter()
+            .any(|s| s.job.id == job.id),
+        "a job inside the deadline its target extended must not be reaped"
+    );
+
+    // Once the settle deadline passes, it is stale — and flagged.
+    let expired = later + 61_000;
+    let found = s
+        .reap_stale_jobs(expired, None)
+        .unwrap()
+        .into_iter()
+        .find(|s| s.job.id == job.id)
+        .expect("past its settle deadline the job is stale");
+    assert!(
+        found.awaiting_settle,
+        "the reaper must be able to say the target accepted this and never came back"
+    );
+
+    s.complete(&job.id, None, None).unwrap();
+}
+
+/// Claim a fresh running job and return `(job_id, epoch)`.
+///
+/// The settle marker is fenced on `(owner, attempt, epoch)`, so every test
+/// below needs a job that is genuinely `Running` at attempt 0 under a claim it
+/// knows the epoch of — a bare id would be refused by the fence rather than by
+/// the thing under test.
+fn running_under_claim(s: &impl Storage, queue: &str, owner: &str) -> (String, i64) {
+    let mut nj = make_job(queue, "settle_task");
+    nj.timeout_ms = 60_000;
+    let job = s.enqueue(nj).unwrap();
+    s.dequeue(queue, now_millis(), None).unwrap().unwrap();
+    let epoch = s
+        .claim_execution(&job.id, owner)
+        .unwrap()
+        .expect("a fresh job's claim is unheld");
+    (job.id, epoch)
+}
+
+fn test_settle_marker_round_trip(s: &impl Storage) {
+    assert!(
+        s.supports_settle(),
+        "every shipped backend implements the settle marker; the default refuses"
+    );
+
+    let q = "q-settle-round-trip";
+    let (job_id, epoch) = running_under_claim(s, q, "settle-owner");
+    let deadline = now_millis() + 60_000;
+
+    assert_eq!(
+        s.await_settle(&job_id, "settle-owner", 0, Some(epoch), deadline, None)
+            .unwrap(),
+        Some(deadline),
+        "accepting a dispatch records the deadline it will be waited on until"
+    );
+
+    // Monotonic. A retransmitted accept, or an extension that lost a race to a
+    // longer one, must not shorten the window the target is working inside.
+    assert_eq!(
+        s.await_settle(
+            &job_id,
+            "settle-owner",
+            0,
+            Some(epoch),
+            deadline - 30_000,
+            None
+        )
+        .unwrap(),
+        Some(deadline),
+        "a deadline must never move backwards"
+    );
+    assert_eq!(
+        s.await_settle(
+            &job_id,
+            "settle-owner",
+            0,
+            Some(epoch),
+            deadline + 30_000,
+            None
+        )
+        .unwrap(),
+        Some(deadline + 30_000),
+        "an extension moves it forward"
+    );
+
+    // Single-use: the marker is removed in the statement that tests it, so the
+    // second caller — whichever of the three racers it is — gets nothing.
+    assert_eq!(
+        s.claim_settle(&job_id, SettleClaimant::Lease(epoch), None)
+            .unwrap(),
+        SettleGrant::Granted
+    );
+    assert_eq!(
+        s.claim_settle(&job_id, SettleClaimant::Lease(epoch), None)
+            .unwrap(),
+        SettleGrant::Refused,
+        "a settle is single-use for the attempt it names"
+    );
+
+    s.complete(&job_id, None, None).unwrap();
+}
+
+fn test_settle_marker_has_exactly_one_winner_under_contention(s: &impl Storage) {
+    // The sequential tests prove replay is refused. They cannot prove the
+    // property the whole design rests on — that two callbacks racing one
+    // marker produce *one* winner — because a check-then-act bug passes every
+    // sequential test there is. This one races them on purpose.
+    let q = "q-settle-contended";
+    let (job_id, epoch) = running_under_claim(s, q, "settle-owner");
+    s.await_settle(
+        &job_id,
+        "settle-owner",
+        0,
+        Some(epoch),
+        now_millis() + 60_000,
+        None,
+    )
+    .unwrap();
+
+    const RACERS: usize = 8;
+    let start = std::sync::Barrier::new(RACERS);
+    let granted = std::sync::atomic::AtomicUsize::new(0);
+
+    std::thread::scope(|scope| {
+        for _ in 0..RACERS {
+            scope.spawn(|| {
+                // Released together, so the claims genuinely overlap rather
+                // than queueing behind each other's setup.
+                start.wait();
+                if matches!(
+                    s.claim_settle(&job_id, SettleClaimant::Lease(epoch), None),
+                    Ok(SettleGrant::Granted)
+                ) {
+                    granted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            });
+        }
+    });
+
+    assert_eq!(
+        granted.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "exactly one of {RACERS} concurrent claims may win the marker"
+    );
+
+    s.complete(&job_id, None, None).unwrap();
+}
+
+fn test_settle_marker_refuses_a_lease_that_is_not_this_claims(s: &impl Storage) {
+    let q = "q-settle-foreign-lease";
+    let (job_id, epoch) = running_under_claim(s, q, "settle-owner");
+    let deadline = now_millis() + 60_000;
+    s.await_settle(&job_id, "settle-owner", 0, Some(epoch), deadline, None)
+        .unwrap();
+
+    // The strict fence, which is the whole point of the feature: a settle
+    // arriving under a superseded dispatch's lease is refused rather than
+    // applied. `epochs_agree` would have let the third case through.
+    assert_eq!(
+        s.claim_settle(&job_id, SettleClaimant::Lease(epoch ^ 1), None)
+            .unwrap(),
+        SettleGrant::Refused,
+        "a lease naming another dispatch settles nothing"
+    );
+
+    // A superseded attempt cannot buy itself more time either. Attempt 1 when
+    // the job is still at 0.
+    assert_eq!(
+        s.await_settle(&job_id, "settle-owner", 1, Some(epoch), deadline, None)
+            .unwrap(),
+        None,
+        "the accept is fenced on the attempt, not just the owner"
+    );
+    assert_eq!(
+        s.await_settle(&job_id, "someone-else", 0, Some(epoch), deadline, None)
+            .unwrap(),
+        None,
+        "and on the owner"
+    );
+
+    // Still claimable by the real one — none of the refusals above consumed
+    // anything.
+    assert_eq!(
+        s.claim_settle(&job_id, SettleClaimant::Lease(epoch), None)
+            .unwrap(),
+        SettleGrant::Granted
+    );
+
+    // Consuming the marker must leave the claim — and its epoch — in place:
+    // the fence that runs when the settled result is applied has nothing else
+    // to compare against.
+    assert!(
+        s.claim_execution(&job_id, "another").unwrap().is_none(),
+        "a consumed settle must not take the execution claim with it"
+    );
+
+    s.complete(&job_id, None, None).unwrap();
+}
+
+fn test_settle_marker_waits_for_its_deadline(s: &impl Storage) {
+    let q = "q-settle-deadline";
+    let (job_id, epoch) = running_under_claim(s, q, "settle-owner");
+    let deadline = now_millis() + 60_000;
+    s.await_settle(&job_id, "settle-owner", 0, Some(epoch), deadline, None)
+        .unwrap();
+
+    // The scheduler is a claimant like any other, and it may only collect a
+    // marker whose deadline has actually passed. Compared inside the statement
+    // so an extension that committed a millisecond ago still wins.
+    assert_eq!(
+        s.claim_settle(&job_id, SettleClaimant::Expired { now: deadline - 1 }, None)
+            .unwrap(),
+        SettleGrant::Refused,
+        "the reaper must not take a marker out from under a live target"
+    );
+    assert_eq!(
+        s.claim_settle(&job_id, SettleClaimant::Expired { now: deadline }, None)
+            .unwrap(),
+        SettleGrant::Granted,
+        "at the deadline the scheduler gives up"
+    );
+
+    s.complete(&job_id, None, None).unwrap();
+}
+
+fn test_settle_marker_survives_the_claim_purge(s: &impl Storage) {
+    // The hole #845 turns from theoretical into the normal case: claims are
+    // swept by age, and a swept claim takes its epoch with it. An absent epoch
+    // is not a mismatch, so the fence would then authorize the one thing it
+    // exists to refuse.
+    let q = "q-settle-purge";
+    let (awaiting, epoch) = running_under_claim(s, q, "purge-owner");
+    let (ordinary, _) = running_under_claim(s, q, "purge-owner");
+
+    let now = now_millis();
+    s.await_settle(&awaiting, "purge-owner", 0, Some(epoch), now + 60_000, None)
+        .unwrap();
+
+    // Sweep with a cutoff far in the future: both claims are "old".
+    s.purge_execution_claims(now + 3_600_000).unwrap();
+
+    assert!(
+        s.claim_execution(&ordinary, "another").unwrap().is_some(),
+        "an ordinary aged claim is still collected"
+    );
+    assert!(
+        s.claim_execution(&awaiting, "another").unwrap().is_none(),
+        "a claim awaiting a settle outlives the age sweep — its epoch is the fence"
+    );
+    // And the marker it was protecting is intact.
+    assert_eq!(
+        s.claim_settle(&awaiting, SettleClaimant::Lease(epoch), None)
+            .unwrap(),
+        SettleGrant::Granted
+    );
+
+    s.complete(&awaiting, None, None).unwrap();
+    s.complete(&ordinary, None, None).unwrap();
 }
 
 fn test_reclaim_execution(s: &impl Storage) {
@@ -2372,6 +2664,12 @@ fn run_storage_tests(s: &impl Storage) {
     test_circuit_breakers(s);
     test_execution_claims_purge(s);
     test_reap_stale_jobs(s);
+    test_reap_skips_and_flags_a_dispatch_awaiting_settle(s);
+    test_settle_marker_round_trip(s);
+    test_settle_marker_has_exactly_one_winner_under_contention(s);
+    test_settle_marker_refuses_a_lease_that_is_not_this_claims(s);
+    test_settle_marker_waits_for_its_deadline(s);
+    test_settle_marker_survives_the_claim_purge(s);
     test_reclaim_execution(s);
     test_claim_execution_batch(s);
     test_complete_batch(s);
