@@ -91,9 +91,20 @@ not concurrent requests.
 An accepted dispatch can be given up by two things that cannot see each other:
 
 1. a `Settle` reaching the replica that dispatched it,
-2. that dispatch being abandoned — the settle deadline passing, a cancel, or a
-   shutdown — observed either by the waiting task or, after this process died,
-   by the stale-job reaper on any replica.
+2. that dispatch being given up by the scheduler — the settle deadline
+   passing, a `notify_cancel`, or a shutdown drain running out — observed
+   either by the waiting task or, after this process died, by the stale-job
+   reaper on any replica.
+
+The cancel in (2) is the **scheduler-side**
+`WorkerDispatcher::notify_cancel`, a different thing from reaching into the
+target's process; §9 rules only the latter out. It takes the marker as
+`SettleClaimant::Abandoned` and settles `Outcome::Cancelled` — the same answer
+a cancel gives *before* the target accepted, because the per-topology table
+promises one answer for push and not one per window. A shutdown drain shares
+that claimant and settles `Refusal::Abandoned`, which is retryable: the job
+was not cancelled, this process merely stopped being able to wait for it.
+The claimant and the settlement are separate values for exactly this reason.
 
 Both must resolve to exactly one outcome, and the in-process registry cannot
 arbitrate: case 2-after-a-crash never touches it. So the arbiter is durable —
@@ -596,11 +607,15 @@ gone.
 
 ## §9 What this does not promise
 
-- **Cancel still does not stop a push target's work.** #846 owns that. The
-  poll-on-settle option it lists composes with this door — a target that calls
-  `ExtendLease` could be told "this job is no longer yours" — and the RPC is
-  shaped so that answer can be added as a field rather than a new RPC. Nothing
-  here implements it.
+- **Cancel still does not stop a push target's work.** #846 owns that, and it
+  is only that half: the scheduler-side `notify_cancel` *is* handled here —
+  it takes the settle marker, settles the attempt `Cancelled`, and fences the
+  target's later callback out (§1.2). What remains out of scope is reaching
+  the target's running process, so its side effects still happen. The
+  poll-on-settle option #846 lists composes with this door — a target that
+  calls `ExtendLease` could be told "this job is no longer yours" — and the
+  RPC is shaped so that answer can be added as a field rather than a new RPC.
+  Nothing here implements it.
 - **No HTTP settle.** §8 of the proto design: "No HTTP binding, ever. Not 'not
   yet'." A target speaks gRPC to report, and the docs say so plainly rather
   than leaving it to be discovered at integration time.
