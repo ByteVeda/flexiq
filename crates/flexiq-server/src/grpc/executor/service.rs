@@ -610,14 +610,24 @@ fn settle_disabled() -> Status {
 
 /// Map a refusal from the dispatch target onto a status code.
 ///
-/// Every one of these is `FAILED_PRECONDITION`, never `ABORTED`: `ABORTED` sits
-/// in the retry-with-backoff class, and a report that lost its fence must not
-/// be resent — resending it is the double execution the fence exists to refuse.
-/// The messages differ because the operator actions differ.
+/// Everything that lost a fence is `FAILED_PRECONDITION`, never `ABORTED`:
+/// `ABORTED` sits in the retry-with-backoff class, and a report that lost its
+/// fence must not be resent — resending it is the double execution the fence
+/// exists to refuse. The messages differ because the operator actions differ.
+///
+/// [`SettleRefused::NotReady`] is the single exception, and the exception is
+/// the point: nothing has been decided there, so it is `UNAVAILABLE` and the
+/// caller is expected to come back. Folding it in with the rest would have a
+/// target discard a good result because the scheduler had not finished writing
+/// its own bookkeeping.
 #[cfg(feature = "http-target")]
 fn settle_refusal(refused: flexiq_core::SettleRefused) -> Status {
     use flexiq_core::SettleRefused;
     match refused {
+        SettleRefused::NotReady => Status::unavailable(
+            "this dispatch was accepted a moment ago and is not ready to be reported on \
+             yet; retry shortly",
+        ),
         // Not a stale lease: the caller may be perfectly current and simply
         // have reached the wrong replica. Said plainly, because the fix is an
         // operator's routing and not the target's code.
@@ -689,9 +699,19 @@ mod tests {
     /// A report that lost its fence must never be resent, so none of these may
     /// be `ABORTED` — which sits in the retry-with-backoff class. Resending one
     /// is the double execution the fence exists to refuse.
+    /// The one refusal a caller *should* retry, kept apart from the rest on
+    /// purpose: nothing has been decided when it is returned.
     #[cfg(feature = "http-target")]
     #[test]
-    fn no_settle_refusal_is_retryable() {
+    fn a_report_that_arrived_too_early_is_retryable() {
+        let status = settle_refusal(flexiq_core::SettleRefused::NotReady);
+        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert!(status.message().contains("retry"));
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn no_settled_refusal_is_retryable() {
         use flexiq_core::SettleRefused;
         for refused in [
             SettleRefused::NotHere,

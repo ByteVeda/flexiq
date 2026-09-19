@@ -32,6 +32,7 @@ use crate::lease::Lease;
 use crate::scheduler::JobResult;
 use crate::storage::records::{SettleClaimant, SettleGrant};
 use crate::worker::protocol::{Dispatch, PROTOCOL_VERSION};
+use crate::worker::SideChannel;
 
 /// `Content-Type` header name. Spelled rather than taken from
 /// `reqwest::header::CONTENT_TYPE` so it reaches [`put`] as the same
@@ -264,14 +265,25 @@ async fn await_settlement(
         .started_at
         .unwrap_or_else(now_millis)
         .saturating_add(job.timeout_ms);
-    match channel.await_settle(
-        &job.id,
-        &owner,
-        job.retry_count,
-        epoch,
-        deadline_ms,
-        namespace,
-    ) {
+    let recorded = blocking_settle(&channel, {
+        let job_id = job.id.clone();
+        let owner = owner.clone();
+        let namespace = namespace.map(str::to_owned);
+        let attempt = job.retry_count;
+        move |channel| {
+            channel.await_settle(
+                &job_id,
+                &owner,
+                attempt,
+                epoch,
+                deadline_ms,
+                namespace.as_deref(),
+            )
+        }
+    })
+    .await;
+
+    match recorded {
         Ok(Some(_)) => {}
         // The attempt was superseded between the dispatch and the answer. It
         // may not buy itself time, and it may not settle either.
@@ -286,6 +298,13 @@ async fn await_settlement(
         }
     }
 
+    // Only now may a callback be fenced. Until the marker is durable a report
+    // is answered "not ready, try again" rather than "fenced, do not retry":
+    // the target beat our own bookkeeping, and refusing it for good would
+    // throw away a result nothing had actually refused, leaving this attempt
+    // to wait out a deadline whose answer had already arrived.
+    shared.mark_accepted_ready(&job.id);
+
     let mut abandon = shared.abandon_signal();
     let claimant = tokio::select! {
         biased;
@@ -298,7 +317,14 @@ async fn await_settlement(
         () = sleep_until_deadline(deadline_ms) => SettleClaimant::Expired { now: now_millis() },
     };
 
-    match channel.claim_settle(&job.id, claimant, namespace) {
+    let consumed = blocking_settle(&channel, {
+        let job_id = job.id.clone();
+        let namespace = namespace.map(str::to_owned);
+        move |channel| channel.claim_settle(&job_id, claimant, namespace.as_deref())
+    })
+    .await;
+
+    match consumed {
         // This task won the marker, so it owes the one result.
         Ok(SettleGrant::Granted) => Some(match claimant {
             SettleClaimant::Abandoned => Refusal::Abandoned,
@@ -319,6 +345,29 @@ async fn await_settlement(
             None
         }
     }
+}
+
+/// Run one synchronous side-channel call off the runtime.
+///
+/// Both settle calls reach a Diesel `write_transaction` or a Redis script, and
+/// this task runs on the runtime every dispatch request shares — the same
+/// argument [`resolve_toggles`] makes for a settings read. A slow or bursting
+/// backend must not be able to occupy runtime workers other dispatches need.
+async fn blocking_settle<T, F>(channel: &Arc<dyn SideChannel>, work: F) -> crate::error::Result<T>
+where
+    F: FnOnce(&Arc<dyn SideChannel>) -> crate::error::Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let channel = Arc::clone(channel);
+    tokio::task::spawn_blocking(move || work(&channel))
+        .await
+        .unwrap_or_else(|error| {
+            // Reported as a failure rather than unwrapped: this is the fence,
+            // and a panicking one must refuse rather than be taken at its word.
+            Err(crate::error::QueueError::Config(format!(
+                "the settle fence could not be evaluated: {error}"
+            )))
+        })
 }
 
 /// Sleep until a wall-clock deadline, re-derived from the clock the reaper

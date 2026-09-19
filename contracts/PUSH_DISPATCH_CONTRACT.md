@@ -199,10 +199,20 @@ A target **MUST** present two things, and neither substitutes for the other:
 
 A `Settle` is **single-use for the attempt it names**. The scheduler records
 one marker per accepted dispatch and removes it in the same statement that
-tests it, so exactly one of a `Settle`, a `Settle` that reached another
-replica, and the settle deadline passing can win.
+tests it, so exactly one of a `Settle` and the scheduler giving the dispatch up
+— its deadline passing, a cancel, or a shutdown — can win.
 
-A call that lost that race is `FAILED_PRECONDITION`, and a target **MUST NOT**
+A `Settle` **MUST** reach the scheduler replica that dispatched the job: the
+attempt waiting for it lives in that process. One that lands elsewhere is
+refused with a message saying so, and consumes nothing. Run a single scheduler
+replica, or route these calls to the one that dispatched.
+
+A call that arrives in the moment between the `202` and the scheduler
+recording its marker is `UNAVAILABLE`, and a target **SHOULD** retry it
+shortly: nothing has been decided, and that is the only status here that means
+so.
+
+A call that lost the race is `FAILED_PRECONDITION`, and a target **MUST NOT**
 retry it. Losing the fence means the attempt was already settled — by a
 retry that ran elsewhere, by an operator requeue, or by the deadline — and
 resending would be the double execution the fence exists to refuse. The same

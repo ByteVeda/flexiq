@@ -440,6 +440,16 @@ struct Accepted {
     /// Retry budget, carried so a settled failure lands on the same
     /// retry-or-dead-letter decision an in-request failure would.
     max_retries: i32,
+    /// Whether the durable settle marker this dispatch is fenced on exists yet.
+    ///
+    /// The entry is registered *before* the marker is written, so that a
+    /// callback racing the write has somewhere to land rather than being lost.
+    /// It must not be told `Fenced` in that window: the contract says a fenced
+    /// report is never resent, so the target would throw away a result nothing
+    /// had refused. Until this flips, a report is
+    /// [`NotReady`](SettleRefused::NotReady) — the one refusal here that is
+    /// retryable, because nothing has been decided yet.
+    ready: bool,
     /// Wakes the waiting attempt so it stops waiting and releases its permit.
     ///
     /// Carries nothing: whoever consumed the settle marker also emits the
@@ -511,10 +521,19 @@ impl Shared {
                 task_name: job.task_name.clone(),
                 attempt: job.retry_count,
                 max_retries: job.max_retries,
+                ready: false,
                 relieve: Some(relieve),
             },
         );
         wait
+    }
+
+    /// Mark an accepted dispatch's settle marker as durable, so reports on it
+    /// stop being answered "not ready yet".
+    fn mark_accepted_ready(&self, job_id: &str) {
+        if let Some(held) = self.accepted.lock().unwrap_or_else(recover).get_mut(job_id) {
+            held.ready = true;
+        }
     }
 
     /// The attempt an accepted dispatch was made at.
@@ -740,6 +759,10 @@ impl HttpDispatchTarget {
         let (expected, namespace) = {
             let accepted = shared.accepted.lock().unwrap_or_else(recover);
             match accepted.get(job_id) {
+                // Read under the same lock as the lease: a readiness checked
+                // separately could go stale between the two reads, which is
+                // the race this flag exists to close.
+                Some(held) if !held.ready => return Err(SettleRefused::NotReady),
                 Some(held) => (held.lease.clone(), held.namespace.clone()),
                 None => return Err(SettleRefused::NotHere),
             }
@@ -784,6 +807,10 @@ impl HttpDispatchTarget {
         let (expected, namespace) = {
             let accepted = shared.accepted.lock().unwrap_or_else(recover);
             match accepted.get(job_id) {
+                // Read under the same lock as the lease: a readiness checked
+                // separately could go stale between the two reads, which is
+                // the race this flag exists to close.
+                Some(held) if !held.ready => return Err(SettleRefused::NotReady),
                 Some(held) => (held.lease.clone(), held.namespace.clone()),
                 None => return Err(SettleRefused::NotHere),
             }
@@ -882,6 +909,9 @@ impl HttpDispatchTarget {
     ) -> Result<Option<String>, SettleRefused> {
         let accepted = self.shared.accepted.lock().unwrap_or_else(recover);
         let held = accepted.get(job_id).ok_or(SettleRefused::NotHere)?;
+        if !held.ready {
+            return Err(SettleRefused::NotReady);
+        }
         if held
             .lease
             .as_ref()
@@ -1007,6 +1037,16 @@ pub enum SettleRefused {
     /// which is an operator's routing problem and not a stale attempt. The two
     /// want different answers from the person reading the error.
     NotHere,
+    /// The dispatch is accepted but its durable settle marker is not written
+    /// yet — a callback that beat the scheduler's own bookkeeping.
+    ///
+    /// **The one refusal here a caller should retry.** Every other one means a
+    /// decision was made; this one means none has been. Telling a target
+    /// `Fenced` in this window would have it throw away a perfectly good
+    /// result on the strength of the contract's "never resend a fenced
+    /// report", and the attempt would then wait out its whole deadline having
+    /// refused the answer it was waiting for.
+    NotReady,
     /// The lease is absent, undecodable, or not the one this dispatch was made
     /// under — or the marker was already consumed. The attempt was settled by
     /// someone else and this answer is thrown away.
