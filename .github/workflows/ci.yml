@@ -38,6 +38,7 @@ jobs:
       server: ${{ steps.decide.outputs.server }}
       chart: ${{ steps.decide.outputs.chart }}
       proto: ${{ steps.decide.outputs.proto }}
+      bench: ${{ steps.decide.outputs.bench }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7.0.1
@@ -159,6 +160,20 @@ jobs:
               # ci-server-image.yml has no trigger of its own, so a PR that
               # touches only this file would skip the suite it just edited.
               - '.github/workflows/ci.yml'
+            # Deliberately not `*shared`: the harness measures the *published*
+            # flexiq wheel pinned in bench/requirements.txt, not this tree, so an
+            # engine change cannot break it. The docs module is watched because
+            # ci-bench.yml regenerates it and diffs the result.
+            bench:
+              - 'bench/**'
+              - 'scripts/sync-bench.mjs'
+              - '.github/actions/setup-node/**'
+              - 'docs/app/lib/bench-data.json'
+              - 'README.md'
+              - '.github/workflows/ci-bench.yml'
+              # ci-bench.yml has no trigger of its own; without this, the one PR
+              # that edits the dispatcher would skip the suite it just wired in.
+              - '.github/workflows/ci.yml'
             # Template rendering only — seconds, and independent of the image.
             chart:
               - 'deploy/helm/**'
@@ -196,6 +211,7 @@ jobs:
           SERVER: ${{ steps.filter.outputs.server }}
           CHART: ${{ steps.filter.outputs.chart }}
           PROTO: ${{ steps.filter.outputs.proto }}
+          BENCH: ${{ steps.filter.outputs.bench }}
         run: |
           decide() {
             if [ "$FORCE" = "true" ] || [ "$2" = "true" ]; then
@@ -214,6 +230,7 @@ jobs:
           decide server "$SERVER"
           decide chart "$CHART"
           decide proto "$PROTO"
+          decide bench "$BENCH"
 
   versions:
     name: Version consistency
@@ -274,6 +291,12 @@ jobs:
     if: needs.changes.outputs.server == 'true'
     uses: ./.github/workflows/ci-server-image.yml
 
+  bench:
+    name: Bench
+    needs: changes
+    if: needs.changes.outputs.bench == 'true'
+    uses: ./.github/workflows/ci-bench.yml
+
   chart:
     name: Chart
     needs: changes
@@ -289,7 +312,7 @@ jobs:
   ci-status:
     name: CI status
     if: always()
-    needs: [changes, versions, rust, python, node, java, go, go-e2e, polyglot, server-image, chart, proto]
+    needs: [changes, versions, rust, python, node, java, go, go-e2e, polyglot, server-image, bench, chart, proto]
     runs-on: ubuntu-latest
     steps:
       - name: Check that no required job failed
