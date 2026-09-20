@@ -35,7 +35,7 @@ import time
 
 from flexiq import Queue
 
-# ── Configuration ──────────────────────────────────────
+# ── Configuration ────────────────────────────────────────
 
 NUM_JOBS = 10_000
 NUM_WORKERS = os.cpu_count() or 4
@@ -53,7 +53,7 @@ def cpu_light(x):
     """Light CPU work — string formatting."""
     return f"processed-{x}-{'x' * 100}"
 
-# ── Benchmark Functions ────────────────────────────────
+# ── Benchmark Functions ──────────────────────────────────
 
 def bench_enqueue(task, n):
     """Measure batch enqueue throughput."""
@@ -101,7 +101,7 @@ def bench_latency(task, samples=100):
     p99 = sorted(latencies)[int(len(latencies) * 0.99)]
     print(f"  Latency (n={samples}): avg={avg*1000:.1f}ms p50={p50*1000:.1f}ms p99={p99*1000:.1f}ms")
 
-# ── Main ─────────────────────────────────────────────
+# ── Main ─────────────────────────────────────────────────
 
 def main():
     print(f"flexiq benchmark")
