@@ -9,8 +9,9 @@
   "scripts": {
     "sync:api": "node scripts/api/sync.mjs",
     "sync:changelog": "node ../scripts/sync-changelog.mjs",
-    "build": "pnpm sync:changelog && react-router build",
-    "dev": "pnpm sync:changelog && react-router dev",
+    "sync:bench": "node ../scripts/sync-bench.mjs",
+    "build": "pnpm sync:changelog && pnpm sync:bench && react-router build",
+    "dev": "pnpm sync:changelog && pnpm sync:bench && react-router dev",
     "start": "serve build/client",
     "typecheck": "react-router typegen && tsc --noEmit",
     "lint": "biome check",

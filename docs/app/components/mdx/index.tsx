@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import * as Demos from "@/components/demos/mdx";
 import * as Diagrams from "@/components/diagrams";
 import { SdkBinding, SdkLang, SdkName, SdkSwap } from "@/components/sdk-text";
+import { BenchProvenance, BenchTable } from "./bench-table";
 import { Callout } from "./callout";
 import { Card, Cards } from "./card";
 import { CodeBlock } from "./code-block";
@@ -51,6 +52,8 @@ export const mdxComponents: MDXComponents = {
   SdkSwap,
   Card,
   Cards,
+  BenchTable,
+  BenchProvenance,
   ...Diagrams,
   ...Demos,
 };

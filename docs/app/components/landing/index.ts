@@ -1,3 +1,4 @@
+export { BenchChart } from "./bench-chart";
 export { CopyButton } from "./copy-button";
 export { FlowDiagram, type FlowStage } from "./flow-diagram";
 export { Footer } from "./footer";
