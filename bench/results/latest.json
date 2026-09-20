@@ -1,0 +1,483 @@
+{
+  "schema": 1,
+  "scenario": {
+    "name": "fixed-payload-drain",
+    "jobs": 20000,
+    "payload_bytes": 256,
+    "concurrency": 4,
+    "warmup_jobs": 500,
+    "latency_jobs": 2000,
+    "latency_rate_per_second": 50,
+    "idle_sample_seconds": 20,
+    "worker_settle_seconds": 5,
+    "drain_timeout_seconds": 420
+  },
+  "machine": {
+    "label": "4-core shared cloud VM (Intel Xeon @ 2.10GHz, 15.7 GB)",
+    "notes": "Measured inside a shared cloud container: a virtualised host with neighbours this run cannot see or control. Treat the ranking as indicative and the tails as noisy; rerun on dedicated hardware before quoting a number in a decision.",
+    "measured_at": "2026-09-20T08:13:17+00:00",
+    "cpu_model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "cpu_count": 4,
+    "ram_gb": 15.7,
+    "kernel": "6.18.44-fc-v37",
+    "platform": "Linux-6.18.44-fc-v37-x86_64-with-glibc2.39",
+    "python": "3.11.15",
+    "node": "v22.22.2",
+    "redis_server": "Redis server v=7.0.15 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=b30e82fcf6da7c56",
+    "git": {
+      "commit": "f8e966907720e0d4d0b6eefb20fe17f2fb8d5e91",
+      "dirty": true
+    }
+  },
+  "sink": {
+    "kind": "redis-list",
+    "url": "redis://127.0.0.1:6399/0"
+  },
+  "systems": {
+    "flexiq-sqlite": {
+      "label": "FlexiQ · SQLite (WAL)",
+      "language": "python",
+      "backend": "sqlite",
+      "configuration": "defaults",
+      "versions": {
+        "flexiq": "2.0.0",
+        "redis": "6.4.0"
+      },
+      "concurrency_model": "N worker threads in the Rust core, one process",
+      "idle": {
+        "rss_mb_mean": 51.1,
+        "rss_mb_max": 51.1,
+        "cpu_percent": 0.35,
+        "processes": 1
+      },
+      "drain": {
+        "completed": 20000,
+        "latency_ms": {
+          "p50": 67893.766,
+          "p90": 122037.881,
+          "p99": 134137.99,
+          "max": 135491.741,
+          "mean": 67936.154
+        },
+        "drain_seconds": 139.0164,
+        "completion_per_second": 143.9
+      },
+      "enqueue": {
+        "per_job": {
+          "jobs": 20000,
+          "seconds": 3.533497,
+          "per_second": 5660.1
+        },
+        "batch": {
+          "jobs": 20000,
+          "seconds": 0.622478,
+          "per_second": 32129.7
+        }
+      },
+      "latency": {
+        "completed": 2000,
+        "target_rate_per_second": 50,
+        "achieved_rate_per_second": 50.0,
+        "latency_ms": {
+          "p50": 29.247,
+          "p90": 49.67,
+          "p99": 54.295,
+          "max": 121.299,
+          "mean": 29.148
+        },
+        "first_decile_mean_ms": 29.578,
+        "last_decile_mean_ms": 28.308,
+        "saturated": false
+      }
+    },
+    "flexiq-redis": {
+      "label": "FlexiQ · Redis",
+      "language": "python",
+      "backend": "redis",
+      "configuration": "defaults",
+      "versions": {
+        "flexiq": "2.0.0",
+        "redis": "6.4.0"
+      },
+      "concurrency_model": "N worker threads in the Rust core, one process",
+      "idle": {
+        "rss_mb_mean": 46.5,
+        "rss_mb_max": 46.6,
+        "cpu_percent": 0.3,
+        "processes": 1
+      },
+      "drain": {
+        "completed": 20000,
+        "latency_ms": {
+          "p50": 79534.228,
+          "p90": 139214.03,
+          "p99": 152116.825,
+          "max": 153510.284,
+          "mean": 78557.323
+        },
+        "drain_seconds": 157.524,
+        "completion_per_second": 127.0
+      },
+      "enqueue": {
+        "per_job": {
+          "jobs": 20000,
+          "seconds": 4.017368,
+          "per_second": 4978.4
+        },
+        "batch": {
+          "jobs": 20000,
+          "seconds": 0.80806,
+          "per_second": 24750.6
+        }
+      },
+      "latency": {
+        "completed": 2000,
+        "target_rate_per_second": 50,
+        "achieved_rate_per_second": 50.0,
+        "latency_ms": {
+          "p50": 29.526,
+          "p90": 50.728,
+          "p99": 123.502,
+          "max": 202.734,
+          "mean": 30.979
+        },
+        "first_decile_mean_ms": 33.946,
+        "last_decile_mean_ms": 31.048,
+        "saturated": false
+      }
+    },
+    "celery": {
+      "label": "Celery · Redis",
+      "language": "python",
+      "backend": "redis",
+      "configuration": "defaults",
+      "versions": {
+        "celery": "5.6.3",
+        "kombu": "5.6.2",
+        "billiard": "4.3.0",
+        "redis": "6.4.0"
+      },
+      "concurrency_model": "N prefork child processes (`celery worker -c N`)",
+      "idle": {
+        "rss_mb_mean": 209.3,
+        "rss_mb_max": 209.3,
+        "cpu_percent": 0.15,
+        "processes": 5
+      },
+      "drain": {
+        "completed": 20000,
+        "latency_ms": {
+          "p50": 4697.02,
+          "p90": 8320.214,
+          "p99": 9055.206,
+          "max": 9153.258,
+          "mean": 4682.641
+        },
+        "drain_seconds": 19.4282,
+        "completion_per_second": 1029.4
+      },
+      "enqueue": {
+        "per_job": {
+          "jobs": 20000,
+          "seconds": 10.280054,
+          "per_second": 1945.5
+        },
+        "batch": null,
+        "batch_declined": "no bulk producer API"
+      },
+      "latency": {
+        "completed": 2000,
+        "target_rate_per_second": 50,
+        "achieved_rate_per_second": 50.0,
+        "latency_ms": {
+          "p50": 2.751,
+          "p90": 3.045,
+          "p99": 3.545,
+          "max": 17.456,
+          "mean": 2.81
+        },
+        "first_decile_mean_ms": 2.836,
+        "last_decile_mean_ms": 2.815,
+        "saturated": false
+      }
+    },
+    "dramatiq": {
+      "label": "Dramatiq · Redis",
+      "language": "python",
+      "backend": "redis",
+      "configuration": "defaults",
+      "versions": {
+        "dramatiq": "2.2.1",
+        "redis": "6.4.0"
+      },
+      "concurrency_model": "N worker processes, 1 thread each (`--processes N --threads 1`)",
+      "idle": {
+        "rss_mb_mean": 129.6,
+        "rss_mb_max": 129.8,
+        "cpu_percent": 0.7,
+        "processes": 5
+      },
+      "drain": {
+        "completed": 20000,
+        "latency_ms": {
+          "p50": 7883.267,
+          "p90": 14252.958,
+          "p99": 15686.727,
+          "max": 15843.367,
+          "mean": 7906.511
+        },
+        "drain_seconds": 19.1164,
+        "completion_per_second": 1046.2
+      },
+      "enqueue": {
+        "per_job": {
+          "jobs": 20000,
+          "seconds": 3.273189,
+          "per_second": 6110.2
+        },
+        "batch": null,
+        "batch_declined": "no bulk producer API"
+      },
+      "latency": {
+        "completed": 2000,
+        "target_rate_per_second": 50,
+        "achieved_rate_per_second": 50.0,
+        "latency_ms": {
+          "p50": 7.672,
+          "p90": 15.158,
+          "p99": 20.816,
+          "max": 39.036,
+          "mean": 8.352
+        },
+        "first_decile_mean_ms": 8.632,
+        "last_decile_mean_ms": 8.605,
+        "saturated": false
+      }
+    },
+    "rq": {
+      "label": "RQ · Redis",
+      "language": "python",
+      "backend": "redis",
+      "configuration": "defaults",
+      "versions": {
+        "rq": "2.12.0",
+        "redis": "6.4.0"
+      },
+      "concurrency_model": "N single-job worker processes (`rq worker-pool -n N`)",
+      "idle": {
+        "rss_mb_mean": 172.5,
+        "rss_mb_max": 172.5,
+        "cpu_percent": 0.05,
+        "processes": 6
+      },
+      "drain": {
+        "completed": 20000,
+        "latency_ms": {
+          "p50": 60097.745,
+          "p90": 106435.466,
+          "p99": 116625.547,
+          "max": 117769.084,
+          "mean": 60033.704
+        },
+        "drain_seconds": 128.4454,
+        "completion_per_second": 155.7
+      },
+      "enqueue": {
+        "per_job": {
+          "jobs": 20000,
+          "seconds": 10.677383,
+          "per_second": 1873.1
+        },
+        "batch": {
+          "jobs": 20000,
+          "seconds": 2.679142,
+          "per_second": 7465.1
+        }
+      },
+      "latency": {
+        "completed": 2000,
+        "target_rate_per_second": 50,
+        "achieved_rate_per_second": 50.0,
+        "latency_ms": {
+          "p50": 16.572,
+          "p90": 17.939,
+          "p99": 20.553,
+          "max": 23.648,
+          "mean": 16.802
+        },
+        "first_decile_mean_ms": 16.501,
+        "last_decile_mean_ms": 16.765,
+        "saturated": false
+      }
+    },
+    "bullmq": {
+      "label": "BullMQ · Redis",
+      "language": "node",
+      "backend": "redis",
+      "configuration": "defaults",
+      "versions": {
+        "bullmq": "5.61.0",
+        "ioredis": "5.9.0",
+        "node": "v22.22.2"
+      },
+      "concurrency_model": "1 Node process, `concurrency` jobs in flight on one event loop",
+      "idle": {
+        "rss_mb_mean": 73.9,
+        "rss_mb_max": 82.6,
+        "cpu_percent": 0.3,
+        "processes": 1
+      },
+      "drain": {
+        "completed": 20000,
+        "latency_ms": {
+          "p50": 0.397,
+          "p90": 0.909,
+          "p99": 6.711,
+          "max": 19.703,
+          "mean": 0.63
+        },
+        "drain_seconds": 3.5818,
+        "completion_per_second": 5583.9
+      },
+      "enqueue": {
+        "per_job": {
+          "jobs": 20000,
+          "seconds": 3.581435,
+          "per_second": 5584.4
+        },
+        "batch": {
+          "jobs": 20000,
+          "seconds": 1.051971,
+          "per_second": 19011.9
+        }
+      },
+      "latency": {
+        "completed": 2000,
+        "target_rate_per_second": 50,
+        "achieved_rate_per_second": 50.0,
+        "latency_ms": {
+          "p50": 1.617,
+          "p90": 1.986,
+          "p99": 2.442,
+          "max": 18.862,
+          "mean": 1.667
+        },
+        "first_decile_mean_ms": 1.748,
+        "last_decile_mean_ms": 1.681,
+        "saturated": false
+      }
+    },
+    "flexiq-sqlite-tuned": {
+      "label": "FlexiQ · SQLite (tuned)",
+      "language": "python",
+      "backend": "sqlite",
+      "configuration": "scheduler_batch_size=64, scheduler_poll_interval_ms=10",
+      "versions": {
+        "flexiq": "2.0.0",
+        "redis": "6.4.0"
+      },
+      "concurrency_model": "N worker threads in the Rust core, one process",
+      "idle": {
+        "rss_mb_mean": 51.2,
+        "rss_mb_max": 51.2,
+        "cpu_percent": 0.35,
+        "processes": 1
+      },
+      "drain": {
+        "completed": 20000,
+        "latency_ms": {
+          "p50": 14201.11,
+          "p90": 24792.869,
+          "p99": 27106.449,
+          "max": 27360.476,
+          "mean": 14161.093
+        },
+        "drain_seconds": 31.7664,
+        "completion_per_second": 629.6
+      },
+      "enqueue": {
+        "per_job": {
+          "jobs": 20000,
+          "seconds": 4.415043,
+          "per_second": 4530.0
+        },
+        "batch": {
+          "jobs": 20000,
+          "seconds": 0.621318,
+          "per_second": 32189.7
+        }
+      },
+      "latency": {
+        "completed": 2000,
+        "target_rate_per_second": 50,
+        "achieved_rate_per_second": 50.0,
+        "latency_ms": {
+          "p50": 11.842,
+          "p90": 21.29,
+          "p99": 23.541,
+          "max": 78.479,
+          "mean": 12.101
+        },
+        "first_decile_mean_ms": 12.858,
+        "last_decile_mean_ms": 12.025,
+        "saturated": false
+      }
+    },
+    "flexiq-redis-tuned": {
+      "label": "FlexiQ · Redis (tuned)",
+      "language": "python",
+      "backend": "redis",
+      "configuration": "scheduler_batch_size=64, scheduler_poll_interval_ms=10",
+      "versions": {
+        "flexiq": "2.0.0",
+        "redis": "6.4.0"
+      },
+      "concurrency_model": "N worker threads in the Rust core, one process",
+      "idle": {
+        "rss_mb_mean": 46.5,
+        "rss_mb_max": 46.6,
+        "cpu_percent": 0.3,
+        "processes": 1
+      },
+      "drain": {
+        "completed": 20000,
+        "latency_ms": {
+          "p50": 21544.117,
+          "p90": 35666.197,
+          "p99": 38225.16,
+          "max": 38517.095,
+          "mean": 20651.72
+        },
+        "drain_seconds": 43.1874,
+        "completion_per_second": 463.1
+      },
+      "enqueue": {
+        "per_job": {
+          "jobs": 20000,
+          "seconds": 4.673095,
+          "per_second": 4279.8
+        },
+        "batch": {
+          "jobs": 20000,
+          "seconds": 0.915332,
+          "per_second": 21850.0
+        }
+      },
+      "latency": {
+        "completed": 2000,
+        "target_rate_per_second": 50,
+        "achieved_rate_per_second": 50.0,
+        "latency_ms": {
+          "p50": 14.676,
+          "p90": 23.343,
+          "p99": 106.053,
+          "max": 222.663,
+          "mean": 16.861
+        },
+        "first_decile_mean_ms": 16.176,
+        "last_decile_mean_ms": 16.101,
+        "saturated": false
+      }
+    }
+  }
+}
