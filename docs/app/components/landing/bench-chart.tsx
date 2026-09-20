@@ -1,3 +1,5 @@
+import { Link } from "react-router";
+import { useActiveSdk } from "@/hooks";
 import { BENCH, type BenchRow } from "@/lib/bench-data";
 import { SectionHead } from "./sections";
 
@@ -137,6 +139,11 @@ function BenchPanel({ panel, rows }: { panel: Panel; rows: BenchRow[] }) {
 }
 
 export function BenchChart() {
+  // The benchmark page is shared content served under every SDK tier, so it
+  // has no unprefixed URL — `/more/examples/benchmark` is a 404. Same shape as
+  // the footer and the scenario finder: take the active SDK and build the
+  // prefix from it, so the reader lands on the tier they are already reading.
+  const sdk = useActiveSdk();
   const rows = BENCH.defaults
     .map((name) => BENCH.systems.find((system) => system.name === name))
     .filter((row): row is BenchRow => row != null);
@@ -161,17 +168,25 @@ export function BenchChart() {
           {BENCH.machine.cpu}. {BENCH.machine.notes}
         </p>
         <p className="bench-links">
-          <a href="https://github.com/ByteVeda/flexiq/tree/master/bench">
+          <a
+            href="https://github.com/ByteVeda/flexiq/tree/master/bench"
+            target="_blank"
+            rel="noreferrer"
+          >
             The harness
           </a>{" "}
           ·{" "}
-          <a href="https://github.com/ByteVeda/flexiq/blob/master/bench/results/latest.json">
+          <a
+            href="https://github.com/ByteVeda/flexiq/blob/master/bench/results/latest.json"
+            target="_blank"
+            rel="noreferrer"
+          >
             the raw results
           </a>{" "}
           ·{" "}
-          <a href="/more/examples/benchmark">
+          <Link to={`/${sdk}/more/examples/benchmark`}>
             every figure, the tuned rows, and what this does not measure
-          </a>
+          </Link>
         </p>
       </div>
     </section>
