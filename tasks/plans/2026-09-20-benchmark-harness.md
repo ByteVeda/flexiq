@@ -4,11 +4,11 @@ Issue: [#824](https://github.com/ByteVeda/flexiq/issues/824)
 Epic: [#827](https://github.com/ByteVeda/flexiq/issues/827) — the last of its six children.
 Branch: `bench/reproducible-harness`, off `origin/master` at `5acbbb1a`.
 
-The local commit series is authored as **pratyush618**. The branch on the
-remote was written through the GitHub API instead, because `git push` was
-unavailable in the environment this was built in, so its commits carry the
-API account as author. The trees match commit for commit; the authorship does
-not.
+Commits authored as **pratyush618**. The branch was written to the remote
+through the GitHub API rather than `git push`, which was unavailable in the
+environment this was built in; the API carried the same authorship, so the
+remote series matches the local one in both tree and author. Those commits are
+unsigned, which is what `git push` would have given them here anyway.
 
 ## Why
 
