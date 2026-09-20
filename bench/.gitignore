@@ -1,0 +1,5 @@
+# The virtualenv `bench/README.md` tells you to build here.
+.venv/
+# Scratch from a run: SQLite files, worker logs. `run.py` wipes it on startup.
+.work/
+node_modules/

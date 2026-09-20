@@ -1,0 +1,45 @@
+# The scenario. One definition, read by every runner — changing a number here
+# changes it for all five systems or for none of them, which is the only way a
+# cross-queue comparison means anything.
+#
+# Numbers published from this file were measured by `python bench/run.py`. If you
+# edit it, the committed results in `bench/results/` no longer describe your run;
+# say so before quoting them.
+
+[scenario]
+name = "fixed-payload-drain"
+
+# Jobs per system per run. Large enough that startup and the tail of the drain
+# do not dominate, small enough that five systems finish in a coffee break.
+jobs = 20000
+
+# Payload size handed to every job, identical bytes for every system. Big enough
+# that serialisation is visible, small enough that it is not the whole benchmark.
+payload_bytes = 256
+
+# Concurrent executors per worker. Each framework spells this differently — see
+# "Concurrency is not one thing" in README.md — so this is the count of jobs that
+# may be in flight at once, however the framework achieves it.
+concurrency = 4
+
+# Jobs drained and discarded before the measured round, so that JIT, connection
+# pools, prefork children and page cache are warm for everyone.
+warmup_jobs = 500
+
+# The paced phase. The burst above answers "how fast does a backlog clear";
+# this answers "what does one caller wait", which is a different question and
+# has to be measured separately or the p99 column is just throughput again.
+# Jobs are submitted at a fixed rate well under every system's measured
+# capacity, so no backlog forms and what is left is service latency.
+latency_jobs = 2000
+latency_rate_per_second = 50
+
+# Seconds the idle worker is sampled for RSS and CPU, queue empty, nothing to do.
+idle_sample_seconds = 20
+
+# Seconds a worker gets to start and settle before anything is measured against it.
+worker_settle_seconds = 5
+
+# Hard ceiling on the drain. A system that trips this fails the run rather than
+# reporting a truncated percentile.
+drain_timeout_seconds = 420

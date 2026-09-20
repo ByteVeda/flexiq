@@ -1,0 +1,18 @@
+# The smoke scenario — CI's copy, and the one to run first on a new machine.
+#
+# It is deliberately too small to measure anything: 500 jobs settle nothing about
+# throughput and a three-second idle window says nothing about idle cost. What it
+# does prove is that all six runners still start, drain and report — which is the
+# part that rots. Nothing measured with this file is ever published.
+
+[scenario]
+name = "fixed-payload-drain-smoke"
+jobs = 500
+payload_bytes = 256
+concurrency = 4
+warmup_jobs = 50
+latency_jobs = 150
+latency_rate_per_second = 50
+idle_sample_seconds = 3
+worker_settle_seconds = 5
+drain_timeout_seconds = 120

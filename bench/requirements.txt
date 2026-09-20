@@ -1,0 +1,41 @@
+# Pinned, because a benchmark whose dependencies float measures a different
+# thing every time it is run. `pip install -r bench/requirements.txt` into a
+# fresh virtualenv is what produced the committed results; the exact versions
+# are recorded again inside each results file, per system, so a reader never
+# has to trust this comment.
+#
+#   python3 -m venv bench/.venv
+#   bench/.venv/bin/pip install -r bench/requirements.txt
+#
+# flexiq is the published wheel rather than a build of this tree, on purpose: a
+# stranger reproducing these numbers gets the same binary we measured, which a
+# `maturin develop` of whatever is checked out cannot promise. To measure your
+# working tree instead, build and install it over the top — the results file
+# records the version it actually imported either way.
+flexiq==2.0.0
+
+# The rivals.
+celery==5.6.3
+dramatiq==2.2.1
+rq==2.12.0
+
+# Shared plumbing: the completion sink every system writes to, and the
+# process/RSS sampling behind the idle-cost column.
+redis==6.4.0
+psutil==7.2.2
+
+# Transitive, pinned so the resolver cannot quietly change what Celery is.
+amqp==5.4.0
+billiard==4.3.0
+click==8.5.0
+click-didyoumean==0.3.1
+click-plugins==1.1.1.2
+click-repl==0.4.0
+kombu==5.6.2
+packaging==26.3
+prompt-toolkit==3.0.53
+python-dateutil==2.9.0.post0
+six==1.17.0
+tzdata==2026.4
+vine==5.1.0
+wcwidth==0.8.4
