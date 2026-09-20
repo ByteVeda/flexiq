@@ -1,13 +1,19 @@
 ---
 title: Benchmark
-description: "A self-contained throughput benchmark — measure enqueue rate, processing rate, and end-to-end latency on your own hardware."
+description: "Measure FlexiQ on your own hardware, and read the published cross-queue numbers — enqueue throughput, end-to-end latency percentiles and idle cost, against Celery, Dramatiq, RQ and BullMQ."
 ---
 
-Numbers depend heavily on your machine, backend, and task body, so the only
-number that matters is the one you measure. Each SDK ships a self-contained
-benchmark that stages a batch of jobs, drains them with a worker, and reports
-the rates that bound a queue: enqueue throughput, processing throughput, and
-end-to-end latency.
+Two different things live on this page.
+
+**Your own number**, first: the snippet below stages a batch of jobs, drains
+them with a worker, and reports what bounds a queue — enqueue throughput,
+processing throughput, end-to-end latency. Numbers depend so heavily on
+machine, backend and task body that the only one that really matters is the one
+you measure.
+
+**And a published comparison** — [how it compares](#how-it-compares) — against
+Celery, Dramatiq, RQ and BullMQ, produced by a harness that lives in the
+repository and that you can run. Including the axes FlexiQ loses on.
 
 ## The benchmark
 
@@ -29,7 +35,7 @@ import time
 
 from flexiq import Queue
 
-# ── Configuration ────────────────────────────────────────
+# ── Configuration ──────────────────────────────────────
 
 NUM_JOBS = 10_000
 NUM_WORKERS = os.cpu_count() or 4
@@ -47,7 +53,7 @@ def cpu_light(x):
     """Light CPU work — string formatting."""
     return f"processed-{x}-{'x' * 100}"
 
-# ── Benchmark Functions ──────────────────────────────────
+# ── Benchmark Functions ────────────────────────────────
 
 def bench_enqueue(task, n):
     """Measure batch enqueue throughput."""
@@ -95,7 +101,7 @@ def bench_latency(task, samples=100):
     p99 = sorted(latencies)[int(len(latencies) * 0.99)]
     print(f"  Latency (n={samples}): avg={avg*1000:.1f}ms p50={p50*1000:.1f}ms p99={p99*1000:.1f}ms")
 
-# ── Main ─────────────────────────────────────────────────
+# ── Main ─────────────────────────────────────────────
 
 def main():
     print(f"flexiq benchmark")
@@ -397,7 +403,11 @@ cargo run --release --bin benchmark
 
 ## Sample output
 
-Illustrative — measure your own:
+**Illustrative, not measured.** These blocks show the shape of the output, not
+a result: nobody ran these exact figures on a machine anybody can name. For
+numbers that were actually measured — with the machine, the commit and the
+library versions recorded beside them — see [how it compares](#how-it-compares)
+below.
 
 <CodeTabs>
   <Tab sdk="python">
@@ -562,9 +572,9 @@ queue = Queue(db_path="tasks.db")
 | Lever | Effect |
 | --- | --- |
 | `enqueue_batch` | one storage round-trip per batch instead of per job |
-| `SchedulerConfig::batch_size` | jobs claimed per scheduler poll — `1` by default, so this is the first knob to move |
+| `SchedulerConfig::poll_interval` | 50ms by default, and the first knob to move: dispatch is capped near `2 × num_workers` per interval, so this sets the ceiling |
 | `SchedulerConfig::max_in_flight` | ceiling on jobs dispatched but not yet finished; unbounded by default |
-| `SchedulerConfig::poll_interval` | 50ms by default — lower it for latency, raise it to spare the database |
+| `SchedulerConfig::batch_size` | jobs claimed per poll — `1` by default, but it cannot lift a ceiling the channel sets; worth raising once the poll is short |
 | `num_workers` | handlers running at once; near the core count for CPU-bound bodies |
 | Backend | SQLite (WAL) for a single node; Postgres/Redis to scale out workers |
 | Task body | a real body's I/O usually dominates — benchmark *your* task too |
@@ -578,49 +588,104 @@ queue = Queue(db_path="tasks.db")
 
 </SdkOnly>
 
-<SdkOnly sdk="python">
-
-## Why it's fast
-
-| Component | How it helps |
-|---|---|
-| **Batch inserts** | `task.map()` inserts all jobs in a single SQLite transaction |
-| **WAL mode** | Concurrent reads while writing — workers don't block enqueue |
-| **Rust scheduler** | 50ms poll loop runs in native code, not Python |
-| **OS threads** | Workers are Rust `std::thread`, not Python threads |
-| **GIL per task** | GIL acquired only during Python task execution, released between tasks |
-| **tokio mpsc channels** | Bounded async dispatch to workers |
-| **r2d2 pool** | Up to 8 concurrent SQLite connections |
-| **Diesel ORM** | Compiled SQL queries, no runtime query building |
-
 ## How it compares
 
-Rough directional comparison on the same hardware (8-core, single
-machine). These are not scientific benchmarks — run the benchmark above on
-your own hardware for accurate numbers.
+The table below is not an estimate, a recollection or a figure from somebody
+else's blog post. It is the output of [`bench/`](https://github.com/ByteVeda/flexiq/tree/master/bench)
+in this repository: one scenario, one command, pinned dependency versions, and
+every system on its own defaults. Rerun it yourself — that is what it is for.
 
-| Metric | flexiq (SQLite) | flexiq (Postgres) | Celery + Redis | Dramatiq + Redis |
-|--------|-----------------|-------------------|---------------|-----------------|
-| Enqueue throughput | ~55,000/s | ~20,000/s | ~5,000/s | ~3,000/s |
-| Processing (noop, 8 workers) | ~4,000/s | ~3,500/s | ~2,000/s | ~1,500/s |
-| p50 latency | 1.1ms | 2.5ms | 5–10ms | 8–15ms |
-| p99 latency | 3.4ms | 8ms | 20–50ms | 30–80ms |
-| Memory (idle worker) | ~30 MB | ~35 MB | ~80 MB | ~60 MB |
-| Setup | `pip install flexiq` | + Postgres | + Redis + Celery | + Redis + Dramatiq |
-| External services | 0 | 1 (Postgres) | 2 (Redis + result backend) | 1 (Redis) |
+<BenchProvenance />
 
-<Callout type="info">
-  Celery numbers are from public benchmarks and community reports. Your
-  mileage will vary depending on workload, serializer, and broker
-  configuration. Run your own benchmarks before making decisions.
+<BenchTable />
+
+<Callout type="warn" title="A shared cloud VM is not a benchmark rig">
+  These numbers were measured on a virtualised host with neighbours the run
+  could not see or control. The ranking is indicative; the tails are noisy. Run
+  `python bench/run.py` on hardware you can name before letting any of this
+  decide anything.
 </Callout>
 
-**Why is flexiq faster?**
+**FlexiQ does not win this.** Read the table rather than this paragraph for
+the ranking, but the shape of it is structural and worth saying plainly.
 
-- Rust scheduler avoids GIL contention — scheduling and dispatch never block Python
-- SQLite WAL mode with batch inserts — disk I/O is minimized
-- Direct DB polling — no broker hop (enqueue → DB → dequeue is one less network round-trip vs enqueue → Redis → dequeue)
-- OS thread pool with per-task GIL acquisition — no multiprocessing overhead for I/O-bound tasks
+Where it does well is **idle cost**: an embedded queue runs no broker process
+and no result backend, so there is simply less resident. Enqueue throughput is
+competitive — one local SQLite or Redis write, no producer-side broker
+protocol.
+
+Where it does badly is **dispatch**, and on the default configuration that is
+most of the table.
+
+The scheduler hands jobs to the worker pool over a channel that holds
+`num_workers x 2` of them. It fills that channel, then sleeps for
+`scheduler_poll_interval_ms` — 50 ms by default — before looking again. Nothing
+wakes it when a worker frees up: the completion wake fires only once in-flight
+work reaches `max_in_flight`, which the Python binding sets to
+`num_workers + async_concurrency` (104 with stock settings) and which an
+eight-slot channel can never reach. So the timer is the only thing that ever
+wakes the scheduler, and throughput lands at roughly:
+
+```
+2 x num_workers / poll_interval
+```
+
+With four workers and a 50 ms poll that is 160 jobs/s, however deep the backlog
+and however idle the pool. Measured on the machine above: 150. The same
+relationship holds at one worker (model 40, measured 37) and at eight (model
+320, measured 232).
+
+The same sleep sits inside every job's latency, which is why the p50 above is
+close to half a poll interval rather than to any work the job did.
+
+Note what this is *not*. `scheduler_batch_size` — the knob this page has always
+recommended first — moves the default from 131 to 150 jobs/s, because batching
+the *claim* does not help when the constraint is a channel that holds eight.
+Dropping the poll to 10 ms, changing nothing else, gives 381. Doing both gives
+603. The poll interval is the lever; the batch size is a rounding error beside
+it.
+
+### What the two knobs are worth
+
+The same engine with the two settings this page has always recommended —
+`scheduler_batch_size=64` and `scheduler_poll_interval_ms=10`. Of the two, the
+poll interval does nearly all of the work:
+
+<BenchTable scope="tuned" />
+
+Only FlexiQ has a tuned row here, and that asymmetry is deliberate: showing
+only the tuned figure would hide that the default loses, and showing only the
+default would hide that the knob exists. No equivalent tuning was applied to
+Celery, Dramatiq, RQ or BullMQ. If you know the documented setting that moves
+one of their numbers, the harness wants that pull request.
+
+### How to read it
+
+Every fairness decision behind these figures is written down in
+[`bench/README.md`](https://github.com/ByteVeda/flexiq/blob/master/bench/README.md):
+one shared completion sink that every system writes to (FlexiQ on SQLite pays
+that Redis hop too), stock configuration except for log level, result storage
+and concurrency, and a no-op task body so that what is left is the framework's
+own cost.
+
+What it does **not** measure: durability under worker loss, retry semantics,
+scheduling, workflows, multi-machine fan-out, or any payload that is not 256
+bytes. Two queues can tie here and be completely different propositions in
+production. And your own handler's work will dominate every number on this
+page — which is why the self-benchmark at the top of it exists.
+
+<SdkOnly sdk="python">
+
+## Where the speed actually is
+
+| Component | What it buys | What it does not |
+|---|---|---|
+| **Batch inserts** | `task.map()` stages a whole batch in one SQLite transaction — the enqueue column above | Nothing on the drain side |
+| **WAL mode** | Concurrent reads while writing, so workers don't block the producer | |
+| **Rust scheduler** | The poll loop and dispatch are native, never blocked by the GIL | It still polls, and only the timer wakes it — dispatch is capped at `2 x num_workers` per poll interval, which is the drain result above |
+| **OS threads** | Workers are Rust `std::thread`, not Python threads | Handler bodies still take the GIL, so CPU-bound work wants `pool="prefork"` |
+| **No broker hop** | Enqueue → DB → dequeue, one network round trip fewer than enqueue → Redis → dequeue | A local Redis makes that hop very cheap; the measured advantage is in memory, not latency |
+| **r2d2 pool + Diesel** | Compiled SQL over a pooled connection, no runtime query building | |
 
 </SdkOnly>
 
