@@ -70,7 +70,12 @@ def validate(doc: dict[str, Any]) -> None:
 def write(doc: dict[str, Any], path: Path) -> None:
     validate(doc)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(doc, indent=2, sort_keys=False) + "\n")
+    # `ensure_ascii=False`: a label reads as "FlexiQ · SQLite" in the file
+    # rather than as an escape sequence. The file is UTF-8 either way; this
+    # is about whether a human opening it can read the row names.
+    path.write_text(
+        json.dumps(doc, indent=2, sort_keys=False, ensure_ascii=False) + "\n"
+    )
 
 
 def read(path: Path) -> dict[str, Any]:
