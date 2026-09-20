@@ -1,0 +1,14 @@
+{
+  "name": "flexiq-bench-bullmq",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The BullMQ row of bench/results — driven by bench/run.py, not run by hand.",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "bullmq": "5.61.0",
+    "ioredis": "5.9.0"
+  }
+}
