@@ -22,6 +22,15 @@ const mdxComponentDir = (name: string) =>
 
 export default defineConfig({
   base,
+  // Pre-bundled on the first pass. Without these, Vite discovers them midway
+  // through the initial crawl, re-optimises, and reloads — twice. A page that
+  // loads across one of those boundaries ends up holding two copies of React,
+  // and the first thing to call a hook dies with "Cannot read properties of
+  // null (reading 'useContext')". It self-heals on the next reload, which is
+  // why it only ever bites on a cold `node_modules/.vite`.
+  optimizeDeps: {
+    include: ["lucide-react", "minisearch", "@mdx-js/react"],
+  },
   resolve: {
     alias: {
       // The reused content MDX imports Fumadocs components; map those paths to
