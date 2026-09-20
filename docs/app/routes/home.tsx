@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { SearchModal } from "@/components/docs";
 import {
+  BenchChart,
   Footer,
   Hero,
   HowItWorks,
@@ -22,7 +23,8 @@ import type { Route } from "./+types/home";
  * `about/capabilities` besides. What is left answers the questions a docs root
  * should: what this is (hero), how it fits together (how it works), that it is
  * reachable without an SDK at all (the server fold — everything above it reads
- * as an embedded library), which page solves the problem I actually have (the
+ * as an embedded library), whether any of the speed is real (the benchmark, and
+ * the harness behind it), which page solves the problem I actually have (the
  * scenario finder), and what else is here (the section grid).
  *
  * The route itself has to stay. `"/"` is hardcoded in the prerender list, and
@@ -74,6 +76,7 @@ export default function Home() {
         <Hero />
         <HowItWorks />
         <ServerFold />
+        <BenchChart />
         <ScenarioFinder />
         <SectionGrid />
       </main>

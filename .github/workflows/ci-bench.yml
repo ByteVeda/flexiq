@@ -1,0 +1,95 @@
+name: CI Bench
+
+# Reusable workflow: run bench/scenario.smoke.toml against all six systems and
+# assert the artifact still validates. Called by ci.yml when the harness changes.
+#
+# NO NUMBER FROM THIS WORKFLOW IS EVER PUBLISHED, and none should be. A shared
+# GitHub runner has neighbours, a throttled disk and no CPU guarantee; a
+# throughput figure measured on one describes the runner, not the queue. What
+# this does prove is the part that rots: that all six runners still start, still
+# drain, and still produce a results file the docs can render. The published
+# numbers come from `python bench/run.py` on hardware somebody can name — see
+# bench/README.md.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Harness smoke run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6399:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      # The repo's own composite: pnpm, Node and the pnpm store cache, pinned in
+      # one place. It installs the BullMQ runner's dependencies from its
+      # lockfile on the way past, which is the frozen install this suite wants.
+      - name: Set up Node and the BullMQ runner
+        uses: ./.github/actions/setup-node
+        with:
+          working-directory: bench/runners/bullmq
+
+      - name: Install the pinned Python dependencies
+        # The pins are the point: an unpinned install here would smoke-test a
+        # different set of libraries than the committed results were measured
+        # against, and the first anyone would know is a number that moved.
+        run: |
+          python -m venv bench/.venv
+          bench/.venv/bin/pip install --upgrade pip
+          bench/.venv/bin/pip install -r bench/requirements.txt
+
+      - name: Smoke-run every system
+        run: |
+          bench/.venv/bin/python bench/run.py \
+            --scenario bench/scenario.smoke.toml \
+            --python "$PWD/bench/.venv/bin/python" \
+            --redis-url redis://127.0.0.1:6399 \
+            --label "github runner — smoke only, never published" \
+            --out "$RUNNER_TEMP/smoke.json"
+
+      - name: The committed results still validate and still render
+        # The artifact in the tree is what the docs build and the README read.
+        # A results file that lands without regenerating them would otherwise
+        # surface as a stale number on the site rather than as a red check here.
+        run: |
+          bench/.venv/bin/python -c "
+          import sys; sys.path.insert(0, 'bench')
+          from pathlib import Path
+          from harness import report
+          report.read(Path('bench/results/latest.json'))
+          print('results/latest.json validates against schema', report.SCHEMA)
+          "
+          node scripts/sync-bench.mjs
+          git diff --exit-code docs/app/lib/bench-data.json README.md
+
+      - name: Worker logs
+        if: failure()
+        run: |
+          for log in bench/.work/logs/*.log; do
+            echo "::group::$log"
+            tail -100 "$log"
+            echo "::endgroup::"
+          done
