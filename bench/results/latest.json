@@ -1,0 +1,315 @@
+{
+  "schema": 1,
+  "run_id": "202609212242306084",
+  "generated_at": "2026-09-21T17:41:03Z",
+  "source": "bench/run.py",
+  "scenario": {
+    "jobs": 500,
+    "payload_bytes": 256,
+    "concurrency": 4,
+    "warmup_jobs": 50,
+    "idle_window_s": 30.0,
+    "drain_timeout_s": 900.0,
+    "task": "decode payload, record latency, return"
+  },
+  "machine": {
+    "os": "Linux 7.0.0-31-generic",
+    "arch": "x86_64",
+    "cpu": "AMD Ryzen 5 5600H with Radeon Graphics",
+    "cores": 12,
+    "ram_gb": 13.5,
+    "python": "3.12.12",
+    "node": "v24.12.0",
+    "load_avg_at_start": [
+      1.11,
+      0.97,
+      0.98
+    ]
+  },
+  "backends": {
+    "sqlite": {
+      "kind": "local",
+      "engine": "SQLite (WAL)",
+      "location": "local disk, same host as the workers"
+    },
+    "redis": {
+      "kind": "remote",
+      "provider": "Redis Cloud",
+      "region": "ap-south-1",
+      "version": "8.6.2",
+      "rtt_ms": {
+        "min": 35.7,
+        "avg": 38.48,
+        "max": 41.65
+      },
+      "maxmemory_policy": "volatile-lru",
+      "shared": true
+    }
+  },
+  "runtimes": [
+    {
+      "id": "flexiq-redis",
+      "engine": "FlexiQ",
+      "engine_version": "2.0.0",
+      "language": "Python 3.12.12",
+      "backend": "redis",
+      "concurrency_model": "4 worker threads (workers=4)",
+      "enqueue": {
+        "jobs": 500,
+        "seconds": 64.676,
+        "per_second": 7.7
+      },
+      "drain": {
+        "seconds": 532.794,
+        "per_second": 0.9
+      },
+      "latency_ms": {
+        "count": 500,
+        "p50": 276349.88,
+        "p95": 446386.55,
+        "p99": 460287.0,
+        "max": 468368.52,
+        "mean": 260599.7
+      },
+      "idle": {
+        "window_s": 30.0,
+        "cpu_pct": 1.03,
+        "rss_mb": 45.7,
+        "processes": 1
+      }
+    },
+    {
+      "id": "celery-redis",
+      "engine": "Celery",
+      "engine_version": "5.6.3",
+      "language": "Python 3.12.12",
+      "backend": "redis",
+      "concurrency_model": "4 prefork processes (-c 4, Celery's default pool)",
+      "enqueue": {
+        "jobs": 500,
+        "seconds": 19.951,
+        "per_second": 25.1
+      },
+      "drain": {
+        "seconds": 39.347,
+        "per_second": 12.7
+      },
+      "latency_ms": {
+        "count": 500,
+        "p50": 9814.72,
+        "p95": 18514.36,
+        "p99": 19244.92,
+        "max": 19434.76,
+        "mean": 9785.38
+      },
+      "idle": {
+        "window_s": 30.0,
+        "cpu_pct": 0.07,
+        "rss_mb": 212.3,
+        "processes": 5
+      }
+    },
+    {
+      "id": "dramatiq-redis",
+      "engine": "Dramatiq",
+      "engine_version": "2.2.1",
+      "language": "Python 3.12.12",
+      "backend": "redis",
+      "concurrency_model": "1 process x 4 threads (--processes 1 --threads 4)",
+      "enqueue": {
+        "jobs": 500,
+        "seconds": 21.773,
+        "per_second": 23.0
+      },
+      "drain": {
+        "seconds": 21.786,
+        "per_second": 23.0
+      },
+      "latency_ms": {
+        "count": 500,
+        "p50": 44.16,
+        "p95": 146.26,
+        "p99": 271.49,
+        "max": 628.9,
+        "mean": 58.76
+      },
+      "idle": {
+        "window_s": 30.0,
+        "cpu_pct": 0.23,
+        "rss_mb": 53.6,
+        "processes": 2
+      }
+    },
+    {
+      "id": "rq-redis",
+      "engine": "RQ",
+      "engine_version": "2.12.0",
+      "language": "Python 3.12.12",
+      "backend": "redis",
+      "concurrency_model": "4 `rq worker` processes (forks a child per job \u2014 RQ's default)",
+      "enqueue": {
+        "jobs": 500,
+        "seconds": 34.404,
+        "per_second": 14.5
+      },
+      "drain": {
+        "seconds": 109.996,
+        "per_second": 4.5
+      },
+      "latency_ms": {
+        "count": 500,
+        "p50": 37544.43,
+        "p95": 71623.95,
+        "p99": 74647.36,
+        "max": 75703.81,
+        "mean": 37837.71
+      },
+      "idle": {
+        "window_s": 30.0,
+        "cpu_pct": 0.06,
+        "rss_mb": 131.7,
+        "processes": 4
+      }
+    },
+    {
+      "id": "bullmq-redis",
+      "engine": "BullMQ",
+      "engine_version": "6.3.8",
+      "language": "Node v24.12.0",
+      "backend": "redis",
+      "concurrency_model": "4 concurrent jobs in one process (concurrency: 4)",
+      "enqueue": {
+        "jobs": 500,
+        "seconds": 17.749,
+        "per_second": 28.2
+      },
+      "drain": {
+        "seconds": 17.751,
+        "per_second": 28.2
+      },
+      "latency_ms": {
+        "count": 500,
+        "p50": 46.29,
+        "p95": 122.53,
+        "p99": 172.1,
+        "max": 521.04,
+        "mean": 57.59
+      },
+      "idle": {
+        "window_s": 30.0,
+        "cpu_pct": 0.0,
+        "rss_mb": 93.4,
+        "processes": 1
+      }
+    },
+    {
+      "id": "flexiq-node-redis",
+      "engine": "FlexiQ",
+      "engine_version": "2.0.0",
+      "language": "Node v24.12.0",
+      "backend": "redis",
+      "concurrency_model": "4 concurrent jobs in one process (concurrency: 4)",
+      "enqueue": {
+        "jobs": 500,
+        "seconds": 69.75,
+        "per_second": 7.2
+      },
+      "drain": {
+        "seconds": 605.337,
+        "per_second": 0.8
+      },
+      "latency_ms": {
+        "count": 500,
+        "p50": 275539.8,
+        "p95": 515294.06,
+        "p99": 532517.03,
+        "max": 535834.85,
+        "mean": 276093.09
+      },
+      "idle": {
+        "window_s": 30.0,
+        "cpu_pct": 0.4,
+        "rss_mb": 99.0,
+        "processes": 1
+      }
+    },
+    {
+      "id": "flexiq-sqlite",
+      "engine": "FlexiQ",
+      "engine_version": "2.0.0",
+      "language": "Python 3.12.12",
+      "backend": "sqlite",
+      "concurrency_model": "4 worker threads (workers=4)",
+      "enqueue": {
+        "jobs": 500,
+        "seconds": 0.087,
+        "per_second": 5734.5
+      },
+      "drain": {
+        "seconds": 3.481,
+        "per_second": 143.6
+      },
+      "latency_ms": {
+        "count": 500,
+        "p50": 1703.51,
+        "p95": 3239.74,
+        "p99": 3345.15,
+        "max": 3393.96,
+        "mean": 1694.47
+      },
+      "idle": {
+        "window_s": 30.0,
+        "cpu_pct": 0.27,
+        "rss_mb": 50.5,
+        "processes": 1
+      }
+    },
+    {
+      "id": "flexiq-node-sqlite",
+      "engine": "FlexiQ",
+      "engine_version": "2.0.0",
+      "language": "Node v24.12.0",
+      "backend": "sqlite",
+      "concurrency_model": "4 concurrent jobs in one process (concurrency: 4)",
+      "enqueue": {
+        "jobs": 500,
+        "seconds": 0.065,
+        "per_second": 7690.2
+      },
+      "drain": {
+        "seconds": 0.671,
+        "per_second": 745.6
+      },
+      "latency_ms": {
+        "count": 500,
+        "p50": 347.71,
+        "p95": 582.81,
+        "p99": 602.28,
+        "max": 605.89,
+        "mean": 349.8
+      },
+      "idle": {
+        "window_s": 30.0,
+        "cpu_pct": 0.2,
+        "rss_mb": 104.6,
+        "processes": 1
+      }
+    }
+  ],
+  "cleanup": {
+    "baseline_keys": 1761,
+    "final_keys": 1758,
+    "delta": -3,
+    "clean": true,
+    "leftovers": []
+  },
+  "notes": [
+    "Every entrant runs its workers and its producer as separate processes, submits serially, and is measured to completion rather than to enqueue.",
+    "Concurrency 4 means a different thing to each entrant \u2014 see `concurrency_model` on every row.",
+    "Each entrant runs with its own defaults. No tuning was applied to any of them.",
+    "Redis is remote (Redis Cloud, ap-south-1), 38.48 ms average round trip. Every Redis-backed entrant pays that floor on every command, so the absolute numbers are a property of this link as much as of the engines. A colocated Redis moves all of them.",
+    "The SQLite rows are a different deployment, not a faster one: a local file against a network service. They are here because no-broker is what FlexiQ is for, not so the local number can stand in for the networked one.",
+    "The Redis server's eviction policy is `volatile-lru`, not `noeviction`. Under memory pressure it may drop queued jobs \u2014 that affects every Redis-backed entrant equally, but it is a durability caveat on the run rather than a performance one.",
+    "The host was not idle at the start of the run (1-minute load average 1.11). Treat the absolute figures as a floor."
+  ]
+}
