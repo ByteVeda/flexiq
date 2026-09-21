@@ -82,10 +82,19 @@ class RedisScope:
         return set(self._client.scan_iter(count=500))
 
     def _deletable(self, keys: Iterable[str]) -> tuple[list[str], list[str]]:
+        """Split new keys into this run's and somebody else's.
+
+        A key carrying the run id is ours by construction — Celery names its
+        queue list after the queue and nothing else, so the engine prefixes
+        alone would leave it behind. Anything matching neither rule appeared
+        during the run without being ours, which is concurrent work: it is
+        reported, never unlinked.
+        """
         ours: list[str] = []
         theirs: list[str] = []
         for key in keys:
-            (ours if key.startswith(ENGINE_PREFIXES) else theirs).append(key)
+            mine = key.startswith(ENGINE_PREFIXES) or self.run_id in key
+            (ours if mine else theirs).append(key)
         return ours, theirs
 
     def _drop_members(self, job_ids: Sequence[str]) -> None:
