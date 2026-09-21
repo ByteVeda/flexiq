@@ -82,7 +82,12 @@ export function Footer() {
         </div>
         {COLS.map((col) => (
           <div key={col.title} className="foot-col">
-            <h4>{col.title}</h4>
+            {/* `h2`, not `h4`. These are page furniture, so whatever heading
+                level the content above happened to end on, the footer must
+                not be a skip from it — and a level that moves *up* never is.
+                At `h4` this was a latent `heading-order` failure waiting for
+                any page whose last section heading was an `h2`. */}
+            <h2>{col.title}</h2>
             {col.links.map((l) =>
               l.external ? (
                 <a key={l.label} href={l.href} target="_blank" rel="noreferrer">
