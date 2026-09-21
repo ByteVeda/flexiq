@@ -1,0 +1,10 @@
+{
+  "$comment": "The scenario definition. One file, read by the Python harness and by the Node adapters, so no runtime can quietly measure something else. Override at the command line with --jobs / --concurrency / --payload-bytes.",
+  "$jobs": "500 rather than a round 10000: the published run crosses a ~36 ms network to Redis, and the slowest entrant drains ~1.3 jobs/s over it. 500 keeps a full run inside half an hour while still putting the 5th-worst sample at p99.",
+  "jobs": 500,
+  "payload_bytes": 256,
+  "concurrency": 4,
+  "warmup_jobs": 50,
+  "idle_window_s": 30,
+  "drain_timeout_s": 900
+}
