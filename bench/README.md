@@ -62,6 +62,13 @@ measure the handler rather than the queue underneath it.
   empty. A poller and a blocking consumer look identical on a drain time and
   very different on a small instance.
 
+One producer submits as fast as it can, which is faster than some entrants
+drain. Where that happens a backlog builds during the run, so those entrants'
+latency percentiles are mostly queueing behind it rather than the cost of one
+job — the completion rate is the primary result for them and the latency is its
+consequence. The harness derives that caveat from the rows themselves
+(`harness/report.py::saturated`) and writes it into the artifact's `notes`.
+
 ### "Concurrency 4" is not one thing
 
 Each row in the artifact carries its own `concurrency_model`, because the

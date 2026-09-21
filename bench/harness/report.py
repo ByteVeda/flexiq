@@ -22,7 +22,27 @@ SQLITE_BACKEND = {
 }
 
 
-def notes_for(machine: dict[str, Any], redis: dict[str, Any] | None) -> list[str]:
+def saturated(runtimes: list[dict[str, Any]]) -> list[str]:
+    """Entrants that could not drain as fast as one producer could submit.
+
+    Their latency percentiles are then mostly queueing behind a backlog rather
+    than the cost of handling one job, and saying so is the difference between
+    a measurement and a number. Derived from the rows themselves so it cannot
+    go stale.
+    """
+    return [
+        runtime["id"]
+        for runtime in runtimes
+        if "error" not in runtime
+        and runtime["drain"]["per_second"] < runtime["enqueue"]["per_second"]
+    ]
+
+
+def notes_for(
+    machine: dict[str, Any],
+    redis: dict[str, Any] | None,
+    runtimes: list[dict[str, Any]] | None = None,
+) -> list[str]:
     """The caveats, derived rather than remembered.
 
     A caveat that has to be re-typed for each run is a caveat that eventually
@@ -55,6 +75,17 @@ def notes_for(machine: dict[str, Any], redis: dict[str, Any] | None) -> list[str
             "every Redis-backed entrant equally, but it is a durability caveat on the "
             "run rather than a performance one."
         )
+    behind = saturated(runtimes or [])
+    if behind:
+        notes.append(
+            "One producer submitted faster than "
+            + ", ".join(f"`{name}`" for name in behind)
+            + " could drain, so a backlog built up during the run. Their latency "
+            "percentiles are dominated by time spent queued behind it rather than by "
+            "the cost of handling one job — read the completion rate as the primary "
+            "result for those entrants, and the latency as its consequence. Every "
+            "entrant received the identical load."
+        )
     load = machine.get("load_avg_at_start") or [0]
     if load[0] > 1.0:
         notes.append(
@@ -86,7 +117,7 @@ def build(
         "backends": backends,
         "runtimes": runtimes,
         "cleanup": cleanup,
-        "notes": notes_for(machine, redis),
+        "notes": notes_for(machine, redis, runtimes),
     }
 
 
