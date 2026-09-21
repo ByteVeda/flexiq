@@ -4,8 +4,11 @@ description: "FlexiQ vs other task queues — feature matrix and decision guide.
 ---
 
 **TL;DR**: FlexiQ is <SdkSwap python="Celery" node="BullMQ" java="a task queue" rust="a task queue" /> without the
-broker (a separate server such as Redis or RabbitMQ that holds pending jobs). Rust scheduler, no broker required, lower latency, better concurrency.
+broker (a separate server such as Redis or RabbitMQ that holds pending jobs). Rust scheduler, no broker required, and no separate service to operate.
 Start with SQLite; add Postgres or Redis as a backend when you scale out.
+
+The page below compares features. For speed, see [Benchmarks](/about/benchmarks) —
+measured, reproducible, and not flattering on every axis.
 
 ## When to use flexiq
 

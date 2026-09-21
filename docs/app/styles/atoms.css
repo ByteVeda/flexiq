@@ -326,7 +326,7 @@
   line-height: 1.6;
   max-width: 280px;
 }
-.foot-col h4 {
+.foot-col h2 {
   font-size: 13px;
   font-family: var(--mono);
   text-transform: uppercase;

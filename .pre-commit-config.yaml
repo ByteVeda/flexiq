@@ -39,6 +39,23 @@ repos:
         types: [python]
         pass_filenames: false
 
+      # The benchmark harness is its own uv project with its own pins, so it
+      # gets its own hooks rather than being folded into the SDK's — the ones
+      # above run from `sdks/python` and would not see these files at all.
+      - id: bench-ruff
+        name: ruff check + format (bench)
+        entry: bash -c 'cd bench && uv run ruff check . && uv run ruff format --check .'
+        language: system
+        files: ^bench/.*\.py$
+        pass_filenames: false
+
+      - id: bench-mypy
+        name: mypy (bench)
+        entry: bash -c 'cd bench && uv run mypy harness run.py --no-incremental'
+        language: system
+        files: ^bench/.*\.py$
+        pass_filenames: false
+
       # gofmt and go vet rather than golangci-lint: these need only the Go
       # toolchain, which anyone touching sdks/go already has. The full lint is
       # `make -C sdks/go lint`, and CI runs it on every push.

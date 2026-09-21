@@ -1,0 +1,12 @@
+{
+  "name": "flexiq-bench-node",
+  "private": true,
+  "type": "module",
+  "description": "Node entrants in the FlexiQ cross-runtime benchmark: BullMQ and the FlexiQ Node SDK",
+  "comment": "Exact pins, no ranges. These versions are the ones bench/results/ was produced with; moving them means re-running the harness, not editing the chart.",
+  "dependencies": {
+    "@byteveda/flexiq": "2.0.0",
+    "bullmq": "6.3.8",
+    "ioredis": "6.0.0"
+  }
+}

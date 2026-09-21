@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { SearchModal } from "@/components/docs";
 import {
+  BenchmarkFold,
   Footer,
   Hero,
   HowItWorks,
@@ -23,7 +24,10 @@ import type { Route } from "./+types/home";
  * should: what this is (hero), how it fits together (how it works), that it is
  * reachable without an SDK at all (the server fold — everything above it reads
  * as an embedded library), which page solves the problem I actually have (the
- * scenario finder), and what else is here (the section grid).
+ * scenario finder), whether the speed claim survives being checked (the
+ * benchmark fold, which is evidence rather than a second pitch — every number
+ * in it comes from a script in this repository), and what else is here (the
+ * section grid).
  *
  * The route itself has to stay. `"/"` is hardcoded in the prerender list, and
  * with no index route the `*` splat under `docs-layout` claims it and ships a
@@ -75,6 +79,7 @@ export default function Home() {
         <HowItWorks />
         <ServerFold />
         <ScenarioFinder />
+        <BenchmarkFold />
         <SectionGrid />
       </main>
       <Footer />

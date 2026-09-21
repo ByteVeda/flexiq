@@ -6,6 +6,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 uv.lock
+# …except the benchmark harness's, whose whole premise is that a stranger can
+# reproduce the published numbers from the versions that produced them.
+!bench/uv.lock
 dist/
 build/
 *.so

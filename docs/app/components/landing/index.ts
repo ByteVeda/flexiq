@@ -1,3 +1,4 @@
+export { BenchmarkFold } from "./benchmark-fold";
 export { CopyButton } from "./copy-button";
 export { FlowDiagram, type FlowStage } from "./flow-diagram";
 export { Footer } from "./footer";

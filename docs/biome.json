@@ -14,7 +14,8 @@
       "!.react-router",
       "!.lighthouseci",
       "!content",
-      "!public/demos"
+      "!public/demos",
+      "!app/lib/benchmark-data.ts"
     ]
   },
   "formatter": {

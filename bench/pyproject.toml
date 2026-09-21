@@ -1,0 +1,72 @@
+[project]
+name = "flexiq-bench"
+version = "0.1.0"
+description = "Cross-runtime benchmark harness for FlexiQ, Celery, Dramatiq, RQ and BullMQ"
+# Exactly 3.12, not a floor: the interpreter is as much a part of a published
+# number as the library versions are.
+requires-python = "==3.12.*"
+
+# Every pin is exact. A benchmark whose dependencies float is a benchmark whose
+# published numbers stop describing anything in particular — `bench/results/`
+# records the versions it ran against, and these are they.
+#
+# The `flexiq` pin deliberately does NOT track the workspace version, and
+# `bench/` is deliberately absent from `SNIPPETS` in `scripts/version.mjs`: the
+# committed numbers were produced by this release, and a bump that silently
+# re-pointed the harness would leave the chart describing a build nobody ran.
+# Re-run the harness to move the pin, never the other way round.
+dependencies = [
+    "flexiq==2.0.0",
+    "celery[redis]==5.6.3",
+    "dramatiq[redis]==2.2.1",
+    "rq==2.12.0",
+    # Held below 6.5 by Celery's kombu, which excludes it explicitly. Pinning
+    # the client the harness imports keeps it the same one Celery, RQ and
+    # Dramatiq are talking through.
+    "redis==6.4.0",
+    "psutil==7.2.2",
+]
+
+[dependency-groups]
+dev = ["ruff==0.16.8", "mypy==2.3.1"]
+
+[tool.uv]
+# The harness is a script tree, not a distribution: `run.py` puts `bench/` on
+# sys.path itself, so there is nothing to build or install.
+package = false
+
+# -- Ruff --
+
+[tool.ruff]
+target-version = "py312"
+line-length = 99
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "SIM",  # simplify
+    "RUF",  # ruff-specific rules
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["harness"]
+
+# -- Mypy --
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+
+# Celery, Dramatiq and RQ ship no type information we depend on, and the
+# worker entrypoints exist to be imported by *their* CLIs, not by us.
+[[tool.mypy.overrides]]
+module = ["celery.*", "dramatiq.*", "rq.*", "flexiq.*", "psutil.*"]
+ignore_missing_imports = true

@@ -86,6 +86,25 @@ truth; the GIL/event loop is held only during task execution. `WorkerDispatcher`
 | Postgres backend | **Yes** | Yes | No | No | No |
 | Setup | **one install** | Broker + backend | Redis | Broker | Redis |
 
+A feature matrix is not a performance claim. For that, see the benchmarks.
+
+## Benchmarks
+
+One scenario — a fixed job count, a fixed payload, a fixed worker concurrency,
+measured **to completion** — run against FlexiQ, Celery, Dramatiq, RQ and
+BullMQ, reporting enqueue throughput, end-to-end latency percentiles and idle
+cost separately. The results are a committed artifact, and FlexiQ does not win
+every axis.
+
+**[Published numbers →](https://docs.byteveda.org/flexiq/about/benchmarks)** ·
+**[Run it yourself →](bench)**
+
+```bash
+pnpm --dir bench/node install --frozen-lockfile   # the BullMQ and Node entrants
+REDIS_URL=redis://localhost:6379 \
+  uv run --project bench python bench/run.py --out bench/results/latest.json
+```
+
 ## Documentation
 
 **[Read the docs →](https://docs.byteveda.org/flexiq)** — guides, API reference, and architecture.

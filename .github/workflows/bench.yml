@@ -1,0 +1,77 @@
+name: Benchmark
+
+# The published numbers are produced by hand and committed; this workflow keeps
+# the harness that produces them from rotting between runs, and gives anyone a
+# one-click run against a *colocated* Redis — which is the comparison the
+# committed artifact cannot make from a laptop.
+#
+# It gates nothing. A benchmark as a required check would turn shared-runner
+# noise into a red PR, and a number measured on a contended runner is not worth
+# blocking a merge over.
+
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: "Measured jobs per entrant"
+        required: false
+        default: "50"
+      only:
+        description: "Space-separated runtime ids, or blank for all"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: Run the harness
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # `sync: false` — the harness has its own locked project with its own
+      # pins, and syncing the SDK's environment here would install a different
+      # flexiq than the one under test.
+      - uses: ./.github/actions/setup-python
+        with:
+          python-version: "3.12"
+          sync: false
+
+      - uses: ./.github/actions/setup-node
+        with:
+          working-directory: bench/node
+
+      - name: Install harness dependencies
+        run: uv sync --project bench --frozen
+
+      - name: Run the benchmark
+        env:
+          REDIS_URL: redis://localhost:6379
+          JOBS: ${{ inputs.jobs }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086 # ONLY is a deliberate word list
+          uv run --project bench python bench/run.py \
+            --jobs "$JOBS" \
+            --out bench-result.json \
+            ${ONLY:+--only $ONLY} | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Uploaded, never committed. A run on a shared runner describes that
+      # runner; publishing it would put a number on the site that nobody chose.
+      - name: Upload the artifact
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: benchmark-result
+          path: bench-result.json
+          if-no-files-found: warn
