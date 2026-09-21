@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "run_id": "202609212311450b1b",
-  "generated_at": "2026-09-21T18:09:57Z",
+  "run_id": "202609220058543783",
+  "generated_at": "2026-09-21T19:56:33Z",
   "source": "bench/run.py",
   "scenario": {
     "jobs": 500,
@@ -21,9 +21,9 @@
     "python": "3.12.12",
     "node": "v24.12.0",
     "load_avg_at_start": [
-      1.37,
-      1.2,
-      1.13
+      1.29,
+      1.26,
+      1.25
     ]
   },
   "backends": {
@@ -38,9 +38,9 @@
       "region": "ap-south-1",
       "version": "8.6.2",
       "rtt_ms": {
-        "min": 32.21,
-        "avg": 34.45,
-        "max": 36.83
+        "min": 35.39,
+        "avg": 38.64,
+        "max": 43.02
       },
       "maxmemory_policy": "volatile-lru",
       "shared": true
@@ -56,25 +56,26 @@
       "concurrency_model": "4 worker threads (workers=4)",
       "enqueue": {
         "jobs": 500,
-        "seconds": 65.242,
-        "per_second": 7.7
+        "seconds": 66.602,
+        "per_second": 7.5
       },
       "drain": {
-        "seconds": 486.91,
-        "per_second": 1.0
+        "seconds": 469.07,
+        "per_second": 1.1,
+        "backlog_at_submit_end": 435
       },
       "latency_ms": {
         "count": 500,
-        "p50": 216961.38,
-        "p95": 401910.49,
-        "p99": 415367.25,
-        "max": 421790.1,
-        "mean": 211533.32
+        "p50": 217307.73,
+        "p95": 384329.61,
+        "p99": 395772.68,
+        "max": 402595.51,
+        "mean": 207807.25
       },
       "idle": {
         "window_s": 30.0,
-        "cpu_pct": 0.67,
-        "rss_mb": 45.5,
+        "cpu_pct": 0.47,
+        "rss_mb": 45.7,
         "processes": 1
       }
     },
@@ -87,25 +88,26 @@
       "concurrency_model": "4 prefork processes (-c 4, Celery's default pool)",
       "enqueue": {
         "jobs": 500,
-        "seconds": 17.619,
-        "per_second": 28.4
+        "seconds": 17.096,
+        "per_second": 29.2
       },
       "drain": {
-        "seconds": 38.499,
-        "per_second": 13.0
+        "seconds": 35.222,
+        "per_second": 14.2,
+        "backlog_at_submit_end": 261
       },
       "latency_ms": {
         "count": 500,
-        "p50": 10480.97,
-        "p95": 19870.99,
-        "p99": 20700.74,
-        "max": 20914.94,
-        "mean": 10496.23
+        "p50": 9086.83,
+        "p95": 17243.96,
+        "p99": 17976.98,
+        "max": 18159.83,
+        "mean": 9107.55
       },
       "idle": {
         "window_s": 30.0,
-        "cpu_pct": 0.03,
-        "rss_mb": 212.2,
+        "cpu_pct": 0.07,
+        "rss_mb": 212.3,
         "processes": 5
       }
     },
@@ -118,24 +120,25 @@
       "concurrency_model": "1 process x 4 threads (--processes 1 --threads 4)",
       "enqueue": {
         "jobs": 500,
-        "seconds": 16.846,
-        "per_second": 29.7
+        "seconds": 21.292,
+        "per_second": 23.5
       },
       "drain": {
-        "seconds": 16.866,
-        "per_second": 29.6
+        "seconds": 21.329,
+        "per_second": 23.4,
+        "backlog_at_submit_end": 1
       },
       "latency_ms": {
         "count": 500,
-        "p50": 52.23,
-        "p95": 69.06,
-        "p99": 70.95,
-        "max": 421.04,
-        "mean": 52.85
+        "p50": 48.76,
+        "p95": 150.85,
+        "p99": 278.17,
+        "max": 552.92,
+        "mean": 66.95
       },
       "idle": {
         "window_s": 30.0,
-        "cpu_pct": 0.2,
+        "cpu_pct": 0.13,
         "rss_mb": 53.6,
         "processes": 2
       }
@@ -149,25 +152,26 @@
       "concurrency_model": "4 `rq worker` processes (forks a child per job \u2014 RQ's default)",
       "enqueue": {
         "jobs": 500,
-        "seconds": 37.091,
-        "per_second": 13.5
+        "seconds": 35.897,
+        "per_second": 13.9
       },
       "drain": {
-        "seconds": 110.015,
-        "per_second": 4.5
+        "seconds": 111.05,
+        "per_second": 4.5,
+        "backlog_at_submit_end": 339
       },
       "latency_ms": {
         "count": 500,
-        "p50": 34753.36,
-        "p95": 68570.45,
-        "p99": 72382.35,
-        "max": 72997.78,
-        "mean": 35917.55
+        "p50": 37521.51,
+        "p95": 71311.83,
+        "p99": 74303.08,
+        "max": 75221.71,
+        "mean": 37634.18
       },
       "idle": {
         "window_s": 30.0,
         "cpu_pct": 0.0,
-        "rss_mb": 131.5,
+        "rss_mb": 131.7,
         "processes": 4
       }
     },
@@ -180,25 +184,26 @@
       "concurrency_model": "4 concurrent jobs in one process (concurrency: 4)",
       "enqueue": {
         "jobs": 500,
-        "seconds": 17.384,
-        "per_second": 28.8
+        "seconds": 21.196,
+        "per_second": 23.6
       },
       "drain": {
-        "seconds": 17.384,
-        "per_second": 28.8
+        "seconds": 21.203,
+        "per_second": 23.6,
+        "backlog_at_submit_end": 1
       },
       "latency_ms": {
         "count": 500,
-        "p50": 45.27,
-        "p95": 160.87,
-        "p99": 171.04,
-        "max": 402.24,
-        "mean": 64.35
+        "p50": 64.92,
+        "p95": 155.6,
+        "p99": 198.92,
+        "max": 450.64,
+        "mean": 73.18
       },
       "idle": {
         "window_s": 30.0,
-        "cpu_pct": 0.03,
-        "rss_mb": 95.2,
+        "cpu_pct": 0.0,
+        "rss_mb": 96.2,
         "processes": 1
       }
     },
@@ -211,25 +216,26 @@
       "concurrency_model": "4 concurrent jobs in one process (concurrency: 4)",
       "enqueue": {
         "jobs": 500,
-        "seconds": 68.237,
-        "per_second": 7.3
+        "seconds": 64.23,
+        "per_second": 7.8
       },
       "drain": {
-        "seconds": 629.089,
-        "per_second": 0.8
+        "seconds": 608.132,
+        "per_second": 0.8,
+        "backlog_at_submit_end": 447
       },
       "latency_ms": {
         "count": 500,
-        "p50": 285933.74,
-        "p95": 543368.95,
-        "p99": 557974.44,
-        "max": 561141.0,
-        "mean": 290600.24
+        "p50": 280714.27,
+        "p95": 520533.6,
+        "p99": 541480.8,
+        "max": 544659.56,
+        "mean": 276666.71
       },
       "idle": {
         "window_s": 30.0,
-        "cpu_pct": 0.43,
-        "rss_mb": 95.5,
+        "cpu_pct": 0.47,
+        "rss_mb": 94.6,
         "processes": 1
       }
     },
@@ -242,25 +248,26 @@
       "concurrency_model": "4 worker threads (workers=4)",
       "enqueue": {
         "jobs": 500,
-        "seconds": 0.07,
-        "per_second": 7098.5
+        "seconds": 0.092,
+        "per_second": 5417.7
       },
       "drain": {
-        "seconds": 3.517,
-        "per_second": 142.2
+        "seconds": 3.489,
+        "per_second": 143.3,
+        "backlog_at_submit_end": 484
       },
       "latency_ms": {
         "count": 500,
-        "p50": 1770.01,
-        "p95": 3288.74,
-        "p99": 3397.84,
-        "max": 3447.23,
-        "mean": 1754.12
+        "p50": 1702.36,
+        "p95": 3247.31,
+        "p99": 3346.9,
+        "max": 3397.41,
+        "mean": 1699.53
       },
       "idle": {
         "window_s": 30.0,
         "cpu_pct": 0.27,
-        "rss_mb": 50.8,
+        "rss_mb": 50.4,
         "processes": 1
       }
     },
@@ -273,25 +280,26 @@
       "concurrency_model": "4 concurrent jobs in one process (concurrency: 4)",
       "enqueue": {
         "jobs": 500,
-        "seconds": 0.248,
-        "per_second": 2012.9
+        "seconds": 0.109,
+        "per_second": 4569.4
       },
       "drain": {
-        "seconds": 0.656,
-        "per_second": 761.8
+        "seconds": 0.647,
+        "per_second": 772.2,
+        "backlog_at_submit_end": 481
       },
       "latency_ms": {
         "count": 500,
-        "p50": 316.0,
-        "p95": 433.27,
-        "p99": 450.11,
-        "max": 454.78,
-        "mean": 280.41
+        "p50": 330.89,
+        "p95": 526.82,
+        "p99": 534.44,
+        "max": 538.3,
+        "mean": 329.94
       },
       "idle": {
         "window_s": 30.0,
         "cpu_pct": 0.2,
-        "rss_mb": 100.6,
+        "rss_mb": 99.3,
         "processes": 1
       }
     }
@@ -307,10 +315,10 @@
     "Every entrant runs its workers and its producer as separate processes, submits serially, and is measured to completion rather than to enqueue.",
     "Concurrency 4 means a different thing to each entrant \u2014 see `concurrency_model` on every row.",
     "Each entrant runs with its own defaults. No tuning was applied to any of them.",
-    "Redis is remote (Redis Cloud, ap-south-1), 34.45 ms average round trip. Every Redis-backed entrant pays that floor on every command, so the absolute numbers are a property of this link as much as of the engines. A colocated Redis moves all of them.",
+    "Redis is remote (Redis Cloud, ap-south-1), 38.64 ms average round trip. Every Redis-backed entrant pays that floor on every command, so the absolute numbers are a property of this link as much as of the engines. A colocated Redis moves all of them.",
     "The SQLite rows are a different deployment, not a faster one: a local file against a network service. They are here because no-broker is what FlexiQ is for, not so the local number can stand in for the networked one.",
     "The Redis server's eviction policy is `volatile-lru`, not `noeviction`. Under memory pressure it may drop queued jobs \u2014 that affects every Redis-backed entrant equally, but it is a durability caveat on the run rather than a performance one.",
-    "One producer submitted faster than `flexiq-redis`, `celery-redis`, `dramatiq-redis`, `rq-redis`, `flexiq-node-redis`, `flexiq-sqlite`, `flexiq-node-sqlite` could drain, so a backlog built up during the run. Their latency percentiles are dominated by time spent queued behind it rather than by the cost of handling one job \u2014 read the completion rate as the primary result for those entrants, and the latency as its consequence. Every entrant received the identical load.",
-    "The host was not idle at the start of the run (1-minute load average 1.37). Treat the absolute figures as a floor."
+    "One producer submits as fast as it can, so latency here is end-to-end under a load an entrant may not keep up with. Each row records `drain.backlog_at_submit_end` \u2014 how many of its jobs were still unfinished the moment submission stopped. Where that is a large share of the run, the percentiles are mostly time spent queued rather than the cost of handling one job, and the completion rate is the result to read. Every entrant received the identical load.",
+    "The host was not idle at the start of the run (1-minute load average 1.29). Treat the absolute figures as a floor."
   ]
 }
