@@ -1,81 +1,65 @@
-# A settle callback for push work that outlives the request deadline (#845)
+# A reproducible benchmark harness with published numbers (#824)
 
-Design: `tasks/specs/2026-09-19-push-settle-callback-design.md`
-Plan: `tasks/plans/2026-09-19-push-settle-callback.md`
+Design: `tasks/specs/2026-09-21-benchmark-harness-design.md`
+Epic: #827 — "the front door still sells 1.0"
 
-Push dispatch settles a job on the connection that started it, so a job is
-capped at the platform's request deadline — 60 minutes on Cloud Run, 15 on
-Lambda. A `202` becomes a hand-off: the request ends, the target keeps working,
-and it reports later through a `Settle` RPC on the executor door.
+The project sold speed and shipped no benchmark. The epic's rule governs: *no
+number goes on the landing page that a reader cannot reproduce from a script in
+this repository.*
 
-**The thing that must be right** is the fence. A `Settle` arriving after its
-lease expired and the job was retried elsewhere must be refused, not applied.
-Two claimants can consume an accepted dispatch's marker — a `Settle` reaching
-the replica that dispatched, and that dispatch being given up (its deadline
-passing, a cancel, or a shutdown) — and each must consume the marker in the
-statement that tests it. Exactly one wins; the loser emits nothing.
+**The thing that must be right** is not any magnitude. It is that the numbers
+are reproducible from the tree, that every entrant is measured the same way,
+and that the losses are published — a benchmark FlexiQ wins on every axis reads
+as a benchmark FlexiQ wrote.
 
-A `Settle` that reaches a *different* replica is **not** a third claimant: it
-is refused as `NotHere` and consumes nothing, because the waiting attempt with
-the permit and the result channel lives in the process that dispatched.
+Three decisions carry the rest:
 
-Two decisions carry the rest:
+- **The head-to-head is same-backend.** The only Redis available is ~36 ms
+  away, so FlexiQ runs on it too and the round trip is a common floor. SQLite
+  is reported as a separate deployment, never as a head-to-head win.
+- **One measurement path.** Every handler in every language appends to the same
+  sink. FlexiQ's own `created_at`/`completed_at` are a cross-check only — the
+  other four have no equivalent.
+- **Defaults everywhere, and `concurrency_model` on every row.** "4" is four
+  prefork processes, one process with four threads, four forking workers, or
+  four concurrent jobs in one process, depending on who is asked.
 
-- **The 202 wait lives inside `run_one`.** The attempt task keeps its semaphore
-  permit and swaps what it awaits. So "exactly one `JobResult` per job, never
-  zero, never two" survives verbatim, and `FLEXIQ_PUSH_TARGET_CAPACITY` keeps
-  one meaning in both modes.
-- **One nullable column** — `execution_claims.settle_deadline_ms` — is both the
-  extension mechanism and the "accepted, never settled" marker, because those
-  are one fact.
+## Items
 
-## Tasks
-
-- [x] 1. Proto: four RPCs carrying the existing frames + the contract's `202` row
-- [x] 2. Storage: migration `m0019`, the records, `await_settle`/`claim_settle`/
-      `supports_settle`, `lease_authorizes` beside `epochs_agree`
-- [x] 3. Storage: SQLite, Postgres and Redis impls + the `delegate!` block
-      (the claim purge preserving a live marker landed here, not in 4 — it is
-      part of the marker's semantics on each backend, and its test is here)
-- [x] 4. Reaper honours the marker and flags it; the scheduler's message
-- [x] 5. Dispatcher accepts a 202 and waits
-- [x] 6+7+8. The settle-only door, `FLEXIQ_PUSH_TARGET_SETTLE`, the chart and
-      the progress/task-log RPCs — one commit, because none of the three
-      compiles without the others: the door needs the config to be reachable,
-      and the handlers need the target methods to exist
-- [x] 9. Tests, including both mutation checks
-- [x] 10. Docs
-
-## Found on the way in
-
-`purge_execution_claims` drops every claim older than a hard-coded hour
-(`scheduler/maintenance.rs:104`). With the row gone the epoch is absent,
-`epochs_agree` agrees with everything, and a job running past an hour has no
-epoch fence at all. Pre-existing; #845 makes it the normal case. Closed here
-for marked rows only — the general case (a long *attached* job) needs a join
-the Diesel backends do not have, and is filed rather than half-done.
+- [x] `bench/` harness: scenario, sink, idle sampler, process lifecycle, report
+- [x] Adapters: FlexiQ (Python/Node × SQLite/Redis), Celery, Dramatiq, RQ, BullMQ
+- [x] Redis hygiene: per-run names, keyspace diff cleanup, `DBSIZE` postcondition
+- [x] Pinned deps — `bench/uv.lock` un-ignored, `bench/node/pnpm-lock.yaml`, Python 3.12
+- [x] `bench-ruff` / `bench-mypy` pre-commit hooks
+- [x] `scripts/sync-benchmarks.mjs` → generated `docs/app/lib/benchmark-data.ts` (+ `--check`)
+- [x] `BenchmarkChart` / `BenchmarkNotes` / `BenchmarkTable` in the diagrams barrel
+- [x] `BenchmarkFold` on the docs landing page
+- [x] `about/benchmarks` page + nav entry
+- [x] README section; `about/comparison` loses its unbacked "lower latency"
+- [x] `bench.yml` — `workflow_dispatch`, colocated Redis, gates nothing
+- [x] The published run, committed as `bench/results/latest.json`
+- [x] Memory + skills updated
 
 ## Review
 
-Ten tasks, nine commits (6-8 merged: see above). All three feature combos
-compile; SQLite and Redis storage suites green; Postgres green apart from
-`test_count_expired_rows_matches_seeded_rows`, **confirmed pre-existing** by
-re-running the same assertion on a stashed tree.
+**What shipped.** A `bench/` project with its own pins, eight entrants over one
+scenario, three metrics reported separately, and a committed artifact that the
+landing chart and the docs page are both generated from. `--check` on the sync
+script is the staleness gate; nothing downstream of the artifact is hand-typed.
 
-Three things worth carrying forward:
+**What the numbers say.** Against a Redis 36 ms away, Dramatiq and BullMQ win
+the drain outright, Celery and RQ sit in the middle, and FlexiQ's Redis backend
+is last by a wide margin — it spends more round trips per job, and the link
+multiplies them. FlexiQ also loses on idle, because its scheduler polls where
+RQ and BullMQ block. Both losses are on the page, with the reason.
 
-- **The wait lives inside `run_one`.** Keeping the attempt task alive and
-  swapping what it awaits meant the "exactly one `JobResult` per job" invariant
-  needed no exception, and capacity kept one meaning across both modes.
-- **`claim_settle` must clear the marker, not delete the claim.** The first
-  draft deleted the row — which takes the epoch with it, and the fence that
-  runs moments later when the result is applied then compares against an
-  absence, which agrees with everything. Caught by a storage test.
-- **A parked accepted dispatch is a shutdown hazard.** An attempt waiting on an
-  hour-long deadline made the first test run hang: the abandon signal is the
-  only thing that reaches it. `a_shutdown_releases_an_accepted_dispatch` pins
-  that on a short drain budget so a regression is a failure, not a hang.
+**Two bugs the harness found in itself.** A producer that submits and then
+declines to exit hangs the run with no output — every producer subprocess now
+has a timeout. And `rq worker-pool` left two of five warmup jobs hung
+indefinitely over the high-latency link; four separate `rq worker` processes do
+not, and are closer to how RQ is supervised anyway.
 
-Known limits, all stated in the contract and docs rather than left to be found:
-a settle must reach the replica that dispatched; cancel semantics are still
-#846's; the claim-purge fence hole is closed only for marked rows.
+**Deliberately not done.** No Redis key prefix was added to the SDK shells,
+though it would have made isolation easier — that is cross-SDK parity debt on a
+documentation issue. No engine tuning, for anyone. And the run was not made a
+required check: a benchmark on a shared runner turns noise into a red PR.
