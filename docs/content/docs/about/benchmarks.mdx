@@ -1,0 +1,110 @@
+---
+title: Benchmarks
+description: "Published, reproducible numbers for FlexiQ against Celery, Dramatiq, RQ and BullMQ — the wins and the losses."
+---
+
+An unbenchmarked performance claim is worth less than no claim, because the
+first reader who cares will run their own. So here is ours, with the script
+that produced it: [`bench/`](https://github.com/ByteVeda/flexiq/tree/master/bench).
+
+Everything on this page is generated from a committed results artifact. Nothing
+is typed by hand, including the machine it ran on.
+
+<BenchmarkChart />
+
+## What was measured
+
+One scenario, run against every entrant: N jobs, a fixed payload, a fixed
+worker concurrency, measured **to completion** rather than to enqueue. The task
+body decodes the payload, records a latency and returns — anything heavier
+would measure the handler rather than the queue underneath it.
+
+Three metrics, reported separately, because an engine that wins one can lose
+another:
+
+- **Enqueue throughput** — one producer, serial, no batch API. FlexiQ has
+  `enqueue_many` and most of the others do not, so using it would measure a
+  feature rather than a queue.
+- **End-to-end latency** — submission to completion, in percentiles. Every
+  handler in every language appends one line to the same file, so the
+  measurement is identical across all of them. FlexiQ keeps `created_at` and
+  `completed_at` on the job row and could answer this from the database, but the
+  others cannot, and a number read one way for us and another way for everyone
+  else is not a comparison.
+- **Idle cost** — CPU and memory across the worker process tree with the queue
+  empty. This is the axis a throughput benchmark normally hides, and it is the
+  one a polling scheduler pays for.
+
+One producer submits as fast as it can, which is faster than some entrants can
+drain. Where that happens a backlog builds during the run, and those entrants'
+latency percentiles are mostly time spent queued behind it rather than the cost
+of handling one job. Read the completion rate as the primary result for them
+and the latency as its consequence — every entrant received the identical load,
+so the ordering is meaningful even where the magnitude is a queueing effect.
+
+<BenchmarkTable />
+
+### "Concurrency 4" is four different things
+
+Each row carries its own `concurrency_model` because the number does not mean
+the same thing twice: four prefork processes to Celery, one process with four
+threads to Dramatiq, four worker processes to RQ — which then forks a child per
+job, as it does by default — and four concurrent jobs in a single process to
+BullMQ and to FlexiQ's Node SDK.
+
+Every entrant runs with its own defaults. Nothing was tuned, FlexiQ included. A
+benchmark that tunes one entrant is a benchmark that entrant wrote.
+
+## What it does not show
+
+<BenchmarkNotes />
+
+The two groups in the chart are kept apart deliberately. The Redis entrants
+share a backend and a network link, so they are comparable with each other. The
+SQLite rows are a **different deployment** — a local file against a network
+service — and merging them into one ranking would be exactly the sleight of
+hand this harness exists to avoid.
+
+## Where FlexiQ loses
+
+Against a Redis that is a network hop away, FlexiQ's Redis backend is the
+slowest entrant in the run, and not by a little.
+
+The reason is round trips. Claiming one job costs a `ZRANGEBYSCORE` over the
+queue's pending set, an `MGET` of the candidates, and then the claim script —
+before the execution claim and the completion write. Dramatiq and BullMQ pop
+with a single blocking command and do very little else. On a local socket that
+difference is small; multiplied by a network hop it is the whole result, and it
+is why those two win the comparison outright.
+
+FlexiQ also pays on idle. Its scheduler polls — `scheduler_poll_interval_ms`
+defaults to 50 — where RQ and BullMQ block until work arrives. That is a
+fraction of a core spent doing nothing, which never shows up in a drain time
+and does show up on a small instance.
+
+The deployment FlexiQ is built for is the one in the second group — the
+database beside the process, no broker in the middle — and that is where the
+numbers in the first group would move to if the Redis were local. Neither
+statement is a substitute for re-running it on your own hardware, which is the
+whole reason the harness is in the repository.
+
+## Running it yourself
+
+```bash
+git clone https://github.com/ByteVeda/flexiq
+cd flexiq
+
+# Plumbing only: no network, no services, about a minute.
+uv run --project bench python bench/run.py --smoke
+
+# The full comparison. Bring your own Redis.
+pnpm --dir bench/node install --frozen-lockfile
+REDIS_URL=redis://localhost:6379 \
+  uv run --project bench python bench/run.py --out bench/results/latest.json
+```
+
+Every dependency is pinned exactly, Python included, and the artifact records
+the versions it ran against. See
+[`bench/README.md`](https://github.com/ByteVeda/flexiq/blob/master/bench/README.md)
+for the scenario, the metrics and the cleanup guarantees the harness makes when
+it is pointed at a Redis it does not own.

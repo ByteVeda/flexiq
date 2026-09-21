@@ -4,6 +4,7 @@
   "pages": [
     "capabilities",
     "comparison",
+    "benchmarks",
     "faq",
     "migrating-to-flexiq",
     "changelog"
