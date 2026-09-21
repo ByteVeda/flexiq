@@ -63,6 +63,9 @@ const runtimes = artifact.runtimes
     concurrencyModel: runtime.concurrency_model,
     enqueuePerSecond: runtime.enqueue.per_second,
     drainPerSecond: runtime.drain.per_second,
+    // Null for an artifact produced before the harness measured it, rather
+    // than a zero that would read as "kept up the whole way".
+    backlogAtSubmitEnd: runtime.drain.backlog_at_submit_end ?? null,
     latencyMs: {
       p50: runtime.latency_ms.p50,
       p95: runtime.latency_ms.p95,
@@ -127,6 +130,8 @@ export interface BenchmarkRuntime {
   concurrencyModel: string;
   enqueuePerSecond: number;
   drainPerSecond: number;
+  /** Jobs still unfinished when submission stopped — measured, not inferred. */
+  backlogAtSubmitEnd: number | null;
   latencyMs: { p50: number; p95: number; p99: number; max: number };
   idle: { cpuPct: number; rssMb: number };
 }

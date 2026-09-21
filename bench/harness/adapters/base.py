@@ -149,6 +149,15 @@ class Adapter(ABC):
             records = latency.measured(latency.read_records(ctx.sink), scenario.warmup_jobs)
             drain_s = (max(r.completed_ms for r in records) - submitted.started_ms) / 1000
 
+            # How many jobs were still unfinished the moment submission stopped.
+            # Measured, not inferred: `drain.seconds` spans the submission
+            # window too, so it is always at least `enqueue.seconds` and
+            # comparing the two rates would call every entrant backlogged,
+            # including ones that kept up the whole way.
+            submit_end_ms = submitted.started_ms + submitted.seconds * 1000
+            finished_by_then = sum(1 for r in records if r.completed_ms <= submit_end_ms)
+            backlog = scenario.jobs - finished_by_then
+
             # The queue is empty and the workers are still up: this is the cost
             # of being available, which is the number a poller loses on.
             idle_stats = idle.sample(
@@ -171,6 +180,7 @@ class Adapter(ABC):
             "drain": {
                 "seconds": round(drain_s, 3),
                 "per_second": round(scenario.jobs / drain_s, 1) if drain_s > 0 else 0.0,
+                "backlog_at_submit_end": backlog,
             },
             "latency_ms": latency.summarise([r.latency_ms for r in records]),
             "idle": idle_stats,

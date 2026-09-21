@@ -234,6 +234,9 @@ export function BenchmarkTable() {
             <th>Concurrency</th>
             <th>Enqueue/s</th>
             <th>Completed/s</th>
+            {/* Jobs still unfinished when submission stopped — the number that
+                says whether a percentile is queueing or handling. */}
+            <th>Backlog</th>
             <th>p50</th>
             <th>p95</th>
             <th>p99</th>
@@ -252,6 +255,11 @@ export function BenchmarkTable() {
               <td>{runtime.concurrencyModel}</td>
               <td>{runtime.enqueuePerSecond}</td>
               <td>{runtime.drainPerSecond}</td>
+              <td>
+                {runtime.backlogAtSubmitEnd === null
+                  ? "—"
+                  : `${runtime.backlogAtSubmitEnd} / ${BENCHMARK.scenario.jobs}`}
+              </td>
               <td>{runtime.latencyMs.p50} ms</td>
               <td>{runtime.latencyMs.p95} ms</td>
               <td>{runtime.latencyMs.p99} ms</td>

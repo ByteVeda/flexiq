@@ -35,12 +35,13 @@ another:
   empty. This is the axis a throughput benchmark normally hides, and it is the
   one a polling scheduler pays for.
 
-One producer submits as fast as it can, which is faster than some entrants can
-drain. Where that happens a backlog builds during the run, and those entrants'
-latency percentiles are mostly time spent queued behind it rather than the cost
-of handling one job. Read the completion rate as the primary result for them
-and the latency as its consequence — every entrant received the identical load,
-so the ordering is meaningful even where the magnitude is a queueing effect.
+One producer submits as fast as it can, so the latency above is end-to-end
+under a load an entrant may not keep up with. Every row in the artifact records
+`drain.backlog_at_submit_end`: how many of its jobs were still unfinished the
+moment submission stopped. Where that is a large share of the run, the
+percentiles are mostly time spent queued rather than the cost of handling one
+job, and the completion rate is the result to read. Every entrant received the
+identical load, so the ordering holds either way.
 
 <BenchmarkTable />
 

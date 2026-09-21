@@ -12,6 +12,8 @@ export interface BenchmarkRuntime {
   concurrencyModel: string;
   enqueuePerSecond: number;
   drainPerSecond: number;
+  /** Jobs still unfinished when submission stopped — measured, not inferred. */
+  backlogAtSubmitEnd: number | null;
   latencyMs: { p50: number; p95: number; p99: number; max: number };
   idle: { cpuPct: number; rssMb: number };
 }
@@ -77,6 +79,7 @@ export const BENCHMARK: BenchmarkRun = {
       "concurrencyModel": "4 worker threads (workers=4)",
       "enqueuePerSecond": 7.7,
       "drainPerSecond": 1,
+      "backlogAtSubmitEnd": null,
       "latencyMs": {
         "p50": 216961.38,
         "p95": 401910.49,
@@ -97,6 +100,7 @@ export const BENCHMARK: BenchmarkRun = {
       "concurrencyModel": "4 prefork processes (-c 4, Celery's default pool)",
       "enqueuePerSecond": 28.4,
       "drainPerSecond": 13,
+      "backlogAtSubmitEnd": null,
       "latencyMs": {
         "p50": 10480.97,
         "p95": 19870.99,
@@ -117,6 +121,7 @@ export const BENCHMARK: BenchmarkRun = {
       "concurrencyModel": "1 process x 4 threads (--processes 1 --threads 4)",
       "enqueuePerSecond": 29.7,
       "drainPerSecond": 29.6,
+      "backlogAtSubmitEnd": null,
       "latencyMs": {
         "p50": 52.23,
         "p95": 69.06,
@@ -137,6 +142,7 @@ export const BENCHMARK: BenchmarkRun = {
       "concurrencyModel": "4 `rq worker` processes (forks a child per job — RQ's default)",
       "enqueuePerSecond": 13.5,
       "drainPerSecond": 4.5,
+      "backlogAtSubmitEnd": null,
       "latencyMs": {
         "p50": 34753.36,
         "p95": 68570.45,
@@ -157,6 +163,7 @@ export const BENCHMARK: BenchmarkRun = {
       "concurrencyModel": "4 concurrent jobs in one process (concurrency: 4)",
       "enqueuePerSecond": 28.8,
       "drainPerSecond": 28.8,
+      "backlogAtSubmitEnd": null,
       "latencyMs": {
         "p50": 45.27,
         "p95": 160.87,
@@ -177,6 +184,7 @@ export const BENCHMARK: BenchmarkRun = {
       "concurrencyModel": "4 concurrent jobs in one process (concurrency: 4)",
       "enqueuePerSecond": 7.3,
       "drainPerSecond": 0.8,
+      "backlogAtSubmitEnd": null,
       "latencyMs": {
         "p50": 285933.74,
         "p95": 543368.95,
@@ -197,6 +205,7 @@ export const BENCHMARK: BenchmarkRun = {
       "concurrencyModel": "4 worker threads (workers=4)",
       "enqueuePerSecond": 7098.5,
       "drainPerSecond": 142.2,
+      "backlogAtSubmitEnd": null,
       "latencyMs": {
         "p50": 1770.01,
         "p95": 3288.74,
@@ -217,6 +226,7 @@ export const BENCHMARK: BenchmarkRun = {
       "concurrencyModel": "4 concurrent jobs in one process (concurrency: 4)",
       "enqueuePerSecond": 2012.9,
       "drainPerSecond": 761.8,
+      "backlogAtSubmitEnd": null,
       "latencyMs": {
         "p50": 316,
         "p95": 433.27,

@@ -62,12 +62,17 @@ measure the handler rather than the queue underneath it.
   empty. A poller and a blocking consumer look identical on a drain time and
   very different on a small instance.
 
-One producer submits as fast as it can, which is faster than some entrants
-drain. Where that happens a backlog builds during the run, so those entrants'
-latency percentiles are mostly queueing behind it rather than the cost of one
-job — the completion rate is the primary result for them and the latency is its
-consequence. The harness derives that caveat from the rows themselves
-(`harness/report.py::saturated`) and writes it into the artifact's `notes`.
+One producer submits as fast as it can, so latency is end-to-end under a load
+an entrant may not keep up with. Each row records
+`drain.backlog_at_submit_end` — how many of its jobs were still unfinished the
+moment submission stopped, counted from the completion timestamps. Where that
+is a large share of the run, the percentiles are mostly queueing and the
+completion rate is the result to read.
+
+That number is measured rather than inferred on purpose. `drain.seconds` spans
+the submission window as well, so it is always at least `enqueue.seconds`, and
+comparing the two rates would call every entrant backlogged — including ones
+that kept up from the first job to the last.
 
 ### "Concurrency 4" is not one thing
 
