@@ -100,6 +100,7 @@ every axis.
 **[Run it yourself →](bench)**
 
 ```bash
+pnpm --dir bench/node install --frozen-lockfile   # the BullMQ and Node entrants
 REDIS_URL=redis://localhost:6379 \
   uv run --project bench python bench/run.py --out bench/results/latest.json
 ```
