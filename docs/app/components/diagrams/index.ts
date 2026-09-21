@@ -3,6 +3,11 @@
 
 export { Mermaid } from "@/components/mermaid";
 export { ArchitectureStack, ResourcePipeline } from "./arch-stack";
+export {
+  BenchmarkChart,
+  BenchmarkNotes,
+  BenchmarkTable,
+} from "./benchmark-chart";
 export { CrashRecoveryTimeline } from "./failure-timeline";
 export { JobStateMachine } from "./lifecycle-graph";
 export { MeshDemo } from "./mesh-demo";

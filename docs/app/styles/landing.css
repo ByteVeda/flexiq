@@ -822,6 +822,25 @@ main {
   }
 }
 
+/* ===== benchmark fold ===== */
+/* The chart brings its own frame (`.bm` in diagrams.css, so the same component
+   serves the MDX page); all that is needed here is the closing note, which is
+   the server fold's shape and reads as one family with it. */
+.bmf-note {
+  max-width: 660px;
+  margin: 36px auto 0;
+  text-align: center;
+}
+.bmf-note p {
+  font-size: 16.5px;
+  line-height: 1.6;
+  color: var(--mut);
+}
+.bmf-note .doclinks {
+  justify-content: center;
+  margin-top: 20px;
+}
+
 /* ===== docs map ===== */
 /* The section grid reuses the docs `.next-grid` cards. Two columns is right
    inside an article's measure; the root has the full `.wrap` to fill. Fixed
