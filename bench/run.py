@@ -144,6 +144,11 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         before = scope.snapshot() if scope and adapter.needs_redis else None
+        # Bound before the `try`, because `finally` reads it: an exception that
+        # is not a `BenchError` would otherwise raise `NameError` over the real
+        # traceback on the first entrant, and hand the *previous* entrant's job
+        # ids to cleanup on every one after that.
+        result: dict[str, Any] | None = None
         try:
             result = adapter.measure(ctx)
         except BenchError as exc:
