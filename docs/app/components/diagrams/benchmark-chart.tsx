@@ -92,16 +92,18 @@ function ordered(
 function Bars({
   runtimes,
   metric,
+  labelledBy,
 }: {
   runtimes: BenchmarkRuntime[];
   metric: Metric;
+  labelledBy: string;
 }) {
   const rows = ordered(runtimes, metric);
   // Scale to the largest bar in *this* group, never across groups: a shared
   // scale would squash the Redis rows against a local-disk number.
   const peak = Math.max(...rows.map(metric.value), 1);
   return (
-    <ul className="bm-bars">
+    <ul className="bm-bars" aria-labelledby={labelledBy}>
       {rows.map((runtime) => (
         <li className="bm-row" key={runtime.id}>
           <span className="bm-label" title={runtime.concurrencyModel}>
@@ -161,28 +163,38 @@ export function BenchmarkChart() {
         </span>
       </p>
 
+      {/* Labels, not headings. The figure sits under an `h2` on the landing
+          page and under the `h1` on the benchmarks page, so any heading level
+          chosen here skips one somewhere — and these caption two groups of
+          bars rather than structuring the document. The `ul` carries the same
+          text as its accessible name, so the grouping still reaches a screen
+          reader. */}
       {shared.length > 0 ? (
-        <section className="bm-group">
-          <h4 className="bm-group-title">
+        <div className="bm-group">
+          <p className="bm-group-title" id="bm-group-shared">
             Same backend — every entrant on one Redis
             {redis?.rttMsAvg ? (
               <span className="bm-note">{redis.rttMsAvg} ms away</span>
             ) : null}
-          </h4>
-          <Bars runtimes={shared} metric={metric} />
-        </section>
+          </p>
+          <Bars
+            runtimes={shared}
+            metric={metric}
+            labelledBy="bm-group-shared"
+          />
+        </div>
       ) : null}
 
       {local.length > 0 ? (
-        <section className="bm-group">
-          <h4 className="bm-group-title">
+        <div className="bm-group">
+          <p className="bm-group-title" id="bm-group-local">
             No broker — FlexiQ on a local SQLite file
             <span className="bm-note">
               a different deployment, not a faster entrant
             </span>
-          </h4>
-          <Bars runtimes={local} metric={metric} />
-        </section>
+          </p>
+          <Bars runtimes={local} metric={metric} labelledBy="bm-group-local" />
+        </div>
       ) : null}
 
       <figcaption className="bm-caption">
