@@ -105,7 +105,10 @@ def table(artifact: dict[str, Any]) -> str:
     rows = []
     for runtime in artifact["runtimes"]:
         if "error" in runtime:
-            rows.append(f"| {runtime['id']} | — | failed: {runtime['error'][:60]} |")
+            # Same column count as every other row: a short row renders as a
+            # broken table, and a failed entrant should read as a result.
+            reason = runtime["error"][:60]
+            rows.append(f"| {runtime['id']} | failed: {reason} |" + " — |" * 7)
             continue
         latency = runtime["latency_ms"]
         rows.append(

@@ -99,7 +99,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     scenario = build_scenario(args)
     wanted = args.only or (list(SMOKE_RUNTIMES) if args.smoke else None)
-    adapters = select(wanted)
+    try:
+        adapters = select(wanted)
+    except ValueError as exc:
+        # A mistyped id should read as a usage error, not a traceback.
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     redis_url = machine.redis_url_from_env()
     needs_redis = [adapter.id for adapter in adapters if adapter.needs_redis]
@@ -143,7 +148,11 @@ def main(argv: list[str] | None = None) -> int:
             result = adapter.measure(ctx)
         except BenchError as exc:
             print(f"  failed: {exc}", file=sys.stderr)
-            print(tail(ctx.run_dir / "worker.log"), file=sys.stderr)
+            # Every log, not a fixed name: an entrant may run several worker
+            # processes, and the one that explains the failure is rarely the
+            # first.
+            for log in sorted(ctx.run_dir.glob("*.log")):
+                print(f"  -- {log.name} --\n{tail(log)}", file=sys.stderr)
             runtimes.append({"id": adapter.id, "engine": adapter.engine, "error": str(exc)})
             result = None
         finally:
