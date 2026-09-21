@@ -40,7 +40,9 @@ class LatencySink:
     """An append-only sample file, safe to share across processes and threads."""
 
     def __init__(self, path: Path) -> None:
-        self._fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        # 0o600: every process that writes here is a worker this harness
+        # started, so the run's own user is the only reader it ever needs.
+        self._fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
 
     def record(self, index: int, latency_ms: float, completed_ms: float) -> None:
         os.write(self._fd, f"{index} {latency_ms:.3f} {completed_ms:.3f}\n".encode())

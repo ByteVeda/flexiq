@@ -118,7 +118,9 @@ class Adapter(ABC):
         """Warm up, submit, drain, then sit idle — in that order, once."""
         scenario = ctx.scenario
         ctx.run_dir.mkdir(parents=True, exist_ok=True)
-        ctx.sink.touch()
+        # Created here, before any worker opens it, so this mode is the one the
+        # file actually gets — `LatencySink`'s would never apply.
+        ctx.sink.touch(mode=0o600)
 
         with ExitStack() as stack:
             workers = [stack.enter_context(worker) for worker in self.workers(ctx)]
