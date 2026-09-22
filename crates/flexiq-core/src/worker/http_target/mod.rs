@@ -456,13 +456,16 @@ struct EndedDispatches {
 
 impl EndedDispatches {
     fn record(&mut self, job_id: &str, lease: Option<Lease>, ending: Ending) {
+        // A re-dispatched job ends again under a new lease. Its old position
+        // must go too, or eviction reaches it early and drops the fresh entry.
         if self
             .by_job
             .insert(job_id.to_string(), (lease, ending))
-            .is_none()
+            .is_some()
         {
-            self.order.push_back(job_id.to_string());
+            self.order.retain(|id| id != job_id);
         }
+        self.order.push_back(job_id.to_string());
         while self.order.len() > ENDED_CAPACITY {
             if let Some(oldest) = self.order.pop_front() {
                 self.by_job.remove(&oldest);
@@ -1537,6 +1540,24 @@ mod tests {
         assert!(matches!(
             ended.refusal("never-seen", &Lease::from_epoch(7)),
             SettleRefused::NotHere
+        ));
+    }
+
+    #[test]
+    fn a_job_that_ends_again_is_evicted_by_its_latest_ending() {
+        let mut ended = EndedDispatches::default();
+        ended.record("again", Some(Lease::from_epoch(1)), Ending::Superseded);
+        for n in 0..ENDED_CAPACITY - 1 {
+            ended.record(&format!("job-{n}"), None, Ending::Superseded);
+        }
+        // Re-dispatched and cancelled: the newest entry, not the oldest.
+        ended.record("again", Some(Lease::from_epoch(2)), Ending::Cancelled);
+        ended.record("one-more", None, Ending::Superseded);
+
+        assert_eq!(ended.order.len(), ENDED_CAPACITY);
+        assert!(matches!(
+            ended.refusal("again", &Lease::from_epoch(2)),
+            SettleRefused::Cancelled
         ));
     }
 
