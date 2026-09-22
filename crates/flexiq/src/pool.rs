@@ -20,6 +20,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use crossbeam_channel::Sender;
+use flexiq_core::worker::CancelSignals;
 use flexiq_core::{
     Job, JobResult, LeaseBook, QueueError, Result, SchedulerConfig, StorageBackend, TaskConfig,
     TaskError, Worker, WorkerDispatcher, WorkerHandle,
@@ -176,6 +177,11 @@ struct ShellDispatcher {
     /// The lease book, likewise. `LeaseBook::current` is where a dispatch's
     /// epoch comes from.
     leases: Mutex<Option<Arc<LeaseBook>>>,
+    /// Cancels the worker's relay delivered, read by `check_cancelled`.
+    ///
+    /// Detached — no storage read behind it — because `Worker` always relays
+    /// the storage flag here, so a check never costs a query.
+    cancels: Arc<CancelSignals>,
 }
 
 impl ShellDispatcher {
@@ -191,6 +197,7 @@ impl ShellDispatcher {
             shutdown: AtomicBool::new(false),
             owner: Mutex::new(String::new()),
             leases: Mutex::new(None),
+            cancels: Arc::new(CancelSignals::detached()),
         }
     }
 
@@ -243,6 +250,11 @@ fn job_result(job: &Job, outcome: Outcome<Option<Vec<u8>>>, started: Instant) ->
             job_id: job.id.clone(),
             task_name: job.task_name.clone(),
             wake_at: wake_at(&sleep),
+            wall_time_ns,
+        },
+        Err(Abort::Cancelled) => JobResult::Cancelled {
+            job_id: job.id.clone(),
+            task_name: job.task_name.clone(),
             wall_time_ns,
         },
     }
@@ -306,6 +318,7 @@ impl WorkerDispatcher for ShellDispatcher {
             let tx = result_tx.clone();
             let (owner, _attempt, epoch) = self.fence(&job);
             let storage = self.storage.clone();
+            let cancels = Arc::clone(&self.cancels);
 
             // Every handler is synchronous, so every handler runs here. An
             // async task is refused by the macro rather than silently blocking
@@ -343,6 +356,7 @@ impl WorkerDispatcher for ShellDispatcher {
                 // the send: `spawn_blocking` catches it into a `JoinHandle`
                 // nothing holds, so the job would sit in flight until the
                 // stale-job reap noticed, with no error recorded anywhere.
+                crate::cancellation::install(&job.id, Arc::clone(&cancels));
                 let outcome = match std::panic::catch_unwind(AssertUnwindSafe(|| handler(&job))) {
                     Ok(outcome) => outcome,
                     // Retryable, like any other failure the task did not
@@ -357,9 +371,12 @@ impl WorkerDispatcher for ShellDispatcher {
                     )))),
                 };
 
+                crate::cancellation::clear();
                 if let Some(session) = crate::steps::take() {
                     session.finish();
                 }
+                // The relay stops at settlement, so the signal is done with.
+                cancels.forget(&job.id);
                 let _ = tx.send(job_result(&job, outcome, started));
             });
         }
@@ -375,6 +392,11 @@ impl WorkerDispatcher for ShellDispatcher {
 
     fn set_lease_book(&self, leases: Arc<LeaseBook>) {
         *self.leases.lock().expect("lease lock") = Some(leases);
+    }
+
+    /// Where the worker's cancel relay lands; `check_cancelled` reads it.
+    fn notify_cancel(&self, job_id: &str) {
+        self.cancels.signal(job_id);
     }
 }
 

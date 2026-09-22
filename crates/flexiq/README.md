@@ -86,6 +86,28 @@ released, so the worker's slot is free while it waits. The attempt ends there â€
 what follows runs on the next attempt, from the top, with every committed step
 memoized. A sleep is not a retry and does not spend one.
 
+## Cancellation
+
+`FlexiQ::request_cancel` flags a running job; nothing interrupts a handler
+mid-call, so the body checks.
+
+```rust,ignore
+#[flexiq::task]
+fn reindex(ids: Vec<String>) -> flexiq::Outcome<()> {
+    for id in ids {
+        flexiq::check_cancelled()?;
+        reindex_one(&id)?;
+    }
+    Ok(())
+}
+```
+
+`check_cancelled` ends the attempt with `Abort::Cancelled`: the job settles
+`Cancelled` and is not retried. The worker picks a cancel up within about a
+second, wherever it was requested, and a check reads memory rather than the
+database, so it is cheap enough for a tight loop. `cancel_requested()` answers
+the same question as a `bool`.
+
 ## Periodic tasks
 
 ```rust,ignore

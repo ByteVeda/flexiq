@@ -16,6 +16,7 @@ pub use flexiq_core;
 // `contract, error, job, lease, periodic, pubsub, resilience, scheduler,
 // settings, step, storage, wire, worker` — the shell's names steer clear.
 mod call;
+mod cancellation;
 mod cron;
 mod decode;
 mod encode;
@@ -34,6 +35,7 @@ mod task;
 pub use flexiq_macros::task;
 
 pub use call::TaskCall;
+pub use cancellation::{cancel_requested, check_cancelled};
 pub use cron::PeriodicSpec;
 pub use decode::DecodeError;
 pub use encode::EncodeError;
