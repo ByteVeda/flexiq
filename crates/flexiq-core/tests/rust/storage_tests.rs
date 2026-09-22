@@ -206,6 +206,28 @@ fn test_cancel_job(s: &impl Storage) {
     assert!(!s.cancel_job(&job.id, None).unwrap());
 }
 
+fn test_cancel_requested_among(s: &impl Storage) {
+    // One running job with a cancel request, one running without, one unknown
+    // id: only the first comes back.
+    let q = "q-cancel-among";
+    let asked = s.enqueue(make_job(q, "cancel_among")).unwrap();
+    let quiet = s.enqueue(make_job(q, "cancel_among")).unwrap();
+    s.dequeue(q, now_millis() + 1000, None).unwrap().unwrap();
+    s.dequeue(q, now_millis() + 1000, None).unwrap().unwrap();
+    assert!(s.request_cancel(&asked.id, None).unwrap());
+
+    let ids = vec![
+        asked.id.clone(),
+        quiet.id.clone(),
+        "no-such-job".to_string(),
+    ];
+    assert_eq!(
+        s.cancel_requested_among(&ids, None).unwrap(),
+        vec![asked.id]
+    );
+    assert!(s.cancel_requested_among(&[], None).unwrap().is_empty());
+}
+
 fn test_stats(s: &impl Storage) {
     let q = "q-stats";
     s.enqueue(make_job(q, "t1")).unwrap();
@@ -2625,6 +2647,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_retry(s);
     test_reschedule(s);
     test_cancel_job(s);
+    test_cancel_requested_among(s);
     test_stats(s);
     test_stats_by_queue_and_task(s);
     test_unique_key_dedup(s);

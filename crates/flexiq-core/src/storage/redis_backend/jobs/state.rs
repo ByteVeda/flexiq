@@ -326,6 +326,37 @@ impl RedisStorage {
         Ok(is_member)
     }
 
+    /// The subset of `ids` whose cancel has been requested: one pipelined
+    /// round trip for membership, then a namespace read for the hits only —
+    /// which are rare, where the ids asked about are every tick's in-flight set.
+    pub fn cancel_requested_among(
+        &self,
+        ids: &[String],
+        namespace: Option<&str>,
+    ) -> Result<Vec<String>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.conn()?;
+        let cancel_set = self.key(&["jobs", "cancel_requested"]);
+        let mut pipe = redis::pipe();
+        for id in ids {
+            pipe.sismember(&cancel_set, id);
+        }
+        let members: Vec<bool> = pipe.query(&mut conn).map_err(map_err)?;
+        let mut requested = Vec::new();
+        for (id, member) in ids.iter().zip(members) {
+            if !member {
+                continue;
+            }
+            if namespace.is_some() && self.get_job(id, namespace)?.is_none() {
+                continue;
+            }
+            requested.push(id.clone());
+        }
+        Ok(requested)
+    }
+
     /// Archive a live job as `Cancelled` after a cancel request was observed.
     /// A job in another namespace is left alone.
     pub fn mark_cancelled(&self, id: &str, namespace: Option<&str>) -> Result<()> {

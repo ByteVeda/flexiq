@@ -627,6 +627,13 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<bool> {
                 self.is_cancel_requested(id, namespace)
             }
+            fn cancel_requested_among(
+                &self,
+                ids: &[String],
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<Vec<String>> {
+                self.cancel_requested_among(ids, namespace)
+            }
             fn mark_cancelled(
                 &self,
                 id: &str,
@@ -1656,6 +1663,13 @@ impl Storage for StorageBackend {
     }
     fn is_cancel_requested(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
         delegate!(self, is_cancel_requested, id, namespace)
+    }
+    fn cancel_requested_among(
+        &self,
+        ids: &[String],
+        namespace: Option<&str>,
+    ) -> Result<Vec<String>> {
+        delegate!(self, cancel_requested_among, ids, namespace)
     }
     fn mark_cancelled(&self, id: &str, namespace: Option<&str>) -> Result<()> {
         delegate!(self, mark_cancelled, id, namespace)

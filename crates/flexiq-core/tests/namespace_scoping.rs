@@ -344,6 +344,23 @@ fn a_running_job_from_another_namespace_cannot_be_cancel_requested() {
 }
 
 #[test]
+fn a_batch_cancel_read_answers_only_for_its_own_namespace() {
+    let storage = storage();
+    let (a_id, b_id) = running_one_each(&storage, "worker-1");
+    assert!(storage.request_cancel(&a_id, Some(TENANT_A)).unwrap());
+    assert!(storage.request_cancel(&b_id, Some(TENANT_B)).unwrap());
+    let ids = vec![a_id.clone(), b_id.clone()];
+
+    assert_eq!(
+        storage
+            .cancel_requested_among(&ids, Some(TENANT_A))
+            .unwrap(),
+        vec![a_id]
+    );
+    assert_eq!(storage.cancel_requested_among(&ids, None).unwrap().len(), 2);
+}
+
+#[test]
 fn a_running_job_from_another_namespace_cannot_be_marked_cancelled() {
     let storage = storage();
     let (a_id, _) = running_one_each(&storage, "worker-1");
