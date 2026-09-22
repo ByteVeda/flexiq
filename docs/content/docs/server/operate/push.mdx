@@ -253,25 +253,30 @@ Durable steps remain attach-only either way: there is no step session here to
 resume, which is why `x-flexiq-outcome: slept` is refused on the request path
 and `Settle` has no `slept` arm.
 
-## `cancel()` does not stop the target's work
+## `cancel()` stops the result, not the work
 
 Under attach, cancelling a job sends a `cancel` frame and the executor stops.
-Under push, there is no frame to send and no connection to send it on — the
-scheduler already handed the whole job to the target in one request. Cancelling
-a job dispatched this way:
+Under push, there is no connection into the target's process to send one on.
+The scheduler picks the cancel up from storage within about a second, then:
 
-- **abandons the request** the scheduler was holding open,
-- **settles the attempt `Cancelled`** in FlexiQ's own state, and
-- **fences the target's eventual answer out** when it does arrive.
+- **in the request** — it abandons the request and settles the attempt
+  `Cancelled`. The target sees its connection close, and whatever it answers
+  afterwards is fenced out.
+- **after a `202`** — it settles the attempt `Cancelled`, and the target's
+  next `ExtendLease`, `ReportProgress`, `WriteTaskLog` or `Settle` is refused
+  with reason `JOB_CANCELLED`.
 
-The target's process is not told, keeps running, and **its side effects still
-happen.** A charge that was about to go through goes through; an email that
-was about to send, sends. Nothing about `cancel()` reaches the target itself
-under push — that is
-[issue #846](https://github.com/ByteVeda/flexiq/issues/846), the tracked
-follow-up for reaching the target's own process. Until it lands, treat a
-push-dispatched job's `cancel()` as "FlexiQ stops waiting", never as "the work
-stops".
+Either way the job ends `Cancelled` and is not retried. But the target is only
+stopped if it **stops itself**: its side effects up to that point still happen.
+A charge that was about to go through goes through, and an email that was about
+to send, sends.
+
+For a long-running target, that makes the reporting RPCs its cancel channel.
+Call `ExtendLease` or `ReportProgress` at an interval you can afford to overrun
+by, and stop on `JOB_CANCELLED` — that interval is how promptly a cancel reaches
+the work. A target that never reports is still correct: it runs to the end and
+its `Settle` is refused. The rules are in the
+[push contract](https://github.com/ByteVeda/flexiq/blob/master/contracts/PUSH_DISPATCH_CONTRACT.md#cancellation).
 
 ## No egress proxy, yet
 

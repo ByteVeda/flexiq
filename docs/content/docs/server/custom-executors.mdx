@@ -157,17 +157,20 @@ knowing before you build against one topology and assume it generalizes:
 | Topology | What `cancel()` promises |
 |---|---|
 | Native | The handler observes the storage flag and stops. |
-| Attach | The scheduler sends a `cancel` frame; the executor stops. |
-| Push | The request is abandoned, the attempt settles `Cancelled`, the target keeps running and its side effects still happen, and its result is fenced out on arrival. Unchanged for an accepted dispatch: the attempt is given up, and the target's later `Settle` is refused on the fence. |
+| Attach | Within about a second the scheduler sends a `cancel` frame; the executor stops. |
+| Push, in the request | The request is abandoned and the attempt settles `Cancelled`. The target sees only its connection close; its side effects still happen and its answer is fenced out. |
+| Push, accepted (`202`) | The attempt settles `Cancelled`. The target's next `ExtendLease`, `ReportProgress`, `WriteTaskLog` or `Settle` is refused with reason `JOB_CANCELLED` — a target that polls stops then; one that never does runs to the end. |
 
 An executor built against this page — attach, over `flexiq.executor.v1` or the
-socket protocol either one — is the middle row: cancellation is real, because
-there is a connection to send it down. [Push dispatch](/server/operate/push)
-has no such connection; the scheduler can stop waiting on a job, but it cannot
-reach into the target's process and stop it.
-[Issue #846](https://github.com/ByteVeda/flexiq/issues/846) is the tracked
-follow-up that changes the push row — until it lands, that gap is a known one,
-not an oversight.
+socket protocol either one — is the attach row: cancellation stops the work,
+because there is a connection to send it down. [Push dispatch](/server/operate/push)
+has no such connection, so there cancel stops the *result* and tells a target
+that asks. Moving a task from one topology to the other changes which promise
+it gets.
+
+A cancel reaches the scheduler through storage, so it does not matter where it
+was made — the producer door's `CancelJob`, the dashboard, or an SDK sharing
+the database all work the same way.
 
 ## The reporting RPCs, for work that outlived its request
 

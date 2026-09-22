@@ -219,6 +219,15 @@ resending would be the double execution the fence exists to refuse. The same
 code answers a lease that is absent, undecodable, or not the one this claim
 was won under.
 
+Two of those refusals carry a `google.rpc.ErrorInfo` (domain
+`flexiq.byteveda.org`), and a target **MUST** branch on its `reason` rather
+than on the code, which the two share:
+
+| `reason` | Means |
+|---|---|
+| `CLAIM_LOST` | The attempt was settled by someone else — a retry, a requeue, the deadline, a shutdown, or an earlier `Settle`. |
+| `JOB_CANCELLED` | An operator cancelled the job. See [Cancellation](#cancellation). |
+
 This is the normal failure mode of the design rather than an edge case: a
 target that runs long **will** eventually lose a race to the deadline, and
 `FAILED_PRECONDITION` is how it finds out its work was thrown away.
@@ -250,7 +259,8 @@ progress **MUST NOT** block on either.
 Both are refused silently if the dispatch is not the one this scheduler is
 holding open — including when the call reaches a replica other than the one
 that dispatched. That costs a progress update and nothing else, which is why
-they are not fenced as strictly as `Settle`.
+they are not fenced as strictly as `Settle`. The one refusal worth reading is
+`JOB_CANCELLED`: it means stop, exactly as it does on `ExtendLease`.
 
 ### What a 202 does not buy
 
@@ -259,7 +269,45 @@ they are not fenced as strictly as `Settle`.
   session here to resume.
 - **No second result.** A target that answers `202` and *also* returns a body
   has not settled anything; the body is ignored.
-- **No escape from cancel's semantics.** See below.
+- **No escape from cancel's semantics.** See [Cancellation](#cancellation).
+
+## Cancellation
+
+The scheduler has no connection into a running target, so push cannot make the
+promise attach makes. **Under attach, `cancel()` stops the work. Under push,
+`cancel()` stops the result from landing, and tells a target that asks.** A
+deployment that moves a task from one topology to the other changes which
+promise it has.
+
+A cancel is picked up from storage by the dispatching scheduler within about a
+second, wherever it was made — the gRPC `CancelJob`, the dashboard, or an SDK
+sharing the database. What happens next depends on where the dispatch is:
+
+| The dispatch is | The scheduler | The target |
+|---|---|---|
+| **In the request** — the target has not answered | Abandons the request and settles the attempt `Cancelled` | Sees its connection close. Whatever it answers afterwards is fenced out |
+| **Accepted** — the target answered `202` | Settles the attempt `Cancelled` | Its next `ExtendLease`, `ReportProgress`, `WriteTaskLog` or `Settle` under that lease is `FAILED_PRECONDITION`, reason `JOB_CANCELLED` |
+
+In both rows the job ends `Cancelled` and is **not retried**, and the target's
+side effects up to the moment it stops still happen.
+
+A target that wants cancel to stop its work, rather than only its result:
+
+- **SHOULD**, in the request, stop when its platform reports the client
+  disconnected — where the platform reports it at all.
+- **SHOULD**, once accepted, call `ExtendLease` or `ReportProgress` at an
+  interval it can afford to overrun by, and stop on `JOB_CANCELLED`. That
+  interval is how promptly a cancel reaches it.
+- **MUST NOT** resend anything after `JOB_CANCELLED`, and need not `Settle`:
+  the attempt is already settled.
+
+A target that never polls is still correct. It runs to the end, and its
+`Settle` is refused with `JOB_CANCELLED`.
+
+`JOB_CANCELLED` is told only to a caller presenting the lease the dispatch was
+made under, and only by the replica that dispatched it — the same routing rule
+as `Settle`. A call that lands elsewhere is refused as misrouted, which is also
+a stop.
 
 ## A worked example
 
@@ -439,11 +487,9 @@ Lambda function URLs' and API Gateway's native answer.
   attached executor's stream. A push target that answers `x-flexiq-outcome:
   slept` is refused outright — there is no step session here to resume, and
   `Settle` has no `slept` arm for the same reason.
-- **`cancel()` does not stop the target's work.** It abandons the request,
-  settles the attempt `Cancelled`, and fences the target's eventual answer out
-  on arrival — the target's process keeps running and its side effects still
-  happen. An accepted dispatch inherits this unchanged: a cancel that ends
-  the attempt leaves the target's later `Settle` to be refused on the fence,
-  and the work it did still ran. See the per-topology table in
-  [Custom executors](https://docs.byteveda.org/flexiq/python/custom-executors)
-  and issue #846, which is the follow-up that changes this.
+- **`cancel()` does not reach into the target's process.** It settles the
+  attempt `Cancelled` and fences the target's answer out; a target learns of
+  it only by a closed connection or by asking — see
+  [Cancellation](#cancellation). There is no cancellation endpoint on the
+  target and there will not be one: most platforms that start a process from a
+  request cannot route a second request to it.
