@@ -5,7 +5,7 @@ use redis::Commands;
 
 use super::dequeue_score;
 use crate::error::{QueueError, Result};
-use crate::job::{now_millis, JobStatus};
+use crate::job::{now_millis, Job, JobStatus};
 use crate::storage::redis_backend::{map_err, RedisStorage};
 
 /// Lua: write the precomputed job JSON only if the job is still live (its
@@ -327,8 +327,12 @@ impl RedisStorage {
     }
 
     /// The subset of `ids` whose cancel has been requested: one pipelined
-    /// round trip for membership, then a namespace read for the hits only —
-    /// which are rare, where the ids asked about are every tick's in-flight set.
+    /// round trip for membership and, when scoped, one `MGET` of the hits'
+    /// live rows for their namespace.
+    ///
+    /// Live rows only, unlike `get_job`'s archive fallback: a cancel can only
+    /// be requested of a `Running` job, and an archived one has nothing left
+    /// to cancel, so dropping it is the right answer rather than a gap.
     pub fn cancel_requested_among(
         &self,
         ids: &[String],
@@ -344,15 +348,28 @@ impl RedisStorage {
             pipe.sismember(&cancel_set, id);
         }
         let members: Vec<bool> = pipe.query(&mut conn).map_err(map_err)?;
+        let hits: Vec<String> = ids
+            .iter()
+            .zip(members)
+            .filter(|(_, member)| *member)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let Some(scope) = namespace else {
+            return Ok(hits);
+        };
+        if hits.is_empty() {
+            return Ok(hits);
+        }
+
+        let job_keys: Vec<String> = hits.iter().map(|id| self.key(&["job", id])).collect();
+        let rows: Vec<Option<String>> = conn.mget(&job_keys).map_err(map_err)?;
         let mut requested = Vec::new();
-        for (id, member) in ids.iter().zip(members) {
-            if !member {
-                continue;
+        for (id, row) in hits.into_iter().zip(rows) {
+            let Some(row) = row else { continue };
+            let job: Job = serde_json::from_str(&row)?;
+            if job.namespace.as_deref() == Some(scope) {
+                requested.push(id);
             }
-            if namespace.is_some() && self.get_job(id, namespace)?.is_none() {
-                continue;
-            }
-            requested.push(id.clone());
         }
         Ok(requested)
     }
