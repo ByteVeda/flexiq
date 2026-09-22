@@ -70,6 +70,9 @@ pub const TASK_NOT_REGISTERED: &str = "TASK_NOT_REGISTERED";
 pub const JOB_TIMEOUT: &str = "JOB_TIMEOUT";
 /// The execution claim moved to another owner. Never resend.
 pub const CLAIM_LOST: &str = "CLAIM_LOST";
+/// The job was cancelled while a push target held an accepted dispatch of it.
+/// Stop working and never resend: the attempt is already settled `Cancelled`.
+pub const JOB_CANCELLED: &str = "JOB_CANCELLED";
 /// A durable step replayed differently from the run it is resuming.
 pub const STEP_DIVERGED: &str = "STEP_DIVERGED";
 /// A step exceeded a size or count limit. Carries `limit`, `actual`, `allowed`.

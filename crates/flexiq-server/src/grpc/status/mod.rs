@@ -217,6 +217,35 @@ impl WireError {
         }
     }
 
+    /// A report on an accepted push dispatch whose job was cancelled.
+    ///
+    /// Its own reason rather than `CLAIM_LOST`: both say "stop, never resend",
+    /// but a target that polls to learn of a cancel has to tell one from a
+    /// race it lost, and the code alone cannot.
+    pub fn job_cancelled() -> Self {
+        Self {
+            code: Code::FailedPrecondition,
+            reason: reason::JOB_CANCELLED,
+            message: "this job was cancelled and its attempt is already settled; stop \
+                      working on it and do not retry"
+                .to_string(),
+            metadata: HashMap::new(),
+            retry_after: None,
+        }
+    }
+
+    /// A report that lost its fence: the attempt it names was settled by
+    /// someone else. The same reason a `QueueError::ClaimLost` carries.
+    pub fn claim_lost(message: impl Into<String>) -> Self {
+        Self {
+            code: Code::FailedPrecondition,
+            reason: reason::CLAIM_LOST,
+            message: message.into(),
+            metadata: HashMap::new(),
+            retry_after: None,
+        }
+    }
+
     /// Name the batch item this error belongs to.
     ///
     /// `index` rides alongside whatever reason the item raised rather than

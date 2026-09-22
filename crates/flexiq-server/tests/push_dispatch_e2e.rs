@@ -945,8 +945,8 @@ fn an_extension_moves_the_deadline_and_is_clamped() {
 
 #[test]
 fn cancelling_an_accepted_dispatch_settles_it_and_fences_the_callback() {
-    // The scheduler-side cancel — `notify_cancel`, not anything reaching into
-    // the target's process, which is still #846's. It must answer the same way
+    // The scheduler-side cancel, driven by `notify_cancel` directly. It must
+    // answer the same way
     // in both windows: a cancel before the target accepted settles
     // `Cancelled`, so a cancel after it accepted has to as well, or push would
     // promise one thing and do another depending on timing the caller cannot
@@ -990,13 +990,95 @@ fn cancelling_an_accepted_dispatch_settles_it_and_fences_the_callback() {
             wall_time_ns: 1,
         },
     );
+    // Refused as *cancelled*, not as misrouted: the target asked the replica
+    // that dispatched it, under the lease it was given (#846).
     assert!(
-        matches!(
-            refused,
-            Err(SettleRefused::Fenced) | Err(SettleRefused::NotHere)
-        ),
-        "a settle after a cancel must be refused, got {refused:?}"
+        matches!(refused, Err(SettleRefused::Cancelled)),
+        "a settle after a cancel must be refused as cancelled, got {refused:?}"
     );
+
+    deployment.stop();
+}
+
+#[test]
+fn a_cancel_written_to_storage_reaches_an_accepted_dispatch_and_its_poll() {
+    // #846: nothing calls `notify_cancel` here. The cancel is only the storage
+    // flag — what `CancelJob`, the dashboard, or an SDK on another host
+    // writes — and the worker's relay has to carry it to the target.
+    let storage = temp_storage("push-cancel-relay");
+    let job = storage
+        .enqueue(new_job("cancelled_from_storage"))
+        .expect("enqueue the job");
+
+    let stub = PushTarget::start(Reply::status(202));
+    let deployment = Deployment::start(&storage, settle_target(&stub.url, 2, &storage), None);
+    let lease = accepted_lease(&stub, &deployment);
+
+    assert!(storage
+        .request_cancel(&job.id, None)
+        .expect("request the cancel"));
+
+    poll_until(Duration::from_secs(15), || {
+        storage
+            .get_job(&job.id, None)
+            .ok()
+            .flatten()
+            .is_some_and(|job| job.status == JobStatus::Cancelled)
+    })
+    .expect("a cancel written to storage must settle the accepted dispatch Cancelled");
+
+    // The target's poll: every reporting call it could make says "cancelled".
+    let extended = deployment
+        .target
+        .extend_lease(&job.id, &lease, Duration::from_secs(60));
+    assert!(
+        matches!(extended, Err(SettleRefused::Cancelled)),
+        "an extension after a cancel must say cancelled, got {extended:?}"
+    );
+    let progress = deployment.target.report_progress(&job.id, &lease, 50);
+    assert!(
+        matches!(progress, Err(SettleRefused::Cancelled)),
+        "a progress report after a cancel must say cancelled, got {progress:?}"
+    );
+    // And only to the lease the dispatch was made under.
+    let stranger =
+        deployment
+            .target
+            .extend_lease(&job.id, &Lease::from_epoch(1), Duration::from_secs(60));
+    assert!(
+        matches!(stranger, Err(SettleRefused::NotHere)),
+        "another lease must learn nothing, got {stranger:?}"
+    );
+
+    deployment.stop();
+}
+
+#[test]
+fn a_cancel_written_to_storage_abandons_an_in_request_dispatch() {
+    // The synchronous half: the target is still holding the request open, so
+    // the relay's cancel abandons it and the attempt settles `Cancelled`.
+    let storage = temp_storage("push-cancel-relay-inflight");
+    let job = storage
+        .enqueue(new_job("cancelled_mid_request"))
+        .expect("enqueue the job");
+
+    let stub = PushTarget::start(Reply::outcome("success").after(Duration::from_secs(20)));
+    let deployment = Deployment::start(&storage, target(&stub.url, 2, &storage), None);
+
+    poll_until(Duration::from_secs(15), || !stub.received().is_empty())
+        .expect("the job must be dispatched");
+    assert!(storage
+        .request_cancel(&job.id, None)
+        .expect("request the cancel"));
+
+    poll_until(Duration::from_secs(10), || {
+        storage
+            .get_job(&job.id, None)
+            .ok()
+            .flatten()
+            .is_some_and(|job| job.status == JobStatus::Cancelled)
+    })
+    .expect("the relay must cancel a request still in flight, well before the target answers");
 
     deployment.stop();
 }
