@@ -20,5 +20,11 @@ Branch `feat/push-cancellation`, not pushed. Commits authored as stromanni.
       `Cancelled`.
 - [x] 8. Docs: push contract cancel section, REMOTE_SDK reason row, module doc
       table, `/server/custom-executors` + `/server/operate/push`, CHANGELOG.
-- [ ] 9. Verify: `cargo test -j1` targeted, clippy (`CARGO_BUILD_JOBS=1`),
+- [x] 9. Verify: `cargo test -j1` targeted, clippy (`CARGO_BUILD_JOBS=1`),
       feature checks (postgres, redis, http-target, grpc), docs build checks.
+      Results: push e2e 18/18, attach e2e 8/8; `flexiq-core` lib 735,
+      `rust` 131, `namespace_scoping` 27; `flexiq-server` gRPC unit 163.
+      clippy `-D warnings` with `http-target,grpc,postgres,redis`, strict
+      rustdoc, `flexiq-server --features http-target` without `grpc`, docs
+      site build, `golangci-lint run` (0 issues) — all pass. Postgres and Redis
+      storage suites need live backends; their first run is CI.

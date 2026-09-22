@@ -94,7 +94,7 @@ progress learns of a cancel as promptly as one that extends its lease.
 | Native | The handler observes the storage flag and stops. |
 | Attach | Within ~1 s the scheduler sends a `cancel` frame; the executor stops. |
 | Push, in-request | Within ~1 s the request is abandoned and the attempt settles `Cancelled`. The target is not told except by the closed connection; its answer is fenced out. |
-| Push, accepted (`202`) | Within ~1 s the attempt settles `Cancelled`. The target's next `ExtendLease`/`ReportProgress`/`WriteTaskLog`/`Settle` is refused `JOB_CANCELLED` — a target that polls stops then; one that does not runs to completion and its `Settle` is refused. |
+| Push, accepted (`202`) | Within ~1 s the attempt settles `Cancelled`. The target's next `ExtendLease`/`ReportProgress`/`WriteTaskLog`/`Settle` on the dispatching replica is refused `JOB_CANCELLED` — a target that polls stops then; one that does not runs to completion and its `Settle` is refused. |
 
 "Cancel stops the work" (native, attach) and "cancel prevents the result from
 landing, and tells a target that asks" (push) are different promises; the
@@ -105,6 +105,19 @@ contract, the docs and the module doc say which is which.
 - A target-side cancel endpoint (rejected above).
 - Giving the other settle refusals (`NotHere`, `NotReady`, settle-disabled,
   storage) an `ErrorInfo` — a pre-existing gap, filed separately.
-- Cross-replica answers: an ended record is process-local, like the open one.
-- Python prefork / other shells: they call `notify_cancel` in-process already
-  and do not use `Worker`.
+- Cross-replica answers. `JOB_CANCELLED` is a **same-replica** promise, stated
+  as such in the push contract's Cancellation section: the ended record is
+  process-local, like the open one, so it is bound by the routing rule
+  `Settle` already has — reach the replica that dispatched. A report that lands
+  elsewhere is refused `NotHere`, which is also a stop and never a resend
+  (pinned by `a_settle_for_another_replicas_dispatch_says_so`). Shared state
+  would buy a better *message* on a misrouted call, not a different action.
+- Shells that never run `Worker`. The relay lives in `Worker::spawn`, which
+  `flexiq-server` and the Rust SDK's pool use. The Python, Node and Java shells
+  run their own worker loops and already call `notify_cancel` in-process from
+  their own `request_cancel`; their `ExecutorClient::spawn` is the *executor*
+  side of attach, which receives the relay's effect as a `cancel` frame.
+- The Rust SDK's `ShellDispatcher` has no cooperative cancel at all and keeps
+  the default no-op `notify_cancel`, so under it the relay costs one indexed
+  read a second while jobs are in flight and changes nothing. Giving that shell
+  a cancel is its own change.
