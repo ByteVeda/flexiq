@@ -20,6 +20,7 @@ use crate::storage::{
     reap_dead_workers_if_leader, sweep_ephemeral_subscriptions, Storage, StorageBackend,
 };
 
+use super::cancel_relay::{CancelRelay, CANCEL_RELAY_INTERVAL};
 use super::dispatcher::NativeDispatcher;
 use super::fingerprint::registry_fingerprint;
 use super::registry::{TaskRegistry, TaskResult};
@@ -184,6 +185,9 @@ impl Worker {
             .is_none()
             .then(|| registry_fingerprint(registry.task_names()))
             .flatten();
+        // The built-in pool reads the storage cancel flag itself; a supplied
+        // one may not be able to, so it gets the relay.
+        let relays_cancels = dispatcher.is_some();
         let (pool_type, dispatcher): (String, Arc<dyn WorkerDispatcher>) = dispatcher
             .unwrap_or_else(|| {
                 (
@@ -210,6 +214,7 @@ impl Worker {
             scheduler_config.max_in_flight = Some(num_workers);
         }
 
+        let relay_namespace = namespace.clone();
         let mut scheduler = Scheduler::new(storage.clone(), queues, scheduler_config, namespace);
         scheduler.set_claim_owner(worker_id.clone());
         // The same id, to the pool: a dispatcher that writes on the scheduler's
@@ -326,13 +331,44 @@ impl Worker {
                 .map_err(spawn_error)?
         };
 
+        let mut threads = vec![runtime_thread, drain_thread, heartbeat_thread];
+        let mut stop_txs = vec![stop_tx];
+        if relays_cancels {
+            let (relay_stop_tx, relay_stop_rx) = std_mpsc::channel::<()>();
+            let storage = storage.clone();
+            let scheduler = scheduler.clone();
+            let dispatcher = dispatcher.clone();
+            threads.push(
+                thread::Builder::new()
+                    .name(format!("{worker_id}-cancel-relay"))
+                    .spawn(move || {
+                        let mut relay = CancelRelay::new();
+                        while let Err(std_mpsc::RecvTimeoutError::Timeout) =
+                            relay_stop_rx.recv_timeout(CANCEL_RELAY_INTERVAL)
+                        {
+                            let in_flight = scheduler.in_flight_dispatches();
+                            if let Err(relay_error) = relay.tick(
+                                &storage,
+                                relay_namespace.as_deref(),
+                                &in_flight,
+                                dispatcher.as_ref(),
+                            ) {
+                                log::warn!("cancel relay read failed: {relay_error}");
+                            }
+                        }
+                    })
+                    .map_err(spawn_error)?,
+            );
+            stop_txs.push(relay_stop_tx);
+        }
+
         Ok(WorkerHandle {
             worker_id,
             storage,
             shutdown,
             dispatcher,
-            stop_tx: Some(stop_tx),
-            threads: vec![runtime_thread, drain_thread, heartbeat_thread],
+            stop_txs,
+            threads,
         })
     }
 }
@@ -348,7 +384,8 @@ pub struct WorkerHandle {
     storage: StorageBackend,
     shutdown: Arc<tokio::sync::Notify>,
     dispatcher: Arc<dyn WorkerDispatcher>,
-    stop_tx: Option<std_mpsc::Sender<()>>,
+    /// Dropping these stops the heartbeat and, when running, the cancel relay.
+    stop_txs: Vec<std_mpsc::Sender<()>>,
     threads: Vec<thread::JoinHandle<()>>,
 }
 
@@ -363,8 +400,9 @@ impl WorkerHandle {
     pub fn shutdown(mut self) -> Result<()> {
         self.shutdown.notify_one();
         self.dispatcher.shutdown();
-        // Dropping the stop sender ends the heartbeat loop on its next wake.
-        self.stop_tx.take();
+        // Dropping the stop senders ends the heartbeat and relay loops on
+        // their next wake.
+        self.stop_txs.clear();
         for thread in self.threads.drain(..) {
             if thread.join().is_err() {
                 log::error!("worker thread panicked during shutdown");

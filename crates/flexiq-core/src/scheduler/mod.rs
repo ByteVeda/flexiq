@@ -737,6 +737,19 @@ impl Scheduler {
         record
     }
 
+    /// Every job this scheduler has in flight, with the epoch it was claimed
+    /// under — so a caller can tell a re-dispatch of an id from the dispatch
+    /// it already acted on.
+    pub fn in_flight_dispatches(&self) -> Vec<(String, Option<i64>)> {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .by_job
+            .iter()
+            .map(|(job_id, record)| (job_id.clone(), record.epoch))
+            .collect()
+    }
+
     /// Handle that stops [`Scheduler::run`] when notified.
     pub fn shutdown_handle(&self) -> Arc<Notify> {
         self.shutdown.clone()
