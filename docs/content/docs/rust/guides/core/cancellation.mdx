@@ -1,6 +1,6 @@
 ---
 title: Cancellation
-description: "cancel for a pending job, request_cancel for a running one — what each does, and what the shell leaves to you."
+description: "cancel for a pending job, request_cancel and check_cancelled for a running one — what each does."
 ---
 
 Two methods, two different jobs. A **pending** job is cancelled outright. A
@@ -33,8 +33,8 @@ is what `request_cancel` is for.
 ## `request_cancel` — a running job
 
 `request_cancel` sets the cancel-requested flag on a `Running` job and returns.
-Nothing interrupts a handler mid-call; the task has to poll for the flag and
-unwind on its own.
+Nothing interrupts a handler mid-call; the task checks with `check_cancelled`
+and unwinds on its own.
 
 ```rust
 queue.request_cancel(&job.id)?;   // producer side
@@ -42,79 +42,46 @@ queue.request_cancel(&job.id)?;   // producer side
 
 `false` means no running job matched.
 
-## Polling for it
+## Checking for it
 
-The shell does not wrap the poll, and a macro-declared task body takes its
-decoded arguments and nothing else — it is never handed its own job id. Two
-things are true as a result.
-
-**Reading the flag** goes through the backend:
+Inside a task body, `flexiq::check_cancelled()` ends the attempt if this job has
+been asked to stop:
 
 ```rust
-use flexiq::Storage;
-
-if queue.storage().is_cancel_requested(&job_id, queue.namespace())? {
-    // stop between units of work
+#[flexiq::task]
+fn reindex(ids: Vec<String>) -> flexiq::Outcome<()> {
+    for id in ids {
+        flexiq::check_cancelled()?;
+        reindex_one(&id)?;
+    }
+    Ok(())
 }
 ```
 
-`queue.namespace()` hands back this handle's scope, so the read stays inside the
-same boundary the enqueue did.
+It returns `Err(Abort::Cancelled)`, and the pool reports that as `Cancelled`:
+the job is archived as cancelled and **not retried** — the retry policy never
+sees it. `flexiq::cancel_requested()` answers the same question as a `bool`, for
+a body that wants to tidy up before it returns.
 
-**Getting the job id into the body** means implementing `Task` by hand instead
-of using the attribute. `run_encoded` receives the `&Job`, so `job.id` and
-`job.cancel_requested` are both in reach:
+Both take no argument, for the same reason `current_step` does: a
+macro-declared body is your own function and cannot grow a parameter it did not
+declare, so the pool installs the running job on the thread.
 
-```rust
-use flexiq::{EnqueueOptions, Job, Outcome, Task, TaskConfig};
+The check reads memory, not the database. The worker polls the cancel flag of
+everything it has in flight once a second and hands each new request to the
+pool, so a cancel made anywhere — this handle, another process, the dashboard —
+reaches `check_cancelled` within about a second, and calling it in a tight loop
+costs a lock and a set lookup.
 
-struct Export;
-
-impl Task for Export {
-    const NAME: &'static str = "export";
-
-    fn config() -> TaskConfig {
-        TaskConfig::default()
-    }
-
-    fn defaults() -> EnqueueOptions {
-        EnqueueOptions::default()
-    }
-
-    fn run_encoded(job: &Job) -> Outcome<Option<Vec<u8>>> {
-        if job.cancel_requested {
-            // …unwind…
-        }
-        Ok(None)
-    }
-}
-```
-
-Implementing the trait by hand is supported and is what this SDK's own tests do
-— the macro is ergonomics, not plumbing.
+Outside a running task, `cancel_requested()` is `false` and `check_cancelled()`
+is `Ok(())`.
 
 <Callout type="info">
-  `job.cancel_requested` is the value read when the job was claimed. A request
-  made *after* that needs a fresh read through `queue.storage()`.
+  Place checks between units of work that are safe to stop after. Nothing
+  interrupts the body anywhere else — a task that never checks runs to
+  completion, which is the honest behaviour: the alternative is killing a
+  thread in the middle of a write.
 </Callout>
-
-## What the shell will not record
-
-The pool builds three outcomes — success, failure and slept — and a cancelled
-outcome is not among them. A Rust task that observes the flag and returns an
-error records a **failure**, which the retry policy then retries or
-dead-letters. Give it a fatal error so it stops on the first attempt:
-
-```rust
-return Err(flexiq::TaskError::fatal("cancelled").into());
-```
-
-Reporting a job as `Cancelled` from a running handler needs a dispatcher of your
-own, built against `flexiq_core::WorkerDispatcher`. The shell does not wrap it.
-
-`Storage::mark_cancelled` is reachable through `queue.storage()` and archives a
-running job as cancelled, but it races the result the pool is already about to
-send for the same job — it is an operator's tool, not a handler's.
 
 ## Cancellation cascades
 
@@ -137,6 +104,6 @@ job exhausts its retries and is dead-lettered, with the reason
   <Card
     title="Execution Models"
     to="guides/core/execution-model"
-    description="The three outcomes the pool reports."
+    description="The four outcomes the pool reports."
   />
 </Cards>

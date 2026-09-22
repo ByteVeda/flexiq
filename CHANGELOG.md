@@ -59,7 +59,10 @@ their entries below keep that name.
   `Settle`, which is refused with the new `ErrorInfo` reason `JOB_CANCELLED` (a lost race now
   carries `CLAIM_LOST`, rather than no reason). What `cancel()` promises under each topology is
   written down in the push contract and the server docs: under push it stops the result from
-  landing and tells a target that asks, but does not stop the work.
+  landing and tells a target that asks, but does not stop the work. The Rust SDK's pool had no
+  cancel at all; a task now calls `flexiq::check_cancelled()?` (or reads
+  `flexiq::cancel_requested()`), which returns the new `Abort::Cancelled` once the relay has
+  delivered a cancel, and the job settles `Cancelled` without a retry.
 - **A float's width on the wire is pinned, so `auto:` keys no longer diverge over one** (#905).
   `contracts/wire-vectors.json` left float width free — a writer could emit half or single
   precision for 1.5 — and pinned the `float` case's decoded value instead of its bytes. Both

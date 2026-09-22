@@ -100,6 +100,17 @@ progress learns of a cancel as promptly as one that extends its lease.
 landing, and tells a target that asks" (push) are different promises; the
 contract, the docs and the module doc say which is which.
 
+### D4 — The Rust SDK's pool gets a cancel
+
+Review found `ShellDispatcher` had no cooperative cancel at all, so under it the
+relay cost a read a second and changed nothing. It now keeps a detached
+`CancelSignals` that `notify_cancel` fills, and installs the running job on the
+handler's thread. `flexiq::check_cancelled()` returns the new
+`Abort::Cancelled`, which the pool reports as `JobResult::Cancelled` — settled,
+not retried. A check reads memory, never storage: the relay is the only source,
+so a body may call it in a tight loop. `Abort` gaining a variant breaks no
+published API — the shell postdates `crates-v2.0.0`.
+
 ## Not in scope
 
 - A target-side cancel endpoint (rejected above).
@@ -117,7 +128,3 @@ contract, the docs and the module doc say which is which.
   run their own worker loops and already call `notify_cancel` in-process from
   their own `request_cancel`; their `ExecutorClient::spawn` is the *executor*
   side of attach, which receives the relay's effect as a `cancel` frame.
-- The Rust SDK's `ShellDispatcher` has no cooperative cancel at all and keeps
-  the default no-op `notify_cancel`, so under it the relay costs one indexed
-  read a second while jobs are in flight and changes nothing. Giving that shell
-  a cancel is its own change.

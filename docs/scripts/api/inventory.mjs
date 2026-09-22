@@ -69,6 +69,7 @@ export const SOURCES = {
       "crates/flexiq/src/pool.rs",
       "crates/flexiq/src/steps.rs",
       "crates/flexiq/src/task.rs",
+      "crates/flexiq/src/cancellation.rs",
     ],
     extract: extractRust,
     language: "rust",
@@ -154,6 +155,8 @@ const FREE_FUNCTIONS = {
   startExecutor: { group: "execution", receiver: "" },
   reservedSettingPrefixes: { group: "queue", receiver: "" },
   current_step: { group: "steps", receiver: "" },
+  check_cancelled: { group: "execution", receiver: "" },
+  cancel_requested: { group: "execution", receiver: "" },
 };
 
 /** The page and receiver for one symbol. `group: "other"` means unmapped. */

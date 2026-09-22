@@ -10,7 +10,8 @@ wrap is one import away.
 
 ```rust
 use flexiq::{FlexiQ, Outcome, TaskCall, EnqueueOptions, Debounce, Abort,
-             WorkerBuilder, Task, StepHandle, current_step, PeriodicSpec};
+             WorkerBuilder, Task, StepHandle, current_step, check_cancelled,
+             cancel_requested, PeriodicSpec};
 ```
 
 | Page | Covers |
@@ -19,7 +20,7 @@ use flexiq::{FlexiQ, Outcome, TaskCall, EnqueueOptions, Debounce, Abort,
 | <SdkLink to="api-reference/queue">FlexiQ</SdkLink> | `FlexiQ::open`, `in_memory`, `from_storage`, and the shape of the handle. |
 | <SdkLink to="api-reference/queue/jobs">Jobs</SdkLink> | `enqueue`, `enqueue_batch`, `get_job`, `list_jobs`, `cancel`, `TaskCall`, `EnqueueOptions`. |
 | <SdkLink to="api-reference/queue/queues">Queues & namespaces</SdkLink> | `stats`, queue selection, `with_namespace`, the periodic admin calls. |
-| <SdkLink to="api-reference/queue/workers">Workers & steps</SdkLink> | `queue.worker()`, `current_step`, `StepHandle`, `PeriodicSpec`. |
+| <SdkLink to="api-reference/queue/workers">Workers & steps</SdkLink> | `queue.worker()`, `current_step`, `StepHandle`, `check_cancelled`, `PeriodicSpec`. |
 | <SdkLink to="api-reference/task">Task</SdkLink> | `#[flexiq::task]` — every attribute, what it expands to, what it refuses. |
 | <SdkLink to="api-reference/worker">Worker</SdkLink> | `WorkerBuilder` and `WorkerHandle`. |
 | <SdkLink to="api-reference/result">Result</SdkLink> | `Job`, `JobStatus`, `QueueStats` — and why there is no typed result read. |

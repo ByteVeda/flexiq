@@ -6,9 +6,26 @@
     "crates/flexiq/src/call.rs",
     "crates/flexiq/src/pool.rs",
     "crates/flexiq/src/steps.rs",
-    "crates/flexiq/src/task.rs"
+    "crates/flexiq/src/task.rs",
+    "crates/flexiq/src/cancellation.rs"
   ],
   "symbols": [
+    {
+      "owner": null,
+      "name": "cancel_requested",
+      "kind": "static",
+      "signature": "fn cancel_requested() -> bool",
+      "params": [],
+      "returns": "bool"
+    },
+    {
+      "owner": null,
+      "name": "check_cancelled",
+      "kind": "static",
+      "signature": "fn check_cancelled() -> Outcome<()>",
+      "params": [],
+      "returns": "Outcome<()>"
+    },
     {
       "owner": null,
       "name": "current_step",

@@ -1,6 +1,6 @@
 ---
 title: Workers & steps
-description: "queue.worker(), current_step and the StepHandle methods, and PeriodicSpec — the worker-facing half of the queue handle."
+description: "queue.worker(), current_step and the StepHandle methods, check_cancelled, and PeriodicSpec — the worker-facing half of the queue handle."
 ---
 
 ```rust
@@ -44,6 +44,21 @@ fn checkout(order: String) -> flexiq::Outcome<()> {
 
 The handle carries nothing. Two handles inside one task are the same session;
 one taken in another task is a different session.
+
+## `check_cancelled` and `cancel_requested`
+
+```rust
+pub fn check_cancelled() -> Outcome<()>
+pub fn cancel_requested() -> bool
+```
+
+Whether the task running on this thread has been asked to stop, through the same
+kind of thread-local as `current_step`. `check_cancelled` returns
+`Err(Abort::Cancelled)` once it has, and the pool settles the job `Cancelled`
+without a retry; `cancel_requested` is the same answer as a `bool`. Both read
+memory the worker's cancel relay fills, never the database. Outside a running
+task they answer `Ok(())` and `false`. See
+<SdkLink to="guides/core/cancellation">cancellation</SdkLink>.
 
 ## `StepHandle`
 
