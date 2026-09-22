@@ -94,7 +94,7 @@ progress learns of a cancel as promptly as one that extends its lease.
 | Native | The handler observes the storage flag and stops. |
 | Attach | Within ~1 s the scheduler sends a `cancel` frame; the executor stops. |
 | Push, in-request | Within ~1 s the request is abandoned and the attempt settles `Cancelled`. The target is not told except by the closed connection; its answer is fenced out. |
-| Push, accepted (`202`) | Within ~1 s the attempt settles `Cancelled`. The target's next `ExtendLease`/`ReportProgress`/`WriteTaskLog`/`Settle` on the dispatching replica is refused `JOB_CANCELLED` — a target that polls stops then; one that does not runs to completion and its `Settle` is refused. |
+| Push, accepted (`202`) | Within ~1 s the attempt settles `Cancelled`. The target's next `ExtendLease`/`ReportProgress`/`WriteTaskLog`/`Settle` on the dispatching replica is refused `JOB_CANCELLED`, while that replica still holds the ending among its last 1024 (after that `NotHere`, also `FAILED_PRECONDITION` and a stop) — a target that polls stops then; one that does not runs to completion and its `Settle` is refused. |
 
 "Cancel stops the work" (native, attach) and "cancel prevents the result from
 landing, and tells a target that asks" (push) are different promises; the

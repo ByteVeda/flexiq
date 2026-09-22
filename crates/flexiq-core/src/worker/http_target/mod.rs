@@ -62,7 +62,7 @@
 //! | Native | The handler observes the storage flag and stops. |
 //! | Attach | The scheduler sends a `cancel` frame; the executor stops. |
 //! | **Push, in the request** | The request is abandoned and the attempt settles `Cancelled`. The target is told only by the closed connection; its side effects still happen and its answer is fenced out. |
-//! | **Push, accepted (`202`)** | The attempt settles `Cancelled`. The target's next report under its lease is refused [`SettleRefused::Cancelled`] — a target that polls stops then; one that never reports runs to the end and its `Settle` is refused. |
+//! | **Push, accepted (`202`)** | The attempt settles `Cancelled`. The target's next report under its lease is refused [`SettleRefused::Cancelled`] by this replica, while it still remembers the ending (the last 1024; after that, `NotHere` — also a stop) — a target that polls stops then; one that never reports runs to the end and its `Settle` is refused. |
 //!
 //! Push stops the *result*, and tells a target that asks; only native and
 //! attach stop the *work*. A cancel reaches this dispatcher as

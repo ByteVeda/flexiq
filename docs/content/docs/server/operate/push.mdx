@@ -275,7 +275,12 @@ For a long-running target, that makes the reporting RPCs its cancel channel.
 Call `ExtendLease` or `ReportProgress` at an interval you can afford to overrun
 by, and stop on `JOB_CANCELLED` — that interval is how promptly a cancel reaches
 the work. A target that never reports is still correct: it runs to the end and
-its `Settle` is refused. The rules are in the
+its `Settle` is refused.
+
+`JOB_CANCELLED` comes from the replica that dispatched the job, and only while
+it still remembers the ending — its most recent 1024. Past that, or on another
+replica, the refusal is a misrouted one instead. Both are `FAILED_PRECONDITION`,
+and both mean stop. The rules are in the
 [push contract](https://github.com/ByteVeda/flexiq/blob/master/contracts/PUSH_DISPATCH_CONTRACT.md#cancellation).
 
 ## No egress proxy, yet

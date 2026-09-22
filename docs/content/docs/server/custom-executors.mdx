@@ -159,7 +159,7 @@ knowing before you build against one topology and assume it generalizes:
 | Native | The handler observes the storage flag and stops. |
 | Attach | Within about a second the scheduler sends a `cancel` frame; the executor stops. |
 | Push, in the request | The request is abandoned and the attempt settles `Cancelled`. The target sees only its connection close; its side effects still happen and its answer is fenced out. |
-| Push, accepted (`202`) | The attempt settles `Cancelled`. The target's next `ExtendLease`, `ReportProgress`, `WriteTaskLog` or `Settle` is refused with reason `JOB_CANCELLED` — a target that polls stops then; one that never does runs to the end. |
+| Push, accepted (`202`) | The attempt settles `Cancelled`. The target's next `ExtendLease`, `ReportProgress`, `WriteTaskLog` or `Settle` is refused with reason `JOB_CANCELLED` by the replica that dispatched it, while it still remembers the ending — a target that polls stops then; one that never does runs to the end. Any `FAILED_PRECONDITION` here means stop. |
 
 An executor built against this page — attach, over `flexiq.executor.v1` or the
 socket protocol either one — is the attach row: cancellation stops the work,

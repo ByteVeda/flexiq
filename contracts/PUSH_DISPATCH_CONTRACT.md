@@ -309,6 +309,12 @@ made under, and only by the replica that dispatched it — the same routing rule
 as `Settle`. A call that lands elsewhere is refused as misrouted, which is also
 a stop.
 
+The replica remembers why a dispatch ended for its most recent 1024 endings,
+not forever. A report arriving after that is refused as misrouted instead of
+`JOB_CANCELLED` — still `FAILED_PRECONDITION`, still a stop, still never to be
+resent. A target **MUST** treat every `FAILED_PRECONDITION` from these RPCs as
+the end of the attempt; only `UNAVAILABLE` invites a retry.
+
 ## A worked example
 
 The floor for a conforming target — no framework, no dedupe store, in-memory
