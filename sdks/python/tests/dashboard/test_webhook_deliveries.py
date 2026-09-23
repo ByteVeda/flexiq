@@ -57,6 +57,10 @@ def fail_server() -> Generator[str]:
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
+            # Drain the body before answering: closing a socket with unread
+            # bytes sends an RST on Windows, and the client then sees
+            # WinError 10053 instead of the 500 this test asserts on.
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
             self.send_response(500)
             self.end_headers()
             self.wfile.write(b"server error")
