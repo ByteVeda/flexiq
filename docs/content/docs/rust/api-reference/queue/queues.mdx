@@ -26,8 +26,9 @@ use flexiq::Storage;
 let billing = queue.storage().stats_by_queue("billing", queue.namespace())?;
 ```
 
-Pausing a queue is on the same trait — `pause_queue(name)`, `resume_queue(name)`
-— and likewise not wrapped.
+Pausing a queue is on the same trait — `pause_queue(name, queue.namespace())`,
+`resume_queue(name, queue.namespace())` — and likewise not wrapped. A pause
+belongs to one namespace; `None` is the default namespace, not every one.
 
 ## Choosing a queue
 

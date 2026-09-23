@@ -43,7 +43,9 @@ queue.pause(queue_name: str) -> None
 
 Pause a named queue. Workers continue running but skip jobs in this queue until
 it is resumed. Persisted, not in-process: one call pauses the queue for every
-worker in the deployment, and it stays paused across a restart. Jobs already
+worker in the deployment, and it stays paused across a restart. The pause
+belongs to this `Queue`'s namespace — a queue of the same name in another
+namespace keeps running. Jobs already
 running are unaffected — pausing gates dispatch, not execution. Declared as
 `pause_queue`.
 
