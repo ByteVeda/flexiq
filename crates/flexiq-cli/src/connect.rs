@@ -22,6 +22,7 @@ use tonic::metadata::{Ascii, MetadataValue};
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, ClientTlsConfig, Uri};
 
+use crate::pb::admin::admin_service_client::AdminServiceClient;
 use crate::pb::producer_service_client::ProducerServiceClient;
 
 /// The only place a credential comes from.
@@ -45,6 +46,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A ready client: the generated one, with the credential attached.
 pub type Client = ProducerServiceClient<InterceptedService<Channel, Bearer>>;
+
+/// The operator door's client, with the credential attached. Same listener and
+/// same token header; the scopes it needs are `inspect` and `admin`.
+pub type AdminClient = AdminServiceClient<InterceptedService<Channel, Bearer>>;
 
 /// Where the door is, and how to reach it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,16 +138,28 @@ impl tonic::service::Interceptor for Bearer {
     }
 }
 
-/// Dial `endpoint` and return a client that presents `token`.
+/// Dial `endpoint` and return a producer client that presents `token`.
 pub async fn connect(endpoint: &str, token: &str) -> Result<Client> {
+    let (channel, bearer) = dial(endpoint, token).await?;
+    Ok(ProducerServiceClient::with_interceptor(channel, bearer))
+}
+
+/// Dial `endpoint` and return an admin client that presents `token`.
+pub async fn connect_admin(endpoint: &str, token: &str) -> Result<AdminClient> {
+    let (channel, bearer) = dial(endpoint, token).await?;
+    Ok(AdminServiceClient::with_interceptor(channel, bearer))
+}
+
+/// The channel and credential both clients wrap. The token is checked before
+/// the socket opens, so a non-ASCII one fails without a round trip.
+async fn dial(endpoint: &str, token: &str) -> Result<(Channel, Bearer)> {
     let bearer = Bearer::new(token)?;
     let channel = match parse_endpoint(endpoint)? {
         Endpoint::Tcp { uri, tls } => connect_tcp(uri, tls).await,
         Endpoint::Unix(path) => connect_unix(&path).await,
     }
     .with_context(|| format!("connecting to {endpoint}"))?;
-
-    Ok(ProducerServiceClient::with_interceptor(channel, bearer))
+    Ok((channel, bearer))
 }
 
 /// Dial a TCP address, negotiating TLS when the scheme asked for it.

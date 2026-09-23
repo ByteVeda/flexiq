@@ -2,6 +2,7 @@
 
 use anyhow::{anyhow, Result};
 
+use super::print_job;
 use crate::cli::{JobsCancelArgs, JobsCommand, JobsGetArgs, JobsListArgs};
 use crate::connect::Client;
 use crate::{error, output, pb};
@@ -88,22 +89,6 @@ async fn cancel(client: &mut Client, args: &JobsCancelArgs, json: bool) -> Resul
         .map_err(|status| anyhow!("{}", error::describe(&status)))?
         .into_inner();
     print_job(response.job.as_ref(), json)
-}
-
-/// One job, as JSON or as a one-row table.
-fn print_job(job: Option<&pb::Job>, json: bool) -> Result<()> {
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&output::job_envelope_json(job))?
-        );
-        return Ok(());
-    }
-    let rows = job
-        .map(|job| vec![output::job_row(job)])
-        .unwrap_or_default();
-    print!("{}", output::table(&output::JOB_COLUMNS, &rows));
-    Ok(())
 }
 
 #[cfg(test)]
