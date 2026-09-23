@@ -3,7 +3,7 @@ import {
   applyTaskOverrides,
   MiddlewareDisableStore,
   middlewareKey,
-  OverridesStore,
+  type OverridesStore,
 } from "./dashboard/stores";
 import { type Emitter, OUTCOME_KIND_EVENTS, type OutcomeEvent } from "./events";
 import type { Middleware } from "./middleware";
@@ -46,6 +46,8 @@ const OUTCOME_HOOKS: Record<keyof typeof OUTCOME_KIND_EVENTS, keyof Middleware> 
 export interface WorkerStartParams {
   tasks: ReadonlyMap<string, RegisteredTask>;
   queueLimits: ReadonlyMap<string, QueueLimits>;
+  /** The queue's overrides, scoped to its namespace; applied at startup. */
+  overrides: OverridesStore;
   serializer: Serializer;
   /** Named codec registry for per-task payload decode (see `TaskOptions.codecs`). */
   codecs?: ReadonlyMap<string, PayloadCodec>;
@@ -99,7 +101,17 @@ export class Worker {
    * @internal
    */
   static start(queue: NativeQueue, params: WorkerStartParams): Worker {
-    const { tasks, queueLimits, serializer, codecs, middleware, emitter, resources, run } = params;
+    const {
+      tasks,
+      queueLimits,
+      overrides,
+      serializer,
+      codecs,
+      middleware,
+      emitter,
+      resources,
+      run,
+    } = params;
 
     // Dashboard-tunable state: per-task middleware disables are re-read on
     // every invocation (live toggles); task/queue overrides apply here, at
@@ -193,12 +205,8 @@ export class Worker {
       // fingerprint on the worker row has to describe what this worker can
       // run, and `taskConfigs` omits every task that took the defaults.
       tasks: [...tasks.keys()],
-      taskConfigs: applyTaskOverrides(
-        buildTaskConfigs(tasks),
-        tasks.keys(),
-        new OverridesStore(queue),
-      ),
-      queueConfigs: applyQueueOverrides(buildQueueConfigs(queueLimits), new OverridesStore(queue)),
+      taskConfigs: applyTaskOverrides(buildTaskConfigs(tasks), tasks.keys(), overrides),
+      queueConfigs: applyQueueOverrides(buildQueueConfigs(queueLimits), overrides),
       resources: resources.isEmpty ? undefined : resources.names,
       mesh: run?.mesh,
       retention: run?.retention,
