@@ -91,6 +91,9 @@ pub enum Outcome {
     Unmappable(String),
     /// The trigger's bucket is empty; retry after this many seconds.
     RateLimited(u64),
+    /// One request asks for more jobs than the bucket holds when full, so no
+    /// retry of it could ever pass.
+    BatchTooLarge(String),
     /// Storage failed. Logged in full, answered without detail.
     Failed,
 }
@@ -108,6 +111,7 @@ impl Outcome {
             Self::Malformed(_) => "malformed",
             Self::Unmappable(_) => "unmappable",
             Self::RateLimited(_) => "rate_limited",
+            Self::BatchTooLarge(_) => "batch_too_large",
             Self::Failed => "failed",
         }
     }
@@ -145,6 +149,9 @@ impl IntoResponse for Outcome {
                     .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
                 response
             }
+            // 413 rather than 429: retrying the same batch cannot succeed,
+            // and it is the status Event Grid treats as final.
+            Self::BatchTooLarge(message) => error(StatusCode::PAYLOAD_TOO_LARGE, &message),
             Self::Failed => error(StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         }
     }
@@ -258,9 +265,21 @@ async fn handle(
         .map(|planned| enqueue::new_job(trigger, &role.namespace, planned))
         .collect();
 
+    let limit = trigger.rate.clone();
+    // A batch the bucket could not hold even when full would drain it on every
+    // attempt and still be refused — and the sender retries the same batch, so
+    // the trigger would admit nothing at all. Refused before a token is drawn.
+    if !rate::fits_burst(&limit, jobs.len()) {
+        return Outcome::BatchTooLarge(format!(
+            "the request carries {} events, more than rate_limit admits at once ({}); \
+             send smaller batches or raise the limit",
+            jobs.len(),
+            limit.max_tokens
+        ));
+    }
+
     let storage = role.storage.clone();
     let key = rate::bucket_key(&role.namespace, &trigger.name);
-    let limit = trigger.rate.clone();
     let retry_after = rate::retry_after_secs(&limit);
     let name = trigger.name.clone();
     let stored = tokio::task::spawn_blocking(move || {

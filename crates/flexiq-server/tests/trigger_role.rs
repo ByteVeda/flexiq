@@ -446,10 +446,30 @@ async fn an_event_grid_subscription_validates_then_delivers_a_batch() {
 
 #[tokio::test]
 async fn an_event_batch_costs_one_token_per_event() {
-    let harness = start("azure-rate", json!([object_store_trigger("azure", "1/h")])).await;
-    let batch = json!([blob_created("e-1", "a"), blob_created("e-2", "b")]);
-    let response = harness.post_json("/t/azure", &batch).await;
-    assert_eq!(response.status(), 429);
+    let harness = start("azure-rate", json!([object_store_trigger("azure", "3/h")])).await;
+    let first = json!([blob_created("e-1", "a"), blob_created("e-2", "b")]);
+    assert_eq!(harness.post_json("/t/azure", &first).await.status(), 202);
+    // One token left, and this batch needs two.
+    let second = json!([blob_created("e-3", "c"), blob_created("e-4", "d")]);
+    assert_eq!(harness.post_json("/t/azure", &second).await.status(), 429);
+}
+
+#[tokio::test]
+async fn a_batch_the_full_bucket_cannot_hold_is_refused_without_draining_it() {
+    let harness = start("azure-burst", json!([object_store_trigger("azure", "2/h")])).await;
+    let oversized = json!([
+        blob_created("e-1", "a"),
+        blob_created("e-2", "b"),
+        blob_created("e-3", "c")
+    ]);
+    // Refused on every attempt, and none of them spends a token: otherwise the
+    // sender's retries of this batch would starve every other delivery.
+    for _ in 0..3 {
+        let refused = harness.post_json("/t/azure", &oversized).await;
+        assert_eq!(refused.status(), 413);
+    }
+    let fits = json!([blob_created("e-4", "d"), blob_created("e-5", "e")]);
+    assert_eq!(harness.post_json("/t/azure", &fits).await.status(), 202);
 }
 
 #[tokio::test]

@@ -29,6 +29,14 @@ pub fn retry_after_secs(rate: &RateLimitConfig) -> u64 {
     interval.clamp(1.0, 3600.0) as u64
 }
 
+/// Whether a full bucket holds `count` tokens. A batch that does not fit can
+/// never be admitted, however long the sender waits.
+pub fn fits_burst(rate: &RateLimitConfig, count: usize) -> bool {
+    // A bucket's capacity is a whole count of at least one, and a batch is at
+    // most `MAX_EVENTS`, so the conversion is exact.
+    count as f64 <= rate.max_tokens
+}
+
 /// Draw `count` tokens, stopping at the first refusal.
 ///
 /// One per job, so an event batch costs what its jobs cost. Tokens drawn
@@ -63,6 +71,13 @@ mod tests {
         assert_eq!(retry_after_secs(&rate("10/s")), 1);
         assert_eq!(retry_after_secs(&rate("30/m")), 2);
         assert_eq!(retry_after_secs(&rate("1/h")), 3600);
+    }
+
+    #[test]
+    fn a_batch_fits_only_a_bucket_that_holds_it_when_full() {
+        assert!(fits_burst(&rate("10/m"), 10));
+        assert!(!fits_burst(&rate("10/m"), 11));
+        assert!(fits_burst(&rate("1/h"), 1));
     }
 
     #[test]
