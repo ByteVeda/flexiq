@@ -15,6 +15,7 @@ pub mod document;
 pub mod enqueue;
 pub mod handler;
 pub mod mapping;
+pub mod object_store;
 pub mod rate;
 pub mod server;
 

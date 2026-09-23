@@ -6,8 +6,9 @@
 //!    costs at most the trigger's own limit;
 //! 2. **verify the sender** — on the raw bytes, before any of them are
 //!    interpreted;
-//! 3. **parse and map** — a request that cannot become a job is refused before
-//!    it costs a token;
+//! 3. **parse, unwrap and map** — a request that cannot become a job is
+//!    refused before it costs a token, and a subscription handshake is
+//!    answered without one;
 //! 4. **draw from the bucket** — only a verified, well-formed request spends
 //!    the sender's budget;
 //! 5. **enqueue**.
@@ -25,9 +26,10 @@ use flexiq_core::StorageBackend;
 use serde_json::{json, Value};
 
 use crate::trigger::auth::Inbound;
-use crate::trigger::definition::{Trigger, HEALTH_PATH};
+use crate::trigger::definition::{Source, Trigger, HEALTH_PATH};
 use crate::trigger::document::{self, DocumentError};
 use crate::trigger::enqueue::{self, Enqueued, Planned, MAX_KEY_LEN};
+use crate::trigger::object_store::{self, Unwrapped};
 use crate::trigger::rate;
 
 /// What the listener serves: the definitions, indexed by path, and where
@@ -65,6 +67,8 @@ impl Role {
 pub enum Outcome {
     /// Every job was stored; some may have been deduplicated.
     Enqueued(Vec<Enqueued>),
+    /// A subscription handshake, answered with this body and no job.
+    Handshake(Value),
     /// The body exceeded the trigger's limit, or could not be read.
     TooLarge,
     /// The sender could not prove its origin.
@@ -87,6 +91,7 @@ impl Outcome {
         match self {
             Self::Enqueued(jobs) if jobs.iter().all(|job| job.deduplicated) => "deduplicated",
             Self::Enqueued(_) => "enqueued",
+            Self::Handshake(_) => "handshake",
             Self::TooLarge => "too_large",
             Self::Unauthorized => "unauthorized",
             Self::UnsupportedMediaType(_) => "unsupported_media_type",
@@ -115,6 +120,7 @@ impl IntoResponse for Outcome {
                     .collect();
                 (status, Json(json!({ "jobs": jobs }))).into_response()
             }
+            Self::Handshake(body) => (StatusCode::OK, Json(body)).into_response(),
             Self::TooLarge => error(StatusCode::PAYLOAD_TOO_LARGE, "the body is too large"),
             Self::Unauthorized => error(StatusCode::UNAUTHORIZED, "unauthorized"),
             Self::UnsupportedMediaType(message) => {
@@ -164,6 +170,10 @@ pub async fn receive(
     let outcome = handle(&role, trigger, uri.query().unwrap_or(""), &headers, body).await;
     match &outcome {
         Outcome::Enqueued(_) | Outcome::RateLimited(_) => {}
+        Outcome::Handshake(_) => log::info!(
+            "[flexiq] trigger {} answered its subscription handshake",
+            trigger.name
+        ),
         refused => log::info!(
             "[flexiq] trigger {} refused a request: {}",
             trigger.name,
@@ -208,7 +218,18 @@ async fn handle(
         Err(DocumentError::Malformed(message)) => return Outcome::Malformed(message),
     };
 
-    let planned = match plan(trigger, &inbound, &document) {
+    // A handshake is answered here, before the bucket: it creates no job, and
+    // a subscription that could not be confirmed under load would never start.
+    let events = match events(trigger.source, document) {
+        Ok(Unwrapped::Events(events)) => events,
+        Ok(Unwrapped::Handshake(body)) => return Outcome::Handshake(body),
+        Err(message) => return Outcome::Unmappable(message),
+    };
+    let planned = match events
+        .iter()
+        .map(|event| plan(trigger, &inbound, event))
+        .collect::<Result<Vec<_>, _>>()
+    {
         Ok(planned) => planned,
         Err(message) => return Outcome::Unmappable(message),
     };
@@ -244,12 +265,17 @@ async fn handle(
     }
 }
 
-/// The jobs one request asks for.
-fn plan(
-    trigger: &Trigger,
-    inbound: &Inbound<'_>,
-    document: &Value,
-) -> Result<Vec<Planned>, String> {
+/// The documents a request's mapping runs over: the body itself, or one
+/// unwrapped event per object.
+fn events(source: Source, document: Value) -> Result<Unwrapped, String> {
+    match source {
+        Source::Http => Ok(Unwrapped::Events(vec![document])),
+        Source::ObjectStore(provider) => object_store::unwrap(provider, &document),
+    }
+}
+
+/// The job one document asks for.
+fn plan(trigger: &Trigger, inbound: &Inbound<'_>, document: &Value) -> Result<Planned, String> {
     let payload = trigger
         .mapping
         .payload(inbound, document)
@@ -265,7 +291,7 @@ fn plan(
             "the unique_key value is longer than {MAX_KEY_LEN} bytes"
         ));
     }
-    Ok(vec![Planned { payload, delivery }])
+    Ok(Planned { payload, delivery })
 }
 
 fn now_secs() -> i64 {

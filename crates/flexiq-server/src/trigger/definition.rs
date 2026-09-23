@@ -23,6 +23,7 @@ use crate::trigger::auth::{
     Verifier, DEFAULT_TOLERANCE_SECS,
 };
 use crate::trigger::mapping::{Mapping, Selector};
+use crate::trigger::object_store::Provider;
 
 /// Largest body a trigger may be configured to accept. Webhook payloads are
 /// kilobytes; a body past this is a job payload that belongs in object
@@ -72,6 +73,18 @@ pub struct Trigger {
     pub unique_key: Option<Selector>,
     /// Largest body accepted, in bytes.
     pub max_body_bytes: usize,
+    /// What sends to it, and so what shape its body arrives in.
+    pub source: Source,
+}
+
+/// What a trigger's requests come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// Any HTTP sender; the body is mapped as it arrives.
+    Http,
+    /// An object-store eventing platform; the body is unwrapped into one
+    /// plain event per object first, and the mapping addresses those.
+    ObjectStore(Provider),
 }
 
 #[derive(Deserialize)]
@@ -108,6 +121,18 @@ struct RawTrigger {
     timeout_secs: u64,
     #[serde(default = "default_max_body_bytes")]
     max_body_bytes: usize,
+    #[serde(default)]
+    kind: RawKind,
+    #[serde(default)]
+    provider: Option<Provider>,
+}
+
+#[derive(Deserialize, Default, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum RawKind {
+    #[default]
+    Http,
+    ObjectStore,
 }
 
 #[derive(Deserialize)]
@@ -231,11 +256,31 @@ fn validate(raw: RawTrigger, env: &Env) -> Result<Trigger> {
         bail!("max_body_bytes must be between 1 and {MAX_BODY_BYTES_CEILING}");
     }
 
+    let source = match (raw.kind, raw.provider) {
+        (RawKind::Http, None) => Source::Http,
+        (RawKind::ObjectStore, Some(provider)) => Source::ObjectStore(provider),
+        (RawKind::Http, Some(_)) => bail!("provider applies only to kind object_store"),
+        (RawKind::ObjectStore, None) => {
+            bail!("kind object_store needs a provider: s3, gcs or azure")
+        }
+    };
+    // An event platform redelivers until it hears a 2xx, and every event
+    // carries an id, so an object-store trigger deduplicates on it unless told
+    // otherwise. Without this, one slow answer is two jobs for one upload.
+    let unique_key = match (&source, raw.unique_key) {
+        (_, Some(selector)) => Some(selector),
+        (Source::ObjectStore(_), None) => Some(Selector::Body {
+            pointer: "/id".to_string(),
+            optional: false,
+        }),
+        (Source::Http, None) => None,
+    };
+
     let args = raw.args.unwrap_or_else(|| vec![Selector::whole_body()]);
     for selector in args
         .iter()
         .chain(raw.kwargs.values())
-        .chain(raw.unique_key.iter())
+        .chain(unique_key.iter())
     {
         selector.validate().map_err(anyhow::Error::msg)?;
     }
@@ -257,8 +302,9 @@ fn validate(raw: RawTrigger, env: &Env) -> Result<Trigger> {
             args,
             kwargs: raw.kwargs,
         },
-        unique_key: raw.unique_key,
+        unique_key,
         max_body_bytes: raw.max_body_bytes,
+        source,
     })
 }
 
@@ -539,6 +585,42 @@ mod tests {
         assert!(parse(r#"{"triggers": []}"#, &env()).is_err());
         let bad = with("kwargs", json!({"id": {"from": "body", "pointer": "id"}}));
         assert!(refusal(bad).contains("JSON Pointer"));
+    }
+
+    #[test]
+    fn an_object_store_trigger_keys_on_the_event_id_by_default() {
+        let mut trigger = with("kind", json!("object_store"));
+        trigger["provider"] = json!("s3");
+        let parsed = parse_one(trigger.clone()).expect("valid");
+        assert_eq!(parsed.source, Source::ObjectStore(Provider::S3));
+        assert_eq!(
+            parsed.unique_key,
+            Some(Selector::Body {
+                pointer: "/id".into(),
+                optional: false
+            })
+        );
+
+        trigger["unique_key"] = json!({"from": "body", "pointer": "/key"});
+        let parsed = parse_one(trigger).expect("valid");
+        assert_eq!(
+            parsed.unique_key,
+            Some(Selector::Body {
+                pointer: "/key".into(),
+                optional: false
+            })
+        );
+
+        assert!(parse_one(minimal()).expect("valid").unique_key.is_none());
+    }
+
+    #[test]
+    fn kind_and_provider_go_together() {
+        assert!(refusal(with("kind", json!("object_store"))).contains("provider"));
+        assert!(refusal(with("provider", json!("gcs"))).contains("object_store"));
+        let mut unknown = with("kind", json!("object_store"));
+        unknown["provider"] = json!("dropbox");
+        assert!(parse_one(unknown).is_err());
     }
 
     #[test]

@@ -319,3 +319,136 @@ async fn a_form_post_with_a_query_secret() {
         .expect("answers");
     assert_eq!(unsigned.status(), 401);
 }
+
+fn object_store_trigger(provider: &str, rate_limit: &str) -> Value {
+    json!({
+        "name": format!("{provider}-uploads"),
+        "path": format!("/t/{provider}"),
+        "task": "uploads.process",
+        "kind": "object_store",
+        "provider": provider,
+        "rate_limit": rate_limit,
+        "auth": {"kind": "shared_secret", "secret_env": "SHARED_SECRET", "query": "key"},
+        "args": [],
+        "kwargs": {
+            "bucket": {"from": "body", "pointer": "/bucket"},
+            "key": {"from": "body", "pointer": "/key"}
+        }
+    })
+}
+
+fn blob_created(id: &str, blob: &str) -> Value {
+    json!({
+        "id": id,
+        "eventType": "Microsoft.Storage.BlobCreated",
+        "subject": format!("/blobServices/default/containers/uploads/blobs/{blob}"),
+        "eventTime": "2026-09-23T10:00:00Z",
+        "data": {"contentLength": 10, "eTag": "0x1"}
+    })
+}
+
+impl Harness {
+    async fn post_json(&self, path: &str, body: &Value) -> reqwest::Response {
+        self.client
+            .post(format!("{}{path}?key={SHARED_SECRET}", self.base))
+            .json(body)
+            .send()
+            .await
+            .expect("answers")
+    }
+}
+
+#[tokio::test]
+async fn an_event_grid_subscription_validates_then_delivers_a_batch() {
+    let harness = start("azure", json!([object_store_trigger("azure", "10/s")])).await;
+
+    let handshake = json!([{
+        "id": "v-1",
+        "eventType": "Microsoft.EventGrid.SubscriptionValidationEvent",
+        "subject": "",
+        "data": {"validationCode": "code-123"}
+    }]);
+    let answered = harness.post_json("/t/azure", &handshake).await;
+    assert_eq!(answered.status(), 200);
+    let body: Value = answered.json().await.expect("a JSON body");
+    assert_eq!(body, json!({"validationResponse": "code-123"}));
+
+    let batch = json!([blob_created("e-1", "a.csv"), blob_created("e-2", "b.csv")]);
+    let delivered = harness.post_json("/t/azure", &batch).await;
+    assert_eq!(delivered.status(), 202);
+    let jobs = job_ids(delivered).await;
+    assert_eq!(jobs.len(), 2);
+
+    let job = harness
+        .storage
+        .get_job(&jobs[1].0, Some(NAMESPACE))
+        .expect("storage answers")
+        .expect("the job exists");
+    assert_eq!(job.task_name, "uploads.process");
+    assert_eq!(job.unique_key.as_deref(), Some("trigger:azure-uploads:e-2"));
+    assert_eq!(
+        job.payload,
+        encode_call(
+            &[],
+            &[
+                ("bucket".to_string(), WireValue::Text("uploads".into())),
+                ("key".to_string(), WireValue::Text("b.csv".into())),
+            ],
+        )
+    );
+
+    // Event Grid redelivers a batch it did not see acknowledged; the event
+    // ids make the second delivery a no-op rather than two more jobs.
+    let redelivered = harness.post_json("/t/azure", &batch).await;
+    assert_eq!(redelivered.status(), 200);
+    let again = job_ids(redelivered).await;
+    assert!(again.iter().all(|(_, deduplicated)| *deduplicated));
+}
+
+#[tokio::test]
+async fn an_event_batch_costs_one_token_per_event() {
+    let harness = start("azure-rate", json!([object_store_trigger("azure", "1/h")])).await;
+    let batch = json!([blob_created("e-1", "a"), blob_created("e-2", "b")]);
+    let response = harness.post_json("/t/azure", &batch).await;
+    assert_eq!(response.status(), 429);
+}
+
+#[tokio::test]
+async fn a_pubsub_push_becomes_a_job_keyed_on_its_message() {
+    use base64::Engine;
+
+    let harness = start("gcs", json!([object_store_trigger("gcs", "10/s")])).await;
+    let resource = json!({"size": "7", "etag": "CAE="}).to_string();
+    let push = json!({
+        "message": {
+            "attributes": {
+                "bucketId": "media",
+                "objectId": "photos/cat.jpg",
+                "eventType": "OBJECT_FINALIZE",
+                "eventTime": "2026-09-23T10:00:00Z"
+            },
+            "data": base64::engine::general_purpose::STANDARD.encode(resource),
+            "messageId": "m-42"
+        },
+        "subscription": "projects/p/subscriptions/s"
+    });
+
+    let response = harness.post_json("/t/gcs", &push).await;
+    assert_eq!(response.status(), 202);
+    let jobs = job_ids(response).await;
+    let job = harness
+        .storage
+        .get_job(&jobs[0].0, Some(NAMESPACE))
+        .expect("storage answers")
+        .expect("the job exists");
+    assert_eq!(job.unique_key.as_deref(), Some("trigger:gcs-uploads:m-42"));
+
+    let unauthenticated = harness
+        .client
+        .post(format!("{}/t/gcs", harness.base))
+        .json(&push)
+        .send()
+        .await
+        .expect("answers");
+    assert_eq!(unauthenticated.status(), 401);
+}
