@@ -1809,8 +1809,8 @@ type PutPeriodicTaskRequest struct {
 	Cron string `protobuf:"bytes,3,opt,name=cron,proto3" json:"cron,omitempty"`
 	// Empty means "default".
 	Queue string `protobuf:"bytes,4,opt,name=queue,proto3" json:"queue,omitempty"`
-	// The arguments each firing passes. Setting no arm passes none; the arms
-	// mean what they mean on flexiq.v1.EnqueueRequest.
+	// The arguments each firing passes. Setting no arm is a call with no
+	// arguments; the arms mean what they mean on flexiq.v1.EnqueueRequest.
 	//
 	// Types that are valid to be assigned to Body:
 	//
@@ -2335,7 +2335,7 @@ func (x *TriggerPeriodicTaskResponse) GetJob() *v1.Job {
 // value the task was declared with applies.
 type TaskOverride struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// `<count>/<unit>`, unit one of `s`, `m`, `h`, `d`: `100/m`.
+	// `<count>/<unit>`, unit one of `s`, `m`, `h`, count at least one: `100/m`.
 	RateLimit *string `protobuf:"bytes,1,opt,name=rate_limit,json=rateLimit,proto3,oneof" json:"rate_limit,omitempty"`
 	// At most this many running at once. Zero or more.
 	MaxConcurrent *int32 `protobuf:"varint,2,opt,name=max_concurrent,json=maxConcurrent,proto3,oneof" json:"max_concurrent,omitempty"`
