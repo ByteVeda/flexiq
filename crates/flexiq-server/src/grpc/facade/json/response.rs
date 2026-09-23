@@ -253,12 +253,12 @@ fn status(status: i32) -> Value {
 }
 
 /// A 64-bit integer, as a string.
-fn int64(value: i64) -> Value {
+pub(super) fn int64(value: i64) -> Value {
     value.to_string().into()
 }
 
 /// Write a timestamp field, if the message holds one this build can render.
-fn insert_timestamp(
+pub(super) fn insert_timestamp(
     object: &mut Map<String, Value>,
     key: &str,
     value: Option<&prost_types::Timestamp>,
@@ -269,13 +269,13 @@ fn insert_timestamp(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::grpc::facade::descriptor;
 
     /// Every field of `Job` set, so the assertion below is about the whole
     /// message rather than about the half a fixture happened to populate.
-    fn populated_job() -> pb::Job {
+    pub(crate) fn populated_job() -> pb::Job {
         pb::Job {
             id: "01924f".to_string(),
             queue: "emails".to_string(),
@@ -310,7 +310,12 @@ mod tests {
     /// added to the `.proto` and forgotten here fails; a key spelled by hand
     /// and not by the contract fails.
     fn assert_names(message: &str, rendered: &Value) {
-        let expected = descriptor::json_names(message);
+        assert_package_names(descriptor::PRODUCER_PACKAGE, message, rendered);
+    }
+
+    /// [`assert_names`] for a message of any served package.
+    pub(crate) fn assert_package_names(package: &str, message: &str, rendered: &Value) {
+        let expected = descriptor::json_names(package, message);
         let emitted: std::collections::BTreeSet<String> = rendered
             .as_object()
             .expect("a message renders as an object")
@@ -383,7 +388,7 @@ mod tests {
     /// [`assert_names`].
     #[test]
     fn a_batch_item_carries_only_names_the_contract_gives_it() {
-        let names = descriptor::json_names("EnqueueBatchItemResult");
+        let names = descriptor::json_names(descriptor::PRODUCER_PACKAGE, "EnqueueBatchItemResult");
         for (outcome, expected) in [
             (
                 pb::enqueue_batch_item_result::Outcome::Enqueued(pb::EnqueueResponse {

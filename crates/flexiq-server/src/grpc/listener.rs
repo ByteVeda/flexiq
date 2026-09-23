@@ -160,11 +160,11 @@ impl Listener {
             executor.clone(),
             Arc::clone(&rpc_metrics),
         )
-        .merge(facade::router(producer.clone()));
+        .merge(facade::router(producer.clone(), admin.clone()));
 
         // That router is what the gRPC services are then added to, rather than
         // a second listener or a service behind a proxy: an HTTP request
-        // reaches the same `Producer` through the same layer, in this process,
+        // reaches the same `Producer` or `Admin` through the same layer, in this process,
         // with no loopback hop.
         let mut routes = Routes::from(http)
             .add_service(producer.into_service())

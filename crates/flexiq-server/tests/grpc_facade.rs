@@ -15,6 +15,7 @@
 
 mod support;
 
+use flexiq_core::job::{now_millis, NewJob};
 use flexiq_core::storage::Storage;
 use flexiq_server::config::grpc::GrpcConfig;
 use flexiq_server::config::listen::ListenAddress;
@@ -545,4 +546,315 @@ async fn both_doors_answer_on_the_one_port() {
     }
 
     harness.stop().await;
+}
+
+// ── flexiq.admin.v1 ──────────────────────────────────────────────────
+//
+// The operator door, spelled in JSON. As above, what is pinned is what a
+// `curl` user sees; `grpc_admin.rs` owns the behaviour of the RPCs themselves.
+
+/// The scopes an operator's token carries: `inspect` to read, `admin` to write.
+fn operator() -> ScopeSet {
+    ScopeSet::of(&[Scope::Inspect, Scope::Admin])
+}
+
+/// Seed a job straight into storage, since an operator token cannot enqueue.
+fn seed_job(storage: &TempStorage, queue: &str, task: &str) -> String {
+    storage
+        .enqueue(NewJob {
+            queue: queue.to_string(),
+            task_name: task.to_string(),
+            payload: CALL_ENVELOPE.to_vec(),
+            priority: 0,
+            scheduled_at: now_millis(),
+            max_retries: 0,
+            timeout_ms: 30_000,
+            unique_key: None,
+            metadata: None,
+            notes: None,
+            depends_on: vec![],
+            expires_at: None,
+            result_ttl_ms: None,
+            namespace: Some(NAMESPACE.to_string()),
+            debounce_key: None,
+        })
+        .expect("enqueue")
+        .id
+}
+
+/// Dead-letter one job of `task`, returning the entry's id.
+fn seed_dead_letter(storage: &TempStorage, task: &str) -> String {
+    let id = seed_job(storage, "dlq", task);
+    storage
+        .dequeue("dlq", now_millis() + 1_000, Some(NAMESPACE))
+        .expect("dequeue");
+    let running = storage.get_job(&id, None).expect("read").expect("present");
+    storage
+        .move_to_dlq(&running, "boom", None)
+        .expect("dead-letter");
+    storage
+        .list_dead(100, 0, Some(NAMESPACE))
+        .expect("list")
+        .into_iter()
+        .find(|dead| dead.original_job_id == id)
+        .expect("the entry")
+        .id
+}
+
+#[tokio::test]
+async fn an_operator_pauses_and_resumes_a_queue_over_json() {
+    let harness = Harness::start_with_scopes("grpc-facade-admin-queues", operator()).await;
+    seed_job(&harness.storage, "emails", "send");
+
+    let paused = harness
+        .post("/v1/admin/queues/emails:pause", json!({}))
+        .await;
+    assert_eq!(paused.status, StatusCode::OK, "body: {}", paused.body);
+    assert_eq!(paused.body["queue"]["name"], Value::from("emails"));
+    assert_eq!(paused.body["queue"]["paused"], Value::from(true));
+    assert_eq!(paused.body["queue"]["pending"], Value::from("1"));
+
+    let listed = harness.get("/v1/admin/queues").await;
+    assert_eq!(listed.status, StatusCode::OK, "body: {}", listed.body);
+    let queues = listed.body["queues"].as_array().expect("an array");
+    let emails = queues
+        .iter()
+        .find(|queue| queue["name"] == "emails")
+        .expect("the paused queue is listed");
+    assert_eq!(emails["paused"], Value::from(true));
+
+    let resumed = harness
+        .post("/v1/admin/queues/emails:resume", json!({}))
+        .await;
+    assert_eq!(resumed.body["queue"]["paused"], Value::from(false));
+
+    let throughput = harness.get("/v1/admin/throughput?window=300s").await;
+    assert_eq!(
+        throughput.status,
+        StatusCode::OK,
+        "body: {}",
+        throughput.body
+    );
+    assert_eq!(throughput.body["window"], Value::from("300s"));
+
+    let workers = harness.get("/v1/admin/workers").await;
+    assert_eq!(workers.status, StatusCode::OK, "body: {}", workers.body);
+    assert_eq!(workers.body["workers"], json!([]));
+
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_dead_letter_is_listed_read_and_replayed_over_json() {
+    let harness = Harness::start_with_scopes("grpc-facade-admin-dlq", operator()).await;
+    let id = seed_dead_letter(&harness.storage, "charge");
+
+    let listed = harness.get("/v1/admin/deadLetters?pageSize=10").await;
+    assert_eq!(listed.status, StatusCode::OK, "body: {}", listed.body);
+    let entry = &listed.body["deadLetters"][0];
+    assert_eq!(entry["id"], Value::from(id.as_str()));
+    assert_eq!(entry["taskName"], Value::from("charge"));
+    assert!(entry.get("payload").is_none(), "a listing carries no blob");
+
+    let read = harness
+        .get(&format!("/v1/admin/deadLetters/{id}?includePayload=true"))
+        .await;
+    assert_eq!(read.status, StatusCode::OK, "body: {}", read.body);
+    assert!(read.body["deadLetter"]["payload"].is_string());
+
+    let replayed = harness
+        .post(&format!("/v1/admin/deadLetters/{id}:replay"), json!({}))
+        .await;
+    assert_eq!(replayed.status, StatusCode::OK, "body: {}", replayed.body);
+    assert_eq!(replayed.body["job"]["taskName"], Value::from("charge"));
+    assert_eq!(
+        replayed.body["job"]["status"],
+        Value::from("JOB_STATUS_PENDING")
+    );
+
+    let emptied = harness.get("/v1/admin/deadLetters").await;
+    assert_eq!(emptied.body["deadLetters"], json!([]));
+
+    // A oneof is one arm; two is a body only this door can see.
+    let both = harness
+        .post(
+            "/v1/admin/deadLetters:purge",
+            json!({"failedBefore": "2025-09-03T12:26:40Z", "taskName": "charge"}),
+        )
+        .await;
+    assert_eq!(both.status, StatusCode::BAD_REQUEST);
+    assert_eq!(both.reason(), "INVALID_REQUEST");
+
+    seed_dead_letter(&harness.storage, "charge");
+    let purged = harness
+        .post("/v1/admin/deadLetters:purge", json!({"taskName": "charge"}))
+        .await;
+    assert_eq!(purged.status, StatusCode::OK, "body: {}", purged.body);
+    assert_eq!(purged.body["purged"], Value::from("1"));
+
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_periodic_task_is_put_with_structured_arguments_and_triggered() {
+    let harness = Harness::start_with_scopes("grpc-facade-admin-periodic", operator()).await;
+
+    let put = harness
+        .post(
+            "/v1/admin/periodicTasks",
+            json!({
+                "name": "nightly",
+                "taskName": "report",
+                "cron": "0 0 3 * * *",
+                "structured": {"args": ["a@b.c"]}
+            }),
+        )
+        .await;
+    assert_eq!(put.status, StatusCode::OK, "body: {}", put.body);
+    assert_eq!(put.body["periodicTask"]["name"], Value::from("nightly"));
+    assert_eq!(put.body["periodicTask"]["enabled"], Value::from(true));
+    assert!(put.body["periodicTask"].get("payload").is_none());
+
+    let read = harness
+        .get("/v1/admin/periodicTasks/nightly?includePayload=true")
+        .await;
+    assert_eq!(read.status, StatusCode::OK, "body: {}", read.body);
+    assert!(read.body["periodicTask"]["payload"].is_string());
+
+    let triggered = harness
+        .post("/v1/admin/periodicTasks/nightly:trigger", json!({}))
+        .await;
+    assert_eq!(triggered.status, StatusCode::OK, "body: {}", triggered.body);
+    let job_id = triggered.body["job"]["id"]
+        .as_str()
+        .expect("a trigger answers with its job");
+    let stored = harness
+        .storage
+        .get_job(job_id, Some(NAMESPACE))
+        .expect("read")
+        .expect("the triggered job exists");
+    assert_eq!(stored.task_name, "report");
+    assert_eq!(
+        stored.payload,
+        CALL_ENVELOPE.to_vec(),
+        "structured arguments are encoded as an enqueue's are"
+    );
+
+    let listed = harness.get("/v1/admin/periodicTasks").await;
+    assert_eq!(
+        listed.body["periodicTasks"]
+            .as_array()
+            .expect("an array")
+            .len(),
+        1
+    );
+
+    let deleted = harness
+        .post("/v1/admin/periodicTasks/nightly:delete", json!({}))
+        .await;
+    assert_eq!(deleted.status, StatusCode::OK, "body: {}", deleted.body);
+    assert_eq!(deleted.body, json!({}));
+
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn an_override_is_the_request_body_and_reads_back() {
+    let harness = Harness::start_with_scopes("grpc-facade-admin-overrides", operator()).await;
+
+    let set = harness
+        .post("/v1/admin/tasks/send/override", json!({"timeout": "30s"}))
+        .await;
+    assert_eq!(set.status, StatusCode::OK, "body: {}", set.body);
+    assert_eq!(set.body["taskOverride"]["timeout"], Value::from("30s"));
+
+    let queue = harness
+        .post(
+            "/v1/admin/queues/emails/override",
+            json!({"rateLimit": "10/s"}),
+        )
+        .await;
+    assert_eq!(queue.status, StatusCode::OK, "body: {}", queue.body);
+    assert_eq!(
+        queue.body["queueOverride"]["rateLimit"],
+        Value::from("10/s")
+    );
+
+    let listed = harness.get("/v1/admin/overrides").await;
+    assert_eq!(listed.status, StatusCode::OK, "body: {}", listed.body);
+    assert_eq!(listed.body["tasks"]["send"]["timeout"], Value::from("30s"));
+    assert_eq!(
+        listed.body["queues"]["emails"]["rateLimit"],
+        Value::from("10/s")
+    );
+
+    // A field the message does not have is refused by name.
+    let typo = harness
+        .post("/v1/admin/tasks/send/override", json!({"timeuot": "30s"}))
+        .await;
+    assert_eq!(typo.status, StatusCode::BAD_REQUEST);
+    assert_eq!(typo.reason(), "MALFORMED_PAYLOAD");
+
+    let cleared = harness
+        .post("/v1/admin/tasks/send/override:clear", json!({}))
+        .await;
+    assert_eq!(cleared.status, StatusCode::OK, "body: {}", cleared.body);
+    let after = harness.get("/v1/admin/overrides").await;
+    assert!(after.body["tasks"].get("send").is_none(), "{}", after.body);
+
+    harness.stop().await;
+}
+
+/// A verb nobody implements on an operator resource is an address with no RPC
+/// at it, exactly as on a job — not a queue name, and not a `405`.
+#[tokio::test]
+async fn an_unknown_admin_verb_is_no_such_method() {
+    let harness = Harness::start_with_scopes("grpc-facade-admin-verb", operator()).await;
+
+    for path in [
+        "/v1/admin/queues/emails:drain",
+        "/v1/admin/queues/emails",
+        "/v1/admin/deadLetters/abc:bogus",
+        "/v1/admin/deadLetters/abc",
+        "/v1/admin/periodicTasks/nightly:explode",
+    ] {
+        let answer = harness.post(path, json!({})).await;
+        assert_eq!(answer.status, StatusCode::NOT_IMPLEMENTED, "path: {path}");
+        assert_eq!(answer.reason(), "NO_SUCH_METHOD", "path: {path}");
+    }
+
+    harness.stop().await;
+}
+
+/// The facade asks what the gRPC door asks: `inspect` to read, `admin` to
+/// write, and a producer's token for neither.
+#[tokio::test]
+async fn each_scope_reaches_its_half_of_the_operator_paths() {
+    let producer =
+        Harness::start_with_scopes("grpc-facade-admin-produce", ScopeSet::of(&[Scope::Produce]))
+            .await;
+    let refused = producer.get("/v1/admin/queues").await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
+    assert_eq!(refused.reason(), "SCOPE_DENIED");
+    assert_eq!(
+        refused.body["error"]["details"][0]["metadata"]["scope"],
+        Value::from("inspect")
+    );
+    producer.stop().await;
+
+    let inspector =
+        Harness::start_with_scopes("grpc-facade-admin-inspect", ScopeSet::of(&[Scope::Inspect]))
+            .await;
+    let read = inspector.get("/v1/admin/queues").await;
+    assert_eq!(read.status, StatusCode::OK, "body: {}", read.body);
+    let refused = inspector
+        .post("/v1/admin/queues/emails:pause", json!({}))
+        .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
+    assert_eq!(refused.reason(), "SCOPE_DENIED");
+    assert_eq!(
+        refused.body["error"]["details"][0]["metadata"]["scope"],
+        Value::from("admin")
+    );
+    inspector.stop().await;
 }
