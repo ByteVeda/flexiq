@@ -164,7 +164,9 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_pauseQueue<
     guard(&mut env, (), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let name = read_string(env, &queue_name)?;
-        queue.storage.pause_queue(&name)?;
+        queue
+            .storage
+            .pause_queue(&name, queue.namespace.as_deref())?;
         Ok(())
     })
 }
@@ -180,7 +182,9 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_resumeQueue
     guard(&mut env, (), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let name = read_string(env, &queue_name)?;
-        queue.storage.resume_queue(&name)?;
+        queue
+            .storage
+            .resume_queue(&name, queue.namespace.as_deref())?;
         Ok(())
     })
 }
@@ -194,7 +198,10 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_listPausedQ
 ) -> jstring {
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
-        new_string(env, to_json(&queue.storage.list_paused_queues()?)?)
+        let paused = queue
+            .storage
+            .list_paused_queues(queue.namespace.as_deref())?;
+        new_string(env, to_json(&paused)?)
     })
 }
 

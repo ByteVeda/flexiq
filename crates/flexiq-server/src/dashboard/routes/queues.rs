@@ -69,7 +69,11 @@ pub async fn circuit_breakers(State(state): State<SharedState>) -> ApiResult<Jso
 
 /// `GET /api/queues/paused`.
 pub async fn paused(State(state): State<SharedState>) -> ApiResult<Json<Value>> {
-    let paused = on_storage(&state, |storage| storage.list_paused_queues()).await?;
+    let namespace = state.namespace.clone();
+    let paused = on_storage(&state, move |storage| {
+        storage.list_paused_queues(namespace.as_deref())
+    })
+    .await?;
     Ok(Json(json!(paused)))
 }
 
@@ -79,7 +83,11 @@ pub async fn pause(
     Path(queue): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let name = queue.clone();
-    on_storage(&state, move |storage| storage.pause_queue(&name)).await?;
+    let namespace = state.namespace.clone();
+    on_storage(&state, move |storage| {
+        storage.pause_queue(&name, namespace.as_deref())
+    })
+    .await?;
     Ok(Json(json!({ "paused": queue })))
 }
 
@@ -89,7 +97,11 @@ pub async fn resume(
     Path(queue): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let name = queue.clone();
-    on_storage(&state, move |storage| storage.resume_queue(&name)).await?;
+    let namespace = state.namespace.clone();
+    on_storage(&state, move |storage| {
+        storage.resume_queue(&name, namespace.as_deref())
+    })
+    .await?;
     Ok(Json(json!({ "resumed": queue })))
 }
 

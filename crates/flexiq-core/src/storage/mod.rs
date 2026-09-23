@@ -1173,14 +1173,25 @@ macro_rules! impl_storage {
             fn list_claims_by_worker(&self, worker_id: &str) -> $crate::error::Result<Vec<String>> {
                 self.list_claims_by_worker(worker_id)
             }
-            fn pause_queue(&self, queue_name: &str) -> $crate::error::Result<()> {
-                self.pause_queue(queue_name)
+            fn pause_queue(
+                &self,
+                queue_name: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<()> {
+                self.pause_queue(queue_name, namespace)
             }
-            fn resume_queue(&self, queue_name: &str) -> $crate::error::Result<()> {
-                self.resume_queue(queue_name)
+            fn resume_queue(
+                &self,
+                queue_name: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<()> {
+                self.resume_queue(queue_name, namespace)
             }
-            fn list_paused_queues(&self) -> $crate::error::Result<Vec<String>> {
-                self.list_paused_queues()
+            fn list_paused_queues(
+                &self,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<Vec<String>> {
+                self.list_paused_queues(namespace)
             }
             fn expire_pending_jobs(&self, now: i64) -> $crate::error::Result<u64> {
                 self.expire_pending_jobs(now)
@@ -2126,14 +2137,14 @@ impl Storage for StorageBackend {
     fn list_claims_by_worker(&self, worker_id: &str) -> Result<Vec<String>> {
         delegate!(self, list_claims_by_worker, worker_id)
     }
-    fn pause_queue(&self, queue_name: &str) -> Result<()> {
-        delegate!(self, pause_queue, queue_name)
+    fn pause_queue(&self, queue_name: &str, namespace: Option<&str>) -> Result<()> {
+        delegate!(self, pause_queue, queue_name, namespace)
     }
-    fn resume_queue(&self, queue_name: &str) -> Result<()> {
-        delegate!(self, resume_queue, queue_name)
+    fn resume_queue(&self, queue_name: &str, namespace: Option<&str>) -> Result<()> {
+        delegate!(self, resume_queue, queue_name, namespace)
     }
-    fn list_paused_queues(&self) -> Result<Vec<String>> {
-        delegate!(self, list_paused_queues)
+    fn list_paused_queues(&self, namespace: Option<&str>) -> Result<Vec<String>> {
+        delegate!(self, list_paused_queues, namespace)
     }
     fn expire_pending_jobs(&self, now: i64) -> Result<u64> {
         delegate!(self, expire_pending_jobs, now)

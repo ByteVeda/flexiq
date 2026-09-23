@@ -36,7 +36,7 @@ impl DataSource for DbSource {
             .into_iter()
             .collect();
         per_queue.sort_by(|a, b| a.0.cmp(&b.0));
-        let paused = self.be.storage.list_paused_queues()?;
+        let paused = self.be.storage.list_paused_queues(None)?;
         Ok(StatsSnapshot {
             overall,
             per_queue,
@@ -227,12 +227,14 @@ impl DataSource for DbSource {
         Ok(self.be.storage.purge_dead(i64::MAX)?)
     }
 
+    // The TUI reads the default namespace throughout (`stats(None)` above), so
+    // its pauses are the default namespace's too.
     fn pause_queue(&self, queue: &str) -> Result<()> {
-        Ok(self.be.storage.pause_queue(queue)?)
+        Ok(self.be.storage.pause_queue(queue, None)?)
     }
 
     fn resume_queue(&self, queue: &str) -> Result<()> {
-        Ok(self.be.storage.resume_queue(queue)?)
+        Ok(self.be.storage.resume_queue(queue, None)?)
     }
 }
 

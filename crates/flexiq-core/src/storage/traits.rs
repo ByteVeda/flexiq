@@ -681,13 +681,18 @@ pub trait Storage: Send + Sync + Clone {
     fn list_claims_by_worker(&self, worker_id: &str) -> Result<Vec<String>>;
 
     // ── Queue pause/resume ───────────────────────────────────────
+    //
+    // A pause is identified by `(namespace, queue_name)` (#836), and
+    // `namespace: None` is the **default namespace**, never a wildcard — the
+    // periodic rule above, and the one `dequeue` follows. A scheduler reads
+    // only its own namespace's pauses.
 
-    /// Pause a queue so no new jobs are dispatched from it.
-    fn pause_queue(&self, queue_name: &str) -> Result<()>;
-    /// Resume a paused queue.
-    fn resume_queue(&self, queue_name: &str) -> Result<()>;
-    /// Names of all currently paused queues.
-    fn list_paused_queues(&self) -> Result<Vec<String>>;
+    /// Pause a queue in one namespace so no new jobs are dispatched from it.
+    fn pause_queue(&self, queue_name: &str, namespace: Option<&str>) -> Result<()>;
+    /// Resume a paused queue in one namespace.
+    fn resume_queue(&self, queue_name: &str, namespace: Option<&str>) -> Result<()>;
+    /// Names of the namespace's paused queues.
+    fn list_paused_queues(&self, namespace: Option<&str>) -> Result<Vec<String>>;
 
     // ── Job expiry ───────────────────────────────────────────────
 

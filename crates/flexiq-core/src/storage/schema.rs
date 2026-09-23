@@ -179,10 +179,11 @@ diesel::table! {
 }
 
 diesel::table! {
-    queue_state (queue_name) {
+    queue_state (namespace, queue_name) {
         queue_name -> Text,
         paused -> Bool,
         paused_at -> Nullable<BigInt>,
+        namespace -> Nullable<Text>,
     }
 }
 

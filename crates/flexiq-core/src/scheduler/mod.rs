@@ -1092,6 +1092,31 @@ mod tests {
         )
     }
 
+    /// #836: a scheduler honours its own namespace's pauses and no other's.
+    #[test]
+    fn active_queues_ignore_another_namespaces_pause() {
+        // The paused list is cached for a second from construction; age it so
+        // the next read goes to storage.
+        let stale = |scheduler: &Scheduler| {
+            let aged = Instant::now()
+                .checked_sub(std::time::Duration::from_secs(2))
+                .unwrap();
+            *scheduler.paused_cache.lock().unwrap() = (HashSet::new(), aged);
+        };
+
+        let scheduler = test_scheduler();
+        scheduler
+            .storage
+            .pause_queue("default", Some("someone-else"))
+            .unwrap();
+        stale(&scheduler);
+        assert_eq!(scheduler.active_queues().as_ref(), ["default".to_string()]);
+
+        scheduler.storage.pause_queue("default", None).unwrap();
+        stale(&scheduler);
+        assert!(scheduler.active_queues().is_empty());
+    }
+
     fn make_job(task_name: &str) -> NewJob {
         NewJob {
             queue: "default".to_string(),

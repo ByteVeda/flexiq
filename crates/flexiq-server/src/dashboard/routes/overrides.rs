@@ -62,7 +62,7 @@ pub async fn list_queues(State(state): State<SharedState>) -> ApiResult<Json<Val
     let (per_queue, paused, stored) = on_storage(&state, move |storage| {
         Ok((
             storage.stats_all_queues(namespace.as_deref())?,
-            storage.list_paused_queues()?,
+            storage.list_paused_queues(namespace.as_deref())?,
             overrides::list(Scope::Queue, storage)?,
         ))
     })
@@ -138,11 +138,12 @@ pub async fn put_queue(
     let paused = body.get("paused").and_then(Value::as_bool);
     let response = put_override(state.clone(), Scope::Queue, queue_name.clone(), body).await?;
     if let Some(paused) = paused {
+        let namespace = state.namespace.clone();
         on_storage(&state, move |storage| {
             if paused {
-                storage.pause_queue(&queue_name)
+                storage.pause_queue(&queue_name, namespace.as_deref())
             } else {
-                storage.resume_queue(&queue_name)
+                storage.resume_queue(&queue_name, namespace.as_deref())
             }
         })
         .await?;

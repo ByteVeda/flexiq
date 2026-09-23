@@ -451,7 +451,9 @@ impl Scheduler {
         }
     }
 
-    /// Snapshot the queue list with paused queues filtered out. The paused
+    /// Snapshot the queue list with paused queues filtered out. Only this
+    /// scheduler's namespace's pauses apply — another tenant pausing a queue
+    /// of the same name must not stop this one. The paused
     /// list is cached for 1s to avoid hammering storage on every tick. Borrows
     /// the queue list directly in the common case (nothing paused), allocating
     /// only when a filtered copy is actually needed.
@@ -463,7 +465,7 @@ impl Scheduler {
         if cache.1.elapsed() > Duration::from_secs(1) {
             cache.0 = self
                 .storage
-                .list_paused_queues()
+                .list_paused_queues(self.namespace.as_deref())
                 .unwrap_or_default()
                 .into_iter()
                 .collect();

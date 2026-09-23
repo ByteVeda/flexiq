@@ -866,13 +866,40 @@ fn test_workers(s: &impl Storage) {
 
 fn test_pause_resume_queue(s: &impl Storage) {
     let q = "q-pause-test";
-    s.pause_queue(q).unwrap();
-    let paused = s.list_paused_queues().unwrap();
-    assert!(paused.contains(&q.to_string()));
+    s.pause_queue(q, None).unwrap();
+    // A second pause is an update, not a duplicate row.
+    s.pause_queue(q, None).unwrap();
+    let paused = s.list_paused_queues(None).unwrap();
+    assert_eq!(paused.iter().filter(|name| *name == q).count(), 1);
 
-    s.resume_queue(q).unwrap();
-    let paused = s.list_paused_queues().unwrap();
+    s.resume_queue(q, None).unwrap();
+    let paused = s.list_paused_queues(None).unwrap();
     assert!(!paused.contains(&q.to_string()));
+}
+
+/// A pause is identified by `(namespace, queue_name)` (#836). Before it, the
+/// row was keyed by name alone and the scheduler read it unscoped, so pausing
+/// a queue in one tenant stopped the same-named queue in every tenant.
+fn test_pause_resume_queue_is_namespace_scoped(s: &impl Storage) {
+    let q = "q-pause-ns";
+    let (a, b) = (Some("qns-tenant-a"), Some("qns-tenant-b"));
+    let paused_in = |ns| s.list_paused_queues(ns).unwrap().contains(&q.to_string());
+
+    s.pause_queue(q, a).unwrap();
+    assert!(paused_in(a));
+    assert!(!paused_in(b), "a pause in one tenant reached another");
+    assert!(!paused_in(None), "a pause in a tenant reached the default");
+
+    // `None` is the default namespace, not a wildcard: pausing and resuming
+    // it leaves the tenant's pause alone.
+    s.pause_queue(q, None).unwrap();
+    s.resume_queue(q, None).unwrap();
+    assert!(paused_in(a));
+
+    s.resume_queue(q, b).unwrap();
+    assert!(paused_in(a), "a resume in one tenant reached another");
+    s.resume_queue(q, a).unwrap();
+    assert!(!paused_in(a));
 }
 
 fn test_execution_claims_purge(s: &impl Storage) {
@@ -2673,6 +2700,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_record_and_get_errors(s);
     test_workers(s);
     test_pause_resume_queue(s);
+    test_pause_resume_queue_is_namespace_scoped(s);
     test_periodic_crud(s);
     test_periodic_is_namespace_scoped(s);
     test_periodic_re_registration_keeps_last_run(s);

@@ -531,12 +531,15 @@ impl<'a> NewWorkerRow<'a> {
 
 // ── Queue State ─────────────────────────────────────────────────
 
-#[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone)]
+/// A pause row for INSERT. There is no SELECT counterpart: every read wants
+/// only the queue names.
+#[derive(Insertable, Debug)]
 #[diesel(table_name = queue_state)]
-pub struct QueueStateRow {
-    pub queue_name: String,
+pub struct NewQueueStateRow<'a> {
+    pub queue_name: &'a str,
     pub paused: bool,
     pub paused_at: Option<i64>,
+    pub namespace: Option<&'a str>,
 }
 
 // ── Dashboard Settings ──────────────────────────────────────────

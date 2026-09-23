@@ -209,22 +209,29 @@ impl JsQueue {
         .map_err(join_to_napi_err)?
     }
 
-    /// Pause a queue — workers stop dispatching its jobs until resumed.
+    /// Pause a queue in this queue's namespace — workers stop dispatching its
+    /// jobs until resumed.
     #[napi]
     pub fn pause_queue(&self, queue: String) -> Result<()> {
-        self.storage.pause_queue(&queue).map_err(to_napi_err)
+        self.storage
+            .pause_queue(&queue, self.namespace.as_deref())
+            .map_err(to_napi_err)
     }
 
-    /// Resume a paused queue.
+    /// Resume a paused queue in this queue's namespace.
     #[napi]
     pub fn resume_queue(&self, queue: String) -> Result<()> {
-        self.storage.resume_queue(&queue).map_err(to_napi_err)
+        self.storage
+            .resume_queue(&queue, self.namespace.as_deref())
+            .map_err(to_napi_err)
     }
 
-    /// List the names of currently-paused queues.
+    /// List the names of this namespace's paused queues.
     #[napi]
     pub fn list_paused_queues(&self) -> Result<Vec<String>> {
-        self.storage.list_paused_queues().map_err(to_napi_err)
+        self.storage
+            .list_paused_queues(self.namespace.as_deref())
+            .map_err(to_napi_err)
     }
 
     /// Read a key/value setting (the shared KV store), or `null`.

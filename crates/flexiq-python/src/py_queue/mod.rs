@@ -757,24 +757,25 @@ impl PyQueue {
         })
     }
 
-    /// Pause a queue (no jobs will be dispatched from it).
+    /// Pause a queue in this queue's namespace (no jobs will be dispatched
+    /// from it).
     pub fn pause_queue(&self, queue_name: &str) -> PyResult<()> {
         self.storage
-            .pause_queue(queue_name)
+            .pause_queue(queue_name, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Resume a paused queue.
+    /// Resume a paused queue in this queue's namespace.
     pub fn resume_queue(&self, queue_name: &str) -> PyResult<()> {
         self.storage
-            .resume_queue(queue_name)
+            .resume_queue(queue_name, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// List paused queues.
+    /// List this namespace's paused queues.
     pub fn list_paused_queues(&self) -> PyResult<Vec<String>> {
         self.storage
-            .list_paused_queues()
+            .list_paused_queues(self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
