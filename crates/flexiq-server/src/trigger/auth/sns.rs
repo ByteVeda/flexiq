@@ -3,9 +3,9 @@
 //! SNS signs every message it delivers over HTTPS with RSA, over a canonical
 //! string built from the message's own fields, and names the certificate that
 //! verifies it in `SigningCertURL`. That URL is part of the request, so it is
-//! only trusted once its host is an SNS endpoint — `sns.<region>.amazonaws.com`
-//! — reached over HTTPS; the certificate is then trusted because that host
-//! served it.
+//! only trusted once its host is exactly the SNS endpoint of the allowlisted
+//! topic's region — `sns.<region>.amazonaws.com` — reached over HTTPS; the
+//! certificate is then trusted because that host served it.
 //!
 //! Beyond the signature: the topic must be one this trigger names, the
 //! message must be recent, and `SignatureVersion` 1 (SHA1withRSA) can be
@@ -141,6 +141,7 @@ impl Sns {
         let cert_url = aws_url(
             field("SigningCertURL").ok_or(Rejection("the message names no certificate"))?,
             AwsUrl::Certificate,
+            topic,
         )?;
         let key = certificate_key(keys, cert_url.as_str(), inbound.now_secs).await?;
 
@@ -153,28 +154,59 @@ impl Sns {
     }
 }
 
-/// `raw` as a URL SNS could have issued, or a refusal.
+/// The SNS endpoint host of the region and partition `topic_arn` names.
 ///
-/// HTTPS on the default port, no credentials, and a host of the form
-/// `sns.<region>.amazonaws.com` (or `.amazonaws.com.cn`). This is the whole of
-/// the trust in the certificate — and what keeps a forged message from making
-/// this process fetch an arbitrary URL.
-pub fn aws_url(raw: &str, kind: AwsUrl) -> Result<Url, Rejection> {
+/// `arn:<partition>:sns:<region>:<account>:<name>`. The topic is one this
+/// trigger allowlists, so the host derived from it is one the operator chose.
+pub fn endpoint_host(topic_arn: &str) -> Option<String> {
+    let mut parts = topic_arn.split(':');
+    let (Some("arn"), Some(partition), Some("sns"), Some(region)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return None;
+    };
+    let domain = match partition {
+        "aws" | "aws-us-gov" => "amazonaws.com",
+        "aws-cn" => "amazonaws.com.cn",
+        _ => return None,
+    };
+    is_region(region).then(|| format!("sns.{region}.{domain}"))
+}
+
+/// Whether `region` has the shape every AWS region has: a two-letter area,
+/// one or more words, and a number — `us-east-1`, `us-gov-west-1`,
+/// `cn-north-1`. What it rules out is a name like `s3` or `s3-us-west-2`,
+/// which would turn `sns.<region>.amazonaws.com` into an S3 bucket host.
+fn is_region(region: &str) -> bool {
+    let parts: Vec<&str> = region.split('-').collect();
+    let letters = |part: &&str| !part.is_empty() && part.chars().all(|c| c.is_ascii_lowercase());
+    match parts.as_slice() {
+        [area, words @ .., number] => {
+            area.len() == 2
+                && letters(area)
+                && !words.is_empty()
+                && words.iter().all(letters)
+                && !number.is_empty()
+                && number.chars().all(|c| c.is_ascii_digit())
+        }
+        _ => false,
+    }
+}
+
+/// `raw` as a URL SNS could have issued for `topic_arn`, or a refusal.
+///
+/// HTTPS on the default port, no credentials, and **exactly** the SNS
+/// endpoint of the topic's own region. A shape match is not enough: a host
+/// like `sns.s3.amazonaws.com` fits `sns.<anything>.amazonaws.com` and is an
+/// S3 bucket someone else can own. This is the whole of the trust in the
+/// certificate — and what keeps a forged message from making this process
+/// fetch an arbitrary URL.
+pub fn aws_url(raw: &str, kind: AwsUrl, topic_arn: &str) -> Result<Url, Rejection> {
     let url = Url::parse(raw).map_err(|_| Rejection("an SNS URL is not a URL"))?;
-    let host = url.host_str().unwrap_or_default();
-    let region = host
-        .strip_prefix("sns.")
-        .and_then(|rest| {
-            rest.strip_suffix(".amazonaws.com")
-                .or_else(|| rest.strip_suffix(".amazonaws.com.cn"))
-        })
-        .unwrap_or_default();
-    let sns_host = !region.is_empty()
-        && region
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    let expected =
+        endpoint_host(topic_arn).ok_or(Rejection("the topic ARN names no SNS region"))?;
     if url.scheme() != "https"
-        || !sns_host
+        || url.host_str() != Some(expected.as_str())
         || url.port().is_some()
         || !url.username().is_empty()
         || url.password().is_some()
@@ -395,21 +427,62 @@ mod tests {
     }
 
     #[test]
-    fn only_sns_endpoints_pass_the_url_check() {
+    fn only_the_topics_own_sns_endpoint_passes_the_url_check() {
         let good = [
-            (CERT_URL, AwsUrl::Certificate),
+            (CERT_URL, AwsUrl::Certificate, TOPIC),
             (
                 "https://sns.cn-north-1.amazonaws.com.cn/SimpleNotificationService-x.pem",
                 AwsUrl::Certificate,
+                "arn:aws-cn:sns:cn-north-1:123456789012:uploads",
             ),
             (
                 "https://sns.eu-west-1.amazonaws.com/?Action=ConfirmSubscription&TopicArn=a&Token=t",
                 AwsUrl::Subscribe,
+                "arn:aws:sns:eu-west-1:123456789012:uploads",
             ),
         ];
-        for (url, kind) in good {
-            assert!(aws_url(url, kind).is_ok(), "{url}");
+        for (url, kind, topic) in good {
+            assert!(aws_url(url, kind, topic).is_ok(), "{url}");
         }
+
+        // Both are S3 virtual-hosted buckets that fit `sns.<x>.amazonaws.com`.
+        for s3_bucket in [
+            "https://sns.s3.amazonaws.com/cert.pem",
+            "https://sns.s3-us-west-2.amazonaws.com/cert.pem",
+        ] {
+            assert!(
+                aws_url(s3_bucket, AwsUrl::Certificate, TOPIC).is_err(),
+                "{s3_bucket}"
+            );
+        }
+        // Not even a topic ARN claiming those "regions" makes them reachable.
+        for region in ["s3", "s3-us-west-2"] {
+            let topic = format!("arn:aws:sns:{region}:123456789012:uploads");
+            let url = format!("https://sns.{region}.amazonaws.com/cert.pem");
+            assert!(
+                aws_url(&url, AwsUrl::Certificate, &topic).is_err(),
+                "{region}"
+            );
+        }
+        // A real SNS endpoint, but another region than the topic's.
+        assert!(aws_url(
+            "https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-x.pem",
+            AwsUrl::Certificate,
+            TOPIC
+        )
+        .is_err());
+        // A topic ARN that names no partition or region yields no endpoint.
+        for topic in [
+            "arn:aws:sqs:us-east-1:1:q",
+            "arn:evil:sns:us-east-1:1:t",
+            "nonsense",
+        ] {
+            assert!(
+                aws_url(CERT_URL, AwsUrl::Certificate, topic).is_err(),
+                "{topic}"
+            );
+        }
+
         let bad = [
             (
                 "http://sns.us-east-1.amazonaws.com/x.pem",
@@ -442,7 +515,7 @@ mod tests {
             ),
         ];
         for (url, kind) in bad {
-            assert!(aws_url(url, kind).is_err(), "{url}");
+            assert!(aws_url(url, kind, TOPIC).is_err(), "{url}");
         }
     }
 

@@ -18,7 +18,7 @@ use flexiq_core::RateLimitConfig;
 use serde::Deserialize;
 
 use crate::config::{value, Env};
-use crate::trigger::auth::sns::DEFAULT_SNS_TOLERANCE_SECS;
+use crate::trigger::auth::sns::{self, DEFAULT_SNS_TOLERANCE_SECS};
 use crate::trigger::auth::{
     Encoding, GoogleOidc, HeaderHmac, Key, SecretLocation, SharedSecret, Sns, StandardWebhooks,
     Stripe, Twilio, Verifier, DEFAULT_TOLERANCE_SECS,
@@ -483,11 +483,13 @@ fn verifier(raw: RawAuth, env: &Env) -> Result<Verifier> {
             if topic_arns.is_empty() {
                 bail!("sns needs topic_arns — the topics this trigger accepts messages from");
             }
+            // The certificate host is derived from the ARN, so one that names
+            // no real partition and region could never verify a message.
             if let Some(bad) = topic_arns
                 .iter()
-                .find(|arn| !arn.starts_with("arn:aws") || !arn.contains(":sns:"))
+                .find(|arn| sns::endpoint_host(arn).is_none())
             {
-                bail!("{bad:?} is not an SNS topic ARN");
+                bail!("{bad:?} is not an SNS topic ARN in a known partition and region");
             }
             if !(60..=86_400).contains(&tolerance_secs) {
                 bail!("sns tolerance_secs must be between 60 and 86400");
@@ -746,8 +748,14 @@ mod tests {
         empty["provider"] = json!("s3_sns");
         empty["auth"] = json!({"kind": "sns", "topic_arns": []});
         assert!(refusal(empty.clone()).contains("topic_arns"));
-        empty["auth"] = json!({"kind": "sns", "topic_arns": ["arn:aws:sqs:us-east-1:1:q"]});
-        assert!(refusal(empty).contains("not an SNS topic"));
+        for bad in [
+            "arn:aws:sqs:us-east-1:1:q",
+            "arn:aws:sns:s3:1:t",
+            "arn:other:sns:us-east-1:1:t",
+        ] {
+            empty["auth"] = json!({"kind": "sns", "topic_arns": [bad]});
+            assert!(refusal(empty.clone()).contains("not an SNS topic"), "{bad}");
+        }
     }
 
     #[test]

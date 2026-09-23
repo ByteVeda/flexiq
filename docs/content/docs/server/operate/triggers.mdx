@@ -118,8 +118,11 @@ a key the cache lacks refetches Google's set at most once a minute.
   issuer, the expiry, an audience that is exactly `audience` — by default the
   push endpoint URL you gave the subscription — and a verified `email` that is
   exactly `service_account`, the account the subscription authenticates as.
-- **`sns`** fetches the certificate only from an
-  `https://sns.<region>.amazonaws.com` URL, refuses a topic not in
+- **`sns`** fetches the certificate only from the SNS endpoint of the
+  topic's own region and partition — for
+  `arn:aws:sns:us-east-1:…`, exactly `https://sns.us-east-1.amazonaws.com` —
+  so no look-alike host (an S3 bucket named `sns`, say) can supply it. It
+  refuses a topic not in
   `topic_arns` before fetching anything, and refuses a message whose
   `Timestamp` is further than `tolerance_secs` from now. SNS signs with
   SHA1withRSA (version 1) unless the topic sets `SignatureVersion` to 2; set

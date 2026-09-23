@@ -64,9 +64,15 @@ pub enum Unwrapped {
     Handshake(Value),
     /// Object events, in delivery order.
     Events(Vec<Value>),
-    /// A subscription confirmed by fetching this URL — SNS's handshake,
-    /// which the handler performs before answering.
-    Confirm(String),
+    /// A subscription confirmed by fetching `url` — SNS's handshake, which
+    /// the handler performs before answering. `topic_arn` names the endpoint
+    /// the URL must belong to.
+    Confirm {
+        /// The `SubscribeURL`.
+        url: String,
+        /// The topic being subscribed to.
+        topic_arn: String,
+    },
 }
 
 /// Unwrap `document` as `provider` delivers it.

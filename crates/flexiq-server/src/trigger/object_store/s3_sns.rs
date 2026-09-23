@@ -22,9 +22,10 @@ use super::{optional_text, size, text, Event, Provider, Unwrapped};
 /// Unwrap one SNS delivery.
 pub fn unwrap(document: &Value) -> Result<Unwrapped, String> {
     match optional_text(document, "/Type") {
-        Some("SubscriptionConfirmation") => Ok(Unwrapped::Confirm(
-            text(document, "/SubscribeURL")?.to_string(),
-        )),
+        Some("SubscriptionConfirmation") => Ok(Unwrapped::Confirm {
+            url: text(document, "/SubscribeURL")?.to_string(),
+            topic_arn: text(document, "/TopicArn")?.to_string(),
+        }),
         Some("UnsubscribeConfirmation") => Ok(Unwrapped::Handshake(
             json!({ "acknowledged": "UnsubscribeConfirmation" }),
         )),
@@ -152,13 +153,16 @@ mod tests {
     fn a_subscription_is_confirmed_through_its_url() {
         let confirm = json!({
             "Type": "SubscriptionConfirmation",
+            "TopicArn": "arn:aws:sns:us-east-1:123456789012:uploads",
             "SubscribeURL": "https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription&Token=t"
         });
         assert_eq!(
             unwrap(&confirm),
-            Ok(Unwrapped::Confirm(
-                "https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription&Token=t".into()
-            ))
+            Ok(Unwrapped::Confirm {
+                url: "https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription&Token=t"
+                    .into(),
+                topic_arn: "arn:aws:sns:us-east-1:123456789012:uploads".into(),
+            })
         );
     }
 

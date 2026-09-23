@@ -240,7 +240,9 @@ async fn handle(
     let events = match events(trigger.source, document) {
         Ok(Unwrapped::Events(events)) => events,
         Ok(Unwrapped::Handshake(body)) => return Outcome::Handshake(body),
-        Ok(Unwrapped::Confirm(url)) => return confirm(&role.keys, &trigger.name, &url).await,
+        Ok(Unwrapped::Confirm { url, topic_arn }) => {
+            return confirm(&role.keys, &trigger.name, &url, &topic_arn).await
+        }
         Err(message) => return Outcome::Unmappable(message),
     };
     let planned = match events
@@ -288,8 +290,8 @@ async fn handle(
 /// The message was signed, so the URL is SNS's; the host check is kept anyway,
 /// because it is what stands between this process and a fetch of any URL a
 /// signing bug let through. A failure answers `500`, so SNS asks again.
-async fn confirm(keys: &KeyFetcher, trigger: &str, url: &str) -> Outcome {
-    let url = match sns::aws_url(url, AwsUrl::Subscribe) {
+async fn confirm(keys: &KeyFetcher, trigger: &str, url: &str, topic_arn: &str) -> Outcome {
+    let url = match sns::aws_url(url, AwsUrl::Subscribe, topic_arn) {
         Ok(url) => url,
         Err(rejection) => return Outcome::Unmappable(rejection.to_string()),
     };
