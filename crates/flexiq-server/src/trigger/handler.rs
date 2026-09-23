@@ -29,6 +29,7 @@ use crate::trigger::auth::Inbound;
 use crate::trigger::definition::{Source, Trigger, HEALTH_PATH};
 use crate::trigger::document::{self, DocumentError};
 use crate::trigger::enqueue::{self, Enqueued, Planned, MAX_KEY_LEN};
+use crate::trigger::metrics;
 use crate::trigger::object_store::{self, Unwrapped};
 use crate::trigger::rate;
 
@@ -168,6 +169,7 @@ pub async fn receive(
     }
 
     let outcome = handle(&role, trigger, uri.query().unwrap_or(""), &headers, body).await;
+    metrics::record(&trigger.name, outcome.label());
     match &outcome {
         Outcome::Enqueued(_) | Outcome::RateLimited(_) => {}
         Outcome::Handshake(_) => log::info!(

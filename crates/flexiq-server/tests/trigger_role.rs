@@ -199,6 +199,14 @@ async fn forgeries_are_refused_without_spending_the_senders_budget() {
             .and_then(|value| value.to_str().ok()),
         Some("3600")
     );
+
+    // Other tests in this binary share the trigger name, so only presence is
+    // asserted, not a count.
+    let metrics = flexiq_server::trigger::metrics::render();
+    for outcome in ["unauthorized", "enqueued", "rate_limited"] {
+        let series = format!("trigger=\"github-push\",outcome=\"{outcome}\"");
+        assert!(metrics.contains(&series), "{series} missing:\n{metrics}");
+    }
 }
 
 #[tokio::test]
