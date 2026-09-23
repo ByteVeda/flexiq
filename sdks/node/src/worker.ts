@@ -253,14 +253,23 @@ export class Worker {
     let onlineReported = false;
     const previousUnhealthy = new Set<string>();
     const lifecycle = { stopped: false };
+    // Set once constructed below; the first beat resolves after that.
+    let self: Worker | undefined;
     const sendHeartbeat = (): void => {
       const snapshot = resources.healthSnapshot();
       void queue
         .workerHeartbeat(native.id, snapshot && JSON.stringify(snapshot))
-        .then((reapedWorkerIds) => {
+        .then(({ reaped: reapedWorkerIds, status }) => {
           // A beat that resolves after stop() must not emit lifecycle events
           // out of order (clearInterval can't cancel an in-flight promise).
           if (lifecycle.stopped) {
+            return;
+          }
+          // An operator asked this worker to drain: stop as a SIGTERM would.
+          // Terminal — stop() is memoized and ends the heartbeat.
+          if (status === "draining") {
+            log.info(() => `worker ${native.id} draining at an operator's request`);
+            void self?.stop();
             return;
           }
           // Online = the first heartbeat storage acknowledged, once.
@@ -307,7 +316,7 @@ export class Worker {
     // Managed log-topic consumers: one poll loop each, beside the heartbeat.
     const consumerStops = startLogConsumers(queue, serializer, params.logConsumers ?? []);
 
-    return new Worker(
+    self = new Worker(
       native,
       queue,
       resources,
@@ -317,6 +326,7 @@ export class Worker {
       lifecycle,
       params.onStopped,
     );
+    return self;
   }
 
   /**

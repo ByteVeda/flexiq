@@ -1866,6 +1866,15 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     return this.native.listWorkers();
   }
 
+  /**
+   * Ask one worker in this namespace to drain. It reads the request on its
+   * next heartbeat and stops as {@link Worker.stop} stops it. Resolves `false`
+   * when no such worker is registered.
+   */
+  async drainWorker(workerId: string): Promise<boolean> {
+    return this.native.requestWorkerDrain(workerId);
+  }
+
   /** Start a worker that runs the registered tasks. Hold the returned {@link Worker}. */
   runWorker(options?: WorkerRunOptions): Worker {
     // A worker entrypoint that imported its task modules directly never has to

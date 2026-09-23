@@ -220,6 +220,15 @@ impl JsQueue {
             .map_err(to_napi_err)
     }
 
+    /// Ask a worker in this queue's namespace to drain. `false` when no such
+    /// worker is registered there.
+    #[napi]
+    pub fn request_worker_drain(&self, worker_id: String) -> Result<bool> {
+        self.storage
+            .request_worker_drain(&worker_id, self.namespace.as_deref())
+            .map_err(to_napi_err)
+    }
+
     /// Resume a paused queue in this queue's namespace.
     #[napi]
     pub fn resume_queue(&self, queue: String) -> Result<()> {

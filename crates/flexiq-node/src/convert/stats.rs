@@ -96,6 +96,17 @@ pub fn metric_to_js(metric: TaskMetric) -> JsMetric {
     }
 }
 
+/// What one heartbeat learned.
+#[napi(object)]
+pub struct JsHeartbeat {
+    /// Dead workers this beat reaped; empty unless this worker is the reaper.
+    pub reaped: Vec<String>,
+    /// The worker row's status after the beat (`"active"` or `"draining"`),
+    /// absent when the row is gone. `"draining"` is an operator's request to
+    /// stop.
+    pub status: Option<String>,
+}
+
 /// A registered worker (heartbeat + identity).
 #[napi(object)]
 pub struct JsWorkerRow {
