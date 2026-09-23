@@ -97,7 +97,7 @@ class PyQueue:
         scheduler_poll_interval_ms: int = 50,
         scheduler_reap_interval: int = 100,
         scheduler_cleanup_interval: int = 1200,
-        scheduler_batch_size: int = 1,
+        scheduler_batch_size: int | None = None,
         namespace: str | None = None,
         push_dispatch: bool = False,
         dlq_auto_retry_delay: int | None = None,

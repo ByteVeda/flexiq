@@ -162,7 +162,7 @@ class Queue(
         scheduler_poll_interval_ms: int = 50,
         scheduler_reap_interval: int = 100,
         scheduler_cleanup_interval: int = 1200,
-        scheduler_batch_size: int = 1,
+        scheduler_batch_size: int | None = None,
         namespace: str | None = None,
         push_dispatch: bool = False,
         dlq_auto_retry_delay: int | None = None,
@@ -239,8 +239,10 @@ class Queue(
             scheduler_cleanup_interval: Cleanup old jobs every N poll iterations
                 (default 1200).
             scheduler_batch_size: Maximum number of jobs the scheduler claims
-                per dispatch round. ``1`` (default) preserves one-job-per-round
-                behavior; higher values batch-claim for greater throughput.
+                per dispatch round. ``None`` (default) lets the backend choose:
+                8 on Redis (one selection round trip already serves several
+                claims), 1 elsewhere (unchanged behavior). An explicit value
+                is always honored, clamped to at least 1.
             push_dispatch: Opt into event-driven dispatch, where an enqueue
                 wakes the scheduler immediately instead of waiting for the next
                 poll. Honored only when the native module was built with the
