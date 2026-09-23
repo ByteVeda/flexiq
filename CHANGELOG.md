@@ -12,6 +12,19 @@ their entries below keep that name.
 
 ### Added
 
+- **Triggers** (#847). `FLEXIQ_TRIGGER_LISTEN` turns `flexiq-server` into the thing a webhook
+  sender or an object-store eventing platform calls: a URL that maps an inbound request to one
+  enqueue, with no service of your own in between. Triggers are configuration, not code — a JSON
+  file (`FLEXIQ_TRIGGERS_FILE`) fixes each trigger's task, queue and rate limit, and a request
+  supplies argument values through JSON Pointer, header, query and constant selectors, never a
+  destination. Every trigger verifies its sender (GitHub, Stripe, Standard Webhooks, Twilio, a
+  generic HMAC-SHA256 header, or a shared secret) against the raw body before anything else, then
+  draws from a storage-backed rate-limit bucket that holds across replicas, so forged requests
+  cannot spend a real sender's budget. A delivery id deduplicates redeliveries. `kind:
+  object_store` unwraps S3 (EventBridge), GCS (Pub/Sub push) and Azure (Event Grid, handshake
+  included) events into one common shape. The listener is plain HTTP on its own port, and the
+  Helm chart gains `triggers.*` with its own Service and Ingress. Cron over the network is left to
+  the admin service (#836).
 - **Push dispatch** (#843, #844). `FLEXIQ_PUSH_TARGET_URL` adds a second way for the scheduler to
   reach an executor: instead of waiting for one to attach, it POSTs each claimed job straight to
   an operator-configured HTTP endpoint — for a platform that starts a container from an inbound
