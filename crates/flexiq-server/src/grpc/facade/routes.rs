@@ -28,7 +28,7 @@
 //!
 //! A custom method on a resource — `POST /v1/jobs/{job_id}:cancel`,
 //! `POST /v1/admin/queues/{queue}:pause` — is registered without its verb, as
-//! `POST /v1/jobs/{job_id}`, and one handler, [`custom_method`], splits the
+//! `POST /v1/jobs/{job_id}`, and one handler, `custom_method`, splits the
 //! verb off the captured segment. matchit, the router axum matches with, says
 //! outright that "dynamic suffixes are not currently supported", so the colon
 //! form cannot be registered. Which binding a verb names is answered by
@@ -577,7 +577,7 @@ pub const ROUTES: &[Binding] = &[
 /// extensions where only a handler can see it — and the thing that needs it is
 /// the metrics layer, which runs outside the router so that a refused call is
 /// still counted. So it is answered here instead, against the same table axum
-/// is built from, and [`custom_method`] asks it too.
+/// is built from, and `custom_method` asks it too.
 ///
 /// The match is exact on literal segments and permissive on `{param}` ones,
 /// including a segment that carries a verb after its parameter
@@ -835,7 +835,7 @@ fn prepare_list_jobs(parts: &Parts) -> Result<tonic::Request<pb::ListJobsRequest
     scoped(parts, message)
 }
 
-/// `CancelJob`, reached through [`custom_method`].
+/// `CancelJob`, reached through `custom_method`.
 async fn cancel_job(producer: &Producer, parts: &Parts, job_id: String) -> Response {
     let request = match scoped(parts, pb::CancelJobRequest { job_id }) {
         Ok(request) => request,

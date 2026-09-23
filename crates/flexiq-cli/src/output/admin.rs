@@ -68,7 +68,7 @@ pub const PERIODIC_COLUMNS: [&str; 8] = [
 ];
 
 /// The columns of an override listing. A queue override has no retries,
-/// backoff, timeout, priority or pause, so those cells are [`UNSET`].
+/// backoff, timeout, priority or pause, so those cells read `-`.
 pub const OVERRIDE_COLUMNS: [&str; 10] = [
     "scope",
     "name",
