@@ -30,8 +30,30 @@ const PRODUCER: &str = "/flexiq.v1.";
 /// The executor package (#720). Classified now so the RPCs that land in it
 /// arrive already gated, rather than relying on that PR to remember.
 const EXECUTOR: &str = "/flexiq.executor.v1.";
+/// The operator package (#836), split between two scopes by method.
+const ADMIN: &str = "/flexiq.admin.v1.";
+/// The operator package's service path.
+const ADMIN_SERVICE: &str = "/flexiq.admin.v1.AdminService/";
+/// Its `NO_SIDE_EFFECTS` methods, which `inspect` reaches. Every other method
+/// — including one this list has not heard of — needs `admin`, so a method
+/// added without updating this list fails closed. A test holds the list to the
+/// descriptor's idempotency levels, both ways.
+pub const INSPECT_METHODS: [&str; 8] = [
+    "ListQueues",
+    "GetThroughput",
+    "ListDeadLetters",
+    "GetDeadLetter",
+    "ListWorkers",
+    "ListPeriodicTasks",
+    "GetPeriodicTask",
+    "ListOverrides",
+];
+/// The JSON facade's operator namespace: `GET` is `inspect`, anything else
+/// `admin`, which is the same split because the facade serves `GET` exactly
+/// for the `NO_SIDE_EFFECTS` methods.
+const FACADE_ADMIN: &str = "/v1/admin";
 /// The JSON facade's namespace (#718), which transcodes the producer package
-/// and only it.
+/// and, under [`FACADE_ADMIN`], the operator package.
 ///
 /// It is a prefix here for the same reason a package is: a route added to the
 /// facade inherits the producer scope without anyone editing this file, and it
@@ -58,12 +80,31 @@ pub enum Requirement {
 /// cover. `/v1beta` is **not** in it — a bare `starts_with` would hand another
 /// namespace's paths the producer scope.
 fn in_facade(path: &str) -> bool {
-    path.strip_prefix(FACADE)
+    under(path, FACADE)
+}
+
+/// Whether `path` is `root` or a path below it — a segment match, so `/v1`
+/// does not claim `/v1beta` and `/v1/admin` does not claim `/v1/administer`.
+fn under(path: &str, root: &str) -> bool {
+    path.strip_prefix(root)
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
-/// Classify one gRPC path.
-pub fn requirement(path: &str) -> Requirement {
+/// The scope one operator gRPC method needs.
+fn admin_method(path: &str) -> Scope {
+    let read_only = path
+        .strip_prefix(ADMIN_SERVICE)
+        .is_some_and(|method| INSPECT_METHODS.contains(&method));
+    if read_only {
+        Scope::Inspect
+    } else {
+        Scope::Admin
+    }
+}
+
+/// Classify one request by its path, and — on the JSON facade's operator
+/// paths, where the verb is what separates a read from a write — its method.
+pub fn requirement(method: &http::Method, path: &str) -> Requirement {
     if HEALTH.contains(&path) {
         // A kubelet `grpc:` probe sends no metadata and has no way to, so
         // gating health would mean either no readiness probe or a token
@@ -71,6 +112,15 @@ pub fn requirement(path: &str) -> Requirement {
         // bit — whether storage answers — to something that already reached
         // the port.
         Requirement::Public
+    } else if path.starts_with(ADMIN) {
+        Requirement::Scoped(admin_method(path))
+    } else if under(path, FACADE_ADMIN) {
+        // Matched before the producer's `/v1`, which would otherwise claim it.
+        if method == http::Method::GET {
+            Requirement::Scoped(Scope::Inspect)
+        } else {
+            Requirement::Scoped(Scope::Admin)
+        }
     } else if path.starts_with(PRODUCER) || in_facade(path) {
         Requirement::Scoped(Scope::Produce)
     } else if path.starts_with(EXECUTOR) {
@@ -88,17 +138,78 @@ pub fn requirement(path: &str) -> Requirement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grpc::facade::descriptor;
+
+    /// A gRPC call is always a `POST`.
+    fn grpc(path: &str) -> Requirement {
+        requirement(&http::Method::POST, path)
+    }
+
+    /// Every operator method needs a scope, and which one is its idempotency
+    /// level's: the list the gate keeps must match the descriptor both ways.
+    #[test]
+    fn the_inspect_methods_are_exactly_the_read_only_ones() {
+        let rpcs = descriptor::rpcs(descriptor::ADMIN_PACKAGE);
+        assert!(!rpcs.is_empty(), "the admin package declares no RPCs");
+        for rpc in &rpcs {
+            let path = format!("{ADMIN_SERVICE}{}", rpc.method);
+            let want = if rpc.no_side_effects {
+                Scope::Inspect
+            } else {
+                Scope::Admin
+            };
+            assert_eq!(grpc(&path), Requirement::Scoped(want), "{path}");
+        }
+        for method in INSPECT_METHODS {
+            assert!(
+                rpcs.iter()
+                    .any(|rpc| rpc.method == method && rpc.no_side_effects),
+                "{method} is not a read-only admin RPC"
+            );
+        }
+    }
+
+    /// A method nobody classified needs the stronger scope, not the weaker.
+    #[test]
+    fn an_unknown_admin_method_needs_admin() {
+        for path in [
+            "/flexiq.admin.v1.AdminService/PurgeEverything",
+            "/flexiq.admin.v1.AdminService/",
+            "/flexiq.admin.v1.OtherService/ListQueues",
+        ] {
+            assert_eq!(grpc(path), Requirement::Scoped(Scope::Admin), "{path}");
+        }
+    }
+
+    /// On the facade the verb separates a read from a write, and the operator
+    /// paths are not the producer's even though both sit under `/v1`.
+    #[test]
+    fn the_facade_admin_paths_split_by_verb() {
+        for path in ["/v1/admin", "/v1/admin/queues", "/v1/admin/deadLetters/x"] {
+            assert_eq!(
+                requirement(&http::Method::GET, path),
+                Requirement::Scoped(Scope::Inspect),
+                "{path}"
+            );
+            for verb in [http::Method::POST, http::Method::HEAD, http::Method::DELETE] {
+                assert_eq!(
+                    requirement(&verb, path),
+                    Requirement::Scoped(Scope::Admin),
+                    "{verb} {path}"
+                );
+            }
+        }
+        // A segment match: a lookalike under `/v1` stays the producer's.
+        assert_eq!(
+            requirement(&http::Method::GET, "/v1/administer"),
+            Requirement::Scoped(Scope::Produce)
+        );
+    }
 
     #[test]
     fn the_two_health_rpcs_are_the_only_public_paths() {
-        assert_eq!(
-            requirement("/grpc.health.v1.Health/Check"),
-            Requirement::Public
-        );
-        assert_eq!(
-            requirement("/grpc.health.v1.Health/Watch"),
-            Requirement::Public
-        );
+        assert_eq!(grpc("/grpc.health.v1.Health/Check"), Requirement::Public);
+        assert_eq!(grpc("/grpc.health.v1.Health/Watch"), Requirement::Public);
     }
 
     /// The health service is public; the health *prefix* is not. A method that
@@ -111,11 +222,7 @@ mod tests {
             "/grpc.health.v1.Health/",
             "/grpc.health.v1.Health/CheckX",
         ] {
-            assert_eq!(
-                requirement(path),
-                Requirement::Authenticated,
-                "path: {path}"
-            );
+            assert_eq!(grpc(path), Requirement::Authenticated, "path: {path}");
         }
     }
 
@@ -124,7 +231,7 @@ mod tests {
     #[test]
     fn the_metrics_path_needs_a_credential_of_either_scope() {
         assert_eq!(
-            requirement(crate::grpc::metrics::METRICS_PATH),
+            grpc(crate::grpc::metrics::METRICS_PATH),
             Requirement::Authenticated
         );
     }
@@ -132,17 +239,17 @@ mod tests {
     #[test]
     fn each_package_carries_its_own_scope() {
         assert_eq!(
-            requirement("/flexiq.v1.ProducerService/Enqueue"),
+            grpc("/flexiq.v1.ProducerService/Enqueue"),
             Requirement::Scoped(Scope::Produce)
         );
         // The RPC #714 has not written yet gets the same answer as the six it
         // has: that is the property the prefix exists for.
         assert_eq!(
-            requirement("/flexiq.v1.ProducerService/SubmitWorkflow"),
+            grpc("/flexiq.v1.ProducerService/SubmitWorkflow"),
             Requirement::Scoped(Scope::Produce)
         );
         assert_eq!(
-            requirement("/flexiq.executor.v1.ExecutorService/Dispatch"),
+            grpc("/flexiq.executor.v1.ExecutorService/Dispatch"),
             Requirement::Scoped(Scope::Execute)
         );
     }
@@ -163,7 +270,7 @@ mod tests {
             "/v1/whatever-lands-here-next",
         ] {
             assert_eq!(
-                requirement(path),
+                grpc(path),
                 Requirement::Scoped(Scope::Produce),
                 "path: {path}"
             );
@@ -176,7 +283,7 @@ mod tests {
             "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
             "/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo",
         ] {
-            assert_eq!(requirement(path), Requirement::Authenticated);
+            assert_eq!(grpc(path), Requirement::Authenticated);
         }
     }
 
@@ -185,7 +292,7 @@ mod tests {
     #[test]
     fn an_unknown_path_still_needs_a_credential() {
         for path in ["/", "/nonsense", "/flexiq.v2.ProducerService/Enqueue"] {
-            assert_eq!(requirement(path), Requirement::Authenticated);
+            assert_eq!(grpc(path), Requirement::Authenticated);
         }
     }
 
@@ -193,15 +300,15 @@ mod tests {
     #[test]
     fn a_lookalike_package_is_not_the_producer_package() {
         assert_eq!(
-            requirement("/flexiq.v1beta.ProducerService/Enqueue"),
+            grpc("/flexiq.v1beta.ProducerService/Enqueue"),
             Requirement::Authenticated
         );
         // Same rule on the facade's side: `/v1` is a path segment, not a
         // prefix, so a future `/v1beta` namespace does not inherit its scope.
-        assert_eq!(requirement("/v1beta/jobs"), Requirement::Authenticated);
-        assert_eq!(requirement("/v1x"), Requirement::Authenticated);
+        assert_eq!(grpc("/v1beta/jobs"), Requirement::Authenticated);
+        assert_eq!(grpc("/v1x"), Requirement::Authenticated);
         assert_eq!(
-            requirement("/grpc.health.v1beta.Health/Check"),
+            grpc("/grpc.health.v1beta.Health/Check"),
             Requirement::Authenticated
         );
     }

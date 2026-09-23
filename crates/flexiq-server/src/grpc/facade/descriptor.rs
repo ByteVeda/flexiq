@@ -20,6 +20,9 @@ pub const PRODUCER_PACKAGE: &str = "flexiq.v1";
 /// The executor package, which it must not cover at all.
 pub const EXECUTOR_PACKAGE: &str = "flexiq.executor.v1";
 
+/// The `flexiq.admin.v1` package, which it must also cover in full.
+pub const ADMIN_PACKAGE: &str = "flexiq.admin.v1";
+
 /// One RPC, as the contract declares it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rpc {
