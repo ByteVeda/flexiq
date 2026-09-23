@@ -1,10 +1,107 @@
 //! Dequeue jobs from one or more queues.
 
+use std::sync::LazyLock;
+
 use redis::Commands;
 
 use crate::error::Result;
 use crate::job::{Job, JobStatus};
 use crate::storage::redis_backend::{map_err, RedisStorage};
+
+/// Lua: select and claim up to `max` ready jobs from one queue in a single
+/// round trip. Candidates are read in score order; a ready one is flipped
+/// Pending→Running under the same `SISMEMBER jobs:status:0` guard as
+/// [`CLAIM_JOB_SCRIPT`], so a job a concurrent cancel/expire already archived
+/// is never resurrected, and Redis's atomic script execution rules out a
+/// double claim between schedulers.
+///
+/// The document is decoded but never re-encoded — `lua-cjson` rewrites an empty
+/// `[]` payload as `{}` — so the claim patches it by swapping the exact
+/// `status` and `started_at` tokens, each of which must occur exactly once.
+/// Anything the script cannot settle on its own is handed back to Rust:
+/// expired jobs (archived with serde) and jobs with dependencies or an
+/// unpatchable document (claimed through [`CLAIM_JOB_SCRIPT`]).
+///
+/// KEYS: queue pending zset, pending status set, running status set.
+/// ARGV: job key prefix, debounce index key prefix, pending wire name, running
+///       wire name, now, namespace mode (`1` = only `ARGV[7]`, `0` = only jobs
+///       without a namespace), namespace, max, scan limit.
+/// Returns `{claimed_docs, expired_ids, deferred_docs}`.
+const SELECT_AND_CLAIM_BODY: &str = r#"
+    local function swap_once(doc, from, to)
+        local s, e = string.find(doc, from, 1, true)
+        if not s or string.find(doc, from, e + 1, true) then return nil end
+        return string.sub(doc, 1, s - 1) .. to .. string.sub(doc, e + 1)
+    end
+    local function present(v)
+        return v ~= nil and v ~= cjson.null
+    end
+
+    local job_key_prefix = ARGV[1]
+    local debounce_key_prefix = ARGV[2]
+    local pending_status = ARGV[3]
+    local running_status = ARGV[4]
+    local now_arg = ARGV[5]
+    local now = tonumber(now_arg)
+    local want_namespace = ARGV[6] == '1'
+    local namespace = ARGV[7]
+    local max = tonumber(ARGV[8])
+
+    local claimed, expired, deferred = {}, {}, {}
+    local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', '+inf', 'LIMIT', 0, ARGV[9])
+    for _, id in ipairs(ids) do
+        if #claimed >= max then break end
+        local doc = redis.call('GET', job_key_prefix .. id)
+        if not doc then
+            -- Stale entry: the job is gone, so drop it from the queue.
+            redis.call('ZREM', KEYS[1], id)
+        else
+            local job = cjson.decode(doc)
+            local job_ns = job.namespace
+            if not present(job_ns) then job_ns = nil end
+            local ns_ok
+            if want_namespace then ns_ok = job_ns == namespace else ns_ok = job_ns == nil end
+
+            if job.status == pending_status and job.scheduled_at <= now and ns_ok then
+                if present(job.expires_at) and now > job.expires_at then
+                    table.insert(expired, id)
+                elseif job.has_deps == true then
+                    table.insert(deferred, doc)
+                elseif redis.call('SISMEMBER', KEYS[2], id) == 1 then
+                    local patched = swap_once(doc,
+                        '"status":"' .. pending_status .. '"',
+                        '"status":"' .. running_status .. '"')
+                    if patched then
+                        patched = swap_once(patched, '"started_at":null', '"started_at":' .. now_arg)
+                    end
+                    if not patched then
+                        table.insert(deferred, doc)
+                    else
+                        redis.call('SET', job_key_prefix .. id, patched)
+                        redis.call('SREM', KEYS[2], id)
+                        redis.call('SADD', KEYS[3], id)
+                        redis.call('ZREM', KEYS[1], id)
+                        -- A claimed job has left its debounce window; the key
+                        -- mirrors `namespace_segment` byte for byte.
+                        if present(job.debounce_key) then
+                            local segment = '-'
+                            if job_ns then segment = #job_ns .. ':' .. job_ns end
+                            redis.call('ZREM',
+                                debounce_key_prefix .. segment .. ':' .. job.debounce_key, id)
+                        end
+                        table.insert(claimed, patched)
+                    end
+                end
+            end
+        end
+    end
+    return {claimed, expired, deferred}
+"#;
+
+/// [`SELECT_AND_CLAIM_BODY`] built once, so its SHA is computed once and every
+/// call after the first is an `EVALSHA`.
+static SELECT_AND_CLAIM_SCRIPT: LazyLock<redis::Script> =
+    LazyLock::new(|| redis::Script::new(SELECT_AND_CLAIM_BODY));
 
 /// Lua: claim a candidate by flipping it Pending→Running, but only if it is
 /// still a member of the pending status set (`jobs:status:0`). This is the
@@ -28,6 +125,10 @@ const CLAIM_JOB_SCRIPT: &str = r#"
     end
     return 1
 "#;
+
+/// Candidates `dequeue_batch` hands back to Rust, as `(claimed_docs,
+/// expired_ids, deferred_docs)`.
+type SelectAndClaimReply = (Vec<String>, Vec<String>, Vec<String>);
 
 impl RedisStorage {
     /// Atomically claim a candidate job (Pending→Running) via [`CLAIM_JOB_SCRIPT`].
@@ -68,115 +169,51 @@ impl RedisStorage {
         Ok(claimed == 1)
     }
 
+    /// Whether every dependency of `job_id` has completed. A completed dep has
+    /// been archived out of the live indices, so the archive is the fallback.
+    fn dependencies_complete(&self, conn: &mut redis::Connection, job_id: &str) -> Result<bool> {
+        let deps_key = self.key(&["job", job_id, "depends_on"]);
+        let dep_ids: Vec<String> = conn.smembers(&deps_key).map_err(map_err)?;
+        for dep_id in &dep_ids {
+            let dep_job = match self.load_job(conn, dep_id)? {
+                Some(j) => Some(j),
+                None => self.load_archived_job(conn, dep_id)?,
+            };
+            if !matches!(dep_job, Some(dep) if dep.status == JobStatus::Complete) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Archive a job the claim script found expired as cancelled, exactly as
+    /// both Diesel paths do. A job that left `Pending` since the script ran is
+    /// someone else's to settle.
+    fn archive_expired(&self, conn: &mut redis::Connection, job_id: &str, now: i64) -> Result<()> {
+        let Some(mut job) = self.load_job(conn, job_id)? else {
+            return Ok(());
+        };
+        if job.status != JobStatus::Pending {
+            return Ok(());
+        }
+        job.status = JobStatus::Cancelled;
+        job.completed_at = Some(now);
+        job.error = Some("expired before execution".to_string());
+        self.archive_job_immediately(conn, &job, JobStatus::Pending)
+    }
+
     /// Atomically claim the highest-priority ready job, moving it to `Running`.
-    /// Scans the queue's sorted set by score; each candidate is claimed Lua-atomically.
+    /// One claim through [`dequeue_batch`](Self::dequeue_batch).
     pub fn dequeue(
         &self,
         queue_name: &str,
         now: i64,
         namespace: Option<&str>,
     ) -> Result<Option<Job>> {
-        let mut conn = self.conn()?;
-        let queue_key = self.key(&["queue", queue_name, "pending"]);
-
-        // Get candidates ordered by score (lowest first = highest priority)
-        let candidates: Vec<String> = conn
-            .zrangebyscore_limit(&queue_key, "-inf", "+inf", 0, 100)
-            .map_err(map_err)?;
-
-        if candidates.is_empty() {
-            return Ok(None);
-        }
-
-        // Batch-load every candidate's JSON in one MGET instead of one GET per
-        // candidate.
-        let job_keys: Vec<String> = candidates.iter().map(|id| self.key(&["job", id])).collect();
-        let blobs: Vec<Option<String>> = conn.mget(&job_keys).map_err(map_err)?;
-
-        for (job_id, data) in candidates.into_iter().zip(blobs) {
-            let data = match data {
-                Some(d) => d,
-                None => {
-                    // Stale entry — remove from queue
-                    conn.zrem::<_, _, ()>(&queue_key, &job_id)
-                        .map_err(map_err)?;
-                    continue;
-                }
-            };
-
-            let mut job: Job = serde_json::from_str(&data)?;
-
-            // Must be pending and scheduled_at <= now
-            if job.status != JobStatus::Pending || job.scheduled_at > now {
-                continue;
-            }
-
-            // Filter by namespace: Some(ns) matches that namespace, None matches only jobs without a namespace
-            if let Some(ns) = namespace {
-                if job.namespace.as_deref() != Some(ns) {
-                    continue;
-                }
-            } else if job.namespace.is_some() {
-                continue;
-            }
-
-            // Skip expired jobs
-            if let Some(expires_at) = job.expires_at {
-                if now > expires_at {
-                    job.status = JobStatus::Cancelled;
-                    job.completed_at = Some(now);
-                    job.error = Some("expired before execution".to_string());
-                    conn.zrem::<_, _, ()>(&queue_key, &job_id)
-                        .map_err(map_err)?;
-                    self.archive_job_immediately(&mut conn, &job, JobStatus::Pending)?;
-                    continue;
-                }
-            }
-
-            // Check dependencies — only for jobs that actually have them, and
-            // resolve them on the existing connection rather than opening a new
-            // one per dependency.
-            if job.has_deps {
-                let deps_key = self.key(&["job", &job_id, "depends_on"]);
-                let dep_ids: Vec<String> = conn.smembers(&deps_key).map_err(map_err)?;
-                if !dep_ids.is_empty() {
-                    let mut all_complete = true;
-                    for dep_id in &dep_ids {
-                        // A completed dep has been archived out of the live
-                        // indices, so fall back to the archive before deciding
-                        // the dep is unsatisfied.
-                        let dep_job = match self.load_job(&mut conn, dep_id)? {
-                            Some(j) => Some(j),
-                            None => self.load_archived_job(&mut conn, dep_id)?,
-                        };
-                        match dep_job {
-                            Some(dep_job) if dep_job.status == JobStatus::Complete => {}
-                            _ => {
-                                all_complete = false;
-                                break;
-                            }
-                        }
-                    }
-                    if !all_complete {
-                        continue;
-                    }
-                }
-            }
-
-            // Claim the job atomically; if we lost the race (cancelled / expired
-            // / claimed by another scheduler) skip to the next candidate.
-            job.status = JobStatus::Running;
-            job.started_at = Some(now);
-            if self.claim_pending(&mut conn, &job, &queue_key)? {
-                // Best-effort pub/sub backlog reindex Pending→Running; a
-                // follow-up rather than folded into the correctness-critical
-                // claim script (see `reindex_pubsub_best_effort`).
-                self.reindex_pubsub_best_effort(&mut conn, &job, JobStatus::Running);
-                return Ok(Some(job));
-            }
-        }
-
-        Ok(None)
+        Ok(self
+            .dequeue_batch(queue_name, now, namespace, 1)?
+            .into_iter()
+            .next())
     }
 
     /// Dequeue across queues. `orders` is accepted for cross-backend signature
@@ -199,10 +236,15 @@ impl RedisStorage {
         Ok(None)
     }
 
-    /// Claim up to `max` ready jobs from a single queue. Mirrors `dequeue`
-    /// (ZRANGEBYSCORE candidates + MGET + claim loop) but accumulates up to
-    /// `max` jobs. Shares `dequeue`'s TOCTOU window — `claim_execution` is the
-    /// external exactly-once guard.
+    /// Claim up to `max` ready jobs from a single queue. Candidate selection
+    /// and the Pending→Running claim run together in one script
+    /// (`SELECT_AND_CLAIM_BODY`), so the common case is one round trip and no
+    /// candidate can change between being read and being claimed.
+    ///
+    /// Jobs with dependencies, and the rare document the script cannot patch,
+    /// fall back to a per-job dependency check plus `CLAIM_JOB_SCRIPT`; they
+    /// are appended after the script's claims. Dependency jobs were never
+    /// strictly ordered against their peers, so that is not a reordering.
     pub fn dequeue_batch(
         &self,
         queue_name: &str,
@@ -219,108 +261,53 @@ impl RedisStorage {
 
         // Scan more candidates than `max` so dependency/expiry skips still
         // leave enough eligible rows to fill the batch, bounded to keep the
-        // loaded set small.
-        let scan_limit = (max.saturating_mul(4)).min(400) as isize;
+        // scripted scan short. The floor keeps single-job `dequeue`'s window.
+        let scan_limit = max.saturating_mul(4).clamp(100, 400);
 
-        // Get candidates ordered by score (lowest first = highest priority)
-        let candidates: Vec<String> = conn
-            .zrangebyscore_limit(&queue_key, "-inf", "+inf", 0, scan_limit)
-            .map_err(map_err)?;
+        let mut invocation = SELECT_AND_CLAIM_SCRIPT.prepare_invoke();
+        invocation
+            .key(&queue_key)
+            .key(self.key(&["jobs", "status", &(JobStatus::Pending as i32).to_string()]))
+            .key(self.key(&["jobs", "status", &(JobStatus::Running as i32).to_string()]))
+            .arg(self.key(&["job", ""]))
+            .arg(self.key(&["jobs", "debounce", ""]))
+            .arg(JobStatus::Pending.wire_name())
+            .arg(JobStatus::Running.wire_name())
+            .arg(now)
+            .arg(if namespace.is_some() { "1" } else { "0" })
+            .arg(namespace.unwrap_or(""))
+            .arg(max)
+            .arg(scan_limit);
+        let (claimed_docs, expired_ids, deferred_docs): SelectAndClaimReply =
+            invocation.invoke(&mut conn).map_err(map_err)?;
 
-        if candidates.is_empty() {
-            return Ok(Vec::new());
+        let mut claimed: Vec<Job> = Vec::with_capacity(max);
+        for doc in &claimed_docs {
+            let job: Job = serde_json::from_str(doc)?;
+            // Best-effort pub/sub backlog reindex Pending→Running; a follow-up
+            // rather than folded into the claim script (see
+            // `reindex_pubsub_best_effort`).
+            self.reindex_pubsub_best_effort(&mut conn, &job, JobStatus::Running);
+            claimed.push(job);
         }
 
-        // Batch-load every candidate's JSON in one MGET instead of one GET per
-        // candidate.
-        let job_keys: Vec<String> = candidates.iter().map(|id| self.key(&["job", id])).collect();
-        let blobs: Vec<Option<String>> = conn.mget(&job_keys).map_err(map_err)?;
+        for job_id in &expired_ids {
+            self.archive_expired(&mut conn, job_id, now)?;
+        }
 
-        let mut claimed: Vec<Job> = Vec::with_capacity(max.min(candidates.len()));
-
-        for (job_id, data) in candidates.into_iter().zip(blobs) {
+        for doc in &deferred_docs {
             if claimed.len() == max {
                 break;
             }
-
-            let data = match data {
-                Some(d) => d,
-                None => {
-                    // Stale entry — remove from queue
-                    conn.zrem::<_, _, ()>(&queue_key, &job_id)
-                        .map_err(map_err)?;
-                    continue;
-                }
-            };
-
-            let mut job: Job = serde_json::from_str(&data)?;
-
-            // Must be pending and scheduled_at <= now
-            if job.status != JobStatus::Pending || job.scheduled_at > now {
+            let mut job: Job = serde_json::from_str(doc)?;
+            if job.has_deps && !self.dependencies_complete(&mut conn, &job.id)? {
                 continue;
             }
-
-            // Filter by namespace: Some(ns) matches that namespace, None matches only jobs without a namespace
-            if let Some(ns) = namespace {
-                if job.namespace.as_deref() != Some(ns) {
-                    continue;
-                }
-            } else if job.namespace.is_some() {
-                continue;
-            }
-
-            // Skip expired jobs — archive them as cancelled, exactly as the
-            // single-job `dequeue` and both Diesel paths do. A status move
-            // alone would leave the row in every live index (and in its
-            // debounce window) as a terminal job that no listing by
-            // `Cancelled` can reach, since those read the archive.
-            if let Some(expires_at) = job.expires_at {
-                if now > expires_at {
-                    job.status = JobStatus::Cancelled;
-                    job.completed_at = Some(now);
-                    job.error = Some("expired before execution".to_string());
-                    conn.zrem::<_, _, ()>(&queue_key, &job_id)
-                        .map_err(map_err)?;
-                    self.archive_job_immediately(&mut conn, &job, JobStatus::Pending)?;
-                    continue;
-                }
-            }
-
-            // Check dependencies — only for jobs that actually have them.
-            if job.has_deps {
-                let deps_key = self.key(&["job", &job_id, "depends_on"]);
-                let dep_ids: Vec<String> = conn.smembers(&deps_key).map_err(map_err)?;
-                if !dep_ids.is_empty() {
-                    let mut all_complete = true;
-                    for dep_id in &dep_ids {
-                        // A completed dep has been archived out of the live
-                        // indices, so fall back to the archive before deciding
-                        // the dep is unsatisfied.
-                        let dep_job = match self.load_job(&mut conn, dep_id)? {
-                            Some(j) => Some(j),
-                            None => self.load_archived_job(&mut conn, dep_id)?,
-                        };
-                        match dep_job {
-                            Some(dep_job) if dep_job.status == JobStatus::Complete => {}
-                            _ => {
-                                all_complete = false;
-                                break;
-                            }
-                        }
-                    }
-                    if !all_complete {
-                        continue;
-                    }
-                }
-            }
-
-            // Claim the job atomically; skip candidates lost to a concurrent
-            // cancel / expire / claim instead of resurrecting them.
+            // Skip candidates lost to a concurrent cancel / expire / claim
+            // instead of resurrecting them.
             job.status = JobStatus::Running;
             job.started_at = Some(now);
             if self.claim_pending(&mut conn, &job, &queue_key)? {
-                // Best-effort pub/sub backlog reindex Pending→Running (see the
-                // single-claim `dequeue` for the rationale).
                 self.reindex_pubsub_best_effort(&mut conn, &job, JobStatus::Running);
                 claimed.push(job);
             }
