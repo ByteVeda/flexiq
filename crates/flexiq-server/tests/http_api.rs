@@ -449,7 +449,7 @@ async fn a_grpc_token_mint_refuses_a_request_it_cannot_honour() {
         ("empty scopes", json!({ "name": "ci", "scopes": [] })),
         (
             "an unknown scope",
-            json!({ "name": "ci", "scopes": ["admin"] }),
+            json!({ "name": "ci", "scopes": ["teleport"] }),
         ),
         (
             "a lifetime past the cap",
@@ -487,7 +487,7 @@ async fn the_grpc_scope_list_is_served() {
         .iter()
         .map(|scope| scope["name"].as_str().expect("a name"))
         .collect();
-    assert_eq!(names, vec!["produce", "execute"]);
+    assert_eq!(names, vec!["produce", "execute", "inspect", "admin"]);
 }
 
 #[tokio::test]
