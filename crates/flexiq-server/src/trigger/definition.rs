@@ -67,6 +67,9 @@ pub struct Trigger {
     pub rate: RateLimitConfig,
     /// How a request proves its origin.
     pub verifier: Verifier,
+    /// The environment variable the verifier's secret was read from — a name,
+    /// not a secret, kept so `main` can scrub the variable once it is read.
+    pub secret_env: String,
     /// How a request becomes arguments.
     pub mapping: Mapping,
     /// Where a delivery's identity comes from, so a redelivery deduplicates.
@@ -182,6 +185,19 @@ enum RawEncoding {
     Base64,
 }
 
+impl RawAuth {
+    fn secret_env(&self) -> &str {
+        match self {
+            Self::SharedSecret { secret_env, .. }
+            | Self::HmacSha256 { secret_env, .. }
+            | Self::Github { secret_env }
+            | Self::Stripe { secret_env, .. }
+            | Self::StandardWebhooks { secret_env, .. }
+            | Self::Twilio { secret_env, .. } => secret_env,
+        }
+    }
+}
+
 fn default_queue() -> String {
     "default".to_string()
 }
@@ -289,6 +305,7 @@ fn validate(raw: RawTrigger, env: &Env) -> Result<Trigger> {
     }
 
     Ok(Trigger {
+        secret_env: raw.auth.secret_env().to_string(),
         verifier: verifier(raw.auth, env)?,
         name: raw.name,
         path: raw.path,

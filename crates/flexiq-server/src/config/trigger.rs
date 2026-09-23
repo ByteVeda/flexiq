@@ -70,6 +70,17 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<TriggerConf
     }))
 }
 
+/// Remove every verifier secret from the process environment once the
+/// definitions are parsed, so a crash dump or anything reading the environment
+/// later cannot read them back.
+pub fn scrub_trigger_secrets(config: &TriggerConfig) {
+    // Called once from `main`, before any thread that reads the environment
+    // has been spawned.
+    for trigger in config.triggers.iter() {
+        std::env::remove_var(&trigger.secret_env);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

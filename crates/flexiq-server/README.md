@@ -1,7 +1,8 @@
 # flexiq-server
 
 The FlexiQ scheduler, executor attach listener, dashboard, admission webhook,
-gRPC door and push dispatcher in one binary, with no language runtime.
+gRPC door, push dispatcher and trigger listener in one binary, with no language
+runtime.
 
 Task bodies stay in the app's own container: executors dial in over the worker
 frame protocol and run them there, so this image is small and identical for
@@ -29,6 +30,7 @@ half of this one moved. The canonical guides:
 | Minting, scoping, rotating and revoking API tokens | **[API tokens](https://docs.byteveda.org/flexiq/python/operate/server/tokens)** |
 | The producer and executor doors, the JSON facade, TLS | **[The gRPC door](https://docs.byteveda.org/flexiq/python/operate/server/grpc)** |
 | Env vars, the egress guard, the limits worth knowing first | **[Push dispatch](https://docs.byteveda.org/flexiq/python/operate/server/push)** |
+| Webhooks and object-store events as enqueue sources | **[Triggers](https://docs.byteveda.org/flexiq/python/operate/server/triggers)** |
 | What to scale on, per role | **[Scaling](https://docs.byteveda.org/flexiq/python/operate/server/scaling)** |
 | Per-backend backup, and what a restore replays | **[Backup and restore](https://docs.byteveda.org/flexiq/python/operate/backup)** |
 | The Helm chart, listener roles, KEDA | **[Kubernetes](https://docs.byteveda.org/flexiq/python/operate/kubernetes)** |
@@ -42,7 +44,8 @@ Environment only — the binary takes no flags beyond `--help`, `--version` and
 the `token` subcommand. `flexiq-server --help` prints every variable it reads.
 
 At least one of `FLEXIQ_LISTEN`, `FLEXIQ_DASHBOARD`, `FLEXIQ_WEBHOOK_LISTEN`,
-`FLEXIQ_GRPC_LISTEN` or `FLEXIQ_PUSH_TARGET_URL` must be set, and every role
+`FLEXIQ_GRPC_LISTEN`, `FLEXIQ_PUSH_TARGET_URL` or `FLEXIQ_TRIGGER_LISTEN` must
+be set, and every role
 but the webhook needs `FLEXIQ_DSN`. `FLEXIQ_PUSH_TARGET_URL` and
 `FLEXIQ_LISTEN` are mutually exclusive — a `Worker` holds exactly one
 dispatcher.
