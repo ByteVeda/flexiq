@@ -25,12 +25,13 @@ use axum::Json;
 use flexiq_core::StorageBackend;
 use serde_json::{json, Value};
 
+use crate::trigger::auth::sns::{self, AwsUrl};
 use crate::trigger::auth::{Inbound, KeyFetcher};
 use crate::trigger::definition::{Source, Trigger, HEALTH_PATH};
 use crate::trigger::document::{self, DocumentError};
 use crate::trigger::enqueue::{self, Enqueued, Planned, MAX_KEY_LEN};
 use crate::trigger::metrics;
-use crate::trigger::object_store::{self, Unwrapped};
+use crate::trigger::object_store::{self, Provider, Unwrapped};
 use crate::trigger::rate;
 
 /// What the listener serves: the definitions, indexed by path, and where
@@ -220,7 +221,13 @@ async fn handle(
         return Outcome::Unauthorized;
     }
 
-    let document = match document::parse(headers, &body) {
+    // SNS posts its JSON as `text/plain`, so its body is read as what it is.
+    let parsed = if trigger.source == Source::ObjectStore(Provider::S3Sns) {
+        document::json(&body)
+    } else {
+        document::parse(headers, &body)
+    };
+    let document = match parsed {
         Ok(document) => document,
         Err(DocumentError::UnsupportedMediaType(message)) => {
             return Outcome::UnsupportedMediaType(message)
@@ -233,6 +240,7 @@ async fn handle(
     let events = match events(trigger.source, document) {
         Ok(Unwrapped::Events(events)) => events,
         Ok(Unwrapped::Handshake(body)) => return Outcome::Handshake(body),
+        Ok(Unwrapped::Confirm(url)) => return confirm(&role.keys, &trigger.name, &url).await,
         Err(message) => return Outcome::Unmappable(message),
     };
     let planned = match events
@@ -270,6 +278,30 @@ async fn handle(
         }
         Err(error) => {
             log::error!("[flexiq] trigger {name} enqueue task failed: {error}");
+            Outcome::Failed
+        }
+    }
+}
+
+/// Confirm an SNS subscription by fetching the URL it sent.
+///
+/// The message was signed, so the URL is SNS's; the host check is kept anyway,
+/// because it is what stands between this process and a fetch of any URL a
+/// signing bug let through. A failure answers `500`, so SNS asks again.
+async fn confirm(keys: &KeyFetcher, trigger: &str, url: &str) -> Outcome {
+    let url = match sns::aws_url(url, AwsUrl::Subscribe) {
+        Ok(url) => url,
+        Err(rejection) => return Outcome::Unmappable(rejection.to_string()),
+    };
+    match keys.get(url.as_str()).await {
+        Ok(_) => {
+            log::info!("[flexiq] trigger {trigger} confirmed its SNS subscription");
+            Outcome::Handshake(json!({ "confirmed": true }))
+        }
+        Err(error) => {
+            log::error!(
+                "[flexiq] trigger {trigger} could not confirm its SNS subscription: {error}"
+            );
             Outcome::Failed
         }
     }

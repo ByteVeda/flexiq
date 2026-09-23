@@ -45,7 +45,9 @@ pub fn parse(headers: &HeaderMap, body: &[u8]) -> Result<Value, DocumentError> {
     }
 }
 
-fn json(body: &[u8]) -> Result<Value, DocumentError> {
+/// `body` as JSON whatever it claims to be — for a sender known to label JSON
+/// wrongly, as SNS does with `text/plain`.
+pub fn json(body: &[u8]) -> Result<Value, DocumentError> {
     serde_json::from_slice(body)
         .map_err(|error| DocumentError::Malformed(format!("the body is not valid JSON: {error}")))
 }

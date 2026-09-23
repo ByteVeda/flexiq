@@ -37,6 +37,8 @@ struct Harness {
 
 const GOOGLE_JWKS: &[u8] = include_bytes!("fixtures/oidc_test_jwks.json");
 const GOOGLE_SIGNING_KEY: &[u8] = include_bytes!("fixtures/oidc_test_key.pem");
+const SNS_CERT: &[u8] = include_bytes!("fixtures/sns_test_cert.pem");
+const SNS_SIGNING_KEY: &[u8] = include_bytes!("fixtures/sns_test_key.der");
 
 /// Published keys served from fixtures, so no test reaches the network. Any
 /// other URL answers `ok`, which is what confirming a subscription needs.
@@ -45,6 +47,8 @@ fn fixture_keys(fetched: Arc<Mutex<Vec<String>>>) -> KeyFetcher {
         fetched.lock().expect("unpoisoned").push(url.clone());
         let body = if url == GOOGLE_JWKS_URL {
             GOOGLE_JWKS.to_vec()
+        } else if url.ends_with(".pem") {
+            SNS_CERT.to_vec()
         } else {
             b"ok".to_vec()
         };
@@ -547,4 +551,142 @@ async fn a_pubsub_push_proves_itself_with_a_google_token() {
     assert_eq!(impostor.status(), 401);
     // The key set came from the cache the second time.
     assert_eq!(harness.fetched.lock().expect("unpoisoned").len(), 1);
+}
+
+const SNS_TOPIC: &str = "arn:aws:sns:us-east-1:123456789012:uploads";
+
+/// `message`, signed the way SNS signs one (signature version 2).
+fn sns_signed(mut message: Value) -> String {
+    use base64::Engine;
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::pkcs8::DecodePrivateKey;
+    use rsa::signature::{SignatureEncoding, Signer};
+
+    message["TopicArn"] = json!(SNS_TOPIC);
+    message["Timestamp"] = json!(chrono::Utc::now().to_rfc3339());
+    message["SignatureVersion"] = json!("2");
+    message["SigningCertURL"] =
+        json!("https://sns.us-east-1.amazonaws.com/SimpleNotificationService-test.pem");
+    let fields: &[&str] = if message["Type"] == "Notification" {
+        &[
+            "Message",
+            "MessageId",
+            "Subject",
+            "Timestamp",
+            "TopicArn",
+            "Type",
+        ]
+    } else {
+        &[
+            "Message",
+            "MessageId",
+            "SubscribeURL",
+            "Timestamp",
+            "Token",
+            "TopicArn",
+            "Type",
+        ]
+    };
+    let canonical: String = fields
+        .iter()
+        .filter_map(|name| {
+            message
+                .get(*name)
+                .and_then(Value::as_str)
+                .map(|value| format!("{name}\n{value}\n"))
+        })
+        .collect();
+    let key = rsa::RsaPrivateKey::from_pkcs8_der(SNS_SIGNING_KEY).expect("a test key");
+    let signature = SigningKey::<Sha256>::new(key).sign(canonical.as_bytes());
+    message["Signature"] =
+        json!(base64::engine::general_purpose::STANDARD.encode(signature.to_vec()));
+    message.to_string()
+}
+
+#[tokio::test]
+async fn an_sns_subscription_confirms_then_delivers_signed_s3_events() {
+    let harness = start(
+        "s3-sns",
+        json!([{
+            "name": "s3-uploads",
+            "path": "/t/s3",
+            "task": "uploads.process",
+            "kind": "object_store",
+            "provider": "s3_sns",
+            "rate_limit": "10/s",
+            "auth": {"kind": "sns", "topic_arns": [SNS_TOPIC], "require_signature_v2": true},
+            "args": [],
+            "kwargs": {"key": {"from": "body", "pointer": "/key"}}
+        }]),
+    )
+    .await;
+    // SNS labels its JSON text/plain; the listener must read it anyway.
+    let post = |body: String| {
+        harness
+            .client
+            .post(format!("{}/t/s3", harness.base))
+            .header("content-type", "text/plain; charset=UTF-8")
+            .body(body)
+            .send()
+    };
+
+    let subscribe_url =
+        "https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription&TopicArn=t&Token=abc";
+    let confirmation = sns_signed(json!({
+        "Type": "SubscriptionConfirmation",
+        "MessageId": "c-1",
+        "Token": "abc",
+        "Message": "You have chosen to subscribe to the topic.",
+        "SubscribeURL": subscribe_url
+    }));
+    let confirmed = post(confirmation).await.expect("answers");
+    assert_eq!(confirmed.status(), 200);
+    assert!(harness
+        .fetched
+        .lock()
+        .expect("unpoisoned")
+        .contains(&subscribe_url.to_string()));
+
+    let records = json!({"Records": [
+        {"eventName": "ObjectCreated:Put", "eventTime": "2027-01-15T08:00:00Z",
+         "s3": {"bucket": {"name": "uploads"}, "object": {"key": "in/a+b.csv", "size": 3}}},
+        {"eventName": "ObjectCreated:Put", "eventTime": "2027-01-15T08:00:00Z",
+         "s3": {"bucket": {"name": "uploads"}, "object": {"key": "in/c.csv", "size": 4}}}
+    ]});
+    let notification = json!({
+        "Type": "Notification",
+        "MessageId": "n-1",
+        "Subject": "Amazon S3 Notification",
+        "Message": records.to_string()
+    });
+    let delivered = post(sns_signed(notification.clone()))
+        .await
+        .expect("answers");
+    assert_eq!(delivered.status(), 202);
+    let jobs = job_ids(delivered).await;
+    assert_eq!(jobs.len(), 2);
+    let job = harness
+        .storage
+        .get_job(&jobs[0].0, Some(NAMESPACE))
+        .expect("storage answers")
+        .expect("the job exists");
+    assert_eq!(job.unique_key.as_deref(), Some("trigger:s3-uploads:n-1:0"));
+    assert_eq!(
+        job.payload,
+        encode_call(
+            &[],
+            &[("key".to_string(), WireValue::Text("in/a b.csv".into()))]
+        )
+    );
+
+    // Signed, then altered: the records are no longer the ones SNS signed.
+    let mut forged: Value =
+        serde_json::from_str(&sns_signed(notification)).expect("a JSON message");
+    forged["Message"] = json!(json!({"Records": [
+        {"eventName": "ObjectCreated:Put",
+         "s3": {"bucket": {"name": "uploads"}, "object": {"key": "evil.csv"}}}
+    ]})
+    .to_string());
+    let refused = post(forged.to_string()).await.expect("answers");
+    assert_eq!(refused.status(), 401);
 }

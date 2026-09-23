@@ -14,13 +14,14 @@
 //! ```
 //!
 //! `size`, `etag` and `time` are `null` when the provider did not say; `raw`
-//! keeps anything the common shape drops. Proof of origin is not here: each
-//! platform's documented mechanism is a shared secret on the endpoint, which
-//! the trigger's ordinary verifier checks before any of this runs.
+//! keeps anything the common shape drops. Proof of origin is not here: the
+//! trigger's verifier — a shared secret, a Pub/Sub OIDC token, or an SNS
+//! signature — has checked the request before any of this runs.
 
 pub mod azure;
 pub mod gcs;
 pub mod s3;
+pub mod s3_sns;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -40,6 +41,8 @@ pub enum Provider {
     Gcs,
     /// Azure Blob Storage through an Event Grid webhook subscription.
     Azure,
+    /// Amazon S3 event notifications through an SNS HTTPS subscription.
+    S3Sns,
 }
 
 impl Provider {
@@ -49,6 +52,7 @@ impl Provider {
             Self::S3 => "s3",
             Self::Gcs => "gcs",
             Self::Azure => "azure",
+            Self::S3Sns => "s3_sns",
         }
     }
 }
@@ -60,6 +64,9 @@ pub enum Unwrapped {
     Handshake(Value),
     /// Object events, in delivery order.
     Events(Vec<Value>),
+    /// A subscription confirmed by fetching this URL — SNS's handshake,
+    /// which the handler performs before answering.
+    Confirm(String),
 }
 
 /// Unwrap `document` as `provider` delivers it.
@@ -68,6 +75,7 @@ pub fn unwrap(provider: Provider, document: &Value) -> Result<Unwrapped, String>
         Provider::S3 => s3::unwrap(document).map(|event| Unwrapped::Events(vec![event])),
         Provider::Gcs => gcs::unwrap(document).map(|event| Unwrapped::Events(vec![event])),
         Provider::Azure => azure::unwrap(document),
+        Provider::S3Sns => s3_sns::unwrap(document),
     }?;
     if let Unwrapped::Events(events) = &unwrapped {
         if events.len() > MAX_EVENTS {

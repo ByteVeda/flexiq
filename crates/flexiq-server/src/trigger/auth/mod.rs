@@ -15,6 +15,7 @@ pub mod fetch;
 pub mod google;
 pub mod shared;
 pub mod signature;
+pub mod sns;
 pub mod standard;
 pub mod stripe;
 pub mod twilio;
@@ -29,6 +30,7 @@ pub use fetch::KeyFetcher;
 pub use google::GoogleOidc;
 pub use shared::{SecretLocation, SharedSecret};
 pub use signature::{Encoding, HeaderHmac};
+pub use sns::Sns;
 pub use standard::StandardWebhooks;
 pub use stripe::Stripe;
 pub use twilio::Twilio;
@@ -115,6 +117,8 @@ pub enum Verifier {
     Twilio(Twilio),
     /// A Pub/Sub push subscription's Google-signed OIDC token.
     GoogleOidc(GoogleOidc),
+    /// An Amazon SNS message's RSA signature.
+    Sns(Sns),
 }
 
 impl Verifier {
@@ -130,6 +134,7 @@ impl Verifier {
             Self::StandardWebhooks(verifier) => verifier.verify(inbound),
             Self::Twilio(verifier) => verifier.verify(inbound),
             Self::GoogleOidc(verifier) => verifier.verify(inbound, keys).await,
+            Self::Sns(verifier) => verifier.verify(inbound, keys).await,
         }
     }
 
@@ -142,6 +147,7 @@ impl Verifier {
             Self::StandardWebhooks(_) => "standard_webhooks",
             Self::Twilio(_) => "twilio",
             Self::GoogleOidc(_) => "google_oidc",
+            Self::Sns(_) => "sns",
         }
     }
 }

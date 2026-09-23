@@ -18,9 +18,10 @@ use flexiq_core::RateLimitConfig;
 use serde::Deserialize;
 
 use crate::config::{value, Env};
+use crate::trigger::auth::sns::DEFAULT_SNS_TOLERANCE_SECS;
 use crate::trigger::auth::{
-    Encoding, GoogleOidc, HeaderHmac, Key, SecretLocation, SharedSecret, StandardWebhooks, Stripe,
-    Twilio, Verifier, DEFAULT_TOLERANCE_SECS,
+    Encoding, GoogleOidc, HeaderHmac, Key, SecretLocation, SharedSecret, Sns, StandardWebhooks,
+    Stripe, Twilio, Verifier, DEFAULT_TOLERANCE_SECS,
 };
 use crate::trigger::mapping::{Mapping, Selector};
 use crate::trigger::object_store::Provider;
@@ -180,6 +181,13 @@ enum RawAuth {
         audience: String,
         service_account: String,
     },
+    Sns {
+        topic_arns: Vec<String>,
+        #[serde(default)]
+        require_signature_v2: bool,
+        #[serde(default = "default_sns_tolerance")]
+        tolerance_secs: i64,
+    },
 }
 
 #[derive(Deserialize, Default, Clone, Copy)]
@@ -199,7 +207,7 @@ impl RawAuth {
             | Self::Stripe { secret_env, .. }
             | Self::StandardWebhooks { secret_env, .. }
             | Self::Twilio { secret_env, .. } => Some(secret_env),
-            Self::GoogleOidc { .. } => None,
+            Self::GoogleOidc { .. } | Self::Sns { .. } => None,
         }
     }
 }
@@ -222,6 +230,10 @@ fn default_max_body_bytes() -> usize {
 
 fn default_tolerance() -> i64 {
     DEFAULT_TOLERANCE_SECS
+}
+
+fn default_sns_tolerance() -> i64 {
+    DEFAULT_SNS_TOLERANCE_SECS
 }
 
 /// Parse and validate a definitions file, resolving secrets from `env`.
@@ -308,6 +320,17 @@ fn validate(raw: RawTrigger, env: &Env) -> Result<Trigger> {
     }
     if raw.kwargs.keys().any(|name| name.is_empty()) {
         bail!("a keyword argument needs a name");
+    }
+
+    // The SNS signature covers the envelope the s3_sns adapter unwraps, and
+    // nothing else carries one — each is meaningless without the other.
+    let sns_source = source == Source::ObjectStore(Provider::S3Sns);
+    let sns_auth = matches!(raw.auth, RawAuth::Sns { .. });
+    if sns_source && !sns_auth {
+        bail!("provider s3_sns needs auth kind sns: the SNS signature is its proof of origin");
+    }
+    if sns_auth && !sns_source {
+        bail!("auth kind sns applies only to kind object_store with provider s3_sns");
     }
 
     Ok(Trigger {
@@ -451,6 +474,25 @@ fn verifier(raw: RawAuth, env: &Env) -> Result<Verifier> {
                 );
             }
             Verifier::GoogleOidc(GoogleOidc::new(audience, service_account))
+        }
+        RawAuth::Sns {
+            topic_arns,
+            require_signature_v2,
+            tolerance_secs,
+        } => {
+            if topic_arns.is_empty() {
+                bail!("sns needs topic_arns — the topics this trigger accepts messages from");
+            }
+            if let Some(bad) = topic_arns
+                .iter()
+                .find(|arn| !arn.starts_with("arn:aws") || !arn.contains(":sns:"))
+            {
+                bail!("{bad:?} is not an SNS topic ARN");
+            }
+            if !(60..=86_400).contains(&tolerance_secs) {
+                bail!("sns tolerance_secs must be between 60 and 86400");
+            }
+            Verifier::Sns(Sns::new(topic_arns, require_signature_v2, tolerance_secs))
         }
     })
 }
@@ -681,6 +723,31 @@ mod tests {
         let mut no_audience = auth;
         no_audience["audience"] = json!(" ");
         assert!(refusal(with("auth", no_audience)).contains("audience"));
+    }
+
+    #[test]
+    fn sns_auth_and_the_s3_sns_provider_go_together() {
+        let sns = json!({
+            "kind": "sns",
+            "topic_arns": ["arn:aws:sns:us-east-1:123456789012:uploads"]
+        });
+        let mut trigger = with("kind", json!("object_store"));
+        trigger["provider"] = json!("s3_sns");
+        trigger["auth"] = sns.clone();
+        let parsed = parse_one(trigger.clone()).expect("valid");
+        assert_eq!(parsed.verifier.kind(), "sns");
+        assert_eq!(parsed.secret_env, None);
+
+        trigger["auth"] = json!({"kind": "github", "secret_env": "HOOK_SECRET"});
+        assert!(refusal(trigger).contains("needs auth kind sns"));
+        assert!(refusal(with("auth", sns.clone())).contains("applies only"));
+
+        let mut empty = with("kind", json!("object_store"));
+        empty["provider"] = json!("s3_sns");
+        empty["auth"] = json!({"kind": "sns", "topic_arns": []});
+        assert!(refusal(empty.clone()).contains("topic_arns"));
+        empty["auth"] = json!({"kind": "sns", "topic_arns": ["arn:aws:sqs:us-east-1:1:q"]});
+        assert!(refusal(empty).contains("not an SNS topic"));
     }
 
     #[test]
