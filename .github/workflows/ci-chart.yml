@@ -45,6 +45,9 @@ jobs:
           render --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false --set dashboard.ingress.enabled=true
           render --set storage.dsn=postgres://u:p@db/x --set attach.token="$TOKEN" \
             --set namespace=prod --set webhook.enabled=true
+          render --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
+            --set dashboard.enabled=false --set namespace=prod --set triggers.enabled=true \
+            --set triggers.existingConfigMap=hooks --set triggers.ingress.enabled=true
 
       - name: Invalid combinations are refused, not rendered
         run: |
@@ -80,6 +83,47 @@ jobs:
             --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
             --set dashboard.enabled=false --set grpc.enabled=true --set namespace=prod \
             --set grpc.existingSecret=my-secret
+          # Mirrors config/trigger.rs: one namespace, and exactly one source of
+          # definitions — a listener with none would answer every request 404.
+          refuses "triggers with no namespace" \
+            --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
+            --set triggers.enabled=true --set triggers.existingConfigMap=hooks
+          refuses "triggers with no definitions" \
+            --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
+            --set namespace=prod --set triggers.enabled=true
+          refuses "triggers with two sources of definitions" \
+            --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
+            --set namespace=prod --set triggers.enabled=true --set triggers.existingConfigMap=hooks \
+            --set-json 'triggers.definitions=[{"name":"a"}]'
+
+      # The definitions reach the server as the file it reads, and each secret
+      # a verifier names reaches it as the variable it names.
+      - name: Trigger definitions render into the file the server reads
+        run: |
+          set -euo pipefail
+          helm template t "$CHART" --set storage.dsn=postgres://u:p@db/x \
+            --set attach.enabled=false --set dashboard.enabled=false --set namespace=prod \
+            --set triggers.enabled=true \
+            --set-json 'triggers.definitions=[{"name":"gh","path":"/t/gh","task":"ci.push","rate_limit":"60/m","auth":{"kind":"github","secret_env":"GH_SECRET"}}]' \
+            --set-json 'triggers.secretEnv=[{"name":"GH_SECRET","secretName":"hooks","key":"github"}]' \
+            | python3 -c '
+          import json, sys, yaml
+          docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+          config = next(d for d in docs if d["kind"] == "ConfigMap")
+          definitions = json.loads(config["data"]["triggers.json"])
+          assert definitions["triggers"][0]["auth"]["secret_env"] == "GH_SECRET", definitions
+          template = next(d for d in docs if d["kind"] == "Deployment")["spec"]["template"]
+          # Read once at boot, so an edited definition must roll the pods.
+          assert "checksum/triggers" in template["metadata"]["annotations"]
+          container = template["spec"]["containers"][0]
+          env = {e["name"]: e for e in container["env"]}
+          assert env["FLEXIQ_TRIGGERS_FILE"]["value"] == "/etc/flexiq/triggers/triggers.json"
+          assert env["GH_SECRET"]["valueFrom"]["secretKeyRef"] == {"name": "hooks", "key": "github"}
+          mount = next(m for m in container["volumeMounts"] if m["name"] == "triggers")
+          assert mount["mountPath"] == "/etc/flexiq/triggers", mount
+          assert container["readinessProbe"]["httpGet"]["path"] == "/healthz"
+          print("definitions, secret and mount all reach the container")
+          '
 
       # A readiness probe that 401s leaves the pod NotReady forever, and the
       # only thing distinguishing the two cases is one env var reaching the

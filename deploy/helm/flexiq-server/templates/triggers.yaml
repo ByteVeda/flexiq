@@ -1,0 +1,68 @@
+{{- $fullname := include "flexiq-server.fullname" . -}}
+{{- if and .Values.triggers.enabled .Values.triggers.definitions }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # Definitions only: every secret a verifier needs arrives through
+  # triggers.secretEnv, so this object is safe to read and to diff.
+  name: {{ $fullname }}-triggers
+  labels:
+    {{- include "flexiq-server.labels" . | nindent 4 }}
+data:
+  triggers.json: {{ dict "triggers" .Values.triggers.definitions | toJson | quote }}
+{{- end }}
+{{- if .Values.triggers.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  # Its own Service: the one public-facing port should not share an object an
+  # Ingress or a LoadBalancer annotation could widen onto the dashboard.
+  name: {{ $fullname }}-triggers
+  labels:
+    {{- include "flexiq-server.labels" . | nindent 4 }}
+  {{- with .Values.triggers.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.triggers.service.type }}
+  selector:
+    {{- include "flexiq-server.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: triggers
+      port: {{ .Values.triggers.port }}
+      targetPort: triggers
+{{- end }}
+{{- if and .Values.triggers.enabled .Values.triggers.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}-triggers
+  labels:
+    {{- include "flexiq-server.labels" . | nindent 4 }}
+  {{- with .Values.triggers.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.triggers.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.triggers.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.triggers.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.triggers.ingress.path }}
+            pathType: {{ .Values.triggers.ingress.pathType }}
+            backend:
+              service:
+                name: {{ $fullname }}-triggers
+                port:
+                  name: triggers
+{{- end }}

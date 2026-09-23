@@ -202,6 +202,51 @@ push:
   # No Service and no containerPort: a push target dials out, so this role has
   # no listener for either to front.
 
+# Inbound triggers (#847): URLs that turn a webhook or an object-store event
+# into an enqueue. The one port meant to face the public internet, so it has its
+# own Service and its own Ingress, never shared with the dashboard's.
+triggers:
+  enabled: false
+  port: 8090
+  # Trigger definitions, rendered into a ConfigMap as the JSON file the server
+  # reads at boot. Each one names its task, queue, rate limit, verifier and
+  # argument mapping; see the server docs for the full schema. A definition
+  # never holds a secret — its verifier names an environment variable, which
+  # secretEnv below fills from a Secret.
+  #
+  #   definitions:
+  #     - name: github-push
+  #       path: /t/github
+  #       task: ci.on_push
+  #       rate_limit: 60/m
+  #       auth: {kind: github, secret_env: GITHUB_WEBHOOK_SECRET}
+  #       unique_key: {from: header, name: X-GitHub-Delivery}
+  definitions: []
+  # Use a ConfigMap you manage instead of `definitions`. The server reads the
+  # file once at boot, so changing that ConfigMap needs a rollout restart; the
+  # chart-owned one is hashed into a pod annotation and restarts on its own.
+  existingConfigMap: ""
+  existingConfigMapKey: triggers.json
+  # The secrets definitions name through secret_env, each from a Secret you own:
+  #
+  #   secretEnv:
+  #     - name: GITHUB_WEBHOOK_SECRET
+  #       secretName: webhook-secrets
+  #       key: github
+  secretEnv: []
+  service:
+    type: ClusterIP
+    annotations: {}
+  # The listener speaks plain HTTP; senders call HTTPS, so terminate TLS here.
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: ""
+    path: /
+    pathType: Prefix
+    tls: []
+
 # Annotation-driven executor sidecar injection.
 webhook:
   enabled: false

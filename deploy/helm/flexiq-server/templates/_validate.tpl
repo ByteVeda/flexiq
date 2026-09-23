@@ -7,12 +7,12 @@ guard in crates/flexiq-server/src/config.
 */}}
 {{- define "flexiq-server.validate" -}}
 
-{{- if not (or .Values.attach.enabled .Values.dashboard.enabled .Values.webhook.enabled .Values.grpc.enabled .Values.push.enabled) -}}
-{{- fail "flexiq-server: nothing to run. Enable at least one of attach.enabled, dashboard.enabled, webhook.enabled, grpc.enabled or push.enabled." -}}
+{{- if not (or .Values.attach.enabled .Values.dashboard.enabled .Values.webhook.enabled .Values.grpc.enabled .Values.push.enabled .Values.triggers.enabled) -}}
+{{- fail "flexiq-server: nothing to run. Enable at least one of attach.enabled, dashboard.enabled, webhook.enabled, grpc.enabled, push.enabled or triggers.enabled." -}}
 {{- end -}}
 
 {{/* Only the webhook runs without storage. */}}
-{{- if or .Values.attach.enabled .Values.dashboard.enabled .Values.grpc.enabled .Values.push.enabled -}}
+{{- if or .Values.attach.enabled .Values.dashboard.enabled .Values.grpc.enabled .Values.push.enabled .Values.triggers.enabled -}}
 {{- if not (or .Values.storage.dsn .Values.storage.existingSecret) -}}
 {{- fail "flexiq-server: storage.dsn or storage.existingSecret is required unless the release runs webhook.enabled alone." -}}
 {{- end -}}
@@ -114,6 +114,22 @@ rows" to a dequeue, and neither is a thing to put on a network port.
 */}}
 {{- if and .Values.grpc.enabled (not .Values.namespace) -}}
 {{- fail "flexiq-server: grpc.enabled requires namespace. The gRPC door serves one named namespace, and the server refuses to start without FLEXIQ_NAMESPACE." -}}
+{{- end -}}
+
+{{/* Mirrors config/trigger.rs: one namespace, and a definitions file. */}}
+{{- if .Values.triggers.enabled -}}
+{{- if not .Values.namespace -}}
+{{- fail "flexiq-server: triggers.enabled requires namespace. Every trigger enqueues into one named namespace, and the server refuses to start without FLEXIQ_NAMESPACE." -}}
+{{- end -}}
+{{- if and .Values.triggers.definitions .Values.triggers.existingConfigMap -}}
+{{- fail "flexiq-server: set triggers.definitions or triggers.existingConfigMap, not both — the server reads one file." -}}
+{{- end -}}
+{{- if not (or .Values.triggers.definitions .Values.triggers.existingConfigMap) -}}
+{{- fail "flexiq-server: triggers.enabled requires triggers.definitions or triggers.existingConfigMap — a listener with no triggers answers every request 404." -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.triggers.ingress.enabled (not .Values.triggers.enabled) -}}
+{{- fail "flexiq-server: triggers.ingress.enabled needs triggers.enabled." -}}
 {{- end -}}
 
 {{- if and .Values.webhook.enabled .Values.webhook.certManager.enabled (not (.Capabilities.APIVersions.Has "cert-manager.io/v1")) -}}
