@@ -59,6 +59,9 @@ pub enum Command {
     Throughput(ThroughputArgs),
     /// The namespace's registered workers and their heartbeats.
     Workers,
+    /// Ask one worker to stop claiming, finish its jobs and exit — the stop a
+    /// SIGTERM gives it. It reads the request on its next heartbeat.
+    Drain(WorkerIdArgs),
     /// Read, replay and delete dead letters.
     #[command(subcommand)]
     Dlq(DlqCommand),
@@ -200,6 +203,16 @@ pub struct ThroughputArgs {
     /// hours is refused.
     #[arg(long)]
     pub window_ms: Option<i64>,
+}
+
+/// `fq drain`.
+///
+/// A top-level verb beside `pause` and `resume`, rather than `fq workers
+/// drain`, so `fq workers` stays a bare listing with no subcommand to parse.
+#[derive(Debug, Args)]
+pub struct WorkerIdArgs {
+    /// The worker's id, as `fq workers` lists it.
+    pub worker_id: String,
 }
 
 /// `fq dlq`.
@@ -463,6 +476,20 @@ mod tests {
         };
         assert!(args.list && args.queue.is_none());
         assert!(parse(&["queues", "mail", "--list"]).is_err());
+    }
+
+    /// `fq workers` stays a bare listing; draining is its own verb.
+    #[test]
+    fn drain_takes_one_worker_id() {
+        let Command::Drain(args) = parse(&["drain", "w-1"]).expect("parses").command else {
+            panic!("a drain command");
+        };
+        assert_eq!(args.worker_id, "w-1");
+        assert!(parse(&["drain"]).is_err());
+        assert!(matches!(
+            parse(&["workers"]).expect("parses").command,
+            Command::Workers
+        ));
     }
 
     #[test]

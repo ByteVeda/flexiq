@@ -457,6 +457,11 @@ pub fn list_workers_json(response: &pb::ListWorkersResponse) -> Value {
     )]))
 }
 
+/// `DrainWorkerResponse`: `{worker}`.
+pub fn worker_envelope_json(worker: Option<&pb::Worker>) -> Value {
+    wrapping("worker", worker, worker_json)
+}
+
 /// One `PeriodicTask`.
 pub fn periodic_task_json(task: &pb::PeriodicTask) -> Value {
     let mut object = Map::new();

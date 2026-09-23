@@ -20,7 +20,7 @@ use flexiq_cli::cli::{
     DeadLetterIdArgs, DlqCommand, DlqListArgs, DlqPurgeArgs, DlqShowArgs, EnqueueArgs,
     JobsCancelArgs, JobsCommand, JobsGetArgs, JobsListArgs, OverridesCommand, PeriodicCommand,
     PeriodicNameArgs, PeriodicPutArgs, PeriodicShowArgs, QueueNameArgs, QueuesArgs,
-    SetQueueOverrideArgs, SetTaskOverrideArgs, TaskNameArgs, ThroughputArgs,
+    SetQueueOverrideArgs, SetTaskOverrideArgs, TaskNameArgs, ThroughputArgs, WorkerIdArgs,
 };
 use flexiq_cli::commands;
 use flexiq_cli::output::admin as cli_render;
@@ -460,6 +460,12 @@ fn queue_name(queue: &str) -> QueueNameArgs {
     }
 }
 
+fn worker_id(worker_id: &str) -> WorkerIdArgs {
+    WorkerIdArgs {
+        worker_id: worker_id.to_string(),
+    }
+}
+
 fn periodic_name(name: &str) -> PeriodicNameArgs {
     PeriodicNameArgs {
         name: name.to_string(),
@@ -534,6 +540,42 @@ async fn pause_and_resume_through_the_cli() {
         .queue
         .expect("the queue");
     assert!(!resumed.paused);
+    harness.stop().await;
+}
+
+/// `fq drain` marks this namespace's worker, and another namespace's is absent.
+#[tokio::test]
+async fn a_drain_through_the_cli_marks_the_worker_draining() {
+    let mut harness = Harness::start("admin-drain").await;
+    harness
+        .storage
+        .register_worker(&WorkerRegistration::new("w-1", "emails", 2).namespace(Some(NAMESPACE)))
+        .expect("register");
+    harness
+        .storage
+        .register_worker(
+            &WorkerRegistration::new("w-other", "emails", 1).namespace(Some("grpc-cli-other")),
+        )
+        .expect("register");
+
+    let worker = harness
+        .admin
+        .drain_worker(commands::workers::drain_request(&worker_id("w-1")))
+        .await
+        .expect("drain")
+        .into_inner()
+        .worker
+        .expect("the worker");
+    assert_eq!(worker.worker_id, "w-1");
+    assert_eq!(worker.status, cli_pb::WorkerStatus::Draining as i32);
+
+    let status = harness
+        .admin
+        .drain_worker(commands::workers::drain_request(&worker_id("w-other")))
+        .await
+        .expect_err("another namespace's worker");
+    let text = flexiq_cli::error::describe(&status);
+    assert!(text.contains("WORKER_NOT_FOUND"), "{text}");
     harness.stop().await;
 }
 
@@ -797,6 +839,16 @@ async fn the_admin_json_render_matches_the_facade() {
         &workers,
         cli_render::list_workers_json,
         server_render::list_workers,
+    );
+    let drained = admin
+        .drain_worker(commands::workers::drain_request(&worker_id("w-1")))
+        .await
+        .expect("drain")
+        .into_inner();
+    assert_same_render(
+        &drained,
+        |r: &cli_pb::DrainWorkerResponse| cli_render::worker_envelope_json(r.worker.as_ref()),
+        server_render::drain_worker,
     );
 
     let listed = admin
@@ -1156,6 +1208,10 @@ async fn every_admin_command_runs_against_a_real_door() {
             .await
             .expect("throughput");
         commands::workers::run(admin, json).await.expect("workers");
+        // Idempotent, so both renderings can drain the same worker.
+        commands::workers::drain(admin, &worker_id("w-1"), json)
+            .await
+            .expect("drain");
         commands::dlq::run(
             admin,
             &DlqCommand::List(DlqListArgs {
