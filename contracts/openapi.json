@@ -39,6 +39,623 @@
         },
         "type": "object"
       },
+      "flexiq.admin.v1.ClearQueueOverrideResponse": {
+        "properties": {},
+        "type": "object"
+      },
+      "flexiq.admin.v1.ClearTaskOverrideResponse": {
+        "properties": {},
+        "type": "object"
+      },
+      "flexiq.admin.v1.DeadLetter": {
+        "description": "A job that exhausted its retries.",
+        "properties": {
+          "error": {
+            "description": "Canonical JSON `{errtype, message, traceback[]}` when structured, free\nprose otherwise.",
+            "type": "string"
+          },
+          "failedAt": {
+            "description": "When it dead-lettered.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "Opaque. The id replay and delete take — not the job's.",
+            "type": "string"
+          },
+          "maxRetries": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "metadata": {
+            "description": "Opaque JSON text, byte-preserved.",
+            "type": "string"
+          },
+          "originalJobId": {
+            "description": "The job that dead-lettered.",
+            "type": "string"
+          },
+          "payload": {
+            "contentEncoding": "base64",
+            "description": "The job's tagged envelope. Absent unless asked for.",
+            "type": "string"
+          },
+          "priority": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "replayCount": {
+            "description": "How many times this job has already come back from the dead-letter queue.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "retryCount": {
+            "description": "Attempts the job had used.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "taskName": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.DeleteDeadLetterResponse": {
+        "properties": {},
+        "type": "object"
+      },
+      "flexiq.admin.v1.DeletePeriodicTaskResponse": {
+        "properties": {},
+        "type": "object"
+      },
+      "flexiq.admin.v1.GetDeadLetterResponse": {
+        "properties": {
+          "deadLetter": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.DeadLetter"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.GetPeriodicTaskResponse": {
+        "properties": {
+          "periodicTask": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.PeriodicTask"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.GetThroughputResponse": {
+        "properties": {
+          "queues": {
+            "description": "By name; a queue with nothing finished in the window is absent.",
+            "items": {
+              "$ref": "#/components/schemas/flexiq.admin.v1.QueueThroughput"
+            },
+            "type": "array"
+          },
+          "since": {
+            "description": "The window's start, by the server's clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "window": {
+            "description": "The window the counts cover, as applied.",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.ListDeadLettersResponse": {
+        "properties": {
+          "deadLetters": {
+            "description": "Newest first, never carrying a payload.",
+            "items": {
+              "$ref": "#/components/schemas/flexiq.admin.v1.DeadLetter"
+            },
+            "type": "array"
+          },
+          "nextPageToken": {
+            "description": "Empty when this is the last page.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.ListOverridesResponse": {
+        "properties": {
+          "queues": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/flexiq.admin.v1.QueueOverride"
+            },
+            "description": "By queue name.",
+            "type": "object"
+          },
+          "tasks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/flexiq.admin.v1.TaskOverride"
+            },
+            "description": "By task name.",
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.ListPeriodicTasksResponse": {
+        "properties": {
+          "periodicTasks": {
+            "description": "By name, never carrying a payload.",
+            "items": {
+              "$ref": "#/components/schemas/flexiq.admin.v1.PeriodicTask"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.ListQueuesResponse": {
+        "properties": {
+          "queues": {
+            "description": "By name. Not paginated: bounded by the number of queues, not of jobs.",
+            "items": {
+              "$ref": "#/components/schemas/flexiq.admin.v1.Queue"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.ListWorkersResponse": {
+        "properties": {
+          "workers": {
+            "description": "By id. Not paginated: bounded by the fleet.",
+            "items": {
+              "$ref": "#/components/schemas/flexiq.admin.v1.Worker"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.PausePeriodicTaskResponse": {
+        "properties": {
+          "periodicTask": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.PeriodicTask",
+            "description": "The task after the call, carrying no payload."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.PauseQueueResponse": {
+        "properties": {
+          "queue": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.Queue",
+            "description": "The queue after the call."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.PeriodicTask": {
+        "description": "A schedule that enqueues one task on a cron expression.",
+        "properties": {
+          "cron": {
+            "description": "Six fields, seconds first: `0 */5 * * * *` is every five minutes.",
+            "type": "string"
+          },
+          "enabled": {
+            "description": "False while paused.",
+            "type": "boolean"
+          },
+          "lastRun": {
+            "description": "Absent until it has fired once.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "description": "Unique within the namespace. The handle every other periodic RPC takes.",
+            "type": "string"
+          },
+          "nextRun": {
+            "description": "An instant, RFC 3339 with a `Z` offset.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "payload": {
+            "contentEncoding": "base64",
+            "description": "The tagged envelope each firing enqueues. Absent unless asked for.",
+            "type": "string"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "taskName": {
+            "description": "The registered task each firing enqueues.",
+            "type": "string"
+          },
+          "timezone": {
+            "description": "IANA name the cron expression is read in. Absent is UTC.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.PurgeDeadLettersRequest": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "failedBefore"
+            ]
+          },
+          {
+            "required": [
+              "taskName"
+            ]
+          },
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "failedBefore"
+                  ]
+                },
+                {
+                  "required": [
+                    "taskName"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "failedBefore": {
+            "description": "Entries that dead-lettered before this instant.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "taskName": {
+            "description": "Entries of this task.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.PurgeDeadLettersResponse": {
+        "properties": {
+          "purged": {
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.PutPeriodicTaskRequest": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "raw"
+            ]
+          },
+          {
+            "required": [
+              "structured"
+            ]
+          },
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "raw"
+                  ]
+                },
+                {
+                  "required": [
+                    "structured"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "cron": {
+            "description": "Six fields, seconds first. Refused if it does not parse.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "queue": {
+            "description": "Empty means \"default\".",
+            "type": "string"
+          },
+          "raw": {
+            "contentEncoding": "base64",
+            "type": "string"
+          },
+          "startPaused": {
+            "description": "Create the task paused. Ignored when it already exists: a replace never\nchanges whether a task is paused.",
+            "type": "boolean"
+          },
+          "structured": {
+            "$ref": "#/components/schemas/flexiq.v1.StructuredArgs"
+          },
+          "taskName": {
+            "type": "string"
+          },
+          "timezone": {
+            "description": "IANA name to read the cron expression in. Unset is UTC. Refused if unknown.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.PutPeriodicTaskResponse": {
+        "properties": {
+          "periodicTask": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.PeriodicTask",
+            "description": "The task after the call, carrying no payload."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.Queue": {
+        "description": "A queue as an operator sees it: whether it dispatches, and what it holds.",
+        "properties": {
+          "cancelled": {
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "completed": {
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "dead": {
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "failed": {
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "paused": {
+            "description": "Paused in this namespace. A pause in another namespace does not show.",
+            "type": "boolean"
+          },
+          "pending": {
+            "description": "The six counters flexiq.v1.QueueStatsResponse carries, for this queue.",
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "running": {
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.QueueOverride": {
+        "description": "What an operator overrides on a queue. No `paused`: PauseQueue is the one\nway to pause a queue.",
+        "properties": {
+          "maxConcurrent": {
+            "description": "At most this many of the queue's jobs running at once. Zero or more.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "rateLimit": {
+            "description": "`<count>/<unit>`, as TaskOverride.rate_limit.",
+            "type": "string"
+          },
+          "updateTime": {
+            "description": "Output only: when the override last changed. Ignored on input.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.QueueThroughput": {
+        "description": "Jobs of one queue that reached a terminal status inside the window.\n\nCounts, not a rate: a rate implies a smoothing choice that belongs to the\nreader. Divide by the window.",
+        "properties": {
+          "cancelled": {
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "completed": {
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "dead": {
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "failed": {
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "queue": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.ReplayDeadLetterResponse": {
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/flexiq.v1.Job",
+            "description": "The new job, carrying neither payload nor result. It keeps the dead job's\nqueue, task, body and priority, and none of its uniqueness or dependencies."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.ResumePeriodicTaskResponse": {
+        "properties": {
+          "periodicTask": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.PeriodicTask",
+            "description": "The task after the call, carrying no payload."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.ResumeQueueResponse": {
+        "properties": {
+          "queue": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.Queue",
+            "description": "The queue after the call."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.SetQueueOverrideResponse": {
+        "properties": {
+          "queueOverride": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.QueueOverride",
+            "description": "As stored."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.SetTaskOverrideResponse": {
+        "properties": {
+          "taskOverride": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.TaskOverride",
+            "description": "As stored."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.TaskOverride": {
+        "description": "What an operator overrides on a task. An unset field is not overridden: the\nvalue the task was declared with applies.",
+        "properties": {
+          "maxConcurrent": {
+            "description": "At most this many running at once. Zero or more.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxRetries": {
+            "description": "Zero or more.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "paused": {
+            "description": "Hold this task's jobs without pausing the queue.",
+            "type": "boolean"
+          },
+          "priority": {
+            "description": "Higher runs first.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "rateLimit": {
+            "description": "`<count>/<unit>`, unit one of `s`, `m`, `h`, `d`: `100/m`.",
+            "type": "string"
+          },
+          "retryBackoff": {
+            "description": "Base delay between retries. Zero or more.",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
+          },
+          "timeout": {
+            "description": "How long one attempt may run. Whole seconds, at least one.",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
+          },
+          "updateTime": {
+            "description": "Output only: when the override last changed. Ignored on input.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.TriggerPeriodicTaskResponse": {
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/flexiq.v1.Job",
+            "description": "The job the trigger enqueued, carrying neither payload nor result."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.Worker": {
+        "description": "A registered worker. It stays listed until it unregisters or its heartbeat\ngoes stale long enough for the cluster to reap it.",
+        "properties": {
+          "concurrency": {
+            "description": "How many jobs it runs at once.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "lastHeartbeat": {
+            "description": "Its most recent heartbeat.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "pid": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "poolType": {
+            "description": "How it runs work, e.g. `thread`, `prefork`, `remote`, `push`.",
+            "type": "string"
+          },
+          "queues": {
+            "description": "The queues it consumes.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sdk": {
+            "description": "The SDK that registered it, and that SDK's release.",
+            "type": "string"
+          },
+          "sdkVersion": {
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "An instant, RFC 3339 with a `Z` offset.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "description": "A value this reader does not recognise is not an error; show it as unknown.",
+            "enum": [
+              "WORKER_STATUS_UNSPECIFIED",
+              "WORKER_STATUS_ACTIVE",
+              "WORKER_STATUS_DRAINING"
+            ],
+            "type": "string"
+          },
+          "workerId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "flexiq.v1.CacheConfig": {
         "additionalProperties": false,
         "description": "Memoize this node's result and skip re-running it on a later, otherwise\nidentical, submission.\n\n**`SubmitWorkflow` refuses any graph where a node sets this field**, for the\nsame reason as GateConfig: nothing reachable from the producer door\nresolves a cache hit yet.",
@@ -851,17 +1468,934 @@
     }
   },
   "info": {
-    "description": "The JSON facade of the FlexiQ gRPC producer door, transcoded from `contracts/proto/flexiq/v1`. Every path here reaches the same service method a gRPC client reaches, on the same listener and behind the same token check.\n\nRequests are refused when they carry a field the contract does not declare. Responses are not closed: a later release may add one.\n\nA listener serves exactly one namespace and it comes from the token, so no request names one. A job in another namespace is indistinguishable from a job that does not exist.\n\nThis document is generated. Edit `contracts/proto/flexiq/v1/producer_service.proto` and run `scripts/proto-check.sh --fix`.",
+    "description": "The JSON facade of the FlexiQ gRPC producer and admin doors, transcoded from `contracts/proto/flexiq/v1` and `contracts/proto/flexiq/admin/v1`. Every path here reaches the same service method a gRPC client reaches, on the same listener and behind the same token check.\n\nA token's scopes pick what it may call: `produce` reaches the `/v1/` producer paths; under `/v1/admin/`, `inspect` reaches every `GET` and `admin` every `POST`.\n\nRequests are refused when they carry a field the contract does not declare. Responses are not closed: a later release may add one.\n\nA listener serves exactly one namespace and it comes from the token, so no request names one. A resource in another namespace is indistinguishable from one that does not exist.\n\nThis document is generated. Edit the `.proto` files and run `scripts/proto-check.sh --fix`.",
     "license": {
       "identifier": "MIT",
       "name": "MIT"
     },
-    "summary": "Submit work, read it back, cancel it, count it.",
-    "title": "FlexiQ producer API",
+    "summary": "Submit work and read it back; operate queues, dead letters, workers, schedules and overrides.",
+    "title": "FlexiQ HTTP API",
     "version": "v1"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/admin/deadLetters": {
+      "get": {
+        "operationId": "AdminService_ListDeadLetters",
+        "parameters": [
+          {
+            "description": "Rows per page. Zero takes the server's default; the server may cap it.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous response's next_page_token. Opaque.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.ListDeadLettersResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Page through the dead-letter queue, newest first.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/deadLetters/{dead_letter_id}": {
+      "get": {
+        "operationId": "AdminService_GetDeadLetter",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dead_letter_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Send DeadLetter.payload back.",
+            "in": "query",
+            "name": "includePayload",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.GetDeadLetterResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Read one dead-letter entry.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/deadLetters/{dead_letter_id}:delete": {
+      "post": {
+        "operationId": "AdminService_DeleteDeadLetter",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dead_letter_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.DeleteDeadLetterResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Delete one dead-letter entry.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/deadLetters/{dead_letter_id}:replay": {
+      "post": {
+        "description": "Enqueue a dead letter again as a fresh job, removing the entry.\n\nNot idempotent: each successful call makes a job, and a second call finds\nno entry.",
+        "operationId": "AdminService_ReplayDeadLetter",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dead_letter_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.ReplayDeadLetterResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Enqueue a dead letter again as a fresh job, removing the entry.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/deadLetters:purge": {
+      "post": {
+        "operationId": "AdminService_PurgeDeadLetters",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/flexiq.admin.v1.PurgeDeadLettersRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.PurgeDeadLettersResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Delete dead-letter entries in bulk.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/overrides": {
+      "get": {
+        "operationId": "AdminService_ListOverrides",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.ListOverridesResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Every task and queue override in the namespace.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/periodicTasks": {
+      "get": {
+        "operationId": "AdminService_ListPeriodicTasks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.ListPeriodicTasksResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Every periodic task in the namespace.",
+        "tags": [
+          "AdminService"
+        ]
+      },
+      "post": {
+        "description": "Create a periodic task, or replace an existing one's definition.\n\nA replace keeps what an operator set and a definition does not own:\nwhether the task is paused, and when it last ran. Its next run moves only\nwhen the cron expression or the timezone changed. A task also declared in\na worker's code is declared again when that worker starts.",
+        "operationId": "AdminService_PutPeriodicTask",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/flexiq.admin.v1.PutPeriodicTaskRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.PutPeriodicTaskResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Create a periodic task, or replace an existing one's definition.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/periodicTasks/{name}": {
+      "get": {
+        "operationId": "AdminService_GetPeriodicTask",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Send PeriodicTask.payload back.",
+            "in": "query",
+            "name": "includePayload",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.GetPeriodicTaskResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Read one periodic task.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/periodicTasks/{name}:delete": {
+      "post": {
+        "operationId": "AdminService_DeletePeriodicTask",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.DeletePeriodicTaskResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Delete a periodic task. Jobs it already fired are untouched.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/periodicTasks/{name}:pause": {
+      "post": {
+        "operationId": "AdminService_PausePeriodicTask",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.PausePeriodicTaskResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Stop a periodic task firing, keeping its definition.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/periodicTasks/{name}:resume": {
+      "post": {
+        "operationId": "AdminService_ResumePeriodicTask",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.ResumePeriodicTaskResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Let a paused periodic task fire again.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/periodicTasks/{name}:trigger": {
+      "post": {
+        "description": "Fire a periodic task now, whether or not it is paused.\n\nEnqueues the job the schedule would, and leaves the schedule alone: the\nnext run and the last run are unchanged. Not idempotent — each call is a\njob.",
+        "operationId": "AdminService_TriggerPeriodicTask",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.TriggerPeriodicTaskResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Fire a periodic task now, whether or not it is paused.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/queues": {
+      "get": {
+        "operationId": "AdminService_ListQueues",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.ListQueuesResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Every queue the namespace has a job, a pause or an override for.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/queues/{queue}/override": {
+      "post": {
+        "operationId": "AdminService_SetQueueOverride",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "queue",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/flexiq.admin.v1.QueueOverride"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.SetQueueOverrideResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Replace one queue's override. Not a merge.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/queues/{queue}/override:clear": {
+      "post": {
+        "operationId": "AdminService_ClearQueueOverride",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "queue",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.ClearQueueOverrideResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Remove one queue's override.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/queues/{queue}:pause": {
+      "post": {
+        "operationId": "AdminService_PauseQueue",
+        "parameters": [
+          {
+            "description": "A queue with no jobs yet may be paused; the pause holds once jobs arrive.",
+            "in": "path",
+            "name": "queue",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.PauseQueueResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Stop dispatching from a queue. Jobs already running finish.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/queues/{queue}:resume": {
+      "post": {
+        "operationId": "AdminService_ResumeQueue",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "queue",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.ResumeQueueResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Resume dispatching from a paused queue.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/tasks/{task_name}/override": {
+      "post": {
+        "description": "Replace one task's override. Not a merge: a field left unset is no longer\noverridden.",
+        "operationId": "AdminService_SetTaskOverride",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/flexiq.admin.v1.TaskOverride"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.SetTaskOverrideResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Replace one task's override. Not a merge: a field left unset is no longer",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/tasks/{task_name}/override:clear": {
+      "post": {
+        "operationId": "AdminService_ClearTaskOverride",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.ClearTaskOverrideResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Remove one task's override, so its declared values apply again.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/throughput": {
+      "get": {
+        "operationId": "AdminService_GetThroughput",
+        "parameters": [
+          {
+            "description": "How far back to count. Unset is five minutes; above 24 hours, zero or\nnegative is refused.",
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "description": "A span of time, seconds with up to nine fractional digits and a trailing `s`.",
+              "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.GetThroughputResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "How many jobs finished per queue over a recent window.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/workers": {
+      "get": {
+        "operationId": "AdminService_ListWorkers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.ListWorkersResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "The namespace's registered workers and their heartbeats.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
     "/v1/jobs": {
       "get": {
         "operationId": "ProducerService_ListJobs",
@@ -1313,6 +2847,9 @@
     }
   ],
   "tags": [
+    {
+      "name": "AdminService"
+    },
     {
       "name": "ProducerService"
     }

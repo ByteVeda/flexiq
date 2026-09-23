@@ -1,8 +1,8 @@
 //! The OpenAPI document for the FlexiQ JSON facade, generated from the
 //! committed wire contract.
 //!
-//! `crates/flexiq-server`'s facade serves the `flexiq.v1` producer RPCs as JSON
-//! over plain HTTP. This crate describes that door in a form the generator
+//! `crates/flexiq-server`'s facade serves the `flexiq.v1` producer RPCs and the
+//! `flexiq.admin.v1` operator RPCs as JSON over plain HTTP. This crate describes that door in a form the generator
 //! ecosystem can read, and it does so from one artifact —
 //! `contracts/descriptor.binpb` — so the description cannot drift from the
 //! contract it describes.
@@ -31,7 +31,7 @@ pub mod schema;
 
 pub use binding::{bindings, Binding, Verb};
 pub use descriptor::Contract;
-pub use document::{document, PRODUCER_PACKAGE};
+pub use document::{document, ADMIN_PACKAGE, PACKAGES, PRODUCER_PACKAGE};
 
 /// Anything that stops the document being generated.
 ///

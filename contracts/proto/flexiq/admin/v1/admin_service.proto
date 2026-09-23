@@ -1,0 +1,571 @@
+// UNRELEASED until the release that first ships it; from then on field numbers,
+// field names and RPC shapes are permanent, under the same rules as flexiq.v1
+// (§2.2 of tasks/specs/2026-09-01-flexiq-v1-proto-design.md):
+//
+//   1. Field numbers are never reused and never renumbered.
+//   2. Fields are deprecated in place, and on removal both the number and the
+//      name are reserved — the name because JSON clients encode against it.
+//   3. New RPCs, messages, fields and enum values are additive and never bump
+//      the package version.
+//   4. A field's meaning and units are frozen with its number.
+//   5. Readers tolerate what they do not know: unknown fields, unknown enum
+//      values, unknown oneof arms.
+//
+// This package is deliberately separate from flexiq.v1. A producer and an
+// operator are different audiences and must not share a credential, so each
+// package is its own scope. flexiq.admin.v1 may import flexiq.v1; the reverse
+// import is forbidden. Design: tasks/specs/2026-09-23-admin-service-design.md.
+
+syntax = "proto3";
+
+package flexiq.admin.v1;
+
+import "flexiq/v1/job.proto";
+// The `google.api.http` bindings are the JSON facade's real routes: the
+// server's route table is drift-tested against them.
+import "google/api/annotations.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// The operator door: the queue, dead-letter, worker, periodic-task and
+// override operations the dashboard performs, as operations — never as a
+// storage proxy.
+//
+// Every RPC acts on the credential's namespace and nothing else. A resource in
+// another namespace is indistinguishable from one that does not exist.
+//
+// Two scopes, chosen by the method's idempotency level rather than listed:
+// `inspect` calls the NO_SIDE_EFFECTS methods, `admin` calls the rest. They are
+// not a hierarchy; an operator's token carries both.
+//
+// What it does not offer:
+//
+//   * A settings door. The settings KV holds credentials and published
+//     policy; a generic read or write of it is not an operator operation.
+//   * Draining a worker. A worker cannot yet be told to drain from outside,
+//     and an RPC that reported success for a signal nobody reads would lie.
+//   * Live effect for overrides. A worker reads overrides when it starts, so a
+//     change reaches the next worker start and no running worker.
+service AdminService {
+  // Every queue the namespace has a job, a pause or an override for.
+  rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/admin/queues"};
+  }
+
+  // Stop dispatching from a queue. Jobs already running finish.
+  rpc PauseQueue(PauseQueueRequest) returns (PauseQueueResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {post: "/v1/admin/queues/{queue}:pause"};
+  }
+
+  // Resume dispatching from a paused queue.
+  rpc ResumeQueue(ResumeQueueRequest) returns (ResumeQueueResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {post: "/v1/admin/queues/{queue}:resume"};
+  }
+
+  // How many jobs finished per queue over a recent window.
+  rpc GetThroughput(GetThroughputRequest) returns (GetThroughputResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/admin/throughput"};
+  }
+
+  // Page through the dead-letter queue, newest first.
+  rpc ListDeadLetters(ListDeadLettersRequest) returns (ListDeadLettersResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/admin/deadLetters"};
+  }
+
+  // Read one dead-letter entry.
+  rpc GetDeadLetter(GetDeadLetterRequest) returns (GetDeadLetterResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/admin/deadLetters/{dead_letter_id}"};
+  }
+
+  // Enqueue a dead letter again as a fresh job, removing the entry.
+  //
+  // Not idempotent: each successful call makes a job, and a second call finds
+  // no entry.
+  rpc ReplayDeadLetter(ReplayDeadLetterRequest) returns (ReplayDeadLetterResponse) {
+    option (google.api.http) = {post: "/v1/admin/deadLetters/{dead_letter_id}:replay"};
+  }
+
+  // Delete one dead-letter entry.
+  rpc DeleteDeadLetter(DeleteDeadLetterRequest) returns (DeleteDeadLetterResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {post: "/v1/admin/deadLetters/{dead_letter_id}:delete"};
+  }
+
+  // Delete dead-letter entries in bulk.
+  rpc PurgeDeadLetters(PurgeDeadLettersRequest) returns (PurgeDeadLettersResponse) {
+    option (google.api.http) = {
+      post: "/v1/admin/deadLetters:purge"
+      body: "*"
+    };
+  }
+
+  // The namespace's registered workers and their heartbeats.
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/admin/workers"};
+  }
+
+  // Every periodic task in the namespace.
+  rpc ListPeriodicTasks(ListPeriodicTasksRequest) returns (ListPeriodicTasksResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/admin/periodicTasks"};
+  }
+
+  // Read one periodic task.
+  rpc GetPeriodicTask(GetPeriodicTaskRequest) returns (GetPeriodicTaskResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/admin/periodicTasks/{name}"};
+  }
+
+  // Create a periodic task, or replace an existing one's definition.
+  //
+  // A replace keeps what an operator set and a definition does not own:
+  // whether the task is paused, and when it last ran. Its next run moves only
+  // when the cron expression or the timezone changed. A task also declared in
+  // a worker's code is declared again when that worker starts.
+  rpc PutPeriodicTask(PutPeriodicTaskRequest) returns (PutPeriodicTaskResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {
+      post: "/v1/admin/periodicTasks"
+      body: "*"
+    };
+  }
+
+  // Delete a periodic task. Jobs it already fired are untouched.
+  rpc DeletePeriodicTask(DeletePeriodicTaskRequest) returns (DeletePeriodicTaskResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {post: "/v1/admin/periodicTasks/{name}:delete"};
+  }
+
+  // Stop a periodic task firing, keeping its definition.
+  rpc PausePeriodicTask(PausePeriodicTaskRequest) returns (PausePeriodicTaskResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {post: "/v1/admin/periodicTasks/{name}:pause"};
+  }
+
+  // Let a paused periodic task fire again.
+  rpc ResumePeriodicTask(ResumePeriodicTaskRequest) returns (ResumePeriodicTaskResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {post: "/v1/admin/periodicTasks/{name}:resume"};
+  }
+
+  // Fire a periodic task now, whether or not it is paused.
+  //
+  // Enqueues the job the schedule would, and leaves the schedule alone: the
+  // next run and the last run are unchanged. Not idempotent — each call is a
+  // job.
+  rpc TriggerPeriodicTask(TriggerPeriodicTaskRequest) returns (TriggerPeriodicTaskResponse) {
+    option (google.api.http) = {post: "/v1/admin/periodicTasks/{name}:trigger"};
+  }
+
+  // Every task and queue override in the namespace.
+  rpc ListOverrides(ListOverridesRequest) returns (ListOverridesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/admin/overrides"};
+  }
+
+  // Replace one task's override. Not a merge: a field left unset is no longer
+  // overridden.
+  rpc SetTaskOverride(SetTaskOverrideRequest) returns (SetTaskOverrideResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {
+      post: "/v1/admin/tasks/{task_name}/override"
+      body: "task_override"
+    };
+  }
+
+  // Remove one task's override, so its declared values apply again.
+  rpc ClearTaskOverride(ClearTaskOverrideRequest) returns (ClearTaskOverrideResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {post: "/v1/admin/tasks/{task_name}/override:clear"};
+  }
+
+  // Replace one queue's override. Not a merge.
+  rpc SetQueueOverride(SetQueueOverrideRequest) returns (SetQueueOverrideResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {
+      post: "/v1/admin/queues/{queue}/override"
+      body: "queue_override"
+    };
+  }
+
+  // Remove one queue's override.
+  rpc ClearQueueOverride(ClearQueueOverrideRequest) returns (ClearQueueOverrideResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {post: "/v1/admin/queues/{queue}/override:clear"};
+  }
+}
+
+// ── Queues ─────────────────────────────────────────────────────────────
+
+// A queue as an operator sees it: whether it dispatches, and what it holds.
+message Queue {
+  string name = 1;
+  // Paused in this namespace. A pause in another namespace does not show.
+  bool paused = 2;
+  // The six counters flexiq.v1.QueueStatsResponse carries, for this queue.
+  int64 pending = 3;
+  int64 running = 4;
+  int64 completed = 5;
+  int64 failed = 6;
+  int64 dead = 7;
+  int64 cancelled = 8;
+}
+
+message ListQueuesRequest {}
+
+message ListQueuesResponse {
+  // By name. Not paginated: bounded by the number of queues, not of jobs.
+  repeated Queue queues = 1;
+}
+
+message PauseQueueRequest {
+  // A queue with no jobs yet may be paused; the pause holds once jobs arrive.
+  string queue = 1;
+}
+
+message PauseQueueResponse {
+  // The queue after the call.
+  Queue queue = 1;
+}
+
+message ResumeQueueRequest {
+  string queue = 1;
+}
+
+message ResumeQueueResponse {
+  // The queue after the call.
+  Queue queue = 1;
+}
+
+message GetThroughputRequest {
+  // How far back to count. Unset is five minutes; above 24 hours, zero or
+  // negative is refused.
+  google.protobuf.Duration window = 1;
+}
+
+// Jobs of one queue that reached a terminal status inside the window.
+//
+// Counts, not a rate: a rate implies a smoothing choice that belongs to the
+// reader. Divide by the window.
+message QueueThroughput {
+  string queue = 1;
+  int64 completed = 2;
+  int64 failed = 3;
+  int64 dead = 4;
+  int64 cancelled = 5;
+}
+
+message GetThroughputResponse {
+  // The window the counts cover, as applied.
+  google.protobuf.Duration window = 1;
+  // The window's start, by the server's clock.
+  google.protobuf.Timestamp since = 2;
+  // By name; a queue with nothing finished in the window is absent.
+  repeated QueueThroughput queues = 3;
+}
+
+// ── Dead letters ───────────────────────────────────────────────────────
+
+// A job that exhausted its retries.
+message DeadLetter {
+  // Opaque. The id replay and delete take — not the job's.
+  string id = 1;
+  // The job that dead-lettered.
+  string original_job_id = 2;
+  string queue = 3;
+  string task_name = 4;
+  // When it dead-lettered.
+  google.protobuf.Timestamp failed_at = 5;
+  // Attempts the job had used.
+  int32 retry_count = 6;
+  int32 max_retries = 7;
+  int32 priority = 8;
+  // How many times this job has already come back from the dead-letter queue.
+  int32 replay_count = 9;
+
+  // Canonical JSON `{errtype, message, traceback[]}` when structured, free
+  // prose otherwise.
+  optional string error = 16;
+  // Opaque JSON text, byte-preserved.
+  optional string metadata = 17;
+  // The job's tagged envelope. Absent unless asked for.
+  optional bytes payload = 18;
+}
+
+message ListDeadLettersRequest {
+  // Rows per page. Zero takes the server's default; the server may cap it.
+  int32 page_size = 1;
+  // The previous response's next_page_token. Opaque.
+  string page_token = 2;
+}
+
+message ListDeadLettersResponse {
+  // Newest first, never carrying a payload.
+  repeated DeadLetter dead_letters = 1;
+  // Empty when this is the last page.
+  string next_page_token = 2;
+}
+
+message GetDeadLetterRequest {
+  string dead_letter_id = 1;
+  // Send DeadLetter.payload back.
+  bool include_payload = 2;
+}
+
+message GetDeadLetterResponse {
+  DeadLetter dead_letter = 1;
+}
+
+message ReplayDeadLetterRequest {
+  string dead_letter_id = 1;
+}
+
+message ReplayDeadLetterResponse {
+  // The new job, carrying neither payload nor result. It keeps the dead job's
+  // queue, task, body and priority, and none of its uniqueness or dependencies.
+  flexiq.v1.Job job = 1;
+}
+
+message DeleteDeadLetterRequest {
+  string dead_letter_id = 1;
+}
+
+message DeleteDeadLetterResponse {}
+
+message PurgeDeadLettersRequest {
+  // Which entries. Setting no arm purges every entry in the namespace.
+  oneof filter {
+    // Entries that dead-lettered before this instant.
+    google.protobuf.Timestamp failed_before = 1;
+    // Entries of this task.
+    string task_name = 2;
+  }
+}
+
+message PurgeDeadLettersResponse {
+  int64 purged = 1;
+}
+
+// ── Workers ────────────────────────────────────────────────────────────
+
+// A worker's lifecycle state, as it reported it.
+enum WorkerStatus {
+  WORKER_STATUS_UNSPECIFIED = 0;
+  // Taking work.
+  WORKER_STATUS_ACTIVE = 1;
+  // Finishing what it holds and taking nothing new.
+  WORKER_STATUS_DRAINING = 2;
+}
+
+// A registered worker. It stays listed until it unregisters or its heartbeat
+// goes stale long enough for the cluster to reap it.
+message Worker {
+  string worker_id = 1;
+  // The queues it consumes.
+  repeated string queues = 2;
+  // A value this reader does not recognise is not an error; show it as unknown.
+  WorkerStatus status = 3;
+  // Its most recent heartbeat.
+  google.protobuf.Timestamp last_heartbeat = 4;
+  // How many jobs it runs at once.
+  int32 concurrency = 5;
+  google.protobuf.Timestamp started_at = 6;
+
+  optional string hostname = 16;
+  optional int32 pid = 17;
+  // How it runs work, e.g. `thread`, `prefork`, `remote`, `push`.
+  optional string pool_type = 18;
+  // The SDK that registered it, and that SDK's release.
+  optional string sdk = 19;
+  optional string sdk_version = 20;
+}
+
+message ListWorkersRequest {}
+
+message ListWorkersResponse {
+  // By id. Not paginated: bounded by the fleet.
+  repeated Worker workers = 1;
+}
+
+// ── Periodic tasks ─────────────────────────────────────────────────────
+
+// A schedule that enqueues one task on a cron expression.
+message PeriodicTask {
+  // Unique within the namespace. The handle every other periodic RPC takes.
+  string name = 1;
+  // The registered task each firing enqueues.
+  string task_name = 2;
+  // Six fields, seconds first: `0 */5 * * * *` is every five minutes.
+  string cron = 3;
+  string queue = 4;
+  // False while paused.
+  bool enabled = 5;
+  google.protobuf.Timestamp next_run = 6;
+  // Absent until it has fired once.
+  google.protobuf.Timestamp last_run = 7;
+
+  // IANA name the cron expression is read in. Absent is UTC.
+  optional string timezone = 16;
+  // The tagged envelope each firing enqueues. Absent unless asked for.
+  optional bytes payload = 17;
+}
+
+message ListPeriodicTasksRequest {}
+
+message ListPeriodicTasksResponse {
+  // By name, never carrying a payload.
+  repeated PeriodicTask periodic_tasks = 1;
+}
+
+message GetPeriodicTaskRequest {
+  string name = 1;
+  // Send PeriodicTask.payload back.
+  bool include_payload = 2;
+}
+
+message GetPeriodicTaskResponse {
+  PeriodicTask periodic_task = 1;
+}
+
+message PutPeriodicTaskRequest {
+  string name = 1;
+  string task_name = 2;
+  // Six fields, seconds first. Refused if it does not parse.
+  string cron = 3;
+  // Empty means "default".
+  string queue = 4;
+  // The arguments each firing passes. Setting no arm passes none; the arms
+  // mean what they mean on flexiq.v1.EnqueueRequest.
+  oneof body {
+    bytes raw = 5;
+    flexiq.v1.StructuredArgs structured = 6;
+  }
+  // Create the task paused. Ignored when it already exists: a replace never
+  // changes whether a task is paused.
+  bool start_paused = 7;
+
+  // IANA name to read the cron expression in. Unset is UTC. Refused if unknown.
+  optional string timezone = 16;
+}
+
+message PutPeriodicTaskResponse {
+  // The task after the call, carrying no payload.
+  PeriodicTask periodic_task = 1;
+}
+
+message DeletePeriodicTaskRequest {
+  string name = 1;
+}
+
+message DeletePeriodicTaskResponse {}
+
+message PausePeriodicTaskRequest {
+  string name = 1;
+}
+
+message PausePeriodicTaskResponse {
+  // The task after the call, carrying no payload.
+  PeriodicTask periodic_task = 1;
+}
+
+message ResumePeriodicTaskRequest {
+  string name = 1;
+}
+
+message ResumePeriodicTaskResponse {
+  // The task after the call, carrying no payload.
+  PeriodicTask periodic_task = 1;
+}
+
+message TriggerPeriodicTaskRequest {
+  string name = 1;
+}
+
+message TriggerPeriodicTaskResponse {
+  // The job the trigger enqueued, carrying neither payload nor result.
+  flexiq.v1.Job job = 1;
+}
+
+// ── Overrides ──────────────────────────────────────────────────────────
+
+// What an operator overrides on a task. An unset field is not overridden: the
+// value the task was declared with applies.
+message TaskOverride {
+  // `<count>/<unit>`, unit one of `s`, `m`, `h`, `d`: `100/m`.
+  optional string rate_limit = 1;
+  // At most this many running at once. Zero or more.
+  optional int32 max_concurrent = 2;
+  // Zero or more.
+  optional int32 max_retries = 3;
+  // Base delay between retries. Zero or more.
+  google.protobuf.Duration retry_backoff = 4;
+  // How long one attempt may run. Whole seconds, at least one.
+  google.protobuf.Duration timeout = 5;
+  // Higher runs first.
+  optional int32 priority = 6;
+  // Hold this task's jobs without pausing the queue.
+  optional bool paused = 7;
+  // Output only: when the override last changed. Ignored on input.
+  google.protobuf.Timestamp update_time = 8;
+}
+
+// What an operator overrides on a queue. No `paused`: PauseQueue is the one
+// way to pause a queue.
+message QueueOverride {
+  // `<count>/<unit>`, as TaskOverride.rate_limit.
+  optional string rate_limit = 1;
+  // At most this many of the queue's jobs running at once. Zero or more.
+  optional int32 max_concurrent = 2;
+  // Output only: when the override last changed. Ignored on input.
+  google.protobuf.Timestamp update_time = 3;
+}
+
+message ListOverridesRequest {}
+
+message ListOverridesResponse {
+  // By task name.
+  map<string, TaskOverride> tasks = 1;
+  // By queue name.
+  map<string, QueueOverride> queues = 2;
+}
+
+message SetTaskOverrideRequest {
+  string task_name = 1;
+  // Setting every field unset is the same as ClearTaskOverride.
+  TaskOverride task_override = 2;
+}
+
+message SetTaskOverrideResponse {
+  // As stored.
+  TaskOverride task_override = 1;
+}
+
+message ClearTaskOverrideRequest {
+  string task_name = 1;
+}
+
+message ClearTaskOverrideResponse {}
+
+message SetQueueOverrideRequest {
+  string queue = 1;
+  // Setting every field unset is the same as ClearQueueOverride.
+  QueueOverride queue_override = 2;
+}
+
+message SetQueueOverrideResponse {
+  // As stored.
+  QueueOverride queue_override = 1;
+}
+
+message ClearQueueOverrideRequest {
+  string queue = 1;
+}
+
+message ClearQueueOverrideResponse {}
