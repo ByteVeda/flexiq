@@ -22,6 +22,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import org.byteveda.flexiq.core.CoreFacade;
+import org.byteveda.flexiq.dashboard.store.OverridesStore;
+import org.byteveda.flexiq.dashboard.store.SettingsAccess;
 import org.byteveda.flexiq.errors.EnqueueSkippedException;
 import org.byteveda.flexiq.errors.InterceptionException;
 import org.byteveda.flexiq.errors.PredicateRejectedException;
@@ -1577,6 +1579,9 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
                 .subscriptions(subscriptions)
                 .logConsumers(logConsumers, this)
                 .queueConfigs(this::encodeQueueConfigs)
+                // Namespaced like the admin surfaces that write them, so a worker
+                // only picks up the overrides of the namespace it serves.
+                .overrides(new OverridesStore(SettingsAccess.of(this), namespace))
                 .lifecycle(new WorkerLifecycle() {
                     @Override
                     public void started(Worker worker) {

@@ -24,6 +24,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.byteveda.flexiq.autoscale.AutoscaleOptions;
 import org.byteveda.flexiq.autoscale.Autoscaler;
+import org.byteveda.flexiq.dashboard.store.OverridesStore;
 import org.byteveda.flexiq.errors.SerializationException;
 import org.byteveda.flexiq.errors.WorkflowException;
 import org.byteveda.flexiq.events.Emitter;
@@ -287,6 +288,7 @@ public final class Worker implements AutoCloseable {
         private final Map<EventName, List<Consumer<FlexiQEvent>>> listeners = new EnumMap<>(EventName.class);
         private List<SubscriptionConfig> subscriptions = List.of();
         private Supplier<List<Map<String, Object>>> queueConfigs = List::of;
+        private @Nullable OverridesStore overrides;
         private @Nullable List<String> queues;
         private int concurrency;
         private @Nullable Integer channelCapacity;
@@ -474,6 +476,20 @@ public final class Worker implements AutoCloseable {
          */
         public Builder queueConfigs(Supplier<List<Map<String, Object>>> queueConfigs) {
             this.queueConfigs = queueConfigs;
+            return this;
+        }
+
+        /**
+         * Stored task and queue overrides to fold into the worker's config (wired by
+         * {@code FlexiQ.worker()}, scoped to the client's namespace). Read once, at
+         * {@code start()}: an override written later reaches only the next start.
+         * A malformed stored field is skipped with a warning, never failing the start.
+         *
+         * @param overrides the override rows of the namespace this worker serves
+         * @return {@code this}, for chaining
+         */
+        public Builder overrides(OverridesStore overrides) {
+            this.overrides = overrides;
             return this;
         }
 
@@ -824,8 +840,12 @@ public final class Worker implements AutoCloseable {
             if (!handlers.isEmpty()) {
                 options.put("tasks", List.copyOf(handlers.keySet()));
             }
-            if (!taskPolicies.isEmpty()) {
-                options.put("taskConfigs", encodeTaskConfigs());
+            List<Map<String, Object>> taskConfigs = taskPolicies.isEmpty() ? List.of() : encodeTaskConfigs();
+            if (overrides != null) {
+                taskConfigs = OverrideApplier.applyTaskOverrides(taskConfigs, handlers.keySet(), overrides);
+            }
+            if (!taskConfigs.isEmpty()) {
+                options.put("taskConfigs", taskConfigs);
             }
             if (mesh != null) {
                 options.put("meshConfig", mesh.toConfigJson());
@@ -835,6 +855,9 @@ public final class Worker implements AutoCloseable {
             }
             // Resolve at start() so config set after the builder was obtained is seen.
             List<Map<String, Object>> resolvedQueueConfigs = queueConfigs.get();
+            if (overrides != null) {
+                resolvedQueueConfigs = OverrideApplier.applyQueueOverrides(resolvedQueueConfigs, overrides);
+            }
             if (!resolvedQueueConfigs.isEmpty()) {
                 options.put("queueConfigs", resolvedQueueConfigs);
             }

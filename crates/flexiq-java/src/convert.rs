@@ -488,7 +488,8 @@ pub struct WorkerOptions {
 }
 
 /// Per-queue scheduler config. Only queues with a value here are registered; an
-/// entry with no positive CoDel bounds and a non-`lifo` order is a no-op.
+/// entry with no positive CoDel bounds, a non-`lifo` order and no limits is a
+/// no-op.
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct QueueConfigSpec {
@@ -496,6 +497,11 @@ pub struct QueueConfigSpec {
     pub codel_target_ms: Option<i64>,
     pub codel_interval_ms: Option<i64>,
     pub dispatch_order: Option<String>,
+    /// `"100/m"`-style dispatch rate for the whole queue — a queue override's
+    /// `rate_limit`, applied at worker start.
+    pub rate_limit: Option<String>,
+    /// Cap on the queue's concurrently running jobs.
+    pub max_concurrent: Option<i32>,
 }
 
 /// Per-table retention windows in seconds. An unset field keeps that table

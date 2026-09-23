@@ -14,7 +14,7 @@ use flexiq_core::resilience::rate_limiter::RateLimitConfig;
 use flexiq_core::resilience::retry::RetryPolicy;
 use flexiq_core::scheduler::codel::CodelConfig;
 use flexiq_core::scheduler::shed::OnExcess;
-use flexiq_core::scheduler::{ResultOutcome, TaskConfig};
+use flexiq_core::scheduler::{QueueConfig, ResultOutcome, TaskConfig};
 use flexiq_core::worker::{registry_fingerprint, WorkerDispatcher};
 use flexiq_core::{Scheduler, SchedulerConfig, Storage, StorageBackend};
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
@@ -149,6 +149,18 @@ fn start_worker(
     for spec in options.queue_configs.take().unwrap_or_default() {
         if let Some(codel) = queue_codel_from_spec(&spec) {
             scheduler.register_queue_codel(spec.name.clone(), codel);
+        }
+        if spec.rate_limit.is_some() || spec.max_concurrent.is_some() {
+            let limits = QueueConfig {
+                rate_limit: parse_rate_spec(
+                    "rateLimit",
+                    "queue",
+                    &spec.name,
+                    spec.rate_limit.as_deref(),
+                )?,
+                max_concurrent: spec.max_concurrent,
+            };
+            scheduler.register_queue_config(spec.name.clone(), limits);
         }
         if spec.dispatch_order.as_deref() == Some("lifo") {
             scheduler.register_queue_dispatch_order(
@@ -353,9 +365,18 @@ fn build_task_policies(
                         .circuit_breaker_half_open_success_rate
                         .unwrap_or(0.8),
                 });
-        let rate_limit = parse_rate_spec("rateLimit", &config.name, config.rate_limit.as_deref())?;
-        let retry_budget =
-            parse_rate_spec("retryBudget", &config.name, config.retry_budget.as_deref())?;
+        let rate_limit = parse_rate_spec(
+            "rateLimit",
+            "task",
+            &config.name,
+            config.rate_limit.as_deref(),
+        )?;
+        let retry_budget = parse_rate_spec(
+            "retryBudget",
+            "task",
+            &config.name,
+            config.retry_budget.as_deref(),
+        )?;
         let on_excess = parse_on_excess(&config.name, config.on_excess.as_deref())?;
         built.push((
             config.name,
@@ -389,17 +410,18 @@ fn queue_codel_from_spec(spec: &QueueConfigSpec) -> Option<CodelConfig> {
     }
 }
 
-/// Parse an optional rate spec, naming the offending task and option so a typo
-/// is actionable. Several options share this `"100/m"` grammar.
+/// Parse an optional rate spec, naming the offending task or queue and option
+/// so a typo is actionable. Several options share this `"100/m"` grammar.
 fn parse_rate_spec(
     field: &str,
-    task: &str,
+    kind: &str,
+    name: &str,
     spec: Option<&str>,
 ) -> Result<Option<RateLimitConfig>, crate::error::BindingError> {
     match spec {
         Some(s) => RateLimitConfig::parse(s).map(Some).ok_or_else(|| {
             crate::error::BindingError::new(format!(
-                "invalid {field} '{s}' on task '{task}' \
+                "invalid {field} '{s}' on {kind} '{name}' \
                  (expected a count of at least 1 over a unit, as in '100/m')"
             ))
         }),
