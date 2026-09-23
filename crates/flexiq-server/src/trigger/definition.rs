@@ -19,8 +19,8 @@ use serde::Deserialize;
 
 use crate::config::{value, Env};
 use crate::trigger::auth::{
-    Encoding, HeaderHmac, Key, SecretLocation, SharedSecret, StandardWebhooks, Stripe, Twilio,
-    Verifier, DEFAULT_TOLERANCE_SECS,
+    Encoding, GoogleOidc, HeaderHmac, Key, SecretLocation, SharedSecret, StandardWebhooks, Stripe,
+    Twilio, Verifier, DEFAULT_TOLERANCE_SECS,
 };
 use crate::trigger::mapping::{Mapping, Selector};
 use crate::trigger::object_store::Provider;
@@ -69,7 +69,8 @@ pub struct Trigger {
     pub verifier: Verifier,
     /// The environment variable the verifier's secret was read from — a name,
     /// not a secret, kept so `main` can scrub the variable once it is read.
-    pub secret_env: String,
+    /// `None` for a verifier that checks against published keys instead.
+    pub secret_env: Option<String>,
     /// How a request becomes arguments.
     pub mapping: Mapping,
     /// Where a delivery's identity comes from, so a redelivery deduplicates.
@@ -175,6 +176,10 @@ enum RawAuth {
         secret_env: String,
         public_url: String,
     },
+    GoogleOidc {
+        audience: String,
+        service_account: String,
+    },
 }
 
 #[derive(Deserialize, Default, Clone, Copy)]
@@ -186,14 +191,15 @@ enum RawEncoding {
 }
 
 impl RawAuth {
-    fn secret_env(&self) -> &str {
+    fn secret_env(&self) -> Option<&str> {
         match self {
             Self::SharedSecret { secret_env, .. }
             | Self::HmacSha256 { secret_env, .. }
             | Self::Github { secret_env }
             | Self::Stripe { secret_env, .. }
             | Self::StandardWebhooks { secret_env, .. }
-            | Self::Twilio { secret_env, .. } => secret_env,
+            | Self::Twilio { secret_env, .. } => Some(secret_env),
+            Self::GoogleOidc { .. } => None,
         }
     }
 }
@@ -305,7 +311,7 @@ fn validate(raw: RawTrigger, env: &Env) -> Result<Trigger> {
     }
 
     Ok(Trigger {
-        secret_env: raw.auth.secret_env().to_string(),
+        secret_env: raw.auth.secret_env().map(str::to_string),
         verifier: verifier(raw.auth, env)?,
         name: raw.name,
         path: raw.path,
@@ -427,6 +433,24 @@ fn verifier(raw: RawAuth, env: &Env) -> Result<Verifier> {
                 );
             }
             Verifier::Twilio(Twilio::new(&secret(env, &secret_env, 1)?, public_url))
+        }
+        RawAuth::GoogleOidc {
+            audience,
+            service_account,
+        } => {
+            if audience.trim().is_empty() {
+                bail!(
+                    "google_oidc needs the audience the push subscription was given — by \
+                     default, the push endpoint URL"
+                );
+            }
+            if !service_account.contains('@') {
+                bail!(
+                    "google_oidc needs the email of the service account the push \
+                     subscription authenticates as"
+                );
+            }
+            Verifier::GoogleOidc(GoogleOidc::new(audience, service_account))
         }
     })
 }
@@ -638,6 +662,25 @@ mod tests {
         let mut unknown = with("kind", json!("object_store"));
         unknown["provider"] = json!("dropbox");
         assert!(parse_one(unknown).is_err());
+    }
+
+    #[test]
+    fn a_google_oidc_verifier_needs_no_secret_but_both_identities() {
+        let auth = json!({
+            "kind": "google_oidc",
+            "audience": "https://hooks.example.com/t/gcs",
+            "service_account": "pusher@p.iam.gserviceaccount.com"
+        });
+        let parsed = parse_one(with("auth", auth.clone())).expect("valid");
+        assert_eq!(parsed.verifier.kind(), "google_oidc");
+        assert_eq!(parsed.secret_env, None);
+
+        let mut no_account = auth.clone();
+        no_account["service_account"] = json!("not-an-email");
+        assert!(refusal(with("auth", no_account)).contains("service account"));
+        let mut no_audience = auth;
+        no_audience["audience"] = json!(" ");
+        assert!(refusal(with("auth", no_audience)).contains("audience"));
     }
 
     #[test]

@@ -12,14 +12,26 @@ use flexiq_core::StorageBackend;
 
 use crate::config::trigger::TriggerConfig;
 use crate::runtime::shutdown::Shutdown;
+use crate::trigger::auth::KeyFetcher;
 use crate::trigger::handler::{receive, Role};
 
 /// The listener's routes, for `serve` and for a test that binds its own port.
 pub fn router(config: &TriggerConfig, storage: StorageBackend) -> Router {
+    router_with_keys(config, storage, KeyFetcher::default())
+}
+
+/// The same routes with the published-key fetches going through `keys` — for
+/// a test that serves its own keys instead of reaching the network.
+pub fn router_with_keys(
+    config: &TriggerConfig,
+    storage: StorageBackend,
+    keys: KeyFetcher,
+) -> Router {
     let role = Arc::new(Role::new(
         storage,
         config.namespace.clone(),
         config.triggers.clone(),
+        keys,
     ));
     Router::new().fallback(receive).with_state(role)
 }

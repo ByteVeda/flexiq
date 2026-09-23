@@ -20,4 +20,4 @@ pub mod object_store;
 pub mod rate;
 pub mod server;
 
-pub use server::{router, serve};
+pub use server::{router, router_with_keys, serve};

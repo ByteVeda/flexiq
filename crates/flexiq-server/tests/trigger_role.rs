@@ -7,12 +7,14 @@
 mod support;
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use flexiq_core::wire::{encode_call, WireValue};
 use flexiq_core::Storage;
 use flexiq_server::config::trigger::TriggerConfig;
 use flexiq_server::config::Env;
+use flexiq_server::trigger::auth::google::GOOGLE_JWKS_URL;
+use flexiq_server::trigger::auth::KeyFetcher;
 use flexiq_server::trigger::definition;
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
@@ -29,6 +31,25 @@ struct Harness {
     base: String,
     storage: TempStorage,
     client: reqwest::Client,
+    /// Every URL the listener fetched, in order.
+    fetched: Arc<Mutex<Vec<String>>>,
+}
+
+const GOOGLE_JWKS: &[u8] = include_bytes!("fixtures/oidc_test_jwks.json");
+const GOOGLE_SIGNING_KEY: &[u8] = include_bytes!("fixtures/oidc_test_key.pem");
+
+/// Published keys served from fixtures, so no test reaches the network. Any
+/// other URL answers `ok`, which is what confirming a subscription needs.
+fn fixture_keys(fetched: Arc<Mutex<Vec<String>>>) -> KeyFetcher {
+    KeyFetcher::new(Arc::new(move |url: String| {
+        fetched.lock().expect("unpoisoned").push(url.clone());
+        let body = if url == GOOGLE_JWKS_URL {
+            GOOGLE_JWKS.to_vec()
+        } else {
+            b"ok".to_vec()
+        };
+        Box::pin(async move { Ok(body) })
+    }))
 }
 
 async fn start(label: &str, triggers: Value) -> Harness {
@@ -46,7 +67,12 @@ async fn start(label: &str, triggers: Value) -> Harness {
     };
 
     let storage = temp_storage(label);
-    let router = flexiq_server::trigger::router(&config, (*storage).clone());
+    let fetched = Arc::new(Mutex::new(Vec::new()));
+    let router = flexiq_server::trigger::router_with_keys(
+        &config,
+        (*storage).clone(),
+        fixture_keys(fetched.clone()),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -59,6 +85,7 @@ async fn start(label: &str, triggers: Value) -> Harness {
         base: format!("http://{addr}"),
         storage,
         client: reqwest::Client::new(),
+        fetched,
     }
 }
 
@@ -459,4 +486,65 @@ async fn a_pubsub_push_becomes_a_job_keyed_on_its_message() {
         .await
         .expect("answers");
     assert_eq!(unauthenticated.status(), 401);
+}
+
+#[tokio::test]
+async fn a_pubsub_push_proves_itself_with_a_google_token() {
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+
+    const AUDIENCE: &str = "https://hooks.example.com/t/gcs";
+    const ACCOUNT: &str = "pusher@project.iam.gserviceaccount.com";
+
+    let mut trigger = object_store_trigger("gcs", "10/s");
+    trigger["auth"] =
+        json!({"kind": "google_oidc", "audience": AUDIENCE, "service_account": ACCOUNT});
+    let harness = start("gcs-oidc", json!([trigger])).await;
+
+    let sign = |email: &str| {
+        let now = chrono::Utc::now().timestamp();
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some("test-key".into());
+        encode(
+            &header,
+            &json!({
+                "iss": "https://accounts.google.com", "aud": AUDIENCE,
+                "exp": now + 600, "iat": now,
+                "email": email, "email_verified": true, "sub": "1"
+            }),
+            &EncodingKey::from_rsa_pem(GOOGLE_SIGNING_KEY).expect("a test key"),
+        )
+        .expect("signed")
+    };
+    let push = json!({
+        "message": {
+            "attributes": {
+                "bucketId": "media", "objectId": "a.jpg",
+                "eventType": "OBJECT_FINALIZE", "eventTime": "2026-09-23T10:00:00Z"
+            },
+            "messageId": "m-oidc"
+        },
+        "subscription": "projects/p/subscriptions/s"
+    });
+    let post = |token: String| {
+        harness
+            .client
+            .post(format!("{}/t/gcs", harness.base))
+            .bearer_auth(token)
+            .json(&push)
+            .send()
+    };
+
+    let accepted = post(sign(ACCOUNT)).await.expect("answers");
+    assert_eq!(accepted.status(), 202);
+    assert_eq!(
+        harness.fetched.lock().expect("unpoisoned").as_slice(),
+        [GOOGLE_JWKS_URL.to_string()]
+    );
+
+    let impostor = post(sign("someone@else.iam.gserviceaccount.com"))
+        .await
+        .expect("answers");
+    assert_eq!(impostor.status(), 401);
+    // The key set came from the cache the second time.
+    assert_eq!(harness.fetched.lock().expect("unpoisoned").len(), 1);
 }

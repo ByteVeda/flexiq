@@ -25,7 +25,7 @@ use axum::Json;
 use flexiq_core::StorageBackend;
 use serde_json::{json, Value};
 
-use crate::trigger::auth::Inbound;
+use crate::trigger::auth::{Inbound, KeyFetcher};
 use crate::trigger::definition::{Source, Trigger, HEALTH_PATH};
 use crate::trigger::document::{self, DocumentError};
 use crate::trigger::enqueue::{self, Enqueued, Planned, MAX_KEY_LEN};
@@ -40,11 +40,18 @@ pub struct Role {
     namespace: String,
     triggers: Arc<[Trigger]>,
     by_path: HashMap<String, usize>,
+    keys: KeyFetcher,
 }
 
 impl Role {
-    /// Serve `triggers` into `namespace` on `storage`.
-    pub fn new(storage: StorageBackend, namespace: String, triggers: Arc<[Trigger]>) -> Self {
+    /// Serve `triggers` into `namespace` on `storage`, fetching the published
+    /// keys a verifier needs through `keys`.
+    pub fn new(
+        storage: StorageBackend,
+        namespace: String,
+        triggers: Arc<[Trigger]>,
+        keys: KeyFetcher,
+    ) -> Self {
         let by_path = triggers
             .iter()
             .enumerate()
@@ -55,6 +62,7 @@ impl Role {
             namespace,
             triggers,
             by_path,
+            keys,
         }
     }
 
@@ -202,7 +210,7 @@ async fn handle(
         now_secs: now_secs(),
     };
 
-    if let Err(rejection) = trigger.verifier.verify(&inbound) {
+    if let Err(rejection) = trigger.verifier.verify(&inbound, &role.keys).await {
         // The reason is for the operator; the caller learns only `401`.
         log::warn!(
             "[flexiq] trigger {} ({}) rejected a request: {rejection}",

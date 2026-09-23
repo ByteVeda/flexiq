@@ -76,8 +76,12 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<TriggerConf
 pub fn scrub_trigger_secrets(config: &TriggerConfig) {
     // Called once from `main`, before any thread that reads the environment
     // has been spawned.
-    for trigger in config.triggers.iter() {
-        std::env::remove_var(&trigger.secret_env);
+    for var in config
+        .triggers
+        .iter()
+        .filter_map(|trigger| trigger.secret_env.as_ref())
+    {
+        std::env::remove_var(var);
     }
 }
 

@@ -11,6 +11,8 @@
 //! sent back: a caller probing the door learns `401` and nothing about which
 //! part of its forgery was wrong.
 
+pub mod fetch;
+pub mod google;
 pub mod shared;
 pub mod signature;
 pub mod standard;
@@ -23,6 +25,8 @@ use axum::http::HeaderMap;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
+pub use fetch::KeyFetcher;
+pub use google::GoogleOidc;
 pub use shared::{SecretLocation, SharedSecret};
 pub use signature::{Encoding, HeaderHmac};
 pub use standard::StandardWebhooks;
@@ -109,17 +113,23 @@ pub enum Verifier {
     StandardWebhooks(StandardWebhooks),
     /// Twilio's `X-Twilio-Signature`.
     Twilio(Twilio),
+    /// A Pub/Sub push subscription's Google-signed OIDC token.
+    GoogleOidc(GoogleOidc),
 }
 
 impl Verifier {
     /// Check `inbound` against this verifier.
-    pub fn verify(&self, inbound: &Inbound<'_>) -> Result<(), Rejection> {
+    ///
+    /// Async because the token kinds check against published keys, which
+    /// `keys` fetches and caches. The secret kinds never touch it.
+    pub async fn verify(&self, inbound: &Inbound<'_>, keys: &KeyFetcher) -> Result<(), Rejection> {
         match self {
             Self::SharedSecret(verifier) => verifier.verify(inbound),
             Self::HeaderHmac(verifier) => verifier.verify(inbound),
             Self::Stripe(verifier) => verifier.verify(inbound),
             Self::StandardWebhooks(verifier) => verifier.verify(inbound),
             Self::Twilio(verifier) => verifier.verify(inbound),
+            Self::GoogleOidc(verifier) => verifier.verify(inbound, keys).await,
         }
     }
 
@@ -131,6 +141,7 @@ impl Verifier {
             Self::Stripe(_) => "stripe",
             Self::StandardWebhooks(_) => "standard_webhooks",
             Self::Twilio(_) => "twilio",
+            Self::GoogleOidc(_) => "google_oidc",
         }
     }
 }
