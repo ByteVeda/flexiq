@@ -4250,7 +4250,8 @@ fn redis_storage_tests() {
     redis_claim_preserves_empty_payload(&storage);
     redis_claim_respects_priority_then_schedule_order(&storage);
     redis_claim_skips_future_and_foreign_namespace(&storage);
-    redis_claim_defers_dependency_jobs(&storage);
+    redis_claim_waits_for_dependencies(&storage);
+    redis_claim_does_not_starve_ready_dependents(&storage);
     redis_select_and_claim_is_one_round_trip(&storage);
 }
 
@@ -4885,7 +4886,7 @@ fn redis_claim_skips_future_and_foreign_namespace(s: &flexiq_core::RedisStorage)
 /// A job with an incomplete dependency is left Pending; once the dependency
 /// completes (and is archived) the next dequeue claims it.
 #[cfg(feature = "redis")]
-fn redis_claim_defers_dependency_jobs(s: &flexiq_core::RedisStorage) {
+fn redis_claim_waits_for_dependencies(s: &flexiq_core::RedisStorage) {
     let q = "q-redis-claim-deps";
     drain_queue(s, q);
     let parent = s.enqueue(make_job(q, "claim_parent")).unwrap();
@@ -4911,6 +4912,48 @@ fn redis_claim_defers_dependency_jobs(s: &flexiq_core::RedisStorage) {
     assert_eq!(claimed[0].id, child.id);
     assert_eq!(claimed[0].status, JobStatus::Running);
     assert_eq!(claimed[0].started_at, Some(now));
+}
+
+/// A ready dependent is claimed in its score-order turn, even with at least
+/// `max` ready plain jobs behind it — the batch budget must not starve it.
+#[cfg(feature = "redis")]
+fn redis_claim_does_not_starve_ready_dependents(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-claim-deps-order";
+    drain_queue(s, q);
+    let now = now_millis() + 1_000;
+    let parent = s.enqueue(make_job(q, "claim_order_parent")).unwrap();
+    assert_eq!(s.dequeue(q, now, None).unwrap().unwrap().id, parent.id);
+    s.complete(&parent.id, None, None).unwrap();
+
+    let base = now_millis() - 10_000;
+    let mut child = make_job(q, "claim_order_child");
+    child.depends_on = vec![parent.id.clone()];
+    child.scheduled_at = base;
+    let child = s.enqueue(child).unwrap();
+    assert!(child.has_deps);
+    let plain: Vec<String> = (1..=4)
+        .map(|i| {
+            let mut job = make_job(q, "claim_order_plain");
+            job.scheduled_at = base + i;
+            s.enqueue(job).unwrap().id
+        })
+        .collect();
+
+    let claimed: Vec<String> = s
+        .dequeue_batch(q, now, None, 4)
+        .unwrap()
+        .into_iter()
+        .map(|job| job.id)
+        .collect();
+    assert_eq!(
+        claimed,
+        vec![
+            child.id.clone(),
+            plain[0].clone(),
+            plain[1].clone(),
+            plain[2].clone()
+        ]
+    );
 }
 
 /// `calls` for one command in an `INFO commandstats` reply, or 0 before its

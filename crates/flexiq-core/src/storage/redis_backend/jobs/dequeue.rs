@@ -2,8 +2,6 @@
 
 use std::sync::LazyLock;
 
-use redis::Commands;
-
 use crate::error::Result;
 use crate::job::{Job, JobStatus};
 use crate::storage::redis_backend::{map_err, RedisStorage};
@@ -18,14 +16,17 @@ use crate::storage::redis_backend::{map_err, RedisStorage};
 /// The document is decoded but never re-encoded — `lua-cjson` rewrites an empty
 /// `[]` payload as `{}` — so the claim patches it by swapping the exact
 /// `status` and `started_at` tokens, each of which must occur exactly once.
-/// Anything the script cannot settle on its own is handed back to Rust:
-/// expired jobs (archived with serde) and jobs with dependencies or an
-/// unpatchable document (claimed through [`CLAIM_JOB_SCRIPT`]).
+/// A job with dependencies is claimed in its score-order turn once every dep
+/// is `Complete` (live or archived), and skipped otherwise, so a ready
+/// dependent is never starved by plain jobs behind it. What the script cannot
+/// settle on its own is handed back to Rust: expired jobs (archived with
+/// serde) and an unpatchable document (claimed through [`CLAIM_JOB_SCRIPT`]).
 ///
 /// KEYS: queue pending zset, pending status set, running status set.
-/// ARGV: job key prefix, debounce index key prefix, pending wire name, running
-///       wire name, now, namespace mode (`1` = only `ARGV[7]`, `0` = only jobs
-///       without a namespace), namespace, max, scan limit.
+/// ARGV: job key prefix, archived job key prefix, debounce index key prefix,
+///       pending / running / complete wire names, now, namespace mode (`1` =
+///       only `ARGV[9]`, `0` = only jobs without a namespace), namespace, max,
+///       scan limit.
 /// Returns `{claimed_docs, expired_ids, deferred_docs}`.
 const SELECT_AND_CLAIM_BODY: &str = r#"
     local function swap_once(doc, from, to)
@@ -38,17 +39,33 @@ const SELECT_AND_CLAIM_BODY: &str = r#"
     end
 
     local job_key_prefix = ARGV[1]
-    local debounce_key_prefix = ARGV[2]
-    local pending_status = ARGV[3]
-    local running_status = ARGV[4]
-    local now_arg = ARGV[5]
+    local archived_key_prefix = ARGV[2]
+    local debounce_key_prefix = ARGV[3]
+    local pending_status = ARGV[4]
+    local running_status = ARGV[5]
+    local complete_status = ARGV[6]
+    local now_arg = ARGV[7]
     local now = tonumber(now_arg)
-    local want_namespace = ARGV[6] == '1'
-    local namespace = ARGV[7]
-    local max = tonumber(ARGV[8])
+    local want_namespace = ARGV[8] == '1'
+    local namespace = ARGV[9]
+    local max = tonumber(ARGV[10])
+
+    -- A completed dep has been archived out of the live keys, so the archive
+    -- is the fallback before a dep counts as unsatisfied.
+    local function deps_complete(id)
+        local deps = redis.call('SMEMBERS', job_key_prefix .. id .. ':depends_on')
+        for _, dep in ipairs(deps) do
+            local dep_doc = redis.call('GET', job_key_prefix .. dep)
+            if not dep_doc then dep_doc = redis.call('GET', archived_key_prefix .. dep) end
+            if not dep_doc or cjson.decode(dep_doc).status ~= complete_status then
+                return false
+            end
+        end
+        return true
+    end
 
     local claimed, expired, deferred = {}, {}, {}
-    local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', '+inf', 'LIMIT', 0, ARGV[9])
+    local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', '+inf', 'LIMIT', 0, ARGV[11])
     for _, id in ipairs(ids) do
         if #claimed >= max then break end
         local doc = redis.call('GET', job_key_prefix .. id)
@@ -65,9 +82,8 @@ const SELECT_AND_CLAIM_BODY: &str = r#"
             if job.status == pending_status and job.scheduled_at <= now and ns_ok then
                 if present(job.expires_at) and now > job.expires_at then
                     table.insert(expired, id)
-                elseif job.has_deps == true then
-                    table.insert(deferred, doc)
-                elseif redis.call('SISMEMBER', KEYS[2], id) == 1 then
+                elseif (job.has_deps ~= true or deps_complete(id))
+                    and redis.call('SISMEMBER', KEYS[2], id) == 1 then
                     local patched = swap_once(doc,
                         '"status":"' .. pending_status .. '"',
                         '"status":"' .. running_status .. '"')
@@ -169,23 +185,6 @@ impl RedisStorage {
         Ok(claimed == 1)
     }
 
-    /// Whether every dependency of `job_id` has completed. A completed dep has
-    /// been archived out of the live indices, so the archive is the fallback.
-    fn dependencies_complete(&self, conn: &mut redis::Connection, job_id: &str) -> Result<bool> {
-        let deps_key = self.key(&["job", job_id, "depends_on"]);
-        let dep_ids: Vec<String> = conn.smembers(&deps_key).map_err(map_err)?;
-        for dep_id in &dep_ids {
-            let dep_job = match self.load_job(conn, dep_id)? {
-                Some(j) => Some(j),
-                None => self.load_archived_job(conn, dep_id)?,
-            };
-            if !matches!(dep_job, Some(dep) if dep.status == JobStatus::Complete) {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
     /// Archive a job the claim script found expired as cancelled, exactly as
     /// both Diesel paths do. A job that left `Pending` since the script ran is
     /// someone else's to settle.
@@ -241,10 +240,10 @@ impl RedisStorage {
     /// (`SELECT_AND_CLAIM_BODY`), so the common case is one round trip and no
     /// candidate can change between being read and being claimed.
     ///
-    /// Jobs with dependencies, and the rare document the script cannot patch,
-    /// fall back to a per-job dependency check plus `CLAIM_JOB_SCRIPT`; they
-    /// are appended after the script's claims. Dependency jobs were never
-    /// strictly ordered against their peers, so that is not a reordering.
+    /// Dependencies are checked inside the script, so jobs come back in score
+    /// order. Only a document the script cannot patch falls back to
+    /// `CLAIM_JOB_SCRIPT`, with whatever budget is left after the script's
+    /// claims.
     pub fn dequeue_batch(
         &self,
         queue_name: &str,
@@ -270,9 +269,11 @@ impl RedisStorage {
             .key(self.key(&["jobs", "status", &(JobStatus::Pending as i32).to_string()]))
             .key(self.key(&["jobs", "status", &(JobStatus::Running as i32).to_string()]))
             .arg(self.key(&["job", ""]))
+            .arg(self.key(&["archived", ""]))
             .arg(self.key(&["jobs", "debounce", ""]))
             .arg(JobStatus::Pending.wire_name())
             .arg(JobStatus::Running.wire_name())
+            .arg(JobStatus::Complete.wire_name())
             .arg(now)
             .arg(if namespace.is_some() { "1" } else { "0" })
             .arg(namespace.unwrap_or(""))
@@ -300,9 +301,6 @@ impl RedisStorage {
                 break;
             }
             let mut job: Job = serde_json::from_str(doc)?;
-            if job.has_deps && !self.dependencies_complete(&mut conn, &job.id)? {
-                continue;
-            }
             // Skip candidates lost to a concurrent cancel / expire / claim
             // instead of resurrecting them.
             job.status = JobStatus::Running;
