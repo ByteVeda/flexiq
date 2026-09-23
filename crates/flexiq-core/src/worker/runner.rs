@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use crate::error::Result;
 use crate::scheduler::{QueueConfig, ResultOutcome, Scheduler, SchedulerConfig, TaskConfig};
-use crate::storage::records::WorkerRegistration;
+use crate::storage::records::{WorkerRegistration, WorkerStatus};
 use crate::storage::{
     reap_dead_workers_if_leader, sweep_ephemeral_subscriptions, Storage, StorageBackend,
 };
@@ -309,17 +309,34 @@ impl Worker {
         // Heartbeat thread: liveness + the elected cluster reaps. The stop
         // sender doubles as the stop signal — dropping it ends the loop.
         let (stop_tx, stop_rx) = std_mpsc::channel::<()>();
+        let drain_requested = Arc::new(AtomicBool::new(false));
         let heartbeat_thread = {
             let storage = storage.clone();
             let worker_id = worker_id.clone();
+            let shutdown = shutdown.clone();
+            let drain_requested = Arc::clone(&drain_requested);
             thread::Builder::new()
                 .name(format!("{worker_id}-heartbeat"))
                 .spawn(move || {
                     while let Err(std_mpsc::RecvTimeoutError::Timeout) =
                         stop_rx.recv_timeout(HEARTBEAT_INTERVAL)
                     {
-                        if let Err(heartbeat_error) = storage.heartbeat(&worker_id, None) {
-                            log::warn!("worker heartbeat failed: {heartbeat_error}");
+                        match storage.heartbeat(&worker_id, None) {
+                            // An operator asked this worker to drain: stop
+                            // claiming now, and let the embedder, which owns
+                            // the handle, finish the shutdown.
+                            Ok(Some(WorkerStatus::Draining))
+                                if !drain_requested.swap(true, Ordering::SeqCst) =>
+                            {
+                                log::info!(
+                                    "worker {worker_id}: drain requested; no longer claiming"
+                                );
+                                shutdown.notify_one();
+                            }
+                            Ok(_) => {}
+                            Err(heartbeat_error) => {
+                                log::warn!("worker heartbeat failed: {heartbeat_error}");
+                            }
                         }
                         reap_dead_workers_if_leader(&storage, &worker_id);
                         if let Err(sweep_error) =
@@ -368,6 +385,7 @@ impl Worker {
             storage,
             shutdown,
             dispatcher,
+            drain_requested,
             stop_txs,
             threads,
         })
@@ -385,6 +403,8 @@ pub struct WorkerHandle {
     storage: StorageBackend,
     shutdown: Arc<tokio::sync::Notify>,
     dispatcher: Arc<dyn WorkerDispatcher>,
+    /// Set once a heartbeat reads back an operator's drain request.
+    drain_requested: Arc<AtomicBool>,
     /// Dropping these stops the heartbeat and, when running, the cancel relay.
     stop_txs: Vec<std_mpsc::Sender<()>>,
     threads: Vec<thread::JoinHandle<()>>,
@@ -394,6 +414,14 @@ impl WorkerHandle {
     /// Id this worker registered under.
     pub fn worker_id(&self) -> &str {
         &self.worker_id
+    }
+
+    /// Whether an operator has asked this worker to drain (the admin door's
+    /// `DrainWorker`). Once it has, the worker claims nothing new; in-flight
+    /// work runs on, and calling [`Self::shutdown`] finishes the drain and
+    /// unregisters it.
+    pub fn drain_requested(&self) -> bool {
+        self.drain_requested.load(Ordering::SeqCst)
     }
 
     /// Stop dispatching, drain in-flight work, stop the heartbeat, and

@@ -668,7 +668,21 @@ pub trait Storage: Send + Sync + Clone {
     fn register_worker(&self, registration: &WorkerRegistration<'_>) -> Result<()>;
     /// Refresh a worker's heartbeat timestamp, optionally updating its
     /// resource-health JSON.
-    fn heartbeat(&self, worker_id: &str, resource_health: Option<&str>) -> Result<()>;
+    ///
+    /// Answers the status the worker's row holds afterwards — `None` once the
+    /// row is gone — so a worker learns of a drain an operator requested on
+    /// the call it already makes every few seconds.
+    fn heartbeat(
+        &self,
+        worker_id: &str,
+        resource_health: Option<&str>,
+    ) -> Result<Option<WorkerStatus>>;
+    /// Ask one worker in `namespace` to drain: set its status to `Draining`,
+    /// which it reads back on its next [`Self::heartbeat`] and answers by
+    /// stopping gracefully. `false` when no such worker is registered in that
+    /// namespace — a worker in another namespace reads as absent. `None` is
+    /// the default namespace.
+    fn request_worker_drain(&self, worker_id: &str, namespace: Option<&str>) -> Result<bool>;
     /// Set a worker's lifecycle status.
     fn update_worker_status(&self, worker_id: &str, status: WorkerStatus) -> Result<()>;
     /// One namespace's registered workers with their heartbeat state.

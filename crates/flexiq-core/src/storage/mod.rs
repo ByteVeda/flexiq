@@ -1173,8 +1173,15 @@ macro_rules! impl_storage {
                 &self,
                 worker_id: &str,
                 resource_health: Option<&str>,
-            ) -> $crate::error::Result<()> {
+            ) -> $crate::error::Result<Option<$crate::storage::records::WorkerStatus>> {
                 self.heartbeat(worker_id, resource_health)
+            }
+            fn request_worker_drain(
+                &self,
+                worker_id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<bool> {
+                self.request_worker_drain(worker_id, namespace)
             }
             fn update_worker_status(
                 &self,
@@ -2158,8 +2165,15 @@ impl Storage for StorageBackend {
     fn register_worker(&self, registration: &records::WorkerRegistration<'_>) -> Result<()> {
         delegate!(self, register_worker, registration)
     }
-    fn heartbeat(&self, worker_id: &str, resource_health: Option<&str>) -> Result<()> {
+    fn heartbeat(
+        &self,
+        worker_id: &str,
+        resource_health: Option<&str>,
+    ) -> Result<Option<records::WorkerStatus>> {
         delegate!(self, heartbeat, worker_id, resource_health)
+    }
+    fn request_worker_drain(&self, worker_id: &str, namespace: Option<&str>) -> Result<bool> {
+        delegate!(self, request_worker_drain, worker_id, namespace)
     }
     fn update_worker_status(&self, worker_id: &str, status: records::WorkerStatus) -> Result<()> {
         delegate!(self, update_worker_status, worker_id, status)

@@ -950,6 +950,44 @@ fn test_workers(s: &impl Storage) {
     s.unregister_worker("w-test-1").unwrap();
 }
 
+/// An operator's drain request reaches only its own namespace's worker, and
+/// that worker reads it back on its next heartbeat.
+fn test_worker_drain_request(s: &impl Storage) {
+    let ns = Some("wdrain-tenant");
+    s.register_worker(&WorkerRegistration::new("w-drain", "q", 1).namespace(ns))
+        .unwrap();
+
+    assert_eq!(
+        s.heartbeat("w-drain", None).unwrap(),
+        Some(WorkerStatus::Active)
+    );
+    // Another namespace, the default one included, cannot reach it.
+    assert!(!s
+        .request_worker_drain("w-drain", Some("wdrain-other"))
+        .unwrap());
+    assert!(!s.request_worker_drain("w-drain", None).unwrap());
+    assert!(!s.request_worker_drain("w-nobody", ns).unwrap());
+    assert_eq!(
+        s.heartbeat("w-drain", None).unwrap(),
+        Some(WorkerStatus::Active)
+    );
+
+    assert!(s.request_worker_drain("w-drain", ns).unwrap());
+    assert_eq!(
+        s.heartbeat("w-drain", None).unwrap(),
+        Some(WorkerStatus::Draining)
+    );
+
+    // Gone once it unregisters, and a later request does not resurrect it.
+    s.unregister_worker("w-drain").unwrap();
+    assert!(!s.request_worker_drain("w-drain", ns).unwrap());
+    assert!(s
+        .list_workers(ns)
+        .unwrap()
+        .iter()
+        .all(|w| w.worker_id != "w-drain"));
+}
+
 /// A worker registers with its namespace, and a listing shows one namespace's
 /// workers (#836). `None` is the default namespace, not every namespace.
 fn test_workers_are_namespace_scoped(s: &impl Storage) {
@@ -2831,6 +2869,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_record_and_get_errors(s);
     test_workers(s);
     test_workers_are_namespace_scoped(s);
+    test_worker_drain_request(s);
     test_pause_resume_queue(s);
     test_pause_resume_queue_is_namespace_scoped(s);
     test_periodic_crud(s);

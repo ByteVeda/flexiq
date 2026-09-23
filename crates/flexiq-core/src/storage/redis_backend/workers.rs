@@ -52,17 +52,55 @@ impl RedisStorage {
 
     /// Refresh a worker's heartbeat timestamp and overwrite its
     /// resource-health JSON (`None` clears any previous value).
-    pub fn heartbeat(&self, worker_id: &str, resource_health: Option<&str>) -> Result<()> {
+    ///
+    /// Answers the status the row holds afterwards, in the same round trip —
+    /// `None` when the row carries none, as a reaped worker's does.
+    pub fn heartbeat(
+        &self,
+        worker_id: &str,
+        resource_health: Option<&str>,
+    ) -> Result<Option<crate::storage::records::WorkerStatus>> {
         let mut conn = self.conn()?;
         let now = now_millis();
         let wkey = self.key(&["worker", worker_id]);
 
-        let pipe = &mut redis::pipe();
-        pipe.hset(&wkey, "last_heartbeat", now);
-        pipe.hset(&wkey, "resource_health", resource_health.unwrap_or(""));
-        pipe.query::<()>(&mut conn).map_err(map_err)?;
+        let (status,): (Option<String>,) = redis::pipe()
+            .hset(&wkey, "last_heartbeat", now)
+            .ignore()
+            .hset(&wkey, "resource_health", resource_health.unwrap_or(""))
+            .ignore()
+            .hget(&wkey, "status")
+            .query(&mut conn)
+            .map_err(map_err)?;
 
-        Ok(())
+        Ok(status.map(|status| crate::storage::records::WorkerStatus::from_wire(&status)))
+    }
+
+    /// Ask one worker in `namespace` to drain. `false` when no such worker is
+    /// registered there — including one in another namespace.
+    ///
+    /// Watched, so a worker that unregisters between the check and the write
+    /// is not resurrected as a hash holding nothing but a status.
+    pub fn request_worker_drain(&self, worker_id: &str, namespace: Option<&str>) -> Result<bool> {
+        let mut conn = self.conn()?;
+        let wkey = self.key(&["worker", worker_id]);
+        let wanted = Self::namespace_segment(namespace);
+        let draining = crate::storage::records::WorkerStatus::Draining.as_str();
+
+        redis::transaction(&mut conn, &[wkey.as_str()], |conn, pipe| {
+            let (registered, segment): (bool, Option<String>) = redis::pipe()
+                .exists(&wkey)
+                .hget(&wkey, "namespace")
+                .query(conn)?;
+            // A row registered before #836 carries no namespace field: the
+            // default namespace's.
+            if !registered || segment.as_deref().unwrap_or("-") != wanted {
+                return Ok(Some(false));
+            }
+            pipe.hset(&wkey, "status", draining).ignore();
+            Ok(pipe.query::<Option<()>>(conn)?.map(|()| true))
+        })
+        .map_err(map_err)
     }
 
     /// Set a worker's status string.
