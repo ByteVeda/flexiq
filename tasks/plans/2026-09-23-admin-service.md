@@ -7,66 +7,60 @@ pushed**. Commits authored as stromanni. One cargo job at a time (`-j1`,
 (pre-commit clippy `--all-targets --all-features`).
 
 **Gate:** the proto (spec § "The proto") is reviewed by the user before step 7.
+Approved 2026-09-23.
 
 ## Phase 1 — namespace the core
 
-- [ ] 1. Queue pause (D2): `m0020_queue_state_namespace`, `schema.rs`,
-      `models.rs`, `diesel_common/queue_state.rs` (UPDATE-else-INSERT), delete
-      the SQLite/Postgres pair, Redis per-namespace set with legacy default key,
-      trait + both forwarding sites, `poller.rs::active_queues`, dashboard
-      routes, TUI (`None`), Python/Node/Java bindings. Contract test
-      `test_pause_resume_queue_is_namespace_scoped` + `namespace_scoping.rs`
-      case.
-- [ ] 2. Workers (D3): `m0021_worker_namespace`, `WorkerRegistration::namespace`,
-      `WorkerInfo.namespace`, `list_workers(namespace)` in diesel macro + Redis,
-      4 registration sites, 8 consumers (probe behaviour change noted). Contract
-      test for isolation.
-- [ ] 3. DLQ (D4): `purge_dead`/`purge_dead_by_task` gain `namespace`
-      (`None` = all), new `get_dead`. Callers: dashboard, TUI, 3 shells.
-      Contract tests.
-- [ ] 4. Overrides (D5): `flexiq_core::overrides` key/prefix builders + vector
-      test; server `dashboard/stores/overrides.rs` uses them with
-      `state.namespace`; Python/Node/Java dashboard stores + worker-start apply
-      use the namespaced layout; `BINDING_CONTRACT.md` section; shared vector
-      test in each SDK suite.
-- [ ] 5. Throughput (D6): `Storage::queue_throughput` — diesel macro, Redis,
-      forwarding, contract test.
-- [ ] 6. Periodic job builder (D7): hoist `scheduler::periodic_job`; `check_periodic`
-      uses it. Existing periodic tests stay green.
+- [x] 1. Queue pause (D2): `m0020`, `diesel_common/queue_state.rs`, Redis
+      per-namespace set with legacy default key, poller, dashboard, TUI, shells.
+      Contract test + scheduler unit test.
+- [x] 2. Workers (D3): `m0021`, `WorkerRegistration::namespace`,
+      `list_workers(namespace)`, 4 registration sites, 8 consumers.
+- [x] 3. DLQ (D4): namespaced `purge_dead`/`purge_dead_by_task`, `get_dead`.
+- [x] 4. Overrides (D5): `flexiq_core::overrides`, server store, Python / Node /
+      Java stores + worker-start apply, `BINDING_CONTRACT.md`, vector tests.
+- [x] 5. Throughput (D6): `Storage::queue_throughput` + `QueueStats::add`.
+- [x] 6. `periodic::{periodic_job, next_run}`; `check_periodic` uses them.
 
 ## Phase 2 — the door
 
-- [ ] 7. Proto: `admin_service.proto`; `scripts/proto-check.sh --fix` (buf
-      1.72.0) → descriptor + openapi; `flexiq-openapi` walks both packages;
-      producer service comment reworded (D11). Go: `buf.gen.yaml` path +
-      regenerated stubs.
-- [ ] 8. Reasons + scopes: `DEAD_LETTER_NOT_FOUND`, `PERIODIC_TASK_NOT_FOUND`;
-      `Scope::{Inspect, Admin}`; gate: descriptor-derived admin map, facade
-      `/v1/admin/` before `/v1/`; `ScopeArg`; dashboard `SCOPE_HELP`. Gate +
-      scope tests.
-- [ ] 9. `grpc/admin/{mod,convert,queues,dead_letters,workers,periodic,overrides}.rs`
-      — `AdminService` impl delegating to free fns, `on_storage` blocking
-      helpers; registered on the listener. `pb.rs` `pub mod admin`.
-- [ ] 10. Facade: admin bindings, generalised `{param}:verb` dispatch, drift
-      tests over both packages, JSON writers + response field-set drift test.
-- [ ] 11. e2e `tests/grpc_admin.rs`: every RPC; scope matrix (produce ✗,
-      inspect reads only, admin writes only); cross-namespace = NOT_FOUND /
-      invisible for every resource; pause stops dispatch in one namespace only;
-      trigger enqueues the periodic job shape; facade round-trip per route.
-- [ ] 12. `fq`: `pb.rs` admin module, subcommands, output renders, unit tests;
-      `grpc_cli.rs` parity + e2e.
-- [ ] 13. Docs: new `server/operate/admin.mdx`, `tokens.mdx` scopes,
-      `cli.mdx` (drop seven "cannot do" rows, document commands),
-      `REMOTE_SDK_CONTRACT.md` (scopes table, admin surface MAY grading),
-      `grpc/mod.rs` doc, `crates/flexiq-server/README.md`, changelog (incl. the
-      D2 breaking note and D3 probe change).
-- [ ] 14. Verify: fmt; clippy `--all-targets --all-features -D warnings`;
-      `cargo test -j1` for `flexiq-core` (lib, `rust`, `namespace_scoping`),
-      `flexiq-server --features grpc`, `flexiq-cli`; `cargo check` postgres /
-      redis / native-async; Python wheel + `tests/` subset (pause, dlq,
-      overrides, workers); Node `build:native` + affected tests; Java
-      `./gradlew test` affected; `golangci-lint run`; docs typecheck/lint/build.
-      PG/Redis contract suites: compile-only locally, first run is CI.
+- [x] 7. Proto, descriptor, OpenAPI (both packages, named request bodies), Go
+      stubs.
+- [x] 8. `inspect` / `admin` scopes; gate by `INSPECT_METHODS` (drift-tested
+      against the descriptor, unknown method → `admin`) and facade verb.
+- [x] 9. `grpc/admin/*`, registered on the listener; not-found reasons.
+- [x] 10. Facade: 22 admin bindings, generic custom-verb dispatch, drift tests,
+      metrics labels `package.Service/Method`.
+- [x] 11. e2e `tests/grpc_admin.rs` (8) + facade admin section.
+- [x] 12. `fq` admin subcommands; `grpc_cli.rs` parity + e2e. Durations are
+      `*-ms` flags, the CLI's existing rule.
+- [x] 13. Docs: admin.mdx, tokens, grpc, limits, contract, index, cli pages,
+      REMOTE_SDK_CONTRACT, README, CHANGELOG (+ synced page). Every curl, grpcurl
+      and fq example run against the real binary.
+- [x] 14. Verify: fmt; clippy `--workspace --all-targets --all-features -D
+      warnings`; check default/postgres/redis/native-async; flexiq-core (lib
+      524, rust 105, namespace_scoping 27, …), flexiq, flexiq-tui, flexiq-cli
+      100, flexiq-openapi 19, flexiq-server `grpc,http-target` 715; Python
+      affected suites 758 passed; Node 790; Java 654; Go vet + test; docs
+      typecheck, lint, build (`NODE_OPTIONS=--max-old-space-size=8192`, as CI).
+      PG/Redis contract suites compile-only locally — first run is CI.
 - [ ] 15. Memory + follow-up issues (ask first).
+
+## Deviations from the reviewed proto
+
+- `Queue.paused_at` dropped: the Redis backend stores a set of names, no time.
+- `QueueThroughput.dead` added beside `completed`/`failed`/`cancelled`.
+- `Worker.threads` named `concurrency`; `DeadLetter.dlq_retry_count` named
+  `replay_count`.
+- `DeleteDeadLetter` / `DeletePeriodicTask` answer `{}` and `NOT_FOUND` when
+  absent (AIP), instead of `deleted: bool`.
+- `PurgeDeadLetters` filter is a oneof (`failed_before` | `task_name`): storage
+  has one method per filter.
+- `TaskOverride` / `QueueOverride` carry an output-only `update_time`; the set
+  requests name the body field (`task_override`, `queue_override`), since
+  `override` is a Rust keyword.
+- Rate limit units are `s|m|h` — what `RateLimitConfig::parse` accepts.
+- The gate classifies admin gRPC methods from a const list drift-tested against
+  the descriptor, not a runtime descriptor decode (no `expect` on the hot path).
 
 ## Review
