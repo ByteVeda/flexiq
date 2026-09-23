@@ -1395,6 +1395,7 @@ dependencies = [
  "flexiq-core",
  "flexiq-openapi",
  "flexiq-workflows",
+ "hex",
  "hmac",
  "http",
  "jsonwebtoken",
@@ -1408,6 +1409,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
+ "sha1",
  "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
@@ -3823,6 +3825,17 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
 ]
 
 [[package]]
