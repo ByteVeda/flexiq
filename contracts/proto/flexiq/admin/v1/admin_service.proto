@@ -441,8 +441,8 @@ message PutPeriodicTaskRequest {
   string cron = 3;
   // Empty means "default".
   string queue = 4;
-  // The arguments each firing passes. Setting no arm passes none; the arms
-  // mean what they mean on flexiq.v1.EnqueueRequest.
+  // The arguments each firing passes. Setting no arm is a call with no
+  // arguments; the arms mean what they mean on flexiq.v1.EnqueueRequest.
   oneof body {
     bytes raw = 5;
     flexiq.v1.StructuredArgs structured = 6;
@@ -498,7 +498,7 @@ message TriggerPeriodicTaskResponse {
 // What an operator overrides on a task. An unset field is not overridden: the
 // value the task was declared with applies.
 message TaskOverride {
-  // `<count>/<unit>`, unit one of `s`, `m`, `h`, `d`: `100/m`.
+  // `<count>/<unit>`, unit one of `s`, `m`, `h`, count at least one: `100/m`.
   optional string rate_limit = 1;
   // At most this many running at once. Zero or more.
   optional int32 max_concurrent = 2;

@@ -41,3 +41,22 @@ include!(concat!(env!("OUT_DIR"), "/flexiq.v1.rs"));
 pub mod executor {
     include!(concat!(env!("OUT_DIR"), "/flexiq.executor.v1.rs"));
 }
+
+/// The generated `flexiq.admin.v1` types, as [`admin`].
+///
+/// The generator names the `flexiq.v1` types this package imports by their
+/// package path — `super::super::v1::Job` from inside `flexiq.admin.v1` — so
+/// the include sits at that depth, beside a `v1` that is this module's root.
+mod flexiq {
+    pub mod v1 {
+        pub use crate::grpc::pb::{Job, StructuredArgs};
+    }
+
+    pub mod admin {
+        pub mod v1 {
+            include!(concat!(env!("OUT_DIR"), "/flexiq.admin.v1.rs"));
+        }
+    }
+}
+
+pub use flexiq::admin::v1 as admin;

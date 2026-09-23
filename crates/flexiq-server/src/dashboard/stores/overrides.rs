@@ -84,16 +84,19 @@ pub fn to_api_json(scope: Scope, name: &str, stored: &Map<String, Value>) -> Val
         };
         body.insert((*field).into(), value);
     }
-    body.insert(
-        "updated_at".into(),
-        json!(normalise_timestamp(
-            stored
-                .get("updated_at")
-                .and_then(Value::as_i64)
-                .unwrap_or(0)
-        )),
-    );
+    body.insert("updated_at".into(), json!(updated_at(stored)));
     Value::Object(body)
+}
+
+/// When a stored override last changed, in Unix milliseconds; zero if never
+/// stamped.
+pub fn updated_at(stored: &Map<String, Value>) -> i64 {
+    normalise_timestamp(
+        stored
+            .get("updated_at")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+    )
 }
 
 /// Every stored override of a scope in one namespace, as
@@ -160,6 +163,46 @@ pub fn set(
         },
     )?;
     Ok(merged)
+}
+
+/// Replace an override outright — the admin door's write, where the dashboard's
+/// is a merge.
+///
+/// Fields listed in `keep` survive from the stored document: the queue scope's
+/// `paused` mirrors the live pause and has its own RPC, so replacing the rest
+/// must not reset it. A document left with no field is deleted, and the result
+/// is `None`.
+pub fn replace(
+    scope: Scope,
+    storage: &impl Storage,
+    namespace: Option<&str>,
+    name: &str,
+    fields: &Map<String, Value>,
+    keep: &[&str],
+) -> std::result::Result<Option<Map<String, Value>>, ApiError> {
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("name must not be empty".into()));
+    }
+    validate(scope, fields)?;
+
+    let key = scope.key(namespace, name);
+    let replaced = kv::update(storage, &key, |stored: &mut Map<String, Value>| {
+        let mut next: Map<String, Value> = keep
+            .iter()
+            .filter_map(|field| Some(((*field).to_string(), stored.get(*field)?.clone())))
+            .collect();
+        next.extend(fields.iter().map(|(k, v)| (k.clone(), v.clone())));
+        if !next.is_empty() {
+            next.insert("updated_at".into(), json!(now_millis()));
+        }
+        *stored = next.clone();
+        next
+    })?;
+    if replaced.is_empty() {
+        storage.delete_setting(&key)?;
+        return Ok(None);
+    }
+    Ok(Some(replaced))
 }
 
 /// Remove an override entirely.

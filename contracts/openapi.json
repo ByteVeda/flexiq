@@ -568,7 +568,7 @@
             "type": "integer"
           },
           "rateLimit": {
-            "description": "`<count>/<unit>`, unit one of `s`, `m`, `h`, `d`: `100/m`.",
+            "description": "`<count>/<unit>`, unit one of `s`, `m`, `h`, count at least one: `100/m`.",
             "type": "string"
           },
           "retryBackoff": {
