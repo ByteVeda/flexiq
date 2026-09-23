@@ -1,6 +1,6 @@
 ---
 title: The wire contract
-description: "What the .proto promises a client generated against it: two packages, the compatibility rules CI enforces, and the two version numbers that are not the same number."
+description: "What the .proto promises a client generated against it: three packages, the compatibility rules CI enforces, and the two version numbers that are not the same number."
 ---
 
 An SDK gets its compatibility promise from a package manager: pin a version,
@@ -18,26 +18,30 @@ that file disagree, that file is the contract.
 
 The calls themselves are elsewhere:
 [The gRPC door](/server/operate/grpc) for what the producer serves,
+[The admin door](/server/operate/admin) for the operator's,
 [Clients without an SDK](/server/clients) for generating against it, and
-[Custom executors](/server/custom-executors) for the other package.
+[Custom executors](/server/custom-executors) for the executor package.
 
-## Two packages, and the import only goes one way
+## Three packages, and imports only go one way
 
-| | `flexiq.v1` | `flexiq.executor.v1` |
-| --- | --- | --- |
-| **Service** | `ProducerService` | `ExecutorService` |
-| **Does** | Submit, read, cancel, count | Claim work, report on it |
-| **Transports** | gRPC, and the same calls as HTTP with JSON bodies on the same listener | gRPC only — no HTTP binding, ever |
-| **Scope** | `produce` | `execute` |
+| | `flexiq.v1` | `flexiq.executor.v1` | `flexiq.admin.v1` |
+| --- | --- | --- | --- |
+| **Service** | `ProducerService` | `ExecutorService` | `AdminService` |
+| **Does** | Submit, read, cancel, count | Claim work, report on it | Operate queues, dead letters, workers, periodic tasks, overrides |
+| **Transports** | gRPC, and the same calls as HTTP with JSON bodies on the same listener | gRPC only — no HTTP binding, ever | gRPC, and HTTP with JSON bodies under `/v1/admin/` |
+| **Scope** | `produce` | `execute` | `inspect` for read-only methods, `admin` for the rest |
 
 They are separate because the audiences, credentials and exposure differ. The
-split is load-bearing rather than tidy: `flexiq.executor.v1` **may** import
-`flexiq.v1` and the reverse import is forbidden, so the package a third party
-generates a producer client from stays compilable — and reviewable — on its own,
-without pulling in the frames of a door it will never open.
+split is load-bearing rather than tidy: `flexiq.executor.v1` and
+`flexiq.admin.v1` **may** import `flexiq.v1` and the reverse import is
+forbidden, so the package a third party generates a producer client from stays
+compilable — and reviewable — on its own, without pulling in the frames or the
+operations of a door it will never open.
 
-Both packages are **stable as of 2.0.0**, the release that first shipped the
-gRPC role. Field numbers, field names and RPC shapes are permanent from there.
+`flexiq.v1` and `flexiq.executor.v1` are **stable as of 2.0.0**, the release
+that first shipped the gRPC role. `flexiq.admin.v1` becomes stable with the
+release that first ships it. Field numbers, field names and RPC shapes are
+permanent from there.
 
 ## The five rules, and the one that surprises people
 
@@ -127,7 +131,7 @@ This is the one place the vocabulary collides, so it is worth being blunt.
 
 | | The package version | The contract level |
 | --- | --- | --- |
-| **Written** | `flexiq.v1`, `flexiq.executor.v1` | `CONTRACT_VERSION` / `MIN_CONTRACT_VERSION`, both `2` |
+| **Written** | `flexiq.v1`, `flexiq.executor.v1`, `flexiq.admin.v1` | `CONTRACT_VERSION` / `MIN_CONTRACT_VERSION`, both `2` |
 | **Governs** | The wire shape a remote client generates against | Whether two *builds* may share one database |
 | **Moves when** | Never, for an additive change — rule 3 | An older build can no longer read what a newer one writes |
 | **A remote client sees it** | Yes — it is in the package name | No. There is no contract-level field in either package |

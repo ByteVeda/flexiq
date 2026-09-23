@@ -78,11 +78,12 @@ A job enqueued this way is an ordinary row: the same scheduler dispatches it and
 an unmodified SDK worker runs it, with nothing about the job recording which
 door it came through.
 
-Two things the surface deliberately does not offer. There is **no admin
-surface** on this door — pausing queues, settings, dead-letter operations and
-webhook secrets stay behind the dashboard's session and role check, because an
-operator surface and a producer surface should not share a credential. And there
-is **no way to name a namespace**; it comes from the credential, as above.
+Two things the producer surface deliberately does not offer. It has **no admin
+methods** — pausing queues, dead-letter operations, workers, periodic tasks and
+overrides are [the admin door](/server/operate/admin), a separate package behind
+the `inspect` and `admin` scopes, because an operator surface and a producer
+surface should not share a credential. And there is **no way to name a
+namespace**; it comes from the credential, as above.
 
 ## Reflection, and what it hands out
 
@@ -92,6 +93,7 @@ descriptor the buf gate builds, so it cannot drift from the schema CI checks.
 Against a bare image, that is the whole toolchain:
 
 ```text
+flexiq.admin.v1.AdminService
 flexiq.executor.v1.ExecutorService
 flexiq.v1.ProducerService
 grpc.health.v1.Health
@@ -292,8 +294,9 @@ consequence worth knowing in advance: a request body over the 4 MiB cap — the
 same cap the gRPC door applies, so the two cannot disagree about what is too
 large — comes back **400** with `"status": "OUT_OF_RANGE"`, not 413.
 
-Three things this door does not do. It carries **no admin surface**: it is the
-producer service and only the producer service. It **does not expose the
+Three things this door does not do. It serves the producer service and, under
+`/v1/admin/`, [the admin service](/server/operate/admin) — nothing else; a
+token's scope decides which of the two a call reaches. It **does not expose the
 executor API** — a worker surface has different credentials and different
 failure modes, and no reason to be reachable from a browser. And it **transcodes
 no streams**, because there are none: `v1` has no server stream and no
@@ -485,8 +488,9 @@ client that treats a rotation as an error will reconnect anyway, but a log line
 that says so is one less incident to chase.
 
 What it does not have, on purpose: no HTTP binding — the JSON facade above
-serves `flexiq.v1` only, never this package — and no admin surface or producer
-surface, so an `execute`-scoped credential can run work and nothing else.
+serves `flexiq.v1` and `flexiq.admin.v1`, never this package — and no admin or
+producer methods, so an `execute`-scoped credential can run work and nothing
+else.
 
 ## Security
 
@@ -507,9 +511,11 @@ Same posture as the attach listener:
   credential provisioned is a misconfiguration rather than a permission grant.
   `grpc.health.v1` `Check` and `Watch` are the one exception, by name — see
   [Health, and which probe it belongs in](#health-and-which-probe-it-belongs-in).
-- **Nothing on this door is an admin surface.** Pausing queues, settings,
-  dead-letter operations and webhook secrets stay behind the dashboard's session
-  and role check. A token that leaks costs you an enqueue path, not a tenant.
+- **The operator surface is scoped apart.** Pausing queues, dead-letter
+  operations, workers, periodic tasks and overrides need `inspect` or `admin`,
+  which no producer or executor token carries, so a `produce` token that leaks
+  costs you an enqueue path, not a tenant. Settings, webhook secrets and token
+  minting are on no gRPC surface at all.
 - **The schema is behind the credential, but not behind a scope.** Any live
   token reads every package this build carries, its own scope included and the
   other one too — see

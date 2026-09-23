@@ -1,0 +1,155 @@
+---
+title: The admin door
+description: "flexiq.admin.v1 — pause queues, work the dead-letter queue, list workers, manage periodic tasks and overrides over gRPC or JSON, behind scopes a producer token never carries."
+---
+
+Everything an operator does from the dashboard — pause a queue, replay a dead
+letter, see which workers are alive, define a schedule, cap a task's rate — is
+also a call on the gRPC listener: `flexiq.admin.v1.AdminService`, and the same
+calls as JSON under `/v1/admin/`. It is how a script, a runbook or
+[`fq`](/server/operate/cli) operates a deployment without the dashboard and
+without an SDK.
+
+It is not the producer door with more methods. It is its own package behind its
+own two scopes, because an operator surface and a producer surface must not
+share a credential:
+
+| Scope | Reaches |
+| --- | --- |
+| `inspect` | Every read-only method: `ListQueues`, `GetThroughput`, `ListDeadLetters`, `GetDeadLetter`, `ListWorkers`, `ListPeriodicTasks`, `GetPeriodicTask`, `ListOverrides` |
+| `admin` | Every other method |
+
+The split is not a list someone keeps: a method that declares
+`idempotency_level = NO_SIDE_EFFECTS` needs `inspect`, and anything else needs
+`admin`. Over JSON that is the verb — `GET` is `inspect`, `POST` is `admin`.
+Neither implies the other, so an operator's token carries both:
+
+```bash
+export FLEXIQ_TOKEN=$(flexiq-server token create --name ops --scope inspect --scope admin)
+```
+
+A `produce` token reaches none of it, and an `inspect` token asked to change
+something is refused `PERMISSION_DENIED` with the reason `SCOPE_DENIED` and
+`scope: admin` in the metadata. See [API tokens](/server/operate/tokens).
+
+## One namespace, as everywhere on this listener
+
+Every call acts on the namespace the token was minted for, and on nothing else.
+A dead letter, a periodic task or a queue in another namespace answers exactly
+as one that does not exist — `NOT_FOUND`, with no way to tell the two apart —
+and a listing never shows another tenant's queue names, workers or schedules.
+
+That took storage changes, not only a check at the door: before this service,
+a queue pause, the worker registry, a dead-letter purge and task overrides were
+one set for the whole database. They are per-namespace now, for the dashboards
+and the SDKs as much as for this door. A pause set before upgrading is the
+default namespace's afterwards; see the changelog.
+
+## Queues
+
+```bash
+curl -s -X POST -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  localhost:50051/v1/admin/queues/emails:pause
+```
+
+```json
+{"queue":{"cancelled":"0","completed":"0","dead":"0","failed":"0","name":"emails","paused":true,"pending":"0","running":"0"}}
+```
+
+A pause stops dispatch from the queue in this namespace; jobs already running
+finish. `:resume` lifts it. Both answer with the queue as the call left it, so
+calling either twice is safe. A queue with no jobs yet may be paused — the pause
+holds once jobs arrive.
+
+`GET /v1/admin/queues` lists every queue the namespace has a job, a pause or an
+override for, with the same six counters `QueueStats` carries.
+
+`GET /v1/admin/throughput?window=600s` counts the jobs per queue that reached a
+terminal status inside the window — five minutes when unset, at most a day.
+It answers counts and the window it applied, not a rate: divide by the window.
+
+## Dead letters
+
+| Call | Does |
+| --- | --- |
+| `GET /v1/admin/deadLetters` | Pages newest first, `pageSize` and `pageToken` as `ListJobs` takes them. No payloads |
+| `GET /v1/admin/deadLetters/{id}?includePayload=true` | One entry, with its envelope when asked |
+| `POST /v1/admin/deadLetters/{id}:replay` | Enqueues it again as a fresh job and answers with that job; the entry is gone |
+| `POST /v1/admin/deadLetters/{id}:delete` | Deletes it. A second delete is `NOT_FOUND` |
+| `POST /v1/admin/deadLetters:purge` | Deletes in bulk: `{"failedBefore": "…"}`, `{"taskName": "…"}`, or `{}` for every entry |
+
+A replayed job keeps the dead job's queue, task, body and priority, and none of
+its uniqueness or dependencies — the same thing a dashboard replay does. It is
+not idempotent: each successful call makes a job.
+
+## Workers
+
+`GET /v1/admin/workers` lists the registered workers in this namespace, with
+their queues, status, concurrency and last heartbeat. A worker registered by a
+release before this one reads as the default namespace's until it restarts.
+
+There is no drain call. A worker cannot yet be told to drain from outside, and
+an RPC that reported success for a signal nothing reads would be a lie.
+
+## Periodic tasks
+
+`POST /v1/admin/periodicTasks` creates a schedule, or replaces one's
+definition:
+
+```bash
+curl -s -X POST -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  -H 'content-type: application/json' localhost:50051/v1/admin/periodicTasks \
+  -d '{"name": "nightly-report", "taskName": "build_report", "cron": "0 0 2 * * *",
+       "timezone": "Europe/Berlin", "structured": {"args": ["daily"]}}'
+```
+
+The cron expression has six fields, seconds first. Its arguments are either
+arm `Enqueue` takes — `raw` or `structured` — and none is a call with no
+arguments. A bad expression or an unknown timezone is refused before anything
+is written.
+
+A replace is the same conditional write a worker makes when it declares a
+schedule in code: it never resumes a task an operator paused, never forgets
+when it last ran, and moves its next run only if the expression or the
+timezone changed. The flip side: **a task also declared in a worker's code is
+declared again when that worker starts**, and its code wins every field but the
+pause.
+
+`:pause` and `:resume` stop and restart firing. `:trigger` enqueues the job the
+schedule would, now, whether or not it is paused, and leaves the next run
+alone. `:delete` removes the schedule; jobs it already fired are untouched.
+
+## Overrides
+
+An override replaces a task's or a queue's declared rate limit, concurrency
+cap, retries, backoff, timeout or priority — the knobs the dashboard's
+**Tasks** and **Queues** pages edit, in the same stored documents.
+
+```bash
+curl -s -X POST -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  -H 'content-type: application/json' localhost:50051/v1/admin/tasks/send_email/override \
+  -d '{"rateLimit": "100/m", "timeout": "30s"}'
+```
+
+`SetTaskOverride` **replaces** the whole override rather than merging — a field
+left out is no longer overridden — and `:clear` removes it. A rate is
+`<count>/<s|m|h>` with a count of at least one; a timeout is whole seconds. A
+queue's override has no `paused`: `PauseQueue` is the one way to pause a queue.
+
+<Callout type="warn" title="An override reaches the next worker start">
+Workers read overrides when they start. A change made here applies to every
+worker that starts afterwards and to no worker already running — restart the
+fleet to apply it now. The Java SDK's worker does not read overrides yet.
+</Callout>
+
+## Errors
+
+Every refusal carries a `google.rpc.ErrorInfo` reason from the same closed list
+the producer door uses, plus two of this door's own:
+
+| Reason | Code | When |
+| --- | --- | --- |
+| `DEAD_LETTER_NOT_FOUND` | `NOT_FOUND` | No such entry in this namespace |
+| `PERIODIC_TASK_NOT_FOUND` | `NOT_FOUND` | No such periodic task in this namespace |
+| `INVALID_REQUEST` | `INVALID_ARGUMENT` | An empty name, a bad cron expression, timezone, rate or window |
+| `SCOPE_DENIED` | `PERMISSION_DENIED` | The token lacks `inspect` or `admin`; the metadata says which |

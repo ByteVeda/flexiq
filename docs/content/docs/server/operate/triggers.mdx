@@ -289,6 +289,5 @@ dashboard's.
 ## Cron
 
 Periodic tasks already exist in every SDK. Defining one over the network,
-rather than in application code, belongs to the admin service
-([#836](https://github.com/ByteVeda/flexiq/issues/836)) and is not a trigger
-kind.
+rather than in application code, is `PutPeriodicTask` on
+[the admin door](/server/operate/admin#periodic-tasks), not a trigger kind.

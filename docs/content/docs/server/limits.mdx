@@ -18,7 +18,7 @@ it can expect.
 | Registers tasks, so a typo is a startup error | Takes a task name as a string | The server holds no task registry. An unimplemented name enqueues fine and <SdkLink to="guides/reliability/dead-letter">dead-letters later</SdkLink> |
 | Runs middleware around the enqueue | Runs none | Middleware is code in your process; there is no process here |
 | Runs the worker too | Enqueues onto a queue somebody else drains | The other half is [an executor](/server/custom-executors), and a separate credential |
-| Reaches the whole admin surface | Reaches none of it | Pausing queues, settings, dead-letter operations and webhook secrets stay behind the dashboard's session and role check. An operator surface and a producer surface must not share a credential |
+| Reaches the whole admin surface | Reaches what an `inspect` or `admin` token opens | Queues, dead letters, workers, periodic tasks and overrides are [the admin door](/server/operate/admin), behind scopes a producer token never carries. Settings, webhook secrets and token minting stay behind the dashboard's session and role check |
 | Chooses its namespace in your own configuration | Is fixed to one at mint time | The namespace comes from the credential, and no RPC in either package has a field for it. A read for a job in another namespace is indistinguishable from a job that does not exist |
 | Decodes a result for you | Hands you bytes | `Job.result` is the tagged envelope; assert your decoder against `wire-vectors.json` once |
 | Can await completion | Cannot | There is no watch and no server stream in `v1`. Poll `GetJob`, or subscribe a webhook |
@@ -63,12 +63,14 @@ and it is also the source of every limit below.
   scheduler derives the fingerprint from it, rather than trusting a second copy
   of one fact that is free to disagree with the first.
 
-## Scopes are two, and they are not a hierarchy
+## Scopes are not a hierarchy
 
-`produce` opens `flexiq.v1`. `execute` opens `flexiq.executor.v1`. There is no
-third scope and no superset: a token that can poll for work cannot enqueue it,
-and the refusal is `PERMISSION_DENIED` with the reason `SCOPE_DENIED`, carrying
-the scope it lacked. Grant both only to something that genuinely does both.
+`produce` opens `flexiq.v1`. `execute` opens `flexiq.executor.v1`. `inspect`
+and `admin` split `flexiq.admin.v1` between its read-only methods and the rest.
+There is no superset: a token that can poll for work cannot enqueue it, one that
+can read the dead-letter queue cannot replay it, and the refusal is
+`PERMISSION_DENIED` with the reason `SCOPE_DENIED`, carrying the scope it
+lacked. Grant each only to something that genuinely needs it.
 [API tokens](/server/operate/tokens) is the lifecycle.
 
 ## Where a remote client is simply different
