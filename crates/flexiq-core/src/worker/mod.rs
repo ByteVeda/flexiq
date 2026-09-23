@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod cancel;
+pub mod cancel_relay;
 pub mod dial;
 pub mod dispatcher;
 pub mod executor;
@@ -68,6 +69,11 @@ pub trait WorkerDispatcher: Send + Sync {
     /// separate process (e.g. the prefork pool) must use this hook to deliver
     /// a side-channel signal so the worker observes the cancel without polling
     /// storage.
+    ///
+    /// Under [`Worker`], a supplied dispatcher has this called for every
+    /// in-flight job whose storage cancel flag is set — see
+    /// [`cancel_relay`] — so a pool that cannot read storage still hears of a
+    /// cancel made from anywhere.
     fn notify_cancel(&self, _job_id: &str) {}
 
     /// Tell the pool which worker id the scheduler wins its execution claims

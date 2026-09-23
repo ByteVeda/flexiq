@@ -32,18 +32,21 @@ pub type Outcome<T> = std::result::Result<T, Abort>;
 pub enum Abort {
     Fail(TaskError),
     Sleep(StepSleep),
+    Cancelled,
 }
 ```
 
-Two arms, not one, because a `step.sleep` is not a failure: the job is already
-rescheduled and unclaimed by the time the body unwinds, and reporting it as an
-error would burn a retry for work that has not gone wrong. The dispatcher maps
-each arm to a different `JobResult` — `Failure` and `Slept`.
+Three arms, not one, because neither a `step.sleep` nor a cancel is a failure:
+a slept job is already rescheduled and unclaimed by the time the body unwinds,
+and a cancelled one was asked to stop. Reporting either as an error would burn
+a retry for work that has not gone wrong. The dispatcher maps each arm to a
+different `JobResult` — `Failure`, `Slept` and `Cancelled`.
 
 | Arm | Built by | The scheduler then |
 |---|---|---|
 | `Fail(TaskError)` | `TaskError::retryable` / `TaskError::fatal`, or `?` on a `TaskError` | Applies the retry policy, or dead-letters. |
 | `Sleep(StepSleep)` | `step.sleep_ms` / `step.sleep_until` — never by hand | Re-schedules the job at its wake time. Not a retry. |
+| `Cancelled` | `check_cancelled` | Archives the job as cancelled. Not a retry. |
 
 `From<TaskError> for Abort` exists, and nothing wider. There is deliberately no
 blanket `From<E: std::error::Error>`: it would collide with `From<TaskError>`,

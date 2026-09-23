@@ -431,6 +431,7 @@ The closed list, with the code each arrives under:
 | `CONTRACT_TOO_OLD` | `FAILED_PRECONDITION` | Carries `speaks`, `required`. See [Compatibility](#compatibility) — it is never about the client. |
 | `JOB_TIMEOUT` | `DEADLINE_EXCEEDED` | |
 | `CLAIM_LOST` | `FAILED_PRECONDITION` | The execution claim moved to another owner. Never resend. |
+| `JOB_CANCELLED` | `FAILED_PRECONDITION` | The job was cancelled while a push target held an accepted dispatch of it. Stop working; never resend. Answered only by the executor door's reporting RPCs — see `PUSH_DISPATCH_CONTRACT.md`. |
 | `STEP_DIVERGED` | `FAILED_PRECONDITION` | A durable step replayed differently from the run it resumes. |
 | `STEP_LIMIT_EXCEEDED` | `INVALID_ARGUMENT` | Carries `limit`, `actual`, `allowed`. |
 | `STEP_REFUSED` | `FAILED_PRECONDITION` | |

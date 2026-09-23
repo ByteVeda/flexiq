@@ -204,6 +204,45 @@ fn a_panic_does_not_take_the_pool_down() {
     assert_eq!(done.status, JobStatus::Complete);
 }
 
+/// Loops until cancelled. Bounded, so a cancel that never arrives fails the
+/// test on its assertion — the job completes — rather than hanging it.
+#[flexiq::task(max_retries = 3)]
+fn waits_for_cancel(_n: i64) -> flexiq::Outcome<()> {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        flexiq::check_cancelled()?;
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Ok(())
+}
+
+/// A cancel requested from storage reaches the body through the worker's
+/// relay, and the job settles `Cancelled` — not failed, and not retried.
+#[test]
+fn a_running_task_that_checks_stops_on_cancel() {
+    let q = FlexiQ::in_memory().expect("opens");
+    let job = q.enqueue(waits_for_cancel::call(1)).expect("enqueues");
+
+    let worker = q
+        .worker()
+        .register::<waits_for_cancel>()
+        .spawn()
+        .expect("spawns");
+
+    // `request_cancel` flags only a running job, so ask until it is one.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !q.request_cancel(&job.id).expect("requests") {
+        assert!(Instant::now() < deadline, "the job never started running");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let done = wait_terminal(&q, &job.id);
+    worker.shutdown().expect("clean shutdown");
+
+    assert_eq!(done.status, JobStatus::Cancelled);
+    assert_eq!(done.retry_count, 0, "a cancel must not spend a retry");
+}
+
 /// The task's declared config reaches the scheduler, not only the job row.
 #[test]
 fn a_worker_registers_the_tasks_dispatch_config() {

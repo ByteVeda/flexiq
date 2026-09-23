@@ -25,7 +25,7 @@ use super::contract::{
     HDR_DISABLED_MIDDLEWARE, HDR_IDEMPOTENCY_KEY, HDR_JOB_ID, HDR_LEASE, HDR_MAX_ATTEMPTS,
     HDR_METADATA, HDR_NAMESPACE, HDR_OUTCOME, HDR_PROTOCOL_VERSION, HDR_QUEUE, HDR_RETRY, HDR_TASK,
 };
-use super::Shared;
+use super::{Ending, Shared};
 use crate::http::{read_bounded, BodyRead, SigningRequest};
 use crate::job::{now_millis, Job};
 use crate::lease::Lease;
@@ -131,7 +131,11 @@ pub(super) async fn run_one(
                 // nothing is the one correct contribution a loser can make.
                 None => {
                     shared.unregister_cancel(&dispatch.job.id, &notify);
-                    shared.unregister_accepted(&dispatch.job.id, dispatch.lease.as_ref());
+                    shared.retire_accepted(
+                        &dispatch.job.id,
+                        dispatch.lease.as_ref(),
+                        Ending::Superseded,
+                    );
                     return;
                 }
             }
@@ -140,7 +144,14 @@ pub(super) async fn run_one(
         Err(refusal) => Err(refusal),
     };
     shared.unregister_cancel(&dispatch.job.id, &notify);
-    shared.unregister_accepted(&dispatch.job.id, dispatch.lease.as_ref());
+    // A no-op for a dispatch that was never accepted. For one that was, an
+    // accepted wait ends in `Cancelled` only through a cancel, which is what
+    // the target is then told when it next reports.
+    let ending = match &settled {
+        Ok((Outcome::Cancelled, _)) => Ending::Cancelled,
+        _ => Ending::Superseded,
+    };
+    shared.retire_accepted(&dispatch.job.id, dispatch.lease.as_ref(), ending);
 
     let wall_time_ns = i64::try_from(started.elapsed().as_nanos()).unwrap_or(i64::MAX);
 

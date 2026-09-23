@@ -180,6 +180,16 @@ pub trait Storage: Send + Sync + Clone {
     /// Whether cancellation has been requested for a job. A job in another
     /// namespace reports `false`, like an unknown id.
     fn is_cancel_requested(&self, id: &str, namespace: Option<&str>) -> Result<bool>;
+    /// The subset of `ids` whose cancel has been requested, in one read.
+    ///
+    /// For a dispatcher that cannot read storage itself, polled once per tick
+    /// over everything in flight. Ids outside `namespace`, unknown ids and ids
+    /// with no request are all simply absent from the answer.
+    fn cancel_requested_among(
+        &self,
+        ids: &[String],
+        namespace: Option<&str>,
+    ) -> Result<Vec<String>>;
     /// Archive a running job as `Cancelled` after it observed a cancel request.
     /// A job in another namespace is left alone.
     fn mark_cancelled(&self, id: &str, namespace: Option<&str>) -> Result<()>;

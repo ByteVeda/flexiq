@@ -27,6 +27,7 @@ Everything below is declared in `flexiq` itself:
 | `Task` | The trait `#[flexiq::task]` implements. | <SdkLink to="api-reference/task">Task</SdkLink> |
 | `task` | The attribute macro, re-exported from `flexiq-macros`. | <SdkLink to="api-reference/task">Task</SdkLink> |
 | `StepHandle`, `current_step` | Durable steps for a running task. | <SdkLink to="api-reference/queue/workers">Workers & steps</SdkLink> |
+| `check_cancelled`, `cancel_requested` | Cooperative cancel for a running task. | <SdkLink to="api-reference/queue/workers">Workers & steps</SdkLink> |
 | `PeriodicSpec` | A task's cron schedule, as declared. | <SdkLink to="api-reference/queue/workers">Workers & steps</SdkLink> |
 | `Outcome<T>`, `Abort` | What a task body ends with. | <SdkLink to="api-reference/errors">Errors</SdkLink> |
 | `EncodeError`, `DecodeError` | The two wire failures. | <SdkLink to="api-reference/errors">Errors</SdkLink> |
@@ -49,6 +50,7 @@ path that resolves.
 | `queue` | `FlexiQ` |
 | `steps` | The per-dispatch step session |
 | `task` | `Task`, `StepHandle`, `current_step` |
+| `cancellation` | `check_cancelled`, `cancel_requested` |
 
 Their names are chosen not to collide with a public module on core's root:
 a private module of the same name would shadow the glob re-export, and

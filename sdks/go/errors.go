@@ -52,6 +52,7 @@ const (
 	ReasonContractTooOld               Reason = "CONTRACT_TOO_OLD"
 	ReasonJobTimeout                   Reason = "JOB_TIMEOUT"
 	ReasonClaimLost                    Reason = "CLAIM_LOST"
+	ReasonJobCancelled                 Reason = "JOB_CANCELLED"
 	ReasonStepDiverged                 Reason = "STEP_DIVERGED"
 	ReasonStepLimitExceeded            Reason = "STEP_LIMIT_EXCEEDED"
 	ReasonStepRefused                  Reason = "STEP_REFUSED"

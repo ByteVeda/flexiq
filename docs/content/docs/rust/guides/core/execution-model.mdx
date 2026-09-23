@@ -116,13 +116,14 @@ amount of retrying makes it runnable here.
 
 ## What the pool reports
 
-Three outcomes, and only three:
+Four outcomes, and only four:
 
 | Outcome | When |
 | --- | --- |
 | Success | The body returned `Ok`. The encoded value is archived. |
 | Failure | The body returned `Err(Abort::Fail(..))`, or panicked. The retry policy decides retry or dead-letter. |
 | Slept | The body called `step.sleep_ms` / `step.sleep_until`. The job is already rescheduled with its claim released — not a success, not a failure, and it spends no retry. |
+| Cancelled | The body returned `Err(Abort::Cancelled)` — what `check_cancelled` returns once the job was asked to stop. Archived as cancelled; never retried. See <SdkLink to="guides/core/cancellation">cancellation</SdkLink>. |
 
 A failure records the contract's canonical JSON —
 `{"errtype","message","traceback"}` — rather than a bare message, so a reader in

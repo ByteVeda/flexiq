@@ -1235,6 +1235,33 @@ macro_rules! impl_diesel_job_ops {
                 })
             }
 
+            /// The subset of `ids` whose cancel has been requested, in one read
+            /// per chunk.
+            ///
+            /// Chunked because SQLite caps bound parameters per statement, and
+            /// the caller's list is only bounded by its in-flight cap.
+            pub fn cancel_requested_among(
+                &self,
+                ids: &[String],
+                namespace: Option<&str>,
+            ) -> Result<Vec<String>> {
+                const CHUNK: usize = 500;
+                let mut conn = self.conn()?;
+                let mut requested = Vec::new();
+                for chunk in ids.chunks(CHUNK) {
+                    let mut query = jobs::table
+                        .filter(jobs::id.eq_any(chunk))
+                        .filter(jobs::cancel_requested.ne(0))
+                        .select(jobs::id)
+                        .into_boxed();
+                    if let Some(ns) = namespace {
+                        query = query.filter(jobs::namespace.eq(ns));
+                    }
+                    requested.extend(query.load::<String>(&mut conn)?);
+                }
+                Ok(requested)
+            }
+
             /// Mark a job as cancelled (used when a running job detects
             /// cancellation). The job moves from `jobs` into `archived_jobs`.
             ///

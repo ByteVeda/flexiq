@@ -61,13 +61,18 @@
 //! |---|---|
 //! | Native | The handler observes the storage flag and stops. |
 //! | Attach | The scheduler sends a `cancel` frame; the executor stops. |
-//! | **Push** | The request is abandoned, the attempt settles `Cancelled`, the target keeps running and its side effects still happen, and its result is fenced out on arrival. |
+//! | **Push, in the request** | The request is abandoned and the attempt settles `Cancelled`. The target is told only by the closed connection; its side effects still happen and its answer is fenced out. |
+//! | **Push, accepted (`202`)** | The attempt settles `Cancelled`. The target's next report under its lease is refused [`SettleRefused::Cancelled`] by this replica, while it still remembers the ending (the last 1024; after that, `NotHere` — also a stop) — a target that polls stops then; one that never reports runs to the end and its `Settle` is refused. |
 //!
-//! There is deliberately no storage-polling cancel loop here: reaching the
-//! target's own process is issue #846's design, and a second cancel path
-//! invented now would have to be unwound when it lands.
+//! Push stops the *result*, and tells a target that asks; only native and
+//! attach stop the *work*. A cancel reaches this dispatcher as
+//! [`WorkerDispatcher::notify_cancel`], which the worker's cancel relay calls
+//! for every in-flight job whose storage flag is set — this module polls
+//! nothing itself. Reaching into a target's running process is not attempted:
+//! most platforms that start one from a request cannot route a second request
+//! to it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -422,6 +427,66 @@ struct Shared {
     /// reach the replica that dispatched. A call that lands elsewhere is
     /// refused by name rather than half-applied.
     accepted: Mutex<HashMap<String, Accepted>>,
+    /// Accepted dispatches this process stopped holding open, and why — so a
+    /// target that asks "is this still mine?" is told it was cancelled, rather
+    /// than that it reached the wrong replica. Locked only after `accepted`.
+    ended: Mutex<EndedDispatches>,
+}
+
+/// How many ended dispatches are remembered. A target polls on the order of
+/// seconds, so the one asking about a dispatch is almost always still in here;
+/// one that falls out is told `NotHere`, which is still a "stop".
+const ENDED_CAPACITY: usize = 1024;
+
+/// Why an accepted dispatch stopped being held open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    /// An operator cancelled the job.
+    Cancelled,
+    /// Anything else: a settle won, the deadline passed, or the drain ran out.
+    Superseded,
+}
+
+/// A bounded memory of ended accepted dispatches, oldest evicted first.
+#[derive(Default)]
+struct EndedDispatches {
+    by_job: HashMap<String, (Option<Lease>, Ending)>,
+    order: VecDeque<String>,
+}
+
+impl EndedDispatches {
+    fn record(&mut self, job_id: &str, lease: Option<Lease>, ending: Ending) {
+        // A re-dispatched job ends again under a new lease. Its old position
+        // must go too, or eviction reaches it early and drops the fresh entry.
+        if self
+            .by_job
+            .insert(job_id.to_string(), (lease, ending))
+            .is_some()
+        {
+            self.order.retain(|id| id != job_id);
+        }
+        self.order.push_back(job_id.to_string());
+        while self.order.len() > ENDED_CAPACITY {
+            if let Some(oldest) = self.order.pop_front() {
+                self.by_job.remove(&oldest);
+            }
+        }
+    }
+
+    /// The refusal a report under `lease` earns. Only the lease the dispatch
+    /// was made under learns *why* it ended; any other is told `NotHere`, the
+    /// answer it would have had before this record existed.
+    fn refusal(&self, job_id: &str, lease: &Lease) -> SettleRefused {
+        match self.by_job.get(job_id) {
+            Some((held, ending)) if held.as_ref().is_none_or(|held| held == lease) => {
+                match ending {
+                    Ending::Cancelled => SettleRefused::Cancelled,
+                    Ending::Superseded => SettleRefused::Fenced,
+                }
+            }
+            _ => SettleRefused::NotHere,
+        }
+    }
 }
 
 /// One dispatch the target accepted and has not settled.
@@ -596,18 +661,34 @@ impl Shared {
         }
     }
 
-    /// Forget an accepted dispatch, but only when the lease still matches.
+    /// Stop holding an accepted dispatch open, remembering why — but only when
+    /// the lease still matches.
     ///
     /// Guarded like [`Shared::unregister_cancel`]: a straggler tidying up
     /// after itself must not evict the entry a newer dispatch just installed.
-    fn unregister_accepted(&self, job_id: &str, lease: Option<&Lease>) {
+    /// The ending is recorded under the same lock that removes the entry, so a
+    /// report arriving in between never finds neither and reads `NotHere`.
+    fn retire_accepted(&self, job_id: &str, lease: Option<&Lease>, ending: Ending) {
         let mut accepted = self.accepted.lock().unwrap_or_else(recover);
         if accepted
             .get(job_id)
             .is_some_and(|held| held.lease.as_ref() == lease)
         {
             accepted.remove(job_id);
+            self.ended
+                .lock()
+                .unwrap_or_else(recover)
+                .record(job_id, lease.cloned(), ending);
         }
+    }
+
+    /// What a report on a dispatch this process is *not* holding open is
+    /// told. Safe under the `accepted` lock: `ended` is always taken second.
+    fn not_held(&self, job_id: &str, lease: &Lease) -> SettleRefused {
+        self.ended
+            .lock()
+            .unwrap_or_else(recover)
+            .refusal(job_id, lease)
     }
 
     /// How many dispatches this process has accepted and not yet settled.
@@ -696,6 +777,7 @@ impl HttpDispatchTarget {
                 claim_owner: Mutex::new(None),
                 results: Mutex::new(None),
                 accepted: Mutex::new(HashMap::new()),
+                ended: Mutex::new(EndedDispatches::default()),
             }),
         })
     }
@@ -764,7 +846,7 @@ impl HttpDispatchTarget {
                 // the race this flag exists to close.
                 Some(held) if !held.ready => return Err(SettleRefused::NotReady),
                 Some(held) => (held.lease.clone(), held.namespace.clone()),
-                None => return Err(SettleRefused::NotHere),
+                None => return Err(shared.not_held(job_id, lease)),
             }
         };
 
@@ -812,7 +894,7 @@ impl HttpDispatchTarget {
                 // the race this flag exists to close.
                 Some(held) if !held.ready => return Err(SettleRefused::NotReady),
                 Some(held) => (held.lease.clone(), held.namespace.clone()),
-                None => return Err(SettleRefused::NotHere),
+                None => return Err(shared.not_held(job_id, lease)),
             }
         };
         let Some(epoch) = lease.epoch() else {
@@ -826,7 +908,7 @@ impl HttpDispatchTarget {
         let channel = shared.side_channel().ok_or(SettleRefused::Unsupported)?;
         let attempt = shared
             .accepted_attempt(job_id)
-            .ok_or(SettleRefused::NotHere)?;
+            .ok_or_else(|| shared.not_held(job_id, lease))?;
 
         let granted = extend_by.min(MAX_LEASE_EXTENSION);
         let deadline = now_millis().saturating_add(granted.as_millis() as i64);
@@ -908,7 +990,9 @@ impl HttpDispatchTarget {
         lease: &Lease,
     ) -> Result<Option<String>, SettleRefused> {
         let accepted = self.shared.accepted.lock().unwrap_or_else(recover);
-        let held = accepted.get(job_id).ok_or(SettleRefused::NotHere)?;
+        let Some(held) = accepted.get(job_id) else {
+            return Err(self.shared.not_held(job_id, lease));
+        };
         if !held.ready {
             return Err(SettleRefused::NotReady);
         }
@@ -1051,6 +1135,13 @@ pub enum SettleRefused {
     /// under — or the marker was already consumed. The attempt was settled by
     /// someone else and this answer is thrown away.
     Fenced,
+    /// The job was cancelled while this dispatch was accepted; the attempt is
+    /// already settled `Cancelled`.
+    ///
+    /// Told only to a caller presenting the lease the dispatch was made under,
+    /// and never retryable — it is the "stop working" answer a target polling
+    /// `ExtendLease` or `ReportProgress` is asking for.
+    Cancelled,
     /// This deployment cannot fence an out-of-band settle at all.
     Unsupported,
     /// The fence could not be evaluated. Refusing rather than guessing: the
@@ -1425,5 +1516,65 @@ mod tests {
         .expect("an allowlisted https target builds");
 
         assert_eq!(target.target(), "https://api.example.com");
+    }
+
+    #[test]
+    fn an_ended_dispatch_tells_only_its_own_lease_why() {
+        let mut ended = EndedDispatches::default();
+        ended.record("cancelled", Some(Lease::from_epoch(7)), Ending::Cancelled);
+        ended.record("lost", Some(Lease::from_epoch(7)), Ending::Superseded);
+
+        assert!(matches!(
+            ended.refusal("cancelled", &Lease::from_epoch(7)),
+            SettleRefused::Cancelled
+        ));
+        assert!(matches!(
+            ended.refusal("lost", &Lease::from_epoch(7)),
+            SettleRefused::Fenced
+        ));
+        // Another lease learns nothing it could not have learned before.
+        assert!(matches!(
+            ended.refusal("cancelled", &Lease::from_epoch(8)),
+            SettleRefused::NotHere
+        ));
+        assert!(matches!(
+            ended.refusal("never-seen", &Lease::from_epoch(7)),
+            SettleRefused::NotHere
+        ));
+    }
+
+    #[test]
+    fn a_job_that_ends_again_is_evicted_by_its_latest_ending() {
+        let mut ended = EndedDispatches::default();
+        ended.record("again", Some(Lease::from_epoch(1)), Ending::Superseded);
+        for n in 0..ENDED_CAPACITY - 1 {
+            ended.record(&format!("job-{n}"), None, Ending::Superseded);
+        }
+        // Re-dispatched and cancelled: the newest entry, not the oldest.
+        ended.record("again", Some(Lease::from_epoch(2)), Ending::Cancelled);
+        ended.record("one-more", None, Ending::Superseded);
+
+        assert_eq!(ended.order.len(), ENDED_CAPACITY);
+        assert!(matches!(
+            ended.refusal("again", &Lease::from_epoch(2)),
+            SettleRefused::Cancelled
+        ));
+    }
+
+    #[test]
+    fn the_ended_record_is_bounded_oldest_first() {
+        let mut ended = EndedDispatches::default();
+        for n in 0..=ENDED_CAPACITY {
+            ended.record(&format!("job-{n}"), None, Ending::Cancelled);
+        }
+        assert_eq!(ended.by_job.len(), ENDED_CAPACITY);
+        assert!(matches!(
+            ended.refusal("job-0", &Lease::from_epoch(1)),
+            SettleRefused::NotHere
+        ));
+        assert!(matches!(
+            ended.refusal(&format!("job-{ENDED_CAPACITY}"), &Lease::from_epoch(1)),
+            SettleRefused::Cancelled
+        ));
     }
 }

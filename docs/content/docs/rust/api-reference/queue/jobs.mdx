@@ -84,7 +84,7 @@ let failed = queue.storage().list_jobs(
 | `request_cancel(job_id: &str) -> Result<bool>` | Ask a *running* job to stop. |
 
 `request_cancel` sets a flag. Nothing interrupts a handler mid-call — the task
-has to poll `job.cancel_requested` itself and return. A task that never looks
+checks with `flexiq::check_cancelled()` and returns. A task that never looks
 runs to completion, which is the honest behaviour: the alternative is killing a
 thread in the middle of a write.
 

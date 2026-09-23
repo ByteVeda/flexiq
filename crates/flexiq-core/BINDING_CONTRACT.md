@@ -122,7 +122,7 @@ Scheduler.handle_result ─▶ ResultOutcome ─▶ shell emits events / middlew
 |--------|-----------|----------|
 | `run` | `async fn run(&self, job_rx: tokio::sync::mpsc::Receiver<Job>, result_tx: crossbeam_channel::Sender<JobResult>)` | yes |
 | `shutdown` | `fn shutdown(&self)` | yes |
-| `notify_cancel` | `fn notify_cancel(&self, job_id: &str)` | optional — in-process pools may no-op; out-of-process (prefork) must deliver a side-channel signal |
+| `notify_cancel` | `fn notify_cancel(&self, job_id: &str)` | optional — in-process pools may no-op; out-of-process (prefork) must deliver a side-channel signal. Under `Worker`, a supplied dispatcher is called for every in-flight job whose storage cancel flag is set (`worker::cancel_relay`), at most once per dispatch |
 
 Channels: inbound `tokio::sync::mpsc::Receiver<Job>` (async); outbound
 `crossbeam_channel::Sender<JobResult>` (sync, cloneable).

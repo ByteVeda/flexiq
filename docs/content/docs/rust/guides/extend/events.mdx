@@ -86,7 +86,8 @@ minted for the dispatch.
   Every step write is fenced on that triple. Under core's pool there is no step
   session to open, so `flexiq::current_step()` hands back a handle whose every
   method fails with `outside a running task`. A task body that calls
-  `step.run(..)` cannot run on a worker built this way.
+  `step.run(..)` cannot run on a worker built this way. `check_cancelled()`
+  likewise has no job to look at, and always answers `Ok(())`.
 </Callout>
 
 A `#[flexiq::task]` body can still be registered by hand, and what the mapping
@@ -101,6 +102,8 @@ let worker = Worker::new(queue.storage().clone())
         Err(Abort::Fail(err)) => Err(err),
         // There is no way to report "this attempt slept" from here.
         Err(Abort::Sleep(_)) => Err(TaskError::fatal("step.sleep needs the shell's own worker")),
+        // Nor "this attempt was cancelled": it becomes a fatal failure.
+        Err(Abort::Cancelled) => Err(TaskError::fatal("cancelled")),
     })
     // The attribute's retry policy, rate limit and breaker live on `config()`.
     // `queue.worker()` registers them for you; here you pass them yourself.

@@ -55,6 +55,55 @@ fn an_attached_executor_runs_a_queued_job() {
 }
 
 #[test]
+fn a_cancel_written_to_storage_reaches_the_attached_executor() {
+    // #846: the storage flag is all `CancelJob`, the dashboard or an SDK on
+    // another host writes. Before the worker relayed it, an attached executor
+    // behind `flexiq-server` never heard of a cancel at all.
+    let storage = temp_storage("attach-cancel-relay");
+    let job = storage
+        .enqueue(new_job("long_running"))
+        .expect("enqueue the job under test");
+
+    let harness = Harness::start(&storage);
+    let mut executor = Executor::attach(harness.port(), &["long_running"]);
+    let dispatched = executor.expect_job();
+
+    assert!(storage
+        .request_cancel(&job.id, None)
+        .expect("request the cancel"));
+
+    let (frame, _) = executor
+        .reader
+        .read::<SchedulerMessage>()
+        .expect("the scheduler must forward the cancel");
+    assert!(
+        matches!(&frame, SchedulerMessage::Cancel { job_id } if *job_id == dispatched.0),
+        "expected a cancel frame for the running job, got {frame:?}"
+    );
+
+    // What a real executor does with it. Also what lets the shutdown drain
+    // finish: an attempt nobody answers holds `stop` open indefinitely.
+    executor
+        .writer
+        .write_header(&ExecutorMessage::Cancelled {
+            job_id: dispatched.0.clone(),
+            task_name: dispatched.1.clone(),
+            wall_time_ns: 1_000,
+            lease: None,
+        })
+        .expect("send the cancelled frame");
+    poll_until(Duration::from_secs(10), || {
+        matches!(
+            storage.get_job(&job.id, None).expect("read the job back"),
+            Some(ref current) if current.status == JobStatus::Cancelled
+        )
+    })
+    .expect("the job must settle Cancelled");
+
+    harness.stop();
+}
+
+#[test]
 fn a_failure_on_the_executor_is_retried() {
     let storage = temp_storage("attach-retry");
     let job = storage

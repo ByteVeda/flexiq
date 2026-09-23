@@ -15,6 +15,9 @@ pub enum Abort {
     Fail(TaskError),
     /// The task called `step.sleep` and this attempt is over.
     Sleep(StepSleep),
+    /// The task saw its cancel request and stopped. Settles `Cancelled`, and
+    /// is not retried. Returned by [`crate::check_cancelled`].
+    Cancelled,
 }
 
 /// What a `#[flexiq::task]` function returns.
@@ -89,7 +92,7 @@ mod tests {
                 assert_eq!(err.message, "upstream 503");
                 assert!(err.retryable);
             }
-            Abort::Sleep(_) => panic!("expected Fail"),
+            Abort::Sleep(_) | Abort::Cancelled => panic!("expected Fail"),
         }
     }
 }

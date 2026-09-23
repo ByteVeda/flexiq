@@ -636,10 +636,15 @@ fn settle_refusal(refused: flexiq_core::SettleRefused) -> Status {
              scheduler that dispatched the job, so run one scheduler replica or route \
              these calls to it",
         ),
-        SettleRefused::Fenced => Status::failed_precondition(
+        SettleRefused::Fenced => crate::grpc::status::WireError::claim_lost(
             "this dispatch was already settled, or the lease names an attempt that has been \
              superseded; do not retry",
-        ),
+        )
+        .into(),
+        // The poll-on-report answer (#846): the one refusal that means "an
+        // operator stopped this", so the target stops rather than wondering
+        // which race it lost.
+        SettleRefused::Cancelled => crate::grpc::status::WireError::job_cancelled().into(),
         SettleRefused::Unsupported => settle_disabled(),
         SettleRefused::Storage(error) => {
             log::warn!("[flexiq] a settle could not be fenced: {error}");
@@ -716,6 +721,7 @@ mod tests {
         for refused in [
             SettleRefused::NotHere,
             SettleRefused::Fenced,
+            SettleRefused::Cancelled,
             SettleRefused::Unsupported,
             SettleRefused::Storage("the database is unhappy".to_string()),
         ] {
@@ -731,6 +737,30 @@ mod tests {
         // logged, never handed to a peer.
         let leaked = settle_refusal(SettleRefused::Storage("host=db user=root".to_string()));
         assert!(!leaked.message().contains("host=db"));
+    }
+
+    /// A cancel and a lost race share a code, so the reason is what a polling
+    /// target branches on (#846).
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_cancel_and_a_lost_race_carry_different_reasons() {
+        use flexiq_core::SettleRefused;
+        use tonic_types::StatusExt as _;
+
+        let reason_of = |refused| {
+            settle_refusal(refused)
+                .get_details_error_info()
+                .expect("an ErrorInfo")
+                .reason
+        };
+        assert_eq!(
+            reason_of(SettleRefused::Cancelled),
+            crate::grpc::status::reason::JOB_CANCELLED
+        );
+        assert_eq!(
+            reason_of(SettleRefused::Fenced),
+            crate::grpc::status::reason::CLAIM_LOST
+        );
     }
 
     /// "Not on this replica" and "already settled" are different problems with

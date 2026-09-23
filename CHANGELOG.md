@@ -27,7 +27,7 @@ their entries below keep that name.
   Three limits worth knowing before deploying it: a job has to finish inside one HTTP
   request — Cloud Run caps that at 60 minutes, Lambda at 15 (#845 tracks lifting this);
   `cancel()` abandons the request and fences the target's answer out rather than stopping the
-  target's own work (#846 tracks reaching it); and push dispatch does not honour `HTTP_PROXY` /
+  target's own work (#846, below, lets a target learn of it); and push dispatch does not honour `HTTP_PROXY` /
   `HTTPS_PROXY` / `ALL_PROXY`, since a proxy would resolve the target outside the egress guard.
 - **`DebounceOptions` and `TaskHandler` are reachable from the crate root** (#921). Both belong on
   `flexiq-core`'s curated root re-export — the blessed import path new code is meant to prefer —
@@ -49,6 +49,20 @@ their entries below keep that name.
 
 ### Fixed
 
+- **`cancel()` reaches attached executors and push targets behind `flexiq-server`** (#846). A
+  cancel only ever set the storage flag, and only the native pool reads it — so under
+  `flexiq-server` neither an attached executor nor a push target heard of one, and the job ran to
+  the end while the API reported success. `Worker` now relays the flag to any dispatcher it was
+  handed, once a second, through one batch read (`Storage::cancel_requested_among`). An attached
+  executor gets its `cancel` frame; a push dispatch settles `Cancelled`. A push target that
+  answered `202` learns of it from its next `ExtendLease`, `ReportProgress`, `WriteTaskLog` or
+  `Settle`, which is refused with the new `ErrorInfo` reason `JOB_CANCELLED` (a lost race now
+  carries `CLAIM_LOST`, rather than no reason). What `cancel()` promises under each topology is
+  written down in the push contract and the server docs: under push it stops the result from
+  landing and tells a target that asks, but does not stop the work. The Rust SDK's pool had no
+  cancel at all; a task now calls `flexiq::check_cancelled()?` (or reads
+  `flexiq::cancel_requested()`), which returns the new `Abort::Cancelled` once the relay has
+  delivered a cancel, and the job settles `Cancelled` without a retry.
 - **A float's width on the wire is pinned, so `auto:` keys no longer diverge over one** (#905).
   `contracts/wire-vectors.json` left float width free — a writer could emit half or single
   precision for 1.5 — and pinned the `float` case's decoded value instead of its bytes. Both

@@ -168,8 +168,8 @@ impl FlexiQ {
         self.storage.cancel_job(job_id, self.namespace.as_deref())
     }
 
-    /// Ask a *running* job to stop. The task has to poll for it; nothing
-    /// interrupts a handler mid-call.
+    /// Ask a *running* job to stop. The task has to poll for it with
+    /// [`crate::check_cancelled`]; nothing interrupts a handler mid-call.
     pub fn request_cancel(&self, job_id: &str) -> Result<bool> {
         self.storage
             .request_cancel(job_id, self.namespace.as_deref())
