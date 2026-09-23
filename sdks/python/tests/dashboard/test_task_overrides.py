@@ -13,7 +13,7 @@ import pytest
 from flexiq import Queue
 from flexiq.dashboard import _make_handler
 from flexiq.dashboard._testing import AuthedClient, seed_admin_and_session
-from flexiq.dashboard.overrides_store import OverridesStore
+from flexiq.dashboard.overrides_store import OverrideScope, OverridesStore, override_key
 
 
 @pytest.fixture
@@ -135,6 +135,60 @@ def test_apply_queue_overrides_merges(queue: Queue) -> None:
     merged = store.apply_queue_overrides(queue._queue_configs)
     assert merged["email"]["max_concurrent"] == 10  # decorator-set survives
     assert merged["email"]["rate_limit"] == "200/m"  # override wins
+
+
+# ── Namespaced keys ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("scope", "namespace", "name", "expected"),
+    [
+        ("task", None, "send", "overrides:task:send"),
+        ("queue", None, "emails", "overrides:queue:emails"),
+        ("task", "billing", "send", "overrides:ns:7:billing:task:send"),
+        ("queue", "a:b", "emails", "overrides:ns:3:a:b:queue:emails"),
+        # An empty namespace is named, not the default.
+        ("task", "", "send", "overrides:ns:0::task:send"),
+        # The length counts UTF-8 bytes, not code points.
+        ("task", "é", "send", "overrides:ns:2:é:task:send"),
+    ],
+)
+def test_override_key_matches_the_cross_sdk_vectors(
+    scope: OverrideScope, namespace: str | None, name: str, expected: str
+) -> None:
+    assert override_key(scope, namespace, name) == expected
+
+
+def test_namespaced_overrides_are_invisible_to_the_default_namespace(tmp_path: Path) -> None:
+    db = str(tmp_path / "ns.db")
+    tenant = OverridesStore(Queue(db_path=db, namespace="billing"))
+    default_queue = Queue(db_path=db)
+    default = OverridesStore(default_queue)
+
+    tenant.set_task("send", {"max_retries": 7})
+    tenant.set_queue("emails", {"paused": True})
+
+    assert default_queue.get_setting("overrides:ns:7:billing:task:send") is not None
+    assert default_queue.get_setting("overrides:ns:7:billing:queue:emails") is not None
+    assert default.get_task("send") is None
+    assert default.get_queue("emails") is None
+    assert default.list_tasks() == {}
+    assert default.list_queues() == {}
+    assert set(tenant.list_tasks()) == {"send"}
+    assert set(tenant.list_queues()) == {"emails"}
+
+
+def test_default_overrides_are_invisible_to_a_namespace(tmp_path: Path) -> None:
+    db = str(tmp_path / "ns.db")
+    default = OverridesStore(Queue(db_path=db))
+    tenant = OverridesStore(Queue(db_path=db, namespace="billing"))
+
+    default.set_task("send", {"max_retries": 7})
+
+    assert tenant.get_task("send") is None
+    assert tenant.list_tasks() == {}
+    assert not tenant.clear_task("send")
+    assert default.get_task("send") is not None
 
 
 # ── Queue.registered_tasks() ──────────────────────────────────────────

@@ -5,10 +5,17 @@ caps, retry policy, timeouts, priority, paused state) at runtime via the
 dashboard. The decorator-declared values become the *defaults* — any override
 recorded here wins.
 
-Storage layout in ``dashboard_settings``:
+Storage layout in ``dashboard_settings`` (one keyspace for the whole
+database, so the key carries the queue handle's namespace):
 
-- ``overrides:task:<task_name>`` — JSON of overridden fields for that task
-- ``overrides:queue:<queue_name>`` — JSON of overridden fields for that queue
+- default namespace: ``overrides:task:<task_name>`` /
+  ``overrides:queue:<queue_name>``
+- namespace ``N``: ``overrides:ns:<len>:<N>:task:<task_name>`` /
+  ``overrides:ns:<len>:<N>:queue:<queue_name>``, where ``<len>`` is ``N``'s
+  UTF-8 length in bytes so a ``:`` inside ``N`` cannot collide two namespaces
+
+Each value is the JSON of the overridden fields. The layout is the cross-SDK
+contract ("Task and queue override keys" in ``BINDING_CONTRACT.md``).
 
 Overrides are applied at worker startup (see
 :meth:`flexiq.mixins.lifecycle.QueueLifecycleMixin.start_worker`).
@@ -27,7 +34,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from flexiq.dashboard.kv import update
 
@@ -35,10 +42,25 @@ if TYPE_CHECKING:
     from flexiq.app import Queue
 
 
-TASK_PREFIX = "overrides:task:"
-QUEUE_PREFIX = "overrides:queue:"
+OverrideScope = Literal["task", "queue"]
 
 logger = logging.getLogger("flexiq.dashboard.overrides")
+
+
+def override_prefix(scope: OverrideScope, namespace: str | None) -> str:
+    """The settings-key prefix for ``scope`` overrides in ``namespace``.
+
+    ``None`` is the default namespace and keeps the pre-namespacing layout;
+    ``""`` is a distinct, named namespace.
+    """
+    if namespace is None:
+        return f"overrides:{scope}:"
+    return f"overrides:ns:{len(namespace.encode('utf-8'))}:{namespace}:{scope}:"
+
+
+def override_key(scope: OverrideScope, namespace: str | None, name: str) -> str:
+    """The settings key holding the ``scope`` override for ``name`` in ``namespace``."""
+    return override_prefix(scope, namespace) + name
 
 
 # ── Allowed override fields ────────────────────────────────────────────
@@ -206,10 +228,13 @@ def _parse_json(raw: str | None) -> dict[str, Any]:
 
 
 class OverridesStore:
-    """CRUD for per-task and per-queue runtime overrides."""
+    """CRUD for per-task and per-queue runtime overrides in ``queue``'s namespace."""
 
     def __init__(self, queue: Queue) -> None:
         self._queue = queue
+        namespace = queue._namespace
+        self._task_prefix = override_prefix("task", namespace)
+        self._queue_prefix = override_prefix("queue", namespace)
 
     def _merge(
         self,
@@ -254,14 +279,14 @@ class OverridesStore:
         """Return ``{task_name: TaskOverride}`` for every task with an override."""
         out: dict[str, TaskOverride] = {}
         for key, raw in self._queue.list_settings().items():
-            if not key.startswith(TASK_PREFIX):
+            if not key.startswith(self._task_prefix):
                 continue
-            task_name = key[len(TASK_PREFIX) :]
+            task_name = key[len(self._task_prefix) :]
             out[task_name] = self._row_to_task(task_name, _parse_json(raw))
         return out
 
     def get_task(self, task_name: str) -> TaskOverride | None:
-        raw = self._queue.get_setting(TASK_PREFIX + task_name)
+        raw = self._queue.get_setting(self._task_prefix + task_name)
         if not raw:
             return None
         return self._row_to_task(task_name, _parse_json(raw))
@@ -271,7 +296,7 @@ class OverridesStore:
         if not task_name:
             raise ValueError("task_name must not be empty")
         merged = self._merge(
-            TASK_PREFIX + task_name,
+            self._task_prefix + task_name,
             fields,
             lambda row: self._overridden_fields(
                 row, self._row_to_task(task_name, row), "task_name"
@@ -280,7 +305,7 @@ class OverridesStore:
         return self._row_to_task(task_name, merged)
 
     def clear_task(self, task_name: str) -> bool:
-        return self._queue.delete_setting(TASK_PREFIX + task_name)
+        return self._queue.delete_setting(self._task_prefix + task_name)
 
     @staticmethod
     def _row_to_task(task_name: str, row: dict[str, Any]) -> TaskOverride:
@@ -301,14 +326,14 @@ class OverridesStore:
     def list_queues(self) -> dict[str, QueueOverride]:
         out: dict[str, QueueOverride] = {}
         for key, raw in self._queue.list_settings().items():
-            if not key.startswith(QUEUE_PREFIX):
+            if not key.startswith(self._queue_prefix):
                 continue
-            queue_name = key[len(QUEUE_PREFIX) :]
+            queue_name = key[len(self._queue_prefix) :]
             out[queue_name] = self._row_to_queue(queue_name, _parse_json(raw))
         return out
 
     def get_queue(self, queue_name: str) -> QueueOverride | None:
-        raw = self._queue.get_setting(QUEUE_PREFIX + queue_name)
+        raw = self._queue.get_setting(self._queue_prefix + queue_name)
         if not raw:
             return None
         return self._row_to_queue(queue_name, _parse_json(raw))
@@ -318,7 +343,7 @@ class OverridesStore:
         if not queue_name:
             raise ValueError("queue_name must not be empty")
         merged = self._merge(
-            QUEUE_PREFIX + queue_name,
+            self._queue_prefix + queue_name,
             fields,
             lambda row: self._overridden_fields(
                 row, self._row_to_queue(queue_name, row), "queue_name"
@@ -327,7 +352,7 @@ class OverridesStore:
         return self._row_to_queue(queue_name, merged)
 
     def clear_queue(self, queue_name: str) -> bool:
-        return self._queue.delete_setting(QUEUE_PREFIX + queue_name)
+        return self._queue.delete_setting(self._queue_prefix + queue_name)
 
     @staticmethod
     def _row_to_queue(queue_name: str, row: dict[str, Any]) -> QueueOverride:
