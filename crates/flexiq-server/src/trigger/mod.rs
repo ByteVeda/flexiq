@@ -10,5 +10,6 @@
 //! dashboard or the gRPC door: an ingress can expose it without exposing them.
 
 pub mod auth;
+pub mod definition;
 pub mod document;
 pub mod mapping;
