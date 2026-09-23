@@ -14,7 +14,6 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use flexiq_core::job::{now_millis, NewJob};
-use flexiq_core::periodic::next_cron_time;
 use flexiq_core::scheduler::retention::RetentionConfig;
 #[cfg(feature = "postgres")]
 use flexiq_core::storage::postgres::PostgresStorage;
@@ -972,7 +971,12 @@ impl PyQueue {
         Ok((jobs.into_iter().map(PyJob::from).collect(), next))
     }
 
-    /// Register a periodic task schedule.
+    /// Declare a periodic task schedule, as a worker does for every
+    /// `@queue.periodic` at start.
+    ///
+    /// A declaration, not an overwrite (#919): an existing schedule keeps an
+    /// operator's pause and its last run, and its next run moves only when the
+    /// cron expression or timezone changed. A new one is inserted enabled.
     #[pyo3(signature = (name, task_name, cron_expr, args=None, kwargs=None, queue="default", timezone=None))]
     pub fn register_periodic(
         &self,
@@ -984,15 +988,8 @@ impl PyQueue {
         queue: &str,
         timezone: Option<&str>,
     ) -> PyResult<()> {
-        use flexiq_core::periodic::next_cron_time_tz;
-
-        let now = now_millis();
-        let next_run = if let Some(tz) = timezone {
-            next_cron_time_tz(cron_expr, now, tz)
-        } else {
-            next_cron_time(cron_expr, now)
-        }
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let next_run = flexiq_core::periodic::next_run(cron_expr, timezone, now_millis())
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
         let row = NewPeriodicTask {
             name: name.to_string(),
@@ -1008,7 +1005,7 @@ impl PyQueue {
         };
 
         self.storage
-            .register_periodic(&row)
+            .declare_periodic(&row)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 

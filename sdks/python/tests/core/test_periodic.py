@@ -132,6 +132,23 @@ def test_pause_and_resume_keep_the_registration(registered: Queue) -> None:
     assert _find(registered.list_periodic(), "nightly").enabled is True
 
 
+def test_a_restarted_worker_does_not_resume_a_paused_schedule(registered: Queue) -> None:
+    """A worker start re-declares every schedule; an operator's pause survives it.
+
+    The declaration used to write ``enabled: true`` unconditionally, so every
+    restart silently resumed a schedule someone had paused.
+    """
+    declared = _find(registered.list_periodic(), "nightly")
+    assert registered.pause_periodic("nightly") is True
+
+    # What a restarting worker does for each ``@queue.periodic``.
+    registered._inner.register_periodic(
+        name="nightly", task_name=declared.task_name, cron_expr=declared.cron_expr
+    )
+
+    assert _find(registered.list_periodic(), "nightly").enabled is False
+
+
 def test_delete_periodic_unschedules(registered: Queue) -> None:
     """Deleting removes the row; a second delete reports not-found."""
     assert registered.delete_periodic("nightly") is True
