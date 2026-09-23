@@ -4247,6 +4247,11 @@ fn redis_storage_tests() {
     redis_debounce_slides_an_empty_payload(&storage);
     redis_purge_metrics_drains_across_batches(&storage);
     redis_prunes_a_legacy_due_member(&storage);
+    redis_claim_preserves_empty_payload(&storage);
+    redis_claim_respects_priority_then_schedule_order(&storage);
+    redis_claim_skips_future_and_foreign_namespace(&storage);
+    redis_claim_defers_dependency_jobs(&storage);
+    redis_select_and_claim_is_one_round_trip(&storage);
 }
 
 /// A schedule registered before #918 lives at `periodic:<name>` and is a bare
@@ -4782,6 +4787,193 @@ fn redis_debounce_slides_an_empty_payload(s: &flexiq_core::RedisStorage) {
             .is_empty(),
         "the slid document must still decode"
     );
+}
+
+/// The claim script patches the stored document by token swap rather than a
+/// `cjson` round trip, so an empty payload (`[]`) must survive the claim.
+#[cfg(feature = "redis")]
+fn redis_claim_preserves_empty_payload(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-claim-empty-payload";
+    drain_queue(s, q);
+    let mut job = make_job(q, "claim_empty_payload");
+    job.payload = Vec::new();
+    let job = s.enqueue(job).unwrap();
+
+    let now = now_millis() + 1_000;
+    let claimed = s.dequeue(q, now, None).unwrap().unwrap();
+    assert_eq!(claimed.id, job.id);
+    assert!(claimed.payload.is_empty());
+    assert_eq!(claimed.started_at, Some(now));
+
+    let stored = s.get_job(&job.id, None).unwrap().unwrap();
+    assert!(
+        stored.payload.is_empty(),
+        "the claimed document must decode"
+    );
+    assert_eq!(stored.status, JobStatus::Running);
+    assert_eq!(stored.started_at, Some(now));
+}
+
+/// One batch claim returns jobs in dispatch order: higher priority first, then
+/// earlier `scheduled_at`, whatever order they were enqueued in.
+#[cfg(feature = "redis")]
+fn redis_claim_respects_priority_then_schedule_order(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-claim-order";
+    drain_queue(s, q);
+    let base = now_millis() - 10_000;
+    let enqueue = |priority: i32, scheduled_at: i64| {
+        let mut job = make_job(q, "claim_order");
+        job.priority = priority;
+        job.scheduled_at = scheduled_at;
+        s.enqueue(job).unwrap().id
+    };
+    let low = enqueue(0, base);
+    let high_late = enqueue(5, base + 10);
+    let mid_early = enqueue(1, base - 5);
+    let high_early = enqueue(5, base);
+
+    let claimed: Vec<String> = s
+        .dequeue_batch(q, now_millis() + 1_000, None, 4)
+        .unwrap()
+        .into_iter()
+        .map(|job| job.id)
+        .collect();
+    assert_eq!(claimed, vec![high_early, high_late, mid_early, low]);
+}
+
+/// Jobs that are not yet due, or belong to another namespace, stay Pending: a
+/// `None` namespace claims only jobs without one, and `Some(ns)` only its own.
+#[cfg(feature = "redis")]
+fn redis_claim_skips_future_and_foreign_namespace(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-claim-filters";
+    drain_queue(s, q);
+    let now = now_millis() + 1_000;
+    let namespaced = |ns: &str| {
+        let mut job = make_job(q, "claim_filters");
+        job.namespace = Some(ns.to_string());
+        s.enqueue(job).unwrap().id
+    };
+
+    let mut future = make_job(q, "claim_filters");
+    future.scheduled_at = now + 60_000;
+    let future = s.enqueue(future).unwrap().id;
+    let tenant_a = namespaced("tenant-a");
+    let tenant_b = namespaced("tenant-b");
+    let plain = s.enqueue(make_job(q, "claim_filters")).unwrap().id;
+
+    let claimed = s.dequeue_batch(q, now, None, 10).unwrap();
+    assert_eq!(
+        claimed.iter().map(|j| &j.id).collect::<Vec<_>>(),
+        vec![&plain],
+        "None claims only the due, un-namespaced job"
+    );
+
+    let other_plain = s.enqueue(make_job(q, "claim_filters")).unwrap().id;
+    let claimed = s.dequeue_batch(q, now, Some("tenant-a"), 10).unwrap();
+    assert_eq!(
+        claimed.iter().map(|j| &j.id).collect::<Vec<_>>(),
+        vec![&tenant_a],
+        "Some(ns) claims only its own namespace"
+    );
+
+    let pending = |id: &str, ns: Option<&str>| s.get_job(id, ns).unwrap().unwrap().status;
+    assert_eq!(pending(&future, None), JobStatus::Pending);
+    assert_eq!(pending(&other_plain, None), JobStatus::Pending);
+    assert_eq!(pending(&tenant_b, Some("tenant-b")), JobStatus::Pending);
+}
+
+/// A job with an incomplete dependency is left Pending; once the dependency
+/// completes (and is archived) the next dequeue claims it.
+#[cfg(feature = "redis")]
+fn redis_claim_defers_dependency_jobs(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-claim-deps";
+    drain_queue(s, q);
+    let parent = s.enqueue(make_job(q, "claim_parent")).unwrap();
+    let mut child = make_job(q, "claim_child");
+    child.depends_on = vec![parent.id.clone()];
+    let child = s.enqueue(child).unwrap();
+
+    let now = now_millis() + 1_000;
+    let claimed = s.dequeue_batch(q, now, None, 10).unwrap();
+    assert_eq!(
+        claimed.iter().map(|j| &j.id).collect::<Vec<_>>(),
+        vec![&parent.id],
+        "the child waits for its parent"
+    );
+    assert_eq!(
+        s.get_job(&child.id, None).unwrap().unwrap().status,
+        JobStatus::Pending
+    );
+
+    s.complete(&parent.id, None, None).unwrap();
+    let claimed = s.dequeue_batch(q, now, None, 10).unwrap();
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].id, child.id);
+    assert_eq!(claimed[0].status, JobStatus::Running);
+    assert_eq!(claimed[0].started_at, Some(now));
+}
+
+/// `calls` for one command in an `INFO commandstats` reply, or 0 before its
+/// first call.
+#[cfg(feature = "redis")]
+fn redis_command_calls(info: &str, command: &str) -> u64 {
+    let prefix = format!("cmdstat_{command}:calls=");
+    info.lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .and_then(|rest| rest.split(',').next())
+        .map_or(0, |calls| calls.parse().unwrap())
+}
+
+/// `INFO commandstats` taken after every command sent so far. A hosted Redis
+/// may serve a snapshot refreshed only every few seconds, so send an `ECHO`
+/// marker and wait for a snapshot that counts it.
+#[cfg(feature = "redis")]
+fn redis_fresh_commandstats(conn: &mut redis::Connection) -> String {
+    let read = |conn: &mut redis::Connection| -> String {
+        redis::cmd("INFO").arg("commandstats").query(conn).unwrap()
+    };
+    let marked = redis_command_calls(&read(conn), "echo") + 1;
+    let _: String = redis::cmd("ECHO").arg("marker").query(conn).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        let info = read(conn);
+        if redis_command_calls(&info, "echo") >= marked {
+            return info;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    panic!("INFO commandstats never counted the ECHO marker");
+}
+
+/// A batch claim is one script call: exactly one `EVALSHA`, and no client-side
+/// `ZRANGEBYSCORE` or `MGET` beside it.
+#[cfg(feature = "redis")]
+fn redis_select_and_claim_is_one_round_trip(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-claim-round-trip";
+    drain_queue(s, q);
+    let now = now_millis() + 1_000;
+    // The first invocation of a script may be EVALSHA → NOSCRIPT → SCRIPT LOAD.
+    assert!(s.dequeue_batch(q, now, None, 4).unwrap().is_empty());
+    for _ in 0..4 {
+        s.enqueue(make_job(q, "claim_round_trip")).unwrap();
+    }
+
+    let mut stats = s.conn().unwrap();
+    let commands = ["zrangebyscore", "mget", "evalsha", "eval"];
+    let before = redis_fresh_commandstats(&mut stats);
+    assert_eq!(s.dequeue_batch(q, now, None, 4).unwrap().len(), 4);
+    let after = redis_fresh_commandstats(&mut stats);
+    let grown: Vec<u64> = commands
+        .iter()
+        .map(|c| redis_command_calls(&after, c) - redis_command_calls(&before, c))
+        .collect();
+
+    // Commands a script runs are counted too, so the scripted ZRANGEBYSCORE
+    // shows as 1; a client-side scan would add a second, an MGET and 4 claims.
+    assert_eq!(grown[0], 1, "zrangebyscore");
+    assert_eq!(grown[1], 0, "mget");
+    assert_eq!(grown[2], 1, "evalsha");
+    assert_eq!(grown[3], 0, "eval");
 }
 
 #[cfg(feature = "postgres")]
