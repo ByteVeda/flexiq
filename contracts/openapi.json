@@ -111,6 +111,15 @@
         "properties": {},
         "type": "object"
       },
+      "flexiq.admin.v1.DrainWorkerResponse": {
+        "properties": {
+          "worker": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.Worker",
+            "description": "The worker after the call: DRAINING."
+          }
+        },
+        "type": "object"
+      },
       "flexiq.admin.v1.GetDeadLetterResponse": {
         "properties": {
           "deadLetter": {
@@ -2391,6 +2400,48 @@
           }
         },
         "summary": "The namespace's registered workers and their heartbeats.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/workers/{worker_id}:drain": {
+      "post": {
+        "description": "Ask one worker to drain: it stops claiming work, finishes what it holds,\nand unregisters — the same graceful stop a SIGTERM gives it.\n\nThe worker reads the request on its next heartbeat, a few seconds later,\nso the answer is the request recorded, not the drain done: the worker\ncomes back DRAINING, and leaves ListWorkers once it has stopped.",
+        "operationId": "AdminService_DrainWorker",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "worker_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.DrainWorkerResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Ask one worker to drain: it stops claiming work, finishes what it holds,",
         "tags": [
           "AdminService"
         ]

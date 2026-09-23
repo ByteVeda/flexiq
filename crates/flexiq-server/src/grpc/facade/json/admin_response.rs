@@ -214,6 +214,11 @@ pub fn list_workers(response: &pb::ListWorkersResponse) -> Value {
     )]))
 }
 
+/// `DrainWorkerResponse`.
+pub fn drain_worker(response: &pb::DrainWorkerResponse) -> Value {
+    wrapping("worker", response.worker.as_ref(), worker)
+}
+
 // ── Periodic tasks ───────────────────────────────────────────────────
 
 /// One `PeriodicTask`.
@@ -541,7 +546,13 @@ mod tests {
         assert_names(
             "ListWorkersResponse",
             &list_workers(&pb::ListWorkersResponse {
-                workers: vec![worker_value],
+                workers: vec![worker_value.clone()],
+            }),
+        );
+        assert_names(
+            "DrainWorkerResponse",
+            &drain_worker(&pb::DrainWorkerResponse {
+                worker: Some(worker_value),
             }),
         );
 

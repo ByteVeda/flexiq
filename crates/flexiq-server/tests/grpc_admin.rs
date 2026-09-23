@@ -16,7 +16,7 @@ use flexiq_server::config::listen::ListenAddress;
 use flexiq_server::grpc::pb::admin::admin_service_client::AdminServiceClient;
 use flexiq_server::grpc::pb::admin::{
     purge_dead_letters_request, put_periodic_task_request, ClearTaskOverrideRequest,
-    DeleteDeadLetterRequest, DeletePeriodicTaskRequest, GetDeadLetterRequest,
+    DeleteDeadLetterRequest, DeletePeriodicTaskRequest, DrainWorkerRequest, GetDeadLetterRequest,
     GetPeriodicTaskRequest, GetThroughputRequest, ListDeadLettersRequest, ListOverridesRequest,
     ListPeriodicTasksRequest, ListQueuesRequest, ListWorkersRequest, PausePeriodicTaskRequest,
     PauseQueueRequest, PurgeDeadLettersRequest, PutPeriodicTaskRequest, QueueOverride,
@@ -415,6 +415,67 @@ async fn workers_are_listed_for_this_namespace_only() {
     harness.stop().await;
 }
 
+#[tokio::test]
+async fn a_drain_marks_this_namespaces_worker_and_no_other() {
+    let mut harness = Harness::start("admin-drain").await;
+    harness
+        .storage
+        .register_worker(&WorkerRegistration::new("w-mine", "emails", 4).namespace(Some(NAMESPACE)))
+        .expect("register");
+    harness
+        .storage
+        .register_worker(&WorkerRegistration::new("w-theirs", "emails", 1).namespace(Some(OTHER)))
+        .expect("register");
+
+    let drain = |worker_id: &str| DrainWorkerRequest {
+        worker_id: worker_id.into(),
+    };
+    let worker = harness
+        .client
+        .drain_worker(drain("w-mine"))
+        .await
+        .expect("drain")
+        .into_inner()
+        .worker
+        .expect("the drained worker");
+    assert_eq!(worker.worker_id, "w-mine");
+    assert_eq!(worker.status, WorkerStatus::Draining as i32);
+    // Idempotent: a second request answers the same row.
+    let again = harness
+        .client
+        .drain_worker(drain("w-mine"))
+        .await
+        .expect("a repeated drain")
+        .into_inner()
+        .worker
+        .expect("the worker");
+    assert_eq!(again.status, WorkerStatus::Draining as i32);
+
+    // Another tenant's worker is absent, and left running.
+    let status = harness
+        .client
+        .drain_worker(drain("w-theirs"))
+        .await
+        .expect_err("a foreign worker");
+    assert_reason(&status, Code::NotFound, reason::WORKER_NOT_FOUND);
+    let theirs = harness.storage.list_workers(Some(OTHER)).unwrap();
+    assert_eq!(theirs[0].status, "active");
+
+    let status = harness
+        .client
+        .drain_worker(drain("w-nobody"))
+        .await
+        .expect_err("an unknown worker");
+    assert_reason(&status, Code::NotFound, reason::WORKER_NOT_FOUND);
+    let status = harness
+        .client
+        .drain_worker(drain(""))
+        .await
+        .expect_err("an empty id");
+    assert_reason(&status, Code::InvalidArgument, reason::INVALID_REQUEST);
+    harness.stop().await;
+}
+
 /// `f(1)`, sent as structured arguments.
 fn one_arg() -> put_periodic_task_request::Body {
     put_periodic_task_request::Body::Structured(StructuredArgs {
@@ -777,6 +838,25 @@ async fn each_scope_reaches_its_half_of_the_service_and_no_more() {
         .list_paused_queues(Some(NAMESPACE))
         .unwrap()
         .is_empty());
+    // A drain is a write: `inspect` sees workers and cannot stop one.
+    inspect
+        .storage
+        .register_worker(&WorkerRegistration::new("w-1", "emails", 1).namespace(Some(NAMESPACE)))
+        .expect("register");
+    denied(
+        inspect
+            .client
+            .drain_worker(DrainWorkerRequest {
+                worker_id: "w-1".into(),
+            })
+            .await
+            .expect_err("write"),
+        "admin",
+    );
+    assert_eq!(
+        inspect.storage.list_workers(Some(NAMESPACE)).unwrap()[0].status,
+        "active"
+    );
     inspect.stop().await;
 
     let mut admin = Harness::with_scopes("admin-scope-admin", ScopeSet::of(&[Scope::Admin])).await;

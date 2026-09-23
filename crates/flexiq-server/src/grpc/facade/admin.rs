@@ -192,6 +192,16 @@ pub(super) async fn list_workers(State(admin): State<Admin>, parts: Parts) -> Re
     .await
 }
 
+pub(super) async fn drain_worker(admin: &Admin, parts: &Parts, worker_id: String) -> Response {
+    answer(
+        parts,
+        Ok(pb::DrainWorkerRequest { worker_id }),
+        |request| admin.drain_worker(request),
+        write::drain_worker,
+    )
+    .await
+}
+
 // ── Periodic tasks ───────────────────────────────────────────────────
 
 pub(super) async fn list_periodic_tasks(State(admin): State<Admin>, parts: Parts) -> Response {

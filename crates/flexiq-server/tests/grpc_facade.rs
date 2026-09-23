@@ -16,6 +16,7 @@
 mod support;
 
 use flexiq_core::job::{now_millis, NewJob};
+use flexiq_core::storage::records::WorkerRegistration;
 use flexiq_core::storage::Storage;
 use flexiq_server::config::grpc::GrpcConfig;
 use flexiq_server::config::listen::ListenAddress;
@@ -805,6 +806,56 @@ async fn an_override_is_the_request_body_and_reads_back() {
     harness.stop().await;
 }
 
+#[tokio::test]
+async fn an_operator_drains_a_worker_over_json() {
+    let harness = Harness::start_with_scopes("grpc-facade-admin-drain", operator()).await;
+    harness
+        .storage
+        .register_worker(&WorkerRegistration::new("w-mine", "emails", 2).namespace(Some(NAMESPACE)))
+        .expect("register");
+    harness
+        .storage
+        .register_worker(
+            &WorkerRegistration::new("w-theirs", "emails", 1).namespace(Some("grpc-facade-other")),
+        )
+        .expect("register");
+
+    let drained = harness
+        .post("/v1/admin/workers/w-mine:drain", json!({}))
+        .await;
+    assert_eq!(drained.status, StatusCode::OK, "body: {}", drained.body);
+    assert_eq!(drained.body["worker"]["workerId"], Value::from("w-mine"));
+    assert_eq!(
+        drained.body["worker"]["status"],
+        Value::from("WORKER_STATUS_DRAINING")
+    );
+    let listed = harness.get("/v1/admin/workers").await;
+    assert_eq!(
+        listed.body["workers"][0]["status"],
+        Value::from("WORKER_STATUS_DRAINING")
+    );
+
+    for path in [
+        "/v1/admin/workers/w-theirs:drain",
+        "/v1/admin/workers/w-nobody:drain",
+    ] {
+        let absent = harness.post(path, json!({})).await;
+        assert_eq!(absent.status, StatusCode::NOT_FOUND, "path: {path}");
+        assert_eq!(absent.code(), "NOT_FOUND", "path: {path}");
+        assert_eq!(absent.reason(), "WORKER_NOT_FOUND", "path: {path}");
+    }
+    let theirs = harness
+        .storage
+        .list_workers(Some("grpc-facade-other"))
+        .expect("list");
+    assert_eq!(
+        theirs[0].status, "active",
+        "another tenant's worker drained"
+    );
+
+    harness.stop().await;
+}
+
 /// A verb nobody implements on an operator resource is an address with no RPC
 /// at it, exactly as on a job — not a queue name, and not a `405`.
 #[tokio::test]
@@ -817,6 +868,8 @@ async fn an_unknown_admin_verb_is_no_such_method() {
         "/v1/admin/deadLetters/abc:bogus",
         "/v1/admin/deadLetters/abc",
         "/v1/admin/periodicTasks/nightly:explode",
+        "/v1/admin/workers/w-1:bogus",
+        "/v1/admin/workers/w-1",
     ] {
         let answer = harness.post(path, json!({})).await;
         assert_eq!(answer.status, StatusCode::NOT_IMPLEMENTED, "path: {path}");
@@ -849,6 +902,20 @@ async fn each_scope_reaches_its_half_of_the_operator_paths() {
     assert_eq!(read.status, StatusCode::OK, "body: {}", read.body);
     let refused = inspector
         .post("/v1/admin/queues/emails:pause", json!({}))
+        .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
+    assert_eq!(refused.reason(), "SCOPE_DENIED");
+    assert_eq!(
+        refused.body["error"]["details"][0]["metadata"]["scope"],
+        Value::from("admin")
+    );
+    // A drain is a write, whatever an `inspect` token can see of the worker.
+    inspector
+        .storage
+        .register_worker(&WorkerRegistration::new("w-1", "emails", 1).namespace(Some(NAMESPACE)))
+        .expect("register");
+    let refused = inspector
+        .post("/v1/admin/workers/w-1:drain", json!({}))
         .await;
     assert_eq!(refused.status, StatusCode::FORBIDDEN);
     assert_eq!(refused.reason(), "SCOPE_DENIED");

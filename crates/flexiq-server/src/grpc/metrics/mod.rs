@@ -191,6 +191,14 @@ mod tests {
         );
         assert_eq!(cleared, "flexiq.admin.v1.AdminService/ClearQueueOverride");
 
+        // A worker id never becomes a label either.
+        let (drained, _) = labels(
+            &http::Method::POST,
+            "/v1/admin/workers/w-1:drain",
+            &headers(""),
+        );
+        assert_eq!(drained, "flexiq.admin.v1.AdminService/DrainWorker");
+
         let (unknown, _) = labels(
             &http::Method::POST,
             "/flexiq.admin.v1.AdminService/Bogus",

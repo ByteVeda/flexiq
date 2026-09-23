@@ -193,6 +193,14 @@ impl AdminService for Admin {
         workers::list(&scoped).await
     }
 
+    async fn drain_worker(
+        &self,
+        request: Request<pb::DrainWorkerRequest>,
+    ) -> Result<Response<pb::DrainWorkerResponse>, Status> {
+        let (scoped, message) = self.scope(request)?;
+        workers::drain(&scoped, message).await
+    }
+
     async fn list_periodic_tasks(
         &self,
         request: Request<pb::ListPeriodicTasksRequest>,

@@ -133,6 +133,8 @@ pub enum Rpc {
     PurgeDeadLetters,
     /// `AdminService.ListWorkers`.
     ListWorkers,
+    /// `AdminService.DrainWorker`.
+    DrainWorker,
     /// `AdminService.ListPeriodicTasks`.
     ListPeriodicTasks,
     /// `AdminService.GetPeriodicTask`.
@@ -161,7 +163,7 @@ pub enum Rpc {
 
 impl Rpc {
     /// Every RPC, so a caller that needs the closed set does not restate it.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 31] = [
         Self::Enqueue,
         Self::EnqueueBatch,
         Self::GetJob,
@@ -180,6 +182,7 @@ impl Rpc {
         Self::DeleteDeadLetter,
         Self::PurgeDeadLetters,
         Self::ListWorkers,
+        Self::DrainWorker,
         Self::ListPeriodicTasks,
         Self::GetPeriodicTask,
         Self::PutPeriodicTask,
@@ -215,6 +218,7 @@ impl Rpc {
             | Self::DeleteDeadLetter
             | Self::PurgeDeadLetters
             | Self::ListWorkers
+            | Self::DrainWorker
             | Self::ListPeriodicTasks
             | Self::GetPeriodicTask
             | Self::PutPeriodicTask
@@ -251,6 +255,7 @@ impl Rpc {
             Self::DeleteDeadLetter => "DeleteDeadLetter",
             Self::PurgeDeadLetters => "PurgeDeadLetters",
             Self::ListWorkers => "ListWorkers",
+            Self::DrainWorker => "DrainWorker",
             Self::ListPeriodicTasks => "ListPeriodicTasks",
             Self::GetPeriodicTask => "GetPeriodicTask",
             Self::PutPeriodicTask => "PutPeriodicTask",
@@ -329,6 +334,8 @@ pub enum Binding {
     PurgeDeadLetters,
     /// `GET /v1/admin/workers`.
     ListWorkers,
+    /// `POST /v1/admin/workers/{worker_id}:drain`.
+    DrainWorker,
     /// `GET /v1/admin/periodicTasks`.
     ListPeriodicTasks,
     /// `GET /v1/admin/periodicTasks/{name}`.
@@ -377,6 +384,7 @@ impl Binding {
             Self::DeleteDeadLetter => Rpc::DeleteDeadLetter,
             Self::PurgeDeadLetters => Rpc::PurgeDeadLetters,
             Self::ListWorkers => Rpc::ListWorkers,
+            Self::DrainWorker => Rpc::DrainWorker,
             Self::ListPeriodicTasks => Rpc::ListPeriodicTasks,
             Self::GetPeriodicTask => Rpc::GetPeriodicTask,
             Self::PutPeriodicTask => Rpc::PutPeriodicTask,
@@ -417,6 +425,7 @@ impl Binding {
             | Self::ReplayDeadLetter
             | Self::DeleteDeadLetter
             | Self::PurgeDeadLetters
+            | Self::DrainWorker
             | Self::PutPeriodicTask
             | Self::DeletePeriodicTask
             | Self::PausePeriodicTask
@@ -451,6 +460,7 @@ impl Binding {
             Self::DeleteDeadLetter => "/v1/admin/deadLetters/{dead_letter_id}:delete",
             Self::PurgeDeadLetters => "/v1/admin/deadLetters:purge",
             Self::ListWorkers => "/v1/admin/workers",
+            Self::DrainWorker => "/v1/admin/workers/{worker_id}:drain",
             Self::ListPeriodicTasks => "/v1/admin/periodicTasks",
             Self::GetPeriodicTask => "/v1/admin/periodicTasks/{name}",
             Self::PutPeriodicTask => "/v1/admin/periodicTasks",
@@ -516,6 +526,7 @@ impl Binding {
             | Self::ResumeQueue
             | Self::ReplayDeadLetter
             | Self::DeleteDeadLetter
+            | Self::DrainWorker
             | Self::DeletePeriodicTask
             | Self::PausePeriodicTask
             | Self::ResumePeriodicTask
@@ -545,6 +556,7 @@ pub const ROUTES: &[Binding] = &[
     Binding::DeleteDeadLetter,
     Binding::PurgeDeadLetters,
     Binding::ListWorkers,
+    Binding::DrainWorker,
     Binding::ListPeriodicTasks,
     Binding::GetPeriodicTask,
     Binding::PutPeriodicTask,
@@ -678,6 +690,7 @@ async fn custom_method(
         Binding::ResumeQueue => operator::resume_queue(&doors.admin, &parts, id).await,
         Binding::ReplayDeadLetter => operator::replay_dead_letter(&doors.admin, &parts, id).await,
         Binding::DeleteDeadLetter => operator::delete_dead_letter(&doors.admin, &parts, id).await,
+        Binding::DrainWorker => operator::drain_worker(&doors.admin, &parts, id).await,
         Binding::DeletePeriodicTask => {
             operator::delete_periodic_task(&doors.admin, &parts, id).await
         }
@@ -1208,6 +1221,11 @@ mod tests {
             resolve(&post, "/v1/admin/deadLetters:purge"),
             Some(Binding::PurgeDeadLetters)
         );
+        assert_eq!(
+            resolve(&post, "/v1/admin/workers/w-1:drain"),
+            Some(Binding::DrainWorker)
+        );
+        assert_eq!(resolve(&post, "/v1/admin/workers:drain"), None);
         assert_eq!(resolve(&post, "/v1/admin/queues/emails:drain"), None);
         assert_eq!(resolve(&post, "/v1/admin/queues/emails"), None);
         assert_eq!(resolve(&post, "/v1/admin/queues/:pause"), None);

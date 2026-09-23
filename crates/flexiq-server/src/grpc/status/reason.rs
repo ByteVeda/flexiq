@@ -61,6 +61,8 @@ pub const JOB_NOT_FOUND: &str = "JOB_NOT_FOUND";
 pub const DEAD_LETTER_NOT_FOUND: &str = "DEAD_LETTER_NOT_FOUND";
 /// No such periodic task in this namespace. `flexiq.admin.v1`.
 pub const PERIODIC_TASK_NOT_FOUND: &str = "PERIODIC_TASK_NOT_FOUND";
+/// No such registered worker in this namespace. `flexiq.admin.v1`.
+pub const WORKER_NOT_FOUND: &str = "WORKER_NOT_FOUND";
 /// A `depends_on` id names nothing this caller may depend on.
 pub const DEPENDENCY_NOT_FOUND: &str = "DEPENDENCY_NOT_FOUND";
 /// The queue is at its admission cap. Carries `queue`, `pending` and `cap`.

@@ -42,8 +42,9 @@ import "google/protobuf/timestamp.proto";
 //
 //   * A settings door. The settings KV holds credentials and published
 //     policy; a generic read or write of it is not an operator operation.
-//   * Draining a worker. A worker cannot yet be told to drain from outside,
-//     and an RPC that reported success for a signal nobody reads would lie.
+//   * Draining an attached or push executor. `DrainWorker` reaches registered
+//     workers — the rows `ListWorkers` shows; an executor behind the
+//     scheduler has no row of its own.
 //   * Live effect for overrides. A worker reads overrides when it starts, so a
 //     change reaches the next worker start and no running worker.
 service AdminService {
@@ -109,6 +110,17 @@ service AdminService {
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
     option (google.api.http) = {get: "/v1/admin/workers"};
+  }
+
+  // Ask one worker to drain: it stops claiming work, finishes what it holds,
+  // and unregisters — the same graceful stop a SIGTERM gives it.
+  //
+  // The worker reads the request on its next heartbeat, a few seconds later,
+  // so the answer is the request recorded, not the drain done: the worker
+  // comes back DRAINING, and leaves ListWorkers once it has stopped.
+  rpc DrainWorker(DrainWorkerRequest) returns (DrainWorkerResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {post: "/v1/admin/workers/{worker_id}:drain"};
   }
 
   // Every periodic task in the namespace.
@@ -392,6 +404,15 @@ message ListWorkersRequest {}
 message ListWorkersResponse {
   // By id. Not paginated: bounded by the fleet.
   repeated Worker workers = 1;
+}
+
+message DrainWorkerRequest {
+  string worker_id = 1;
+}
+
+message DrainWorkerResponse {
+  // The worker after the call: DRAINING.
+  Worker worker = 1;
 }
 
 // ── Periodic tasks ─────────────────────────────────────────────────────
