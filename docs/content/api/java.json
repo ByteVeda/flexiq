@@ -359,6 +359,20 @@
     },
     {
       "owner": "FlexiQ",
+      "name": "drainWorker",
+      "kind": "method",
+      "signature": "boolean drainWorker(String workerId)",
+      "params": [
+        {
+          "name": "workerId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
       "name": "dryRunRetention",
       "kind": "method",
       "signature": "RetentionPreview dryRunRetention()",
@@ -1214,6 +1228,14 @@
         }
       ],
       "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "namespace",
+      "kind": "method",
+      "signature": "Optional<String> namespace()",
+      "params": [],
+      "returns": "Optional<String>"
     },
     {
       "owner": "FlexiQ",

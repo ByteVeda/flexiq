@@ -592,6 +592,12 @@ queue.replayJob(jobId: string): Promise<string>
 queue.requestCancel(id: string): boolean
 ```
 
+### `queue.requestWorkerDrain()`
+
+```typescript
+queue.requestWorkerDrain(workerId: string): boolean
+```
+
 ### `queue.requeueJob()`
 
 ```typescript
@@ -796,7 +802,7 @@ queue.updateProgress(id: string, progress: number): void
 queue.workerHeartbeat(
     workerId: string,
     resourceHealth?: string | undefined | null
-): Promise<Array<string>>
+): Promise<JsHeartbeat>
 ```
 
 ### `queue.workflowNodeForJob()`

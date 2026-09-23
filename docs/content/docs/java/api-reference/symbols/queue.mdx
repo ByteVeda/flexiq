@@ -119,6 +119,12 @@ FlexiQ dispatchOrder(String queue, DispatchOrder order)
 @Deprecated FlexiQ dispatchOrder(String queue, String order)
 ```
 
+### `flexiq.drainWorker()`
+
+```java
+boolean drainWorker(String workerId)
+```
+
 ### `flexiq.dryRunRetention()`
 
 ```java
@@ -415,6 +421,12 @@ int minContract()
 
 ```java
 boolean nackMessage(String topic, String name, String messageId)
+```
+
+### `flexiq.namespace()`
+
+```java
+Optional<String> namespace()
 ```
 
 ### `flexiq.onEvent()`
