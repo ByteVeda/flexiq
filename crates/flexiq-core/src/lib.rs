@@ -17,6 +17,8 @@ pub mod job;
 pub mod lease;
 /// Facts about IP space, shared by every outbound guard in the workspace.
 pub mod net;
+/// Settings keys for task and queue runtime overrides.
+pub mod overrides;
 /// Periodic (cron) task scheduling helpers.
 pub mod periodic;
 pub mod pubsub;
@@ -57,6 +59,7 @@ pub use http::auth::{AuthError, OutboundAuth, Signer, SigningRequest};
 pub use http::{DispatchClient, EgressPolicy, EgressRefusal};
 pub use job::{now_millis, Job, JobCompletion, JobStatus, NewJob};
 pub use lease::{lease_authorizes, mint_claim_epoch, Lease, LeaseBook, MAX_LEASE_EXTENSION};
+pub use overrides::{override_key, override_prefix, OverrideScope};
 pub use resilience::circuit_breaker::{CircuitBreakerConfig, CircuitState};
 pub use resilience::rate_limiter::RateLimitConfig;
 pub use resilience::retry::RetryPolicy;
