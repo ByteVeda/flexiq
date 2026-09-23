@@ -351,14 +351,19 @@ pub trait Storage: Send + Sync + Clone {
         namespace: Option<&str>,
     ) -> Result<Vec<DeadJob>>;
     /// Delete every dead-letter entry for a task. Returns the number removed.
-    fn purge_dead_by_task(&self, task_name: &str) -> Result<u64>;
+    /// `namespace` of `None` purges every namespace, like `list_dead`'s read.
+    fn purge_dead_by_task(&self, task_name: &str, namespace: Option<&str>) -> Result<u64>;
+    /// One dead-letter entry, payload included, or `None` when absent. An
+    /// entry in another namespace reads as absent.
+    fn get_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<Option<DeadJob>>;
     /// Re-enqueue a dead-letter entry as a fresh job, deleting the entry.
     /// Returns the new job's id; `JobNotFound` if the entry is absent.
     /// An entry in another namespace reports `JobNotFound`.
     fn retry_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<String>;
     /// Purge dead-letter entries older than the cutoff. Returns the count
-    /// removed.
-    fn purge_dead(&self, older_than_ms: i64) -> Result<u64>;
+    /// removed. `namespace` of `None` purges every namespace, like
+    /// `list_dead`'s read; retention uses [`Self::purge_dead_with_ttl`].
+    fn purge_dead(&self, older_than_ms: i64, namespace: Option<&str>) -> Result<u64>;
     /// Delete one dead-letter entry. Returns `false` when no row matched.
     /// An entry in another namespace reports `false`.
     fn delete_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<bool>;

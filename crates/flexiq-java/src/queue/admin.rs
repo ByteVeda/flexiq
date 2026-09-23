@@ -95,7 +95,9 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_purgeDead<'
 ) -> jlong {
     guard(&mut env, 0, |_env| {
         let queue = unsafe { borrow_queue(handle) };
-        Ok(queue.storage.purge_dead(older_than_ms)? as jlong)
+        Ok(queue
+            .storage
+            .purge_dead(older_than_ms, queue.namespace.as_deref())? as jlong)
     })
 }
 
@@ -135,7 +137,9 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_purgeDeadBy
     guard(&mut env, 0, |env| {
         let queue = unsafe { borrow_queue(handle) };
         let task = read_string(env, &task_name)?;
-        Ok(queue.storage.purge_dead_by_task(&task)? as jlong)
+        Ok(queue
+            .storage
+            .purge_dead_by_task(&task, queue.namespace.as_deref())? as jlong)
     })
 }
 

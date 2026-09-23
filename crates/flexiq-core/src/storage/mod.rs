@@ -797,8 +797,19 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Vec<$crate::storage::DeadJob>> {
                 self.list_dead_by_task(task_name, limit, offset, namespace)
             }
-            fn purge_dead_by_task(&self, task_name: &str) -> $crate::error::Result<u64> {
-                self.purge_dead_by_task(task_name)
+            fn purge_dead_by_task(
+                &self,
+                task_name: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<u64> {
+                self.purge_dead_by_task(task_name, namespace)
+            }
+            fn get_dead(
+                &self,
+                dead_id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<Option<$crate::storage::DeadJob>> {
+                self.get_dead(dead_id, namespace)
             }
             fn retry_dead(
                 &self,
@@ -807,8 +818,12 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<String> {
                 self.retry_dead(dead_id, namespace)
             }
-            fn purge_dead(&self, older_than_ms: i64) -> $crate::error::Result<u64> {
-                self.purge_dead(older_than_ms)
+            fn purge_dead(
+                &self,
+                older_than_ms: i64,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<u64> {
+                self.purge_dead(older_than_ms, namespace)
             }
             fn delete_dead(
                 &self,
@@ -1805,14 +1820,17 @@ impl Storage for StorageBackend {
     ) -> Result<Vec<DeadJob>> {
         delegate!(self, list_dead_by_task, task_name, limit, offset, namespace)
     }
-    fn purge_dead_by_task(&self, task_name: &str) -> Result<u64> {
-        delegate!(self, purge_dead_by_task, task_name)
+    fn purge_dead_by_task(&self, task_name: &str, namespace: Option<&str>) -> Result<u64> {
+        delegate!(self, purge_dead_by_task, task_name, namespace)
+    }
+    fn get_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<Option<DeadJob>> {
+        delegate!(self, get_dead, dead_id, namespace)
     }
     fn retry_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<String> {
         delegate!(self, retry_dead, dead_id, namespace)
     }
-    fn purge_dead(&self, older_than_ms: i64) -> Result<u64> {
-        delegate!(self, purge_dead, older_than_ms)
+    fn purge_dead(&self, older_than_ms: i64, namespace: Option<&str>) -> Result<u64> {
+        delegate!(self, purge_dead, older_than_ms, namespace)
     }
     fn delete_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<bool> {
         delegate!(self, delete_dead, dead_id, namespace)

@@ -2243,7 +2243,7 @@ fn test_purge_dead_drains_across_batches() {
         storage.move_to_dlq(&running, "boom", None).unwrap();
     }
 
-    let removed = storage.purge_dead(now_millis() + 10_000).unwrap();
+    let removed = storage.purge_dead(now_millis() + 10_000, None).unwrap();
     assert_eq!(removed, 550, "batched purge must drain every dead row");
     assert!(storage.list_dead(1000, 0, None).unwrap().is_empty());
 }

@@ -641,6 +641,56 @@ fn test_count_expired_rows_none_cutoff_counts_per_entry_only(s: &impl Storage) {
     assert_eq!(after.job_errors, before.job_errors);
 }
 
+/// Dead-letter an entry for `task_name` in `namespace`, returning its DLQ id.
+fn dead_letter_in(s: &impl Storage, q: &str, task_name: &str, namespace: Option<&str>) -> String {
+    let mut new_job = make_job(q, task_name);
+    new_job.namespace = namespace.map(str::to_owned);
+    let job = s.enqueue(new_job).unwrap();
+    s.dequeue(q, now_millis() + 1000, namespace).unwrap();
+    let running = s.get_job(&job.id, None).unwrap().unwrap();
+    s.move_to_dlq(&running, "boom", None).unwrap();
+    s.list_dead(100, 0, namespace)
+        .unwrap()
+        .into_iter()
+        .find(|d| d.original_job_id == job.id)
+        .unwrap()
+        .id
+}
+
+/// #836: a scoped purge and a scoped read reach one namespace's dead letters;
+/// `None` stays unscoped, like `list_dead`.
+fn test_dead_letter_purge_and_get_are_namespace_scoped(s: &impl Storage) {
+    let q = "q-dlq-ns";
+    let (a, b) = (Some("dns-tenant-a"), Some("dns-tenant-b"));
+    let in_a = dead_letter_in(s, q, "dns_task", a);
+    let in_b = dead_letter_in(s, q, "dns_task", b);
+
+    // A read is scoped, and carries the payload a listing omits.
+    let read = s.get_dead(&in_a, a).unwrap().expect("own entry");
+    assert_eq!(read.payload, make_job(q, "dns_task").payload);
+    assert!(
+        s.get_dead(&in_a, b).unwrap().is_none(),
+        "read across tenants"
+    );
+    assert!(
+        s.get_dead(&in_a, None).unwrap().is_some(),
+        "None is unscoped"
+    );
+    assert!(s.get_dead("no-such-dead-id", a).unwrap().is_none());
+
+    // A scoped purge by task leaves the other tenant's entry.
+    assert_eq!(s.purge_dead_by_task("dns_task", a).unwrap(), 1);
+    assert!(s.get_dead(&in_a, None).unwrap().is_none());
+    assert!(s.get_dead(&in_b, None).unwrap().is_some());
+
+    // So does a scoped purge by age.
+    let in_a = dead_letter_in(s, q, "dns_task", a);
+    assert_eq!(s.purge_dead(now_millis() + 60_000, a).unwrap(), 1);
+    assert!(s.get_dead(&in_a, None).unwrap().is_none());
+    assert!(s.get_dead(&in_b, None).unwrap().is_some());
+    assert_eq!(s.purge_dead(now_millis() + 60_000, b).unwrap(), 1);
+}
+
 fn test_dead_letter_by_task(s: &impl Storage) {
     let q = "q-dlq-by-task";
 
@@ -665,7 +715,7 @@ fn test_dead_letter_by_task(s: &impl Storage) {
     assert_eq!(page[0].task_name, "task_a");
 
     // Purge removes only the matching task's entries.
-    assert_eq!(s.purge_dead_by_task("task_a").unwrap(), 2);
+    assert_eq!(s.purge_dead_by_task("task_a", None).unwrap(), 2);
     assert!(s
         .list_dead_by_task("task_a", 10, 0, None)
         .unwrap()
@@ -2731,6 +2781,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_every_enqueue_path_writes_dependency_rows(s);
     test_dead_letter_queue(s);
     test_dead_letter_by_task(s);
+    test_dead_letter_purge_and_get_are_namespace_scoped(s);
     test_purge_retention_covers_every_status(s);
     test_purge_retention_honors_per_entry_ttl(s);
     test_purge_retention_keeps_job_errors(s);
@@ -4250,7 +4301,7 @@ fn redis_purge_dead_drains_across_batches(s: &flexiq_core::RedisStorage) {
     }
 
     // Cutoff far in the future so every dead entry is eligible.
-    let removed = s.purge_dead(now_millis() + 3_600_000).unwrap();
+    let removed = s.purge_dead(now_millis() + 3_600_000, None).unwrap();
     assert!(
         removed >= 550,
         "batched purge_dead must remove all >500 eligible entries, got {removed}"

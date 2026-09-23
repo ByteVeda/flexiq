@@ -224,7 +224,8 @@ impl DataSource for DbSource {
     fn purge_dead(&self) -> Result<u64> {
         // Max cutoff → every entry, including same-millisecond or clock-skewed
         // future timestamps a `now`-based cutoff would miss.
-        Ok(self.be.storage.purge_dead(i64::MAX)?)
+        // Unscoped, like the TUI's dead-letter listing.
+        Ok(self.be.storage.purge_dead(i64::MAX, None)?)
     }
 
     // The TUI reads the default namespace throughout (`stats(None)` above), so

@@ -100,9 +100,10 @@ impl JsQueue {
     #[napi]
     pub async fn purge_dead_by_task(&self, task_name: String) -> Result<i64> {
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
             storage
-                .purge_dead_by_task(&task_name)
+                .purge_dead_by_task(&task_name, namespace.as_deref())
                 .map(|n| n as i64)
                 .map_err(to_napi_err)
         })
@@ -184,9 +185,10 @@ impl JsQueue {
     pub async fn purge_dead(&self, older_than_ms: i64) -> Result<i64> {
         let older_than_ms = non_negative(older_than_ms, "olderThanMs")?;
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
             storage
-                .purge_dead(older_than_ms)
+                .purge_dead(older_than_ms, namespace.as_deref())
                 .map(|n| n as i64)
                 .map_err(to_napi_err)
         })

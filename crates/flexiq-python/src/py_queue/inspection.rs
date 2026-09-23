@@ -263,7 +263,7 @@ impl PyQueue {
     /// Purge every dead letter entry for a task. Returns the count removed.
     pub fn purge_dead_by_task(&self, task_name: &str) -> PyResult<u64> {
         self.storage
-            .purge_dead_by_task(task_name)
+            .purge_dead_by_task(task_name, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -286,7 +286,7 @@ impl PyQueue {
     pub fn purge_dead(&self, older_than_seconds: i64) -> PyResult<u64> {
         let cutoff = now_millis().saturating_sub(older_than_seconds.saturating_mul(1000));
         self.storage
-            .purge_dead(cutoff)
+            .purge_dead(cutoff, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
