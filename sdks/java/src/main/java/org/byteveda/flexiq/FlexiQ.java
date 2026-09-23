@@ -779,6 +779,14 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
     }
 
     /**
+     * The namespace this client reads and writes under, as set by
+     * {@link Builder#namespace(String)}.
+     *
+     * @return the namespace, or empty for the default namespace
+     */
+    Optional<String> namespace();
+
+    /**
      * The retention windows a worker is applying to this queue's namespace, or
      * empty when no worker has swept yet — distinct from retention being
      * disabled, which reports with {@code enabled = false}.
@@ -1649,7 +1657,8 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
          * @return the client
          */
         public FlexiQ open(QueueBackend backend) {
-            return new DefaultFlexiQ(backend, effectiveSerializer(), namedCodecs, middlewareTimeout);
+            return new DefaultFlexiQ(
+                    backend, effectiveSerializer(), namedCodecs, middlewareTimeout, configuredNamespace());
         }
 
         /**
@@ -1666,7 +1675,16 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
                 throw new ConfigurationException("url (dsn) is required");
             }
             return new DefaultFlexiQ(
-                    JniQueueBackend.open(encodeOptions()), effectiveSerializer(), namedCodecs, middlewareTimeout);
+                    JniQueueBackend.open(encodeOptions()),
+                    effectiveSerializer(),
+                    namedCodecs,
+                    middlewareTimeout,
+                    configuredNamespace());
+        }
+
+        /** The configured namespace; {@code null} is the default one. */
+        private @Nullable String configuredNamespace() {
+            return (String) options.get("namespace");
         }
 
         /** Create the SQLite file's parent directory (skip in-memory databases). */

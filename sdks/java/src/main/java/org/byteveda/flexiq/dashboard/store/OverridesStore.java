@@ -1,5 +1,6 @@
 package org.byteveda.flexiq.dashboard.store;
 
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -9,18 +10,41 @@ import org.byteveda.flexiq.internal.SettingsDocument;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Per-task and per-queue runtime overrides, persisted in the settings KV at
- * {@code overrides:task:<name>} / {@code overrides:queue:<name>}. Rows are
- * normalised (every field present, unset fields {@code null}) and stamped with
- * {@code updated_at} in milliseconds. A {@code null} field in a PUT patch clears
- * it; absent fields are left unchanged.
+ * Per-task and per-queue runtime overrides, persisted in the settings KV. The
+ * KV is one keyspace for the whole database, so the key carries the namespace
+ * (cross-SDK contract):
+ *
+ * <ul>
+ *   <li>default namespace: {@code overrides:task:<name>} / {@code overrides:queue:<name>};
+ *   <li>namespace {@code N}: {@code overrides:ns:<len>:<N>:task:<name>} /
+ *       {@code overrides:ns:<len>:<N>:queue:<name>}, {@code <len>} being
+ *       {@code N}'s UTF-8 byte length so a {@code :} in {@code N} cannot collide.
+ * </ul>
+ *
+ * <p>Rows are normalised (every field present, unset fields {@code null}) and
+ * stamped with {@code updated_at} in milliseconds. A {@code null} field in a PUT
+ * patch clears it; absent fields are left unchanged.
  */
 public final class OverridesStore {
-    /** Prefix of the per-task override keys. */
+    /** Prefix of the per-task override keys in the default namespace. */
     public static final String TASK_PREFIX = "overrides:task:";
 
-    /** Prefix of the per-queue override keys. */
+    /** Prefix of the per-queue override keys in the default namespace. */
     public static final String QUEUE_PREFIX = "overrides:queue:";
+
+    /** Which subject an override applies to. */
+    public enum Scope {
+        /** One task. */
+        TASK("task"),
+        /** One queue. */
+        QUEUE("queue");
+
+        private final String segment;
+
+        Scope(String segment) {
+            this.segment = segment;
+        }
+    }
 
     private static final List<String> TASK_FIELDS =
             List.of("rate_limit", "max_concurrent", "max_retries", "retry_backoff", "timeout", "priority", "paused");
@@ -30,14 +54,57 @@ public final class OverridesStore {
             SettingsDocument.codec(OverridesStore::decodeRow, Json::toString);
 
     private final SettingsAccess settings;
+    private final String taskPrefix;
+    private final String queuePrefix;
 
     /**
-     * A store over one queue's settings documents.
+     * A store over the default namespace's override rows.
      *
      * @param settings where the override rows live
      */
     public OverridesStore(SettingsAccess settings) {
+        this(settings, null);
+    }
+
+    /**
+     * A store over one namespace's override rows.
+     *
+     * @param settings where the override rows live
+     * @param namespace the namespace the rows belong to; {@code null} is the default
+     *     namespace, distinct from the empty string
+     */
+    public OverridesStore(SettingsAccess settings, @Nullable String namespace) {
         this.settings = settings;
+        this.taskPrefix = prefix(Scope.TASK, namespace);
+        this.queuePrefix = prefix(Scope.QUEUE, namespace);
+    }
+
+    /**
+     * The key prefix every override in {@code scope} and {@code namespace}
+     * shares; strip it from a key to get the subject's name.
+     *
+     * @param scope task or queue
+     * @param namespace the namespace, or {@code null} for the default
+     * @return the prefix
+     */
+    public static String prefix(Scope scope, @Nullable String namespace) {
+        if (namespace == null) {
+            return "overrides:" + scope.segment + ":";
+        }
+        int len = namespace.getBytes(StandardCharsets.UTF_8).length;
+        return "overrides:ns:" + len + ":" + namespace + ":" + scope.segment + ":";
+    }
+
+    /**
+     * The settings key of one subject's override.
+     *
+     * @param scope task or queue
+     * @param namespace the namespace, or {@code null} for the default
+     * @param name the task's or queue's name
+     * @return the key
+     */
+    public static String key(Scope scope, @Nullable String namespace, String name) {
+        return prefix(scope, namespace) + name;
     }
 
     /**
@@ -47,7 +114,7 @@ public final class OverridesStore {
      * @return the normalised row, or {@code null} when none is stored
      */
     public @Nullable Map<String, Object> getTask(String name) {
-        return read(TASK_PREFIX + name);
+        return read(taskPrefix + name);
     }
 
     /**
@@ -57,7 +124,7 @@ public final class OverridesStore {
      * @return the normalised row, or {@code null} when none is stored
      */
     public @Nullable Map<String, Object> getQueue(String name) {
-        return read(QUEUE_PREFIX + name);
+        return read(queuePrefix + name);
     }
 
     /**
@@ -69,7 +136,7 @@ public final class OverridesStore {
      * @return the row as it stands after the write
      */
     public Map<String, Object> putTask(String name, Map<String, Object> patch) {
-        return put(TASK_PREFIX + name, "task_name", name, TASK_FIELDS, patch);
+        return put(taskPrefix + name, "task_name", name, TASK_FIELDS, patch);
     }
 
     /**
@@ -81,7 +148,7 @@ public final class OverridesStore {
      * @return the row as it stands after the write
      */
     public Map<String, Object> putQueue(String name, Map<String, Object> patch) {
-        return put(QUEUE_PREFIX + name, "queue_name", name, QUEUE_FIELDS, patch);
+        return put(queuePrefix + name, "queue_name", name, QUEUE_FIELDS, patch);
     }
 
     /**
@@ -91,7 +158,7 @@ public final class OverridesStore {
      * @return whether a row existed
      */
     public boolean deleteTask(String name) {
-        return settings.deleteSetting(TASK_PREFIX + name);
+        return settings.deleteSetting(taskPrefix + name);
     }
 
     /**
@@ -101,7 +168,7 @@ public final class OverridesStore {
      * @return whether a row existed
      */
     public boolean deleteQueue(String name) {
-        return settings.deleteSetting(QUEUE_PREFIX + name);
+        return settings.deleteSetting(queuePrefix + name);
     }
 
     /**
@@ -110,7 +177,7 @@ public final class OverridesStore {
      * @return the names, sorted
      */
     public java.util.Set<String> taskNames() {
-        return names(TASK_PREFIX);
+        return names(taskPrefix);
     }
 
     /**
@@ -119,7 +186,7 @@ public final class OverridesStore {
      * @return the names, sorted
      */
     public java.util.Set<String> queueNames() {
-        return names(QUEUE_PREFIX);
+        return names(queuePrefix);
     }
 
     private java.util.Set<String> names(String prefix) {

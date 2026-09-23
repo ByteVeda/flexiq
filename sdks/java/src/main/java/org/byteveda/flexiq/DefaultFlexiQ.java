@@ -121,6 +121,8 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     private final Map<String, PayloadCodec> codecs;
     /** Per-hook middleware budget; {@code null} leaves the worker's own default. */
     private final @Nullable Duration middlewareTimeout;
+    /** The namespace set at open; {@code null} is the default one. */
+    private final @Nullable String namespace;
 
     private final List<Middleware> middleware = new CopyOnWriteArrayList<>();
     private final ResourceRuntime resources = new ResourceRuntime();
@@ -146,12 +148,19 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
             QueueBackend backend,
             Serializer serializer,
             Map<String, PayloadCodec> codecs,
-            @Nullable Duration middlewareTimeout) {
+            @Nullable Duration middlewareTimeout,
+            @Nullable String namespace) {
         this.backend = backend;
         this.facade = new CoreFacade(backend);
         this.serializer = serializer;
         this.codecs = codecs;
         this.middlewareTimeout = middlewareTimeout;
+        this.namespace = namespace;
+    }
+
+    @Override
+    public Optional<String> namespace() {
+        return Optional.ofNullable(namespace);
     }
 
     @Override
