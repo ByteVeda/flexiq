@@ -56,7 +56,8 @@ pub struct SchedulerConfig {
     /// Maximum number of jobs claimed per dispatch round. `None` (the
     /// default) lets the backend pick: [`REDIS_DEFAULT_BATCH_SIZE`] on Redis,
     /// `1` (unchanged behavior) on SQLite/Postgres. `Some(n)` is always
-    /// honoured, clamped to at least 1. Resolve via [`Scheduler::batch_size`].
+    /// honoured, clamped to at least 1. Resolved once per dispatch round by
+    /// the scheduler's internal `batch_size()`.
     pub batch_size: Option<usize>,
     /// Upper bound on jobs this scheduler keeps in flight (dispatched to the
     /// worker channel but not yet finished). Set it to the worker pool's
