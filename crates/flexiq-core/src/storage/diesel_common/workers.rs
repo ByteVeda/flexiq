@@ -37,11 +37,20 @@ macro_rules! impl_diesel_worker_ops {
                 Ok(())
             }
 
-            /// List all workers with their heartbeat status.
-            pub fn list_workers(&self) -> Result<Vec<$crate::storage::records::WorkerInfo>> {
+            /// The namespace's workers with their heartbeat status. `None` is
+            /// the default namespace, never "every namespace".
+            pub fn list_workers(
+                &self,
+                namespace: Option<&str>,
+            ) -> Result<Vec<$crate::storage::records::WorkerInfo>> {
                 let mut conn = self.conn()?;
 
-                let rows = workers::table
+                let query = workers::table.into_boxed();
+                let query = match namespace {
+                    Some(ns) => query.filter(workers::namespace.eq(ns)),
+                    None => query.filter(workers::namespace.is_null()),
+                };
+                let rows = query
                     .select(WorkerRow::as_select())
                     .load::<WorkerRow>(&mut conn)?;
 

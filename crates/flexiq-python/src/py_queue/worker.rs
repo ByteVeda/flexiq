@@ -593,7 +593,8 @@ impl PyQueue {
                 // The native module's version, which maturin builds from the
                 // same workspace version the wheel carries.
                 .sdk(Some("python"), Some(env!("CARGO_PKG_VERSION")))
-                .registry_fingerprint(fingerprint.as_deref()),
+                .registry_fingerprint(fingerprint.as_deref())
+                .namespace(self.namespace.as_deref()),
         );
 
         // Build the dispatcher up front for the prefork case so we can install

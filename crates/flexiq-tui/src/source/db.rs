@@ -107,7 +107,7 @@ impl DataSource for DbSource {
     }
 
     fn workers(&self) -> Result<Vec<WorkerView>> {
-        let workers = self.be.storage.list_workers()?;
+        let workers = self.be.storage.list_workers(None)?;
         Ok(workers
             .into_iter()
             .map(|w| WorkerView {

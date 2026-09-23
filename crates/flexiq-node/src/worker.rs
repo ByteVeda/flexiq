@@ -124,6 +124,8 @@ pub fn start_worker(
     // execution under, so it keeps its own storage handle alongside it.
     let steps_storage = storage.clone();
     let steps_namespace = namespace.clone();
+    // The registry row records the namespace so a scoped listing finds it.
+    let lifecycle_namespace = namespace.clone();
     // Mesh gossip advertises the served queues; capture them before `queues`
     // moves into the scheduler.
     #[cfg(feature = "mesh")]
@@ -176,6 +178,7 @@ pub fn start_worker(
         // the registry row stays one comparable value however many tasks a
         // worker serves.
         registry_fingerprint(options.tasks.iter().flatten()),
+        lifecycle_namespace,
         lifecycle_stop.clone(),
     );
 
@@ -327,6 +330,7 @@ fn spawn_worker_lifecycle(
     resources: Option<String>,
     capacity: usize,
     registry_fingerprint: Option<String>,
+    namespace: Option<String>,
     stop: Arc<Notify>,
 ) {
     let hostname = gethostname::gethostname().to_string_lossy().to_string();
@@ -346,7 +350,8 @@ fn spawn_worker_lifecycle(
                     .pool_type(Some("node"))
                     // The addon's version, which the package is published from.
                     .sdk(Some("node"), Some(env!("CARGO_PKG_VERSION")))
-                    .registry_fingerprint(registry_fingerprint.as_deref()),
+                    .registry_fingerprint(registry_fingerprint.as_deref())
+                    .namespace(namespace.as_deref()),
             )
         })
         .await

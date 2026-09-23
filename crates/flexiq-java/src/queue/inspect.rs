@@ -270,7 +270,7 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_listWorkers
 ) -> jstring {
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
-        let workers = queue.storage.list_workers()?;
+        let workers = queue.storage.list_workers(queue.namespace.as_deref())?;
         let views: Vec<WorkerView> = workers.iter().map(WorkerView::from).collect();
         new_string(env, to_json(&views)?)
     })

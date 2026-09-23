@@ -457,7 +457,7 @@ fn worker_sdk_columns_are_added_to_a_pre_existing_database() {
         })
         .unwrap();
 
-    let workers = storage.list_workers().unwrap();
+    let workers = storage.list_workers(None).unwrap();
     let worker = workers.iter().find(|w| w.worker_id == "migrated").unwrap();
     assert_eq!(worker.sdk.as_deref(), Some("python"));
     assert_eq!(worker.sdk_version.as_deref(), Some("1.2.3"));
@@ -495,7 +495,7 @@ fn the_registry_fingerprint_column_is_added_to_a_pre_existing_database() {
         })
         .unwrap();
 
-    let workers = storage.list_workers().unwrap();
+    let workers = storage.list_workers(None).unwrap();
     let worker = workers
         .iter()
         .find(|w| w.worker_id == "fingerprinted")
@@ -523,7 +523,7 @@ fn worker_sdk_migration_is_idempotent() {
             ..Default::default()
         })
         .unwrap();
-    let workers = storage.list_workers().unwrap();
+    let workers = storage.list_workers(None).unwrap();
     let worker = workers.iter().find(|w| w.worker_id == "twice").unwrap();
     assert_eq!(worker.sdk.as_deref(), Some("node"));
     assert_eq!(worker.sdk_version, None);
@@ -999,7 +999,7 @@ fn test_reap_dead_workers_removes_stale_keeps_fresh() {
     assert_eq!(reaped, vec!["stale".to_string()]);
 
     let surviving: Vec<String> = storage
-        .list_workers()
+        .list_workers(None)
         .unwrap()
         .into_iter()
         .map(|w| w.worker_id)

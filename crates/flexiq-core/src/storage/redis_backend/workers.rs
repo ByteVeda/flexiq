@@ -37,6 +37,13 @@ impl RedisStorage {
             "registry_fingerprint",
             registration.registry_fingerprint.unwrap_or(""),
         );
+        // The segment encoding, not the bare name: an empty string would
+        // otherwise be both "no namespace" and `Some("")`.
+        pipe.hset(
+            &wkey,
+            "namespace",
+            Self::namespace_segment(registration.namespace),
+        );
         pipe.sadd(&wall, registration.worker_id);
         pipe.query::<()>(&mut conn).map_err(map_err)?;
 
@@ -73,10 +80,15 @@ impl RedisStorage {
         Ok(())
     }
 
-    /// Every registered worker with its heartbeat state.
-    pub fn list_workers(&self) -> Result<Vec<WorkerInfo>> {
+    /// The namespace's registered workers with their heartbeat state. `None`
+    /// is the default namespace, never "every namespace".
+    ///
+    /// One registry set serves every namespace, filtered here: reaping and
+    /// unregistering are by globally unique id and stay namespace-blind.
+    pub fn list_workers(&self, namespace: Option<&str>) -> Result<Vec<WorkerInfo>> {
         let mut conn = self.conn()?;
         let wall = self.key(&["workers", "all"]);
+        let wanted = Self::namespace_segment(namespace);
 
         let worker_ids: Vec<String> = conn.smembers(&wall).map_err(map_err)?;
 
@@ -87,6 +99,11 @@ impl RedisStorage {
                 conn.hgetall(&wkey).map_err(map_err)?;
 
             if data.is_empty() {
+                continue;
+            }
+            // A row registered before #836 has no field: the default namespace.
+            let segment = data.get("namespace").map(String::as_str).unwrap_or("-");
+            if segment != wanted {
                 continue;
             }
 
@@ -124,6 +141,7 @@ impl RedisStorage {
                 sdk: to_opt("sdk"),
                 sdk_version: to_opt("sdk_version"),
                 registry_fingerprint: to_opt("registry_fingerprint"),
+                namespace: namespace.map(str::to_owned),
             });
         }
 

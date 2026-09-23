@@ -175,6 +175,7 @@ diesel::table! {
         sdk -> Nullable<Text>,
         sdk_version -> Nullable<Text>,
         registry_fingerprint -> Nullable<Text>,
+        namespace -> Nullable<Text>,
     }
 }
 

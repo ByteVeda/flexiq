@@ -436,12 +436,16 @@ impl JsQueue {
         .map_err(join_to_napi_err)?
     }
 
-    /// List registered workers (heartbeat + identity).
+    /// List the workers registered in this queue's namespace (heartbeat +
+    /// identity).
     #[napi]
     pub async fn list_workers(&self) -> Result<Vec<JsWorkerRow>> {
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
-            let workers = storage.list_workers().map_err(to_napi_err)?;
+            let workers = storage
+                .list_workers(namespace.as_deref())
+                .map_err(to_napi_err)?;
             Ok(workers.into_iter().map(worker_to_js).collect())
         })
         .await

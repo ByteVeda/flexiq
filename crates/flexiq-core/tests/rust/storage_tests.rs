@@ -811,7 +811,7 @@ fn test_workers(s: &impl Storage) {
     s.heartbeat("w-test-1", Some(r#"{"db":"unhealthy","redis":"healthy"}"#))
         .unwrap();
 
-    let workers = s.list_workers().unwrap();
+    let workers = s.list_workers(None).unwrap();
     assert!(!workers.is_empty());
     let w = workers.iter().find(|w| w.worker_id == "w-test-1").unwrap();
     assert_eq!(w.threads, 4);
@@ -839,7 +839,7 @@ fn test_workers(s: &impl Storage) {
     ))
     .unwrap();
     let quiet = s
-        .list_workers()
+        .list_workers(None)
         .unwrap()
         .into_iter()
         .find(|w| w.worker_id == "w-test-no-registry")
@@ -849,7 +849,7 @@ fn test_workers(s: &impl Storage) {
     // Test update_worker_status
     s.update_worker_status("w-test-1", WorkerStatus::Draining)
         .unwrap();
-    let workers = s.list_workers().unwrap();
+    let workers = s.list_workers(None).unwrap();
     let w = workers.iter().find(|w| w.worker_id == "w-test-1").unwrap();
     assert_eq!(w.status, "draining");
 
@@ -862,6 +862,49 @@ fn test_workers(s: &impl Storage) {
     assert!(!none_live.contains(&"w-test-1".to_string()));
 
     s.unregister_worker("w-test-1").unwrap();
+}
+
+/// A worker registers with its namespace, and a listing shows one namespace's
+/// workers (#836). `None` is the default namespace, not every namespace.
+fn test_workers_are_namespace_scoped(s: &impl Storage) {
+    let ns = Some("wns-tenant");
+    s.register_worker(&WorkerRegistration::new("w-ns-tenant", "q", 1).namespace(ns))
+        .unwrap();
+    s.register_worker(&WorkerRegistration::new("w-ns-default", "q", 1))
+        .unwrap();
+
+    let ids = |namespace| -> Vec<String> {
+        s.list_workers(namespace)
+            .unwrap()
+            .into_iter()
+            .map(|w| w.worker_id)
+            .collect()
+    };
+    let tenant = ids(ns);
+    assert!(tenant.contains(&"w-ns-tenant".to_string()));
+    assert!(!tenant.contains(&"w-ns-default".to_string()));
+    let default = ids(None);
+    assert!(default.contains(&"w-ns-default".to_string()));
+    assert!(!default.contains(&"w-ns-tenant".to_string()));
+    assert!(ids(Some("wns-nobody")).is_empty());
+
+    let row = s
+        .list_workers(ns)
+        .unwrap()
+        .into_iter()
+        .find(|w| w.worker_id == "w-ns-tenant")
+        .unwrap();
+    assert_eq!(row.namespace.as_deref(), ns);
+
+    // The id-keyed members stay namespace-blind: the live set spans both.
+    let live = s
+        .list_live_worker_ids(flexiq_core::job::now_millis() - 10_000)
+        .unwrap();
+    assert!(live.contains(&"w-ns-tenant".to_string()));
+    assert!(live.contains(&"w-ns-default".to_string()));
+
+    s.unregister_worker("w-ns-tenant").unwrap();
+    s.unregister_worker("w-ns-default").unwrap();
 }
 
 fn test_pause_resume_queue(s: &impl Storage) {
@@ -2699,6 +2742,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_progress_tracking(s);
     test_record_and_get_errors(s);
     test_workers(s);
+    test_workers_are_namespace_scoped(s);
     test_pause_resume_queue(s);
     test_pause_resume_queue_is_namespace_scoped(s);
     test_periodic_crud(s);

@@ -53,7 +53,11 @@ pub async fn stats_by_queue(
 
 /// `GET /api/workers`.
 pub async fn workers(State(state): State<SharedState>) -> ApiResult<Json<Value>> {
-    let workers = on_storage(&state, |storage| storage.list_workers()).await?;
+    let namespace = state.namespace.clone();
+    let workers = on_storage(&state, move |storage| {
+        storage.list_workers(namespace.as_deref())
+    })
+    .await?;
     Ok(Json(Value::Array(
         workers.iter().map(dto::worker).collect(),
     )))
@@ -120,7 +124,13 @@ pub async fn scaler(State(state): State<SharedState>, params: Params) -> ApiResu
         let namespace = namespace.clone();
         on_storage(&state, move |storage| storage.stats(namespace.as_deref())).await?
     };
-    let workers = on_storage(&state, |storage| storage.list_workers()).await?;
+    let workers = {
+        let namespace = namespace.clone();
+        on_storage(&state, move |storage| {
+            storage.list_workers(namespace.as_deref())
+        })
+        .await?
+    };
     let per_queue = on_storage(&state, move |storage| {
         storage.stats_all_queues(namespace.as_deref())
     })

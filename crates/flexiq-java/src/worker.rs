@@ -135,6 +135,7 @@ fn start_worker(
         // so the registry row stays one comparable value however many tasks a
         // worker serves.
         registry_fingerprint(options.tasks.iter().flatten()).as_deref(),
+        namespace.as_deref(),
     )?;
     register_subscriptions(&storage, &worker_id, options.subscriptions.take())?;
 
@@ -254,6 +255,7 @@ fn register_live_worker(
     queues_csv: &str,
     capacity: usize,
     registry_fingerprint: Option<&str>,
+    namespace: Option<&str>,
 ) -> Result<(), crate::error::BindingError> {
     let hostname = gethostname::gethostname().to_string_lossy().to_string();
     let pid = std::process::id() as i32;
@@ -264,7 +266,8 @@ fn register_live_worker(
             .pool_type(Some("java"))
             // The native library's version, which the jar is published alongside.
             .sdk(Some("java"), Some(env!("CARGO_PKG_VERSION")))
-            .registry_fingerprint(registry_fingerprint),
+            .registry_fingerprint(registry_fingerprint)
+            .namespace(namespace),
     )?;
     Ok(())
 }

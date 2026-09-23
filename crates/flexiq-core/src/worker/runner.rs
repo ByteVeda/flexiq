@@ -205,6 +205,7 @@ impl Worker {
             sdk: Some("rust"),
             sdk_version: Some(env!("CARGO_PKG_VERSION")),
             registry_fingerprint: fingerprint.as_deref(),
+            namespace: namespace.as_deref(),
             ..Default::default()
         })?;
 

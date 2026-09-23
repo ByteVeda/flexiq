@@ -509,6 +509,8 @@ pub struct WorkerRegistration<'a> {
     /// not report one, and from a worker with nothing registered — neither is
     /// a registry that differs from its peers', so neither gets a value.
     pub registry_fingerprint: Option<&'a str>,
+    /// Namespace the worker serves. `None` is the default namespace.
+    pub namespace: Option<&'a str>,
 }
 
 impl<'a> WorkerRegistration<'a> {
@@ -580,6 +582,15 @@ impl<'a> WorkerRegistration<'a> {
         self.registry_fingerprint = registry_fingerprint;
         self
     }
+
+    /// Namespace the worker serves — the one its scheduler dequeues from.
+    /// `None` is the default namespace. A registry listing is scoped by it, so
+    /// a shell that leaves it unset shows its workers in the default
+    /// namespace's listing and nowhere else.
+    pub fn namespace(mut self, namespace: Option<&'a str>) -> Self {
+        self.namespace = namespace;
+        self
+    }
 }
 
 /// A registered worker as seen by the cluster registry.
@@ -623,6 +634,9 @@ pub struct WorkerInfo {
     /// by host. `None` from a shell that predates the field, and from a worker
     /// with nothing registered.
     pub registry_fingerprint: Option<String>,
+    /// Namespace the worker serves. `None` is the default namespace, and also
+    /// what a worker registered before `0021_worker_namespace` reads as.
+    pub namespace: Option<String>,
 }
 
 /// Holder and expiry of a distributed lock.

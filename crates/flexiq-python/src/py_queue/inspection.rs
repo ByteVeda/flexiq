@@ -540,11 +540,11 @@ impl PyQueue {
 
     // ── Worker API ───────────────────────────────────────────────
 
-    /// List all registered workers.
+    /// List the workers registered in this queue's namespace.
     pub fn list_workers(&self) -> PyResult<Vec<Py<PyAny>>> {
         let rows = self
             .storage
-            .list_workers()
+            .list_workers(self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         Python::attach(|py| {

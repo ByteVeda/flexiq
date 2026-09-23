@@ -185,7 +185,7 @@ fn a_worker_records_a_fingerprint_of_its_task_registry() {
         .spawn()
         .expect("spawn");
 
-    let workers = storage.list_workers().expect("list_workers");
+    let workers = storage.list_workers(None).expect("list_workers");
     let worker = workers.first().expect("the worker registered");
     // The value `crates/flexiq-core/BINDING_CONTRACT.md` pins for this set.
     assert_eq!(
@@ -204,7 +204,7 @@ fn a_worker_with_nothing_registered_reports_no_fingerprint() {
     let storage = test_backend();
     let handle = Worker::new(storage.clone()).spawn().expect("spawn");
 
-    let workers = storage.list_workers().expect("list_workers");
+    let workers = storage.list_workers(None).expect("list_workers");
     assert_eq!(
         workers.first().expect("registered").registry_fingerprint,
         None
@@ -244,7 +244,7 @@ fn a_supplied_pool_reports_no_fingerprint_for_handlers_it_will_not_run() {
         .spawn()
         .expect("spawn");
 
-    let workers = storage.list_workers().expect("list_workers");
+    let workers = storage.list_workers(None).expect("list_workers");
     let worker = workers.first().expect("the worker registered");
     assert_eq!(worker.pool_type.as_deref(), Some("remote"));
     assert_eq!(worker.registry_fingerprint, None);

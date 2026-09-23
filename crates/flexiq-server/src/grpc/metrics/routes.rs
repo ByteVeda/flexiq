@@ -60,7 +60,12 @@ async fn scrape(State(state): State<MetricsState>) -> Response {
         Ok(per_queue) => per_queue,
         Err(status) => return error::response(&status),
     };
-    let workers = match on_storage(&state.storage, |storage| storage.list_workers()).await {
+    let namespace = state.namespace.clone();
+    let workers = match on_storage(&state.storage, move |storage| {
+        storage.list_workers(Some(&namespace))
+    })
+    .await
+    {
         Ok(workers) => workers,
         Err(status) => return error::response(&status),
     };

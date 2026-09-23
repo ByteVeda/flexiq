@@ -481,6 +481,7 @@ pub struct WorkerRow {
     pub sdk: Option<String>,
     pub sdk_version: Option<String>,
     pub registry_fingerprint: Option<String>,
+    pub namespace: Option<String>,
 }
 
 #[derive(Insertable, AsChangeset, Debug)]
@@ -501,6 +502,7 @@ pub struct NewWorkerRow<'a> {
     pub sdk: Option<&'a str>,
     pub sdk_version: Option<&'a str>,
     pub registry_fingerprint: Option<&'a str>,
+    pub namespace: Option<&'a str>,
 }
 
 impl<'a> NewWorkerRow<'a> {
@@ -525,6 +527,7 @@ impl<'a> NewWorkerRow<'a> {
             sdk: registration.sdk,
             sdk_version: registration.sdk_version,
             registry_fingerprint: registration.registry_fingerprint,
+            namespace: registration.namespace,
         }
     }
 }
@@ -1017,6 +1020,7 @@ impl From<WorkerRow> for WorkerInfo {
             sdk: r.sdk,
             sdk_version: r.sdk_version,
             registry_fingerprint: r.registry_fingerprint,
+            namespace: r.namespace,
         }
     }
 }

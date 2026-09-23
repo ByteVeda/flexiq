@@ -666,11 +666,17 @@ pub trait Storage: Send + Sync + Clone {
     fn heartbeat(&self, worker_id: &str, resource_health: Option<&str>) -> Result<()>;
     /// Set a worker's lifecycle status.
     fn update_worker_status(&self, worker_id: &str, status: WorkerStatus) -> Result<()>;
-    /// Every registered worker with its heartbeat state.
-    fn list_workers(&self) -> Result<Vec<WorkerInfo>>;
-    /// Ids of workers whose heartbeat is at or after `cutoff_ms`. A narrow
-    /// projection of [`Self::list_workers`] for callers that only need the live
-    /// set and must not pay to load every worker's `resource_health` blob.
+    /// One namespace's registered workers with their heartbeat state.
+    ///
+    /// `None` is the **default namespace**, never a wildcard (#836): the
+    /// namespace is what the worker registered with, and a worker registered
+    /// before `0021_worker_namespace` reads as the default's. The id-keyed
+    /// members around this one stay namespace-blind — a worker id is globally
+    /// unique, and a dead worker is dead in every namespace.
+    fn list_workers(&self, namespace: Option<&str>) -> Result<Vec<WorkerInfo>>;
+    /// Ids of workers in **every** namespace whose heartbeat is at or after
+    /// `cutoff_ms`, for callers that only need the live set and must not pay
+    /// to load every worker's `resource_health` blob.
     fn list_live_worker_ids(&self, cutoff_ms: i64) -> Result<Vec<String>>;
     /// Remove workers whose heartbeat is stale past the dead-worker threshold.
     /// Returns the reaped worker ids.

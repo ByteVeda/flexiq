@@ -1155,8 +1155,9 @@ macro_rules! impl_storage {
             }
             fn list_workers(
                 &self,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::storage::records::WorkerInfo>> {
-                self.list_workers()
+                self.list_workers(namespace)
             }
             fn list_live_worker_ids(
                 &self,
@@ -2122,8 +2123,8 @@ impl Storage for StorageBackend {
     fn update_worker_status(&self, worker_id: &str, status: records::WorkerStatus) -> Result<()> {
         delegate!(self, update_worker_status, worker_id, status)
     }
-    fn list_workers(&self) -> Result<Vec<records::WorkerInfo>> {
-        delegate!(self, list_workers)
+    fn list_workers(&self, namespace: Option<&str>) -> Result<Vec<records::WorkerInfo>> {
+        delegate!(self, list_workers, namespace)
     }
     fn list_live_worker_ids(&self, cutoff_ms: i64) -> Result<Vec<String>> {
         delegate!(self, list_live_worker_ids, cutoff_ms)
