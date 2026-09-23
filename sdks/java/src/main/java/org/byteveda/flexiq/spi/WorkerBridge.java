@@ -89,4 +89,15 @@ public interface WorkerBridge {
             int retryCount,
             boolean timedOut,
             long wallTimeNs);
+
+    /**
+     * An operator asked this worker to drain, read back on its heartbeat. The
+     * runtime has already stopped claiming; the SDK finishes the stop its
+     * shutdown performs. Called at most once, on a native thread that must not
+     * be the one to close the worker — hand the close to another thread.
+     *
+     * <p>A default rather than an abstract method, so a bridge written before
+     * drains existed keeps compiling; it simply stops claiming and never closes.
+     */
+    default void onDrainRequested() {}
 }

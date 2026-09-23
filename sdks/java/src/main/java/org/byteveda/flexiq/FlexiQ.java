@@ -578,6 +578,17 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
     List<WorkerInfo> listWorkers();
 
     /**
+     * Ask one worker in this namespace to drain. It reads the request on its
+     * next heartbeat, stops claiming, finishes its running jobs and
+     * unregisters — the same stop {@link org.byteveda.flexiq.worker.Worker#close()}
+     * performs.
+     *
+     * @param workerId the worker's id, as {@link #listWorkers()} reports it
+     * @return whether such a worker was registered in this namespace
+     */
+    boolean drainWorker(String workerId);
+
+    /**
      * Every configured task's circuit-breaker state.
      *
      * @return one entry per task with a breaker

@@ -201,6 +201,15 @@ public final class NativeQueue {
     public static native String listWorkers(long handle);
 
     /**
+     * Mark one of this namespace's workers draining.
+     *
+     * @param handle the queue handle from {@link #open}
+     * @param workerId the worker's id
+     * @return whether such a worker was registered in this namespace
+     */
+    public static native boolean requestWorkerDrain(long handle, String workerId);
+
+    /**
      * Every task's circuit-breaker state.
      *
      * @param handle the queue handle from {@link #open}

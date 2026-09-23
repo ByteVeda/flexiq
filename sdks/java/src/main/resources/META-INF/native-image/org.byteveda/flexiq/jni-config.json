@@ -40,6 +40,6 @@
 },
 {
   "name":"org.byteveda.flexiq.worker.WorkerDispatchBridge",
-  "methods":[{"name":"onJob","parameterTypes":["long","java.lang.String","java.lang.String","byte[]","java.lang.String","java.lang.String"] }, {"name":"onJob","parameterTypes":["long","java.lang.String","java.lang.String","byte[]","java.lang.String","java.lang.String","int"] }, {"name":"onOutcome","parameterTypes":["java.lang.String","java.lang.String","java.lang.String","java.lang.String","int","boolean","long"] }]
+  "methods":[{"name":"onJob","parameterTypes":["long","java.lang.String","java.lang.String","byte[]","java.lang.String","java.lang.String"] }, {"name":"onJob","parameterTypes":["long","java.lang.String","java.lang.String","byte[]","java.lang.String","java.lang.String","int"] }, {"name":"onOutcome","parameterTypes":["java.lang.String","java.lang.String","java.lang.String","java.lang.String","int","boolean","long"] }, {"name":"onDrainRequested","parameterTypes":[] }]
 }
 ]

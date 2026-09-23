@@ -175,6 +175,26 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_pauseQueue<
     })
 }
 
+/// `boolean requestWorkerDrain(long handle, String workerId)` — mark one of this
+/// namespace's workers draining. False when no such worker is registered here.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_requestWorkerDrain<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    worker_id: JString<'local>,
+) -> jboolean {
+    guard(&mut env, JNI_FALSE, |env| {
+        let queue = unsafe { borrow_queue(handle) };
+        let id = read_string(env, &worker_id)?;
+        Ok(super::to_jboolean(
+            queue
+                .storage
+                .request_worker_drain(&id, queue.namespace.as_deref())?,
+        ))
+    })
+}
+
 /// `void resumeQueue(long handle, String queue)`.
 #[no_mangle]
 pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_resumeQueue<'local>(

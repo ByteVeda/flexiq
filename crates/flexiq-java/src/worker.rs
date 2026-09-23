@@ -23,7 +23,7 @@ use jni::JNIEnv;
 use tokio::sync::Notify;
 
 use flexiq_core::job::now_millis;
-use flexiq_core::{NewSubscription, WorkerRegistration};
+use flexiq_core::{NewSubscription, WorkerRegistration, WorkerStatus};
 
 use crate::backend::QueueHandle;
 use crate::convert::{
@@ -231,7 +231,7 @@ fn start_worker(
     // `recv` is blocking, so it runs on a blocking thread; it exits when the
     // result sender has dropped (dispatcher done).
     let drain_scheduler = scheduler;
-    let drain_callbacks = callbacks;
+    let drain_callbacks = callbacks.clone();
     runtime.spawn_blocking(move || {
         drain_results(result_rx, drain_scheduler, drain_callbacks, capacity)
     });
@@ -241,7 +241,11 @@ fn start_worker(
         &runtime,
         lifecycle_storage,
         worker_id,
-        heartbeat_stop.clone(),
+        Lifecycle {
+            stop: heartbeat_stop.clone(),
+            scheduler_shutdown: shutdown.clone(),
+            callbacks,
+        },
     );
 
     Ok(WorkerHandle {
@@ -626,22 +630,52 @@ fn describe(outcome: &ResultOutcome) -> (&str, &str, &str, Option<&str>, i32, bo
     }
 }
 
+/// What the lifecycle loop signals and is signalled by.
+struct Lifecycle {
+    /// Ends the loop: `NativeWorker.stop`.
+    stop: Arc<Notify>,
+    /// The scheduler's own shutdown, fired on a drain request so claiming stops
+    /// at once rather than when Java gets round to `stop`.
+    scheduler_shutdown: Arc<Notify>,
+    /// The Java `WorkerBridge`, told once when a drain is requested.
+    callbacks: GlobalRef,
+}
+
 /// Heartbeat the already-registered worker every 5s until stopped, then
 /// unregister it. Registration itself happens synchronously at start (see
 /// [`register_live_worker`]) so ephemeral subscriptions never precede it.
+///
+/// A beat that reads the row back `Draining` — an operator's drain request —
+/// stops the scheduler claiming and tells Java once, which then closes the
+/// worker as it would on shutdown. Terminal: the row never reads `Active` again.
 fn spawn_lifecycle(
     runtime: &tokio::runtime::Runtime,
     storage: StorageBackend,
     worker_id: String,
-    stop: Arc<Notify>,
+    lifecycle: Lifecycle,
 ) {
+    let Lifecycle {
+        stop,
+        scheduler_shutdown,
+        callbacks,
+    } = lifecycle;
     runtime.spawn(async move {
+        let mut drain_announced = false;
         loop {
             tokio::select! {
                 _ = stop.notified() => break,
                 _ = tokio::time::sleep(HEARTBEAT_INTERVAL) => {
-                    if let Err(e) = storage.heartbeat(&worker_id, None) {
-                        log::warn!("[flexiq-java] worker heartbeat failed: {e}");
+                    match storage.heartbeat(&worker_id, None) {
+                        Ok(Some(WorkerStatus::Draining)) if !drain_announced => {
+                            drain_announced = true;
+                            log::info!("[flexiq-java] worker {worker_id} draining at an operator's request");
+                            scheduler_shutdown.notify_one();
+                            let callbacks = callbacks.clone();
+                            // JNI attach blocks; keep it off the runtime's workers.
+                            tokio::task::spawn_blocking(move || call_on_drain_requested(&callbacks));
+                        }
+                        Ok(_) => {}
+                        Err(e) => log::warn!("[flexiq-java] worker heartbeat failed: {e}"),
                     }
                     // Elect a single reaper: without this, every worker's 5s
                     // sweep scans the whole registry, O(N) per cluster. Dead-
@@ -666,6 +700,24 @@ fn spawn_lifecycle(
             log::warn!("[flexiq-java] ephemeral subscription reap failed: {e}");
         }
     });
+}
+
+/// Invoke `WorkerBridge.onDrainRequested` on an attached thread. The Java side
+/// only hands the close to a thread of its own: closing drops this runtime,
+/// which cannot happen from one of its own threads.
+fn call_on_drain_requested(callbacks: &GlobalRef) {
+    let mut env = match jvm::vm().attach_current_thread() {
+        Ok(env) => env,
+        Err(e) => {
+            log::error!("[flexiq-java] drain attach failed: {e}");
+            return;
+        }
+    };
+    let called = env.call_method(callbacks, "onDrainRequested", "()V", &[]);
+    if called.is_err() || env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+        log::error!("[flexiq-java] WorkerBridge.onDrainRequested failed");
+    }
 }
 
 /// Borrow a worker handle.

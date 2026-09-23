@@ -73,6 +73,8 @@ public final class Worker implements AutoCloseable {
     private final @Nullable WorkerLifecycle lifecycle;
     /** Guards the one-shot {@code worker.stopped} emission shared by {@link #stop()} and {@link #close()}. */
     private final AtomicBoolean stoppedEmitted = new AtomicBoolean();
+    /** Set by the first drain request, which is terminal. */
+    private final AtomicBoolean drainStarted = new AtomicBoolean();
 
     private final CountDownLatch shutdown = new CountDownLatch(1);
     private boolean closed;
@@ -133,6 +135,21 @@ public final class Worker implements AutoCloseable {
     public void stop() {
         control.stop();
         emitStopped();
+    }
+
+    /**
+     * An operator asked this worker to drain. Close it as a shutdown would, on a
+     * thread of its own: the caller is a native runtime thread, and closing
+     * tears that runtime down. Once — the native side reports a drain once.
+     */
+    private void drainRequested() {
+        if (!drainStarted.compareAndSet(false, true)) {
+            return;
+        }
+        LOG.info("drain requested by an operator; finishing running jobs, then stopping");
+        Thread closer = new Thread(this::close, "flexiq-worker-drain");
+        closer.setDaemon(true);
+        closer.start();
     }
 
     /** Emit {@code worker.stopped} exactly once across {@link #stop()} and {@link #close()}. */
@@ -751,6 +768,7 @@ public final class Worker implements AutoCloseable {
             if (lifecycle != null) {
                 lifecycle.started(worker);
             }
+            bridge.bindDrain(worker::drainRequested);
             return worker;
         }
 

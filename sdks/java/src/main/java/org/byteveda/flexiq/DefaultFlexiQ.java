@@ -812,6 +812,11 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     }
 
     @Override
+    public boolean drainWorker(String workerId) {
+        return backend.requestWorkerDrain(workerId);
+    }
+
+    @Override
     public List<CircuitBreakerState> listCircuitBreakers() {
         return decodeList(backend.listCircuitBreakersJson(), CircuitBreakerState.class);
     }
