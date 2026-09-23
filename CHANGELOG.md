@@ -13,8 +13,8 @@ their entries below keep that name.
 ### Added
 
 - **Triggers** (#847). `FLEXIQ_TRIGGER_LISTEN` turns `flexiq-server` into the thing a webhook
-  sender or an object-store eventing platform calls: a URL that maps an inbound request to one
-  enqueue, with no service of your own in between. Triggers are configuration, not code — a JSON
+  sender or an object-store eventing platform calls: a URL that maps an inbound request to an
+  enqueue per event it carries, with no service of your own in between. Triggers are configuration, not code — a JSON
   file (`FLEXIQ_TRIGGERS_FILE`) fixes each trigger's task, queue and rate limit, and a request
   supplies argument values through JSON Pointer, header, query and constant selectors, never a
   destination. Every trigger verifies its sender (GitHub, Stripe, Standard Webhooks, Twilio, a

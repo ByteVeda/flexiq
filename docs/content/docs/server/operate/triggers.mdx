@@ -5,9 +5,10 @@ description: "Turn an inbound webhook or an object-store event into an enqueue w
 
 Every job enters FlexiQ because something called enqueue. A trigger makes the
 server the thing that gets called: a URL that a webhook sender or an
-object-store eventing platform posts to, and that enqueues one task in
-response. It replaces the small service you would otherwise write, deploy and
-operate for each integration — an endpoint that receives a Stripe webhook and
+object-store eventing platform posts to, and that enqueues a task in
+response — one per event, when a delivery batches several. It replaces the
+small service you would otherwise write, deploy and operate for each
+integration — an endpoint that receives a Stripe webhook and
 enqueues, a function that fires on an S3 upload and enqueues.
 
 ```bash
