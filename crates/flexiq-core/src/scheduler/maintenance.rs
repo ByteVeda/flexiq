@@ -1,8 +1,8 @@
 use log::{error, info, warn};
 
 use crate::error::Result;
-use crate::job::{now_millis, NewJob};
-use crate::periodic::{next_cron_time, next_cron_time_tz};
+use crate::job::now_millis;
+use crate::periodic::{next_run, periodic_job};
 use crate::scheduler::retention::{
     publish_effective_retention, EffectiveRetention, RetentionConfig, DEFAULT_NAMESPACE,
 };
@@ -22,12 +22,6 @@ use super::{JobResult, Scheduler};
 /// `worker::http_target` so its original path still resolves — two constants
 /// carrying one string would be free to disagree.
 pub const ACCEPTED_NOT_SETTLED: &str = "push.accepted_not_settled";
-
-/// Default max retries for periodic tasks.
-const PERIODIC_DEFAULT_MAX_RETRIES: i32 = 3;
-
-/// Default timeout for periodic tasks (ms).
-const PERIODIC_DEFAULT_TIMEOUT_MS: i64 = 300_000;
 
 /// Max log messages compacted per retention tick, bounding each sweep.
 const TOPIC_MESSAGE_PURGE_LIMIT: i64 = 10_000;
@@ -353,34 +347,15 @@ impl Scheduler {
 
         for task in due_tasks {
             let unique_key = Some(format!("periodic:{}:{}", task.name, now));
-            let new_job = NewJob {
-                queue: task.queue.clone(),
-                task_name: task.task_name.clone(),
-                payload: Self::build_periodic_payload(&task.args),
-                priority: 0,
-                scheduled_at: now,
-                max_retries: PERIODIC_DEFAULT_MAX_RETRIES,
-                timeout_ms: PERIODIC_DEFAULT_TIMEOUT_MS,
-                unique_key,
-                metadata: None,
-                notes: None,
-                depends_on: vec![],
-                expires_at: None,
-                result_ttl_ms: None,
-                namespace: task.namespace.clone(),
-                debounce_key: None,
-            };
-
-            if let Err(e) = self.storage.enqueue_unique(new_job) {
+            if let Err(e) = self
+                .storage
+                .enqueue_unique(periodic_job(&task, now, unique_key))
+            {
                 error!("failed to enqueue periodic task '{}': {e}", task.name);
                 continue;
             }
 
-            let next_run = match if let Some(ref tz) = task.timezone {
-                next_cron_time_tz(&task.cron_expr, now, tz)
-            } else {
-                next_cron_time(&task.cron_expr, now)
-            } {
+            let next_run = match next_run(&task.cron_expr, task.timezone.as_deref(), now) {
                 Ok(t) => t,
                 Err(e) => {
                     error!("failed to compute next run for '{}': {e}", task.name);
@@ -461,14 +436,5 @@ impl Scheduler {
         }
 
         Ok(())
-    }
-
-    /// Build a payload from stored args. Opaque to the core — the binding
-    /// (de)serializes it with whatever serializer it chose at enqueue.
-    fn build_periodic_payload(args: &Option<Vec<u8>>) -> Vec<u8> {
-        match args {
-            Some(blob) => blob.clone(),
-            None => Vec::new(),
-        }
     }
 }

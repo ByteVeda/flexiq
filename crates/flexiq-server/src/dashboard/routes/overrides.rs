@@ -30,7 +30,11 @@ pub async fn list_tasks(State(state): State<SharedState>) -> ApiResult<Json<Valu
         })
         .unwrap_or_default();
 
-    let stored = on_storage(&state, |storage| overrides::list(Scope::Task, storage)).await?;
+    let namespace = state.namespace.clone();
+    let stored = on_storage(&state, move |storage| {
+        overrides::list(Scope::Task, storage, namespace.as_deref())
+    })
+    .await?;
     let mut names: std::collections::BTreeSet<String> = advertised.clone();
     names.extend(stored.iter().map(|(name, _)| name.clone()));
 
@@ -62,8 +66,8 @@ pub async fn list_queues(State(state): State<SharedState>) -> ApiResult<Json<Val
     let (per_queue, paused, stored) = on_storage(&state, move |storage| {
         Ok((
             storage.stats_all_queues(namespace.as_deref())?,
-            storage.list_paused_queues()?,
-            overrides::list(Scope::Queue, storage)?,
+            storage.list_paused_queues(namespace.as_deref())?,
+            overrides::list(Scope::Queue, storage, namespace.as_deref())?,
         ))
     })
     .await?;
@@ -138,11 +142,12 @@ pub async fn put_queue(
     let paused = body.get("paused").and_then(Value::as_bool);
     let response = put_override(state.clone(), Scope::Queue, queue_name.clone(), body).await?;
     if let Some(paused) = paused {
+        let namespace = state.namespace.clone();
         on_storage(&state, move |storage| {
             if paused {
-                storage.pause_queue(&queue_name)
+                storage.pause_queue(&queue_name, namespace.as_deref())
             } else {
-                storage.resume_queue(&queue_name)
+                storage.resume_queue(&queue_name, namespace.as_deref())
             }
         })
         .await?;
@@ -165,8 +170,9 @@ async fn get_override(
     label: &str,
 ) -> ApiResult<Json<Value>> {
     let lookup = name.clone();
+    let namespace = state.namespace.clone();
     let stored = on_storage(&state, move |storage| {
-        overrides::get(scope, storage, &lookup)
+        overrides::get(scope, storage, namespace.as_deref(), &lookup)
     })
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("no override set for {label} '{name}'")))?;
@@ -184,16 +190,18 @@ async fn put_override(
         .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".into()))?
         .clone();
     let subject = name.clone();
+    let namespace = state.namespace.clone();
     let stored = on_storage_api(&state, move |storage| {
-        overrides::set(scope, storage, &subject, &patch)
+        overrides::set(scope, storage, namespace.as_deref(), &subject, &patch)
     })
     .await?;
     Ok(Json(overrides::to_api_json(scope, &name, &stored)))
 }
 
 async fn clear_override(state: SharedState, scope: Scope, name: String) -> ApiResult<Json<Value>> {
+    let namespace = state.namespace.clone();
     let cleared = on_storage(&state, move |storage| {
-        overrides::clear(scope, storage, &name)
+        overrides::clear(scope, storage, namespace.as_deref(), &name)
     })
     .await?;
     Ok(Json(json!({ "cleared": cleared })))

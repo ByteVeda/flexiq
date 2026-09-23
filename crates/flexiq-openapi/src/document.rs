@@ -18,22 +18,31 @@ use std::collections::BTreeSet;
 
 use serde_json::{json, Map, Value};
 
-use crate::binding::{bindings, Binding};
+use crate::binding::Binding;
 use crate::descriptor::{Contract, Field};
 use crate::schema::{self, Registry};
 use crate::Error;
 
-/// The package whose RPCs this door serves.
+/// The producer package.
+pub const PRODUCER_PACKAGE: &str = "flexiq.v1";
+
+/// The operator package.
+pub const ADMIN_PACKAGE: &str = "flexiq.admin.v1";
+
+/// Every package whose RPCs this door serves, in document order.
 ///
 /// `flexiq.executor.v1` is deliberately absent and cannot be added: a worker
 /// surface has different credentials, different failure modes and no reason to
 /// be reachable from a browser.
-pub const PRODUCER_PACKAGE: &str = "flexiq.v1";
+pub const PACKAGES: [&str; 2] = [PRODUCER_PACKAGE, ADMIN_PACKAGE];
 
 /// The OpenAPI document for the JSON facade, as the bytes to commit.
 pub fn document(descriptor: &[u8]) -> Result<String, Error> {
     let contract = Contract::load(descriptor)?;
-    let bindings = bindings(descriptor, PRODUCER_PACKAGE)?;
+    let mut bindings = Vec::new();
+    for package in PACKAGES {
+        bindings.extend(crate::binding::bindings(descriptor, package)?);
+    }
     let mut registry = Registry::new(&contract);
 
     let mut paths: Map<String, Value> = Map::new();
@@ -104,18 +113,20 @@ pub fn document(descriptor: &[u8]) -> Result<String, Error> {
 /// put it in `scripts/version.mjs`'s list for no gain.
 fn info() -> Value {
     json!({
-        "title": "FlexiQ producer API",
+        "title": "FlexiQ HTTP API",
         "version": "v1",
-        "summary": "Submit work, read it back, cancel it, count it.",
-        "description": "The JSON facade of the FlexiQ gRPC producer door, transcoded from \
-    `contracts/proto/flexiq/v1`. Every path here reaches the same service method a gRPC client \
-    reaches, on the same listener and behind the same token check.\n\n\
+        "summary": "Submit work and read it back; operate queues, dead letters, workers, schedules and overrides.",
+        "description": "The JSON facade of the FlexiQ gRPC producer and admin doors, transcoded \
+    from `contracts/proto/flexiq/v1` and `contracts/proto/flexiq/admin/v1`. Every path here reaches \
+    the same service method a gRPC client reaches, on the same listener and behind the same token \
+    check.\n\n\
+    A token's scopes pick what it may call: `produce` reaches the `/v1/` producer paths; under \
+    `/v1/admin/`, `inspect` reaches every `GET` and `admin` every `POST`.\n\n\
     Requests are refused when they carry a field the contract does not declare. Responses are not \
     closed: a later release may add one.\n\n\
     A listener serves exactly one namespace and it comes from the token, so no request names one. A \
-    job in another namespace is indistinguishable from a job that does not exist.\n\n\
-    This document is generated. Edit `contracts/proto/flexiq/v1/producer_service.proto` and run \
-    `scripts/proto-check.sh --fix`.",
+    resource in another namespace is indistinguishable from one that does not exist.\n\n\
+    This document is generated. Edit the `.proto` files and run `scripts/proto-check.sh --fix`.",
         "license": { "name": "MIT", "identifier": "MIT" }
     })
 }
@@ -195,14 +206,36 @@ fn operation(
                 }),
             );
         }
-        // A named body field would make the remaining fields a query string on
-        // a write, which nothing in this contract does. Refusing is better than
-        // describing a shape no handler implements.
+        // A named body is that one field's value. Anything the path and the
+        // body leave over would be a query string on a write, which nothing in
+        // this contract does, so it is refused rather than described.
         Some(named) => {
-            return Err(Error::Unsupported {
-                element: format!("{}.{}", binding.service, binding.method),
-                reason: format!("`body: \"{named}\"` names a field; only `*` is described"),
-            })
+            let field = input
+                .fields
+                .iter()
+                .find(|field| field.name == named)
+                .ok_or_else(|| Error::Undeclared(format!("{}.{named}", input.full_name)))?;
+            if let Some(stray) = input
+                .fields
+                .iter()
+                .find(|field| field.name != named && !bound.contains(&field.name))
+            {
+                return Err(Error::Unsupported {
+                    element: format!("{}.{}", binding.service, binding.method),
+                    reason: format!(
+                        "`{}` is in neither the path nor `body: \"{named}\"`",
+                        stray.name
+                    ),
+                });
+            }
+            let schema = registry.field_shape(field)?;
+            operation.insert(
+                "requestBody".to_string(),
+                json!({
+                    "required": true,
+                    "content": { "application/json": { "schema": schema } }
+                }),
+            );
         }
         None => {
             // Everything the path did not bind is a query parameter, which is

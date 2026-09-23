@@ -17,7 +17,11 @@ use crate::dashboard::state::SharedState;
 
 /// `GET /api/resources` — per-resource health across live workers.
 pub async fn status(State(state): State<SharedState>) -> ApiResult<Json<Value>> {
-    let workers = on_storage(&state, |storage| storage.list_workers()).await?;
+    let namespace = state.namespace.clone();
+    let workers = on_storage(&state, move |storage| {
+        storage.list_workers(namespace.as_deref())
+    })
+    .await?;
 
     // resource name → the health strings each worker reported for it.
     let mut observed: std::collections::BTreeMap<String, Vec<String>> =

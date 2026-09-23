@@ -144,6 +144,11 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
+    public boolean requestWorkerDrain(String workerId) {
+        return withOpenHandle(() -> NativeQueue.requestWorkerDrain(handle, workerId));
+    }
+
+    @Override
     public String listCircuitBreakersJson() {
         return withOpenHandle(() -> NativeQueue.listCircuitBreakers(handle));
     }

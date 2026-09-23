@@ -1,30 +1,11 @@
 //! `fq enqueue` — submit one job.
 
 use anyhow::{anyhow, Result};
-use prost_types::{Duration as ProtoDuration, Timestamp};
 
 use crate::cli::EnqueueArgs;
 use crate::connect::Client;
+use crate::time::{instant_after, span};
 use crate::{args, error, output, pb};
-
-/// Milliseconds in a second.
-const MILLIS_PER_SECOND: i64 = 1_000;
-
-/// Nanoseconds in a millisecond.
-const NANOS_PER_MILLI: i32 = 1_000_000;
-
-/// `0001-01-01T00:00:00Z`, the earliest instant a `google.protobuf.Timestamp`
-/// may carry, in Unix milliseconds.
-const MIN_TIMESTAMP_MS: i64 = -62_135_596_800_000;
-
-/// `9999-12-31T23:59:59.999Z`, the latest.
-const MAX_TIMESTAMP_MS: i64 = 253_402_300_799_999;
-
-/// The widest span a `google.protobuf.Duration` may carry, in milliseconds.
-///
-/// The type is documented as ±315,576,000,000 seconds — roughly ten thousand
-/// years, the same span the timestamp range covers.
-const MAX_DURATION_MS: i64 = 315_576_000_000_000;
 
 /// Submit the job and print what came back.
 pub async fn run(client: &mut Client, cli_args: &EnqueueArgs, json: bool) -> Result<()> {
@@ -93,77 +74,10 @@ pub fn options(cli_args: &EnqueueArgs, now_ms: i64) -> Result<pb::EnqueueOptions
     })
 }
 
-/// `now_ms + offset` as an absolute instant, refusing an offset that does not
-/// land on one.
-///
-/// Two limits, and the wider one is not the interesting one. An unchecked `+`
-/// panics under `overflow-checks` and wraps without them, and a wrapped offset
-/// schedules the job in the distant past rather than failing. But `i64` is far
-/// wider than a `google.protobuf.Timestamp`, which runs `0001-01-01` to
-/// `9999-12-31` — and nothing downstream catches the gap: the door's
-/// `millis_from_timestamp` *saturates*, so an out-of-range instant is stored as
-/// a plausible-looking wrong one, and `--json` then omits the field entirely
-/// because it does not render. Refusing here is the only place it reads as the
-/// flag the operator typed.
-fn instant_after(now_ms: i64, offset_ms: Option<i64>, flag: &str) -> Result<Option<Timestamp>> {
-    offset_ms
-        .map(|offset| {
-            let millis = now_ms
-                .checked_add(offset)
-                .filter(|millis| (MIN_TIMESTAMP_MS..=MAX_TIMESTAMP_MS).contains(millis))
-                .ok_or_else(|| {
-                    anyhow!(
-                        "`{flag} {offset}` lands outside 0001-01-01 to 9999-12-31, \
-                         which is the range an instant can express"
-                    )
-                })?;
-            Ok(timestamp(millis))
-        })
-        .transpose()
-}
-
-/// Unix milliseconds as a `Timestamp`.
-///
-/// Euclidean division so a pre-epoch instant keeps a non-negative `nanos`,
-/// which is the only spelling a `Timestamp` may carry.
-fn timestamp(millis: i64) -> Timestamp {
-    Timestamp {
-        seconds: millis.div_euclid(MILLIS_PER_SECOND),
-        nanos: millis.rem_euclid(MILLIS_PER_SECOND) as i32 * NANOS_PER_MILLI,
-    }
-}
-
-/// A span in milliseconds as a `Duration`, refusing one the type cannot carry.
-///
-/// Same shape as [`instant_after`] and for the same reason: `i64` milliseconds
-/// reach roughly 292 million years, a `Duration` about ten thousand, and the
-/// door's `millis_from_duration` *saturates* rather than refusing — so an
-/// out-of-range timeout would become a plausible wrong one instead of an error.
-fn span(millis: Option<i64>, flag: &str) -> Result<Option<ProtoDuration>> {
-    millis
-        .map(|millis| {
-            if millis.abs() > MAX_DURATION_MS {
-                return Err(anyhow!(
-                    "`{flag} {millis}` is longer than the ±{MAX_DURATION_MS} milliseconds a \
-                     duration can express"
-                ));
-            }
-            Ok(duration(millis))
-        })
-        .transpose()
-}
-
-/// A span in milliseconds as a `Duration`.
-fn duration(millis: i64) -> ProtoDuration {
-    ProtoDuration {
-        seconds: millis / MILLIS_PER_SECOND,
-        nanos: (millis % MILLIS_PER_SECOND) as i32 * NANOS_PER_MILLI,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::{MAX_DURATION_MS, MAX_TIMESTAMP_MS, MIN_TIMESTAMP_MS};
 
     fn sample() -> EnqueueArgs {
         EnqueueArgs {

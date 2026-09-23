@@ -1,11 +1,11 @@
 ---
 title: Server & wire
-description: "The network door in its own tier: whether to reach for flexiq-server at all, the two doors it opens, and what the wire guarantees a caller with no SDK."
+description: "The network door in its own tier: whether to reach for flexiq-server at all, the three doors it opens, and what the wire guarantees a caller with no SDK."
 ---
 
 This tier sits beside Python, Node and Java rather than inside them, because
 the network door is not written in a language. Everything here holds whichever
-SDK — or none — is on the other end of it: one binary to run, two doors, one
+SDK — or none — is on the other end of it: one binary to run, three doors, one
 proto, one kind of credential.
 
 **No — this does not replace the mode you already use.** Embedded/local mode —
@@ -42,23 +42,23 @@ Celery-style remote consumer, one network hop from the scheduler, with the
 capacity of whatever container it happens to run in. Server mode buys you a
 network door; it does not buy you more cores.
 
-## The two doors
+## The three doors
 
-`flexiq-server` puts two independent things on the network, not one door with
-two names:
+`flexiq-server` puts three independent things on the network, not one door with
+three names:
 
-| | Producer door | Executor door |
-|---|---|---|
-| **Package** | `flexiq.v1` | `flexiq.executor.v1` |
-| **Does** | Enqueue, read, cancel work | Claim work, report on it |
-| **Reachable over** | gRPC, and plain HTTP with JSON bodies on the same listener | gRPC only — no HTTP binding |
-| **Scope** | `produce` | `execute` |
-| **Admin surface** | None — settings, pausing and dead-letter operations stay behind the dashboard | None |
+| | Producer door | Executor door | Admin door |
+|---|---|---|---|
+| **Package** | `flexiq.v1` | `flexiq.executor.v1` | `flexiq.admin.v1` |
+| **Does** | Enqueue, read, cancel work | Claim work, report on it | Pause queues, work the dead-letter queue, list workers, manage periodic tasks and overrides |
+| **Reachable over** | gRPC, and plain HTTP with JSON bodies on the same listener | gRPC only — no HTTP binding | gRPC, and plain HTTP with JSON bodies under `/v1/admin/` |
+| **Scope** | `produce` | `execute` | `inspect` to read, `admin` to change |
 
-A `produce` token cannot open an executor stream, and an `execute` token cannot
-enqueue — they are not a hierarchy, and a credential scoped to one package
-never opens the other. See
+A `produce` token cannot open an executor stream or pause a queue, and an
+`execute` token cannot enqueue — no scope is a hierarchy, and a credential
+scoped to one package never opens another. See
 [the gRPC door](/server/operate/grpc) for the producer RPCs,
+[the admin door](/server/operate/admin) for the operator's,
 [API tokens](/server/operate/tokens) for the credential's
 lifecycle, and
 [the executor door](/server/operate/grpc#the-executor-door)

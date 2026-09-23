@@ -8,13 +8,13 @@ mod worker;
 #[cfg(feature = "workflows")]
 mod workflow_ops;
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use flexiq_core::job::{now_millis, NewJob};
-use flexiq_core::periodic::next_cron_time;
 use flexiq_core::scheduler::retention::RetentionConfig;
 #[cfg(feature = "postgres")]
 use flexiq_core::storage::postgres::PostgresStorage;
@@ -44,16 +44,22 @@ pub(crate) struct ShutdownState {
     /// Live `run_worker` calls, counted from Python entry — see
     /// [`PyQueue::begin_run`].
     active: usize,
+    /// Workers an operator asked to drain, read back on their heartbeat. Per
+    /// worker, not per queue: a drain names one worker, and its siblings on
+    /// the same `Queue` keep running.
+    drained: HashSet<String>,
 }
 
-/// Whether a stop has been requested of the runs currently live on a queue.
+/// Whether the run of `worker_id` should stop: the whole queue was asked to,
+/// or an operator asked this one worker to drain.
 ///
 /// Takes the state directly so the worker loop can poll it with the GIL
 /// released, where `&PyQueue` cannot travel.
-pub(crate) fn stop_requested(shutdown: &Mutex<ShutdownState>) -> bool {
-    // Two plain fields with no invariant a panic can break, so recovering from
+pub(crate) fn stop_requested(shutdown: &Mutex<ShutdownState>, worker_id: &str) -> bool {
+    // Plain fields with no invariant a panic can break, so recovering from
     // poisoning beats dropping a stop request on the floor.
-    shutdown.lock().unwrap_or_else(|e| e.into_inner()).requested
+    let state = shutdown.lock().unwrap_or_else(|e| e.into_inner());
+    state.requested || state.drained.contains(worker_id)
 }
 
 /// The core queue engine exposed to Python.
@@ -354,6 +360,7 @@ impl PyQueue {
         state.active = state.active.saturating_sub(1);
         if state.active == 0 {
             state.requested = false;
+            state.drained.clear();
         }
     }
 
@@ -757,24 +764,25 @@ impl PyQueue {
         })
     }
 
-    /// Pause a queue (no jobs will be dispatched from it).
+    /// Pause a queue in this queue's namespace (no jobs will be dispatched
+    /// from it).
     pub fn pause_queue(&self, queue_name: &str) -> PyResult<()> {
         self.storage
-            .pause_queue(queue_name)
+            .pause_queue(queue_name, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Resume a paused queue.
+    /// Resume a paused queue in this queue's namespace.
     pub fn resume_queue(&self, queue_name: &str) -> PyResult<()> {
         self.storage
-            .resume_queue(queue_name)
+            .resume_queue(queue_name, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// List paused queues.
+    /// List this namespace's paused queues.
     pub fn list_paused_queues(&self) -> PyResult<Vec<String>> {
         self.storage
-            .list_paused_queues()
+            .list_paused_queues(self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -971,7 +979,12 @@ impl PyQueue {
         Ok((jobs.into_iter().map(PyJob::from).collect(), next))
     }
 
-    /// Register a periodic task schedule.
+    /// Declare a periodic task schedule, as a worker does for every
+    /// `@queue.periodic` at start.
+    ///
+    /// A declaration, not an overwrite (#919): an existing schedule keeps an
+    /// operator's pause and its last run, and its next run moves only when the
+    /// cron expression or timezone changed. A new one is inserted enabled.
     #[pyo3(signature = (name, task_name, cron_expr, args=None, kwargs=None, queue="default", timezone=None))]
     pub fn register_periodic(
         &self,
@@ -983,15 +996,8 @@ impl PyQueue {
         queue: &str,
         timezone: Option<&str>,
     ) -> PyResult<()> {
-        use flexiq_core::periodic::next_cron_time_tz;
-
-        let now = now_millis();
-        let next_run = if let Some(tz) = timezone {
-            next_cron_time_tz(cron_expr, now, tz)
-        } else {
-            next_cron_time(cron_expr, now)
-        }
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let next_run = flexiq_core::periodic::next_run(cron_expr, timezone, now_millis())
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
         let row = NewPeriodicTask {
             name: name.to_string(),
@@ -1007,7 +1013,7 @@ impl PyQueue {
         };
 
         self.storage
-            .register_periodic(&row)
+            .declare_periodic(&row)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -1073,6 +1079,19 @@ impl PyQueue {
     /// see [`stop_requested`] for why that is the safe direction here.
     pub(crate) fn shutdown_state(&self) -> std::sync::MutexGuard<'_, ShutdownState> {
         self.shutdown.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Stop the run of `worker_id` as `request_shutdown` stops every run.
+    /// Terminal: nothing un-marks it before that run ends. `true` the first
+    /// time, so the caller can announce the drain once.
+    pub(crate) fn mark_drained(&self, worker_id: &str) -> bool {
+        self.shutdown_state().drained.insert(worker_id.to_string())
+    }
+
+    /// Forget a finished run's drain mark, so a worker id reused by a later
+    /// `run_worker` starts unstopped.
+    pub(crate) fn clear_drained(&self, worker_id: &str) {
+        self.shutdown_state().drained.remove(worker_id);
     }
 
     /// Install the active worker dispatcher. Called by `run_worker` before

@@ -22,6 +22,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import org.byteveda.flexiq.core.CoreFacade;
+import org.byteveda.flexiq.dashboard.store.OverridesStore;
+import org.byteveda.flexiq.dashboard.store.SettingsAccess;
 import org.byteveda.flexiq.errors.EnqueueSkippedException;
 import org.byteveda.flexiq.errors.InterceptionException;
 import org.byteveda.flexiq.errors.PredicateRejectedException;
@@ -121,6 +123,8 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     private final Map<String, PayloadCodec> codecs;
     /** Per-hook middleware budget; {@code null} leaves the worker's own default. */
     private final @Nullable Duration middlewareTimeout;
+    /** The namespace set at open; {@code null} is the default one. */
+    private final @Nullable String namespace;
 
     private final List<Middleware> middleware = new CopyOnWriteArrayList<>();
     private final ResourceRuntime resources = new ResourceRuntime();
@@ -146,12 +150,19 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
             QueueBackend backend,
             Serializer serializer,
             Map<String, PayloadCodec> codecs,
-            @Nullable Duration middlewareTimeout) {
+            @Nullable Duration middlewareTimeout,
+            @Nullable String namespace) {
         this.backend = backend;
         this.facade = new CoreFacade(backend);
         this.serializer = serializer;
         this.codecs = codecs;
         this.middlewareTimeout = middlewareTimeout;
+        this.namespace = namespace;
+    }
+
+    @Override
+    public Optional<String> namespace() {
+        return Optional.ofNullable(namespace);
     }
 
     @Override
@@ -798,6 +809,11 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     @Override
     public List<WorkerInfo> listWorkers() {
         return decodeList(backend.listWorkersJson(), WorkerInfo.class);
+    }
+
+    @Override
+    public boolean drainWorker(String workerId) {
+        return backend.requestWorkerDrain(workerId);
     }
 
     @Override
@@ -1568,6 +1584,9 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
                 .subscriptions(subscriptions)
                 .logConsumers(logConsumers, this)
                 .queueConfigs(this::encodeQueueConfigs)
+                // Namespaced like the admin surfaces that write them, so a worker
+                // only picks up the overrides of the namespace it serves.
+                .overrides(new OverridesStore(SettingsAccess.of(this), namespace))
                 .lifecycle(new WorkerLifecycle() {
                     @Override
                     public void started(Worker worker) {

@@ -31,7 +31,7 @@ turns one on implicitly:
 | --- | --- | --- | --- |
 | Executor attach | `FLEXIQ_LISTEN` | The worker frame protocol over TCP or a Unix socket | Yes |
 | Dashboard | `FLEXIQ_DASHBOARD` | The SPA, its JSON API, `/health`, `/readiness`, `/metrics` | Yes |
-| gRPC door | `FLEXIQ_GRPC_LISTEN` | `flexiq.v1`, `flexiq.executor.v1`, the JSON facade, `/metrics` | Yes |
+| gRPC door | `FLEXIQ_GRPC_LISTEN` | `flexiq.v1`, `flexiq.admin.v1`, `flexiq.executor.v1`, the JSON facade, `/metrics` | Yes |
 | Admission webhook | `FLEXIQ_WEBHOOK_LISTEN` | The mutating webhook that injects executor sidecars | **No** |
 | Push dispatch | `FLEXIQ_PUSH_TARGET_URL` | Nothing — it dials out instead of serving | Yes |
 | Triggers | `FLEXIQ_TRIGGER_LISTEN` | [Inbound webhooks and object-store events](/server/operate/triggers) that become enqueues | Yes |

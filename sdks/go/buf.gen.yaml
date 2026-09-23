@@ -48,9 +48,14 @@ inputs:
     # a copy of the codec. The import graph is what keeps the scopes apart —
     # package executor reaches no producer stub.
     #
+    #
+    # flexiq.admin.v1 is generated too, into package admin, so a client can be
+    # written against it; nothing in this module wraps it yet.
+    #
     # These paths resolve against this directory, not against `directory:`, so
     # the full prefix is required; a bare `flexiq/v1` is reported as outside the
     # context directory.
     paths:
       - ../../contracts/proto/flexiq/v1
       - ../../contracts/proto/flexiq/executor/v1
+      - ../../contracts/proto/flexiq/admin/v1

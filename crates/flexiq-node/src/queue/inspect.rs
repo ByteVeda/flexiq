@@ -12,8 +12,8 @@ use super::JsQueue;
 use crate::config::{DetailedJobFilter, JobFilter};
 use crate::convert::{
     circuit_breaker_to_js, job_error_to_js, job_to_js, log_to_js, metric_to_js, replay_to_js,
-    stats_to_js, status_code, worker_to_js, JsCircuitBreaker, JsDagEdge, JsJob, JsJobDag,
-    JsJobError, JsJobPage, JsMetric, JsReplayEntry, JsStats, JsTaskLog, JsWorkerRow,
+    stats_to_js, status_code, worker_to_js, JsCircuitBreaker, JsDagEdge, JsHeartbeat, JsJob,
+    JsJobDag, JsJobError, JsJobPage, JsMetric, JsReplayEntry, JsStats, JsTaskLog, JsWorkerRow,
 };
 use crate::error::{invalid_arg, join_to_napi_err, non_negative, to_napi_err};
 
@@ -436,12 +436,16 @@ impl JsQueue {
         .map_err(join_to_napi_err)?
     }
 
-    /// List registered workers (heartbeat + identity).
+    /// List the workers registered in this queue's namespace (heartbeat +
+    /// identity).
     #[napi]
     pub async fn list_workers(&self) -> Result<Vec<JsWorkerRow>> {
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
-            let workers = storage.list_workers().map_err(to_napi_err)?;
+            let workers = storage
+                .list_workers(namespace.as_deref())
+                .map_err(to_napi_err)?;
             Ok(workers.into_iter().map(worker_to_js).collect())
         })
         .await
@@ -456,21 +460,26 @@ impl JsQueue {
     /// every 5s is O(N) per cluster, and each returns the same dead ids so a
     /// `WORKER_OFFLINE` event fires N times per death. A non-leader reaps
     /// nothing and returns an empty list.
+    ///
+    /// The beat also answers the row's status, which is how an operator's
+    /// drain request reaches the worker.
     #[napi]
     pub async fn worker_heartbeat(
         &self,
         worker_id: String,
         resource_health: Option<String>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<JsHeartbeat> {
         let storage = self.storage.clone();
         spawn_blocking(move || {
-            storage
+            let status = storage
                 .heartbeat(&worker_id, resource_health.as_deref())
                 .map_err(to_napi_err)?;
             // Reaping is opportunistic — a failure must not fail the heartbeat.
-            Ok(flexiq_core::storage::reap_dead_workers_if_leader(
-                &storage, &worker_id,
-            ))
+            let reaped = flexiq_core::storage::reap_dead_workers_if_leader(&storage, &worker_id);
+            Ok(JsHeartbeat {
+                reaped,
+                status: status.map(|status| status.as_str().to_string()),
+            })
         })
         .await
         .map_err(join_to_napi_err)?

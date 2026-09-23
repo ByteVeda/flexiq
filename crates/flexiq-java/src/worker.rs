@@ -14,7 +14,7 @@ use flexiq_core::resilience::rate_limiter::RateLimitConfig;
 use flexiq_core::resilience::retry::RetryPolicy;
 use flexiq_core::scheduler::codel::CodelConfig;
 use flexiq_core::scheduler::shed::OnExcess;
-use flexiq_core::scheduler::{ResultOutcome, TaskConfig};
+use flexiq_core::scheduler::{QueueConfig, ResultOutcome, TaskConfig};
 use flexiq_core::worker::{registry_fingerprint, WorkerDispatcher};
 use flexiq_core::{Scheduler, SchedulerConfig, Storage, StorageBackend};
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
@@ -23,7 +23,7 @@ use jni::JNIEnv;
 use tokio::sync::Notify;
 
 use flexiq_core::job::now_millis;
-use flexiq_core::{NewSubscription, WorkerRegistration};
+use flexiq_core::{NewSubscription, WorkerRegistration, WorkerStatus};
 
 use crate::backend::QueueHandle;
 use crate::convert::{
@@ -135,6 +135,7 @@ fn start_worker(
         // so the registry row stays one comparable value however many tasks a
         // worker serves.
         registry_fingerprint(options.tasks.iter().flatten()).as_deref(),
+        namespace.as_deref(),
     )?;
     register_subscriptions(&storage, &worker_id, options.subscriptions.take())?;
 
@@ -148,6 +149,18 @@ fn start_worker(
     for spec in options.queue_configs.take().unwrap_or_default() {
         if let Some(codel) = queue_codel_from_spec(&spec) {
             scheduler.register_queue_codel(spec.name.clone(), codel);
+        }
+        if spec.rate_limit.is_some() || spec.max_concurrent.is_some() {
+            let limits = QueueConfig {
+                rate_limit: parse_rate_spec(
+                    "rateLimit",
+                    "queue",
+                    &spec.name,
+                    spec.rate_limit.as_deref(),
+                )?,
+                max_concurrent: spec.max_concurrent,
+            };
+            scheduler.register_queue_config(spec.name.clone(), limits);
         }
         if spec.dispatch_order.as_deref() == Some("lifo") {
             scheduler.register_queue_dispatch_order(
@@ -218,7 +231,7 @@ fn start_worker(
     // `recv` is blocking, so it runs on a blocking thread; it exits when the
     // result sender has dropped (dispatcher done).
     let drain_scheduler = scheduler;
-    let drain_callbacks = callbacks;
+    let drain_callbacks = callbacks.clone();
     runtime.spawn_blocking(move || {
         drain_results(result_rx, drain_scheduler, drain_callbacks, capacity)
     });
@@ -228,7 +241,11 @@ fn start_worker(
         &runtime,
         lifecycle_storage,
         worker_id,
-        heartbeat_stop.clone(),
+        Lifecycle {
+            stop: heartbeat_stop.clone(),
+            scheduler_shutdown: shutdown.clone(),
+            callbacks,
+        },
     );
 
     Ok(WorkerHandle {
@@ -254,6 +271,7 @@ fn register_live_worker(
     queues_csv: &str,
     capacity: usize,
     registry_fingerprint: Option<&str>,
+    namespace: Option<&str>,
 ) -> Result<(), crate::error::BindingError> {
     let hostname = gethostname::gethostname().to_string_lossy().to_string();
     let pid = std::process::id() as i32;
@@ -264,7 +282,8 @@ fn register_live_worker(
             .pool_type(Some("java"))
             // The native library's version, which the jar is published alongside.
             .sdk(Some("java"), Some(env!("CARGO_PKG_VERSION")))
-            .registry_fingerprint(registry_fingerprint),
+            .registry_fingerprint(registry_fingerprint)
+            .namespace(namespace),
     )?;
     Ok(())
 }
@@ -350,9 +369,18 @@ fn build_task_policies(
                         .circuit_breaker_half_open_success_rate
                         .unwrap_or(0.8),
                 });
-        let rate_limit = parse_rate_spec("rateLimit", &config.name, config.rate_limit.as_deref())?;
-        let retry_budget =
-            parse_rate_spec("retryBudget", &config.name, config.retry_budget.as_deref())?;
+        let rate_limit = parse_rate_spec(
+            "rateLimit",
+            "task",
+            &config.name,
+            config.rate_limit.as_deref(),
+        )?;
+        let retry_budget = parse_rate_spec(
+            "retryBudget",
+            "task",
+            &config.name,
+            config.retry_budget.as_deref(),
+        )?;
         let on_excess = parse_on_excess(&config.name, config.on_excess.as_deref())?;
         built.push((
             config.name,
@@ -386,17 +414,18 @@ fn queue_codel_from_spec(spec: &QueueConfigSpec) -> Option<CodelConfig> {
     }
 }
 
-/// Parse an optional rate spec, naming the offending task and option so a typo
-/// is actionable. Several options share this `"100/m"` grammar.
+/// Parse an optional rate spec, naming the offending task or queue and option
+/// so a typo is actionable. Several options share this `"100/m"` grammar.
 fn parse_rate_spec(
     field: &str,
-    task: &str,
+    kind: &str,
+    name: &str,
     spec: Option<&str>,
 ) -> Result<Option<RateLimitConfig>, crate::error::BindingError> {
     match spec {
         Some(s) => RateLimitConfig::parse(s).map(Some).ok_or_else(|| {
             crate::error::BindingError::new(format!(
-                "invalid {field} '{s}' on task '{task}' \
+                "invalid {field} '{s}' on {kind} '{name}' \
                  (expected a count of at least 1 over a unit, as in '100/m')"
             ))
         }),
@@ -601,22 +630,52 @@ fn describe(outcome: &ResultOutcome) -> (&str, &str, &str, Option<&str>, i32, bo
     }
 }
 
+/// What the lifecycle loop signals and is signalled by.
+struct Lifecycle {
+    /// Ends the loop: `NativeWorker.stop`.
+    stop: Arc<Notify>,
+    /// The scheduler's own shutdown, fired on a drain request so claiming stops
+    /// at once rather than when Java gets round to `stop`.
+    scheduler_shutdown: Arc<Notify>,
+    /// The Java `WorkerBridge`, told once when a drain is requested.
+    callbacks: GlobalRef,
+}
+
 /// Heartbeat the already-registered worker every 5s until stopped, then
 /// unregister it. Registration itself happens synchronously at start (see
 /// [`register_live_worker`]) so ephemeral subscriptions never precede it.
+///
+/// A beat that reads the row back `Draining` — an operator's drain request —
+/// stops the scheduler claiming and tells Java once, which then closes the
+/// worker as it would on shutdown. Terminal: the row never reads `Active` again.
 fn spawn_lifecycle(
     runtime: &tokio::runtime::Runtime,
     storage: StorageBackend,
     worker_id: String,
-    stop: Arc<Notify>,
+    lifecycle: Lifecycle,
 ) {
+    let Lifecycle {
+        stop,
+        scheduler_shutdown,
+        callbacks,
+    } = lifecycle;
     runtime.spawn(async move {
+        let mut drain_announced = false;
         loop {
             tokio::select! {
                 _ = stop.notified() => break,
                 _ = tokio::time::sleep(HEARTBEAT_INTERVAL) => {
-                    if let Err(e) = storage.heartbeat(&worker_id, None) {
-                        log::warn!("[flexiq-java] worker heartbeat failed: {e}");
+                    match storage.heartbeat(&worker_id, None) {
+                        Ok(Some(WorkerStatus::Draining)) if !drain_announced => {
+                            drain_announced = true;
+                            log::info!("[flexiq-java] worker {worker_id} draining at an operator's request");
+                            scheduler_shutdown.notify_one();
+                            let callbacks = callbacks.clone();
+                            // JNI attach blocks; keep it off the runtime's workers.
+                            tokio::task::spawn_blocking(move || call_on_drain_requested(&callbacks));
+                        }
+                        Ok(_) => {}
+                        Err(e) => log::warn!("[flexiq-java] worker heartbeat failed: {e}"),
                     }
                     // Elect a single reaper: without this, every worker's 5s
                     // sweep scans the whole registry, O(N) per cluster. Dead-
@@ -641,6 +700,24 @@ fn spawn_lifecycle(
             log::warn!("[flexiq-java] ephemeral subscription reap failed: {e}");
         }
     });
+}
+
+/// Invoke `WorkerBridge.onDrainRequested` on an attached thread. The Java side
+/// only hands the close to a thread of its own: closing drops this runtime,
+/// which cannot happen from one of its own threads.
+fn call_on_drain_requested(callbacks: &GlobalRef) {
+    let mut env = match jvm::vm().attach_current_thread() {
+        Ok(env) => env,
+        Err(e) => {
+            log::error!("[flexiq-java] drain attach failed: {e}");
+            return;
+        }
+    };
+    let called = env.call_method(callbacks, "onDrainRequested", "()V", &[]);
+    if called.is_err() || env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+        log::error!("[flexiq-java] WorkerBridge.onDrainRequested failed");
+    }
 }
 
 /// Borrow a worker handle.

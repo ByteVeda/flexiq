@@ -132,6 +132,42 @@ fn test_dequeue_batch_archives_expired_jobs(s: &impl Storage) {
     assert!(!pending.iter().any(|job| job.id == expired.id));
 }
 
+/// #836: terminal jobs in a window, per queue and per namespace. Pending and
+/// running jobs are not throughput.
+fn test_queue_throughput(s: &impl Storage) {
+    let q = "q-throughput";
+    let ns = Some("tp-tenant");
+    let before = now_millis() - 1;
+    let in_ns = |task: &str| {
+        let mut job = make_job(q, task);
+        job.namespace = ns.map(str::to_owned);
+        s.enqueue(job).unwrap()
+    };
+
+    for _ in 0..2 {
+        let job = in_ns("tp_task");
+        s.dequeue(q, now_millis() + 1000, ns).unwrap();
+        s.complete(&job.id, None, ns).unwrap();
+    }
+    let cancelled = in_ns("tp_task");
+    assert!(s.cancel_job(&cancelled.id, ns).unwrap());
+    in_ns("tp_task"); // pending: not throughput
+                      // Another namespace's completion stays out of this one's count.
+    let other = s.enqueue(make_job(q, "tp_task")).unwrap();
+    s.dequeue(q, now_millis() + 1000, None).unwrap();
+    s.complete(&other.id, None, None).unwrap();
+
+    let counts = s.queue_throughput(before, ns).unwrap();
+    let stats = counts.get(q).expect("the queue had terminal jobs");
+    assert_eq!(stats.completed, 2);
+    assert_eq!(stats.cancelled, 1);
+    assert_eq!((stats.pending, stats.running, stats.failed), (0, 0, 0));
+
+    // A window that starts after everything finished is empty.
+    let later = s.queue_throughput(now_millis() + 60_000, ns).unwrap();
+    assert!(!later.contains_key(q), "{later:?}");
+}
+
 fn test_complete(s: &impl Storage) {
     let q = "q-complete";
     let job = s.enqueue(make_job(q, "complete_task")).unwrap();
@@ -641,6 +677,56 @@ fn test_count_expired_rows_none_cutoff_counts_per_entry_only(s: &impl Storage) {
     assert_eq!(after.job_errors, before.job_errors);
 }
 
+/// Dead-letter an entry for `task_name` in `namespace`, returning its DLQ id.
+fn dead_letter_in(s: &impl Storage, q: &str, task_name: &str, namespace: Option<&str>) -> String {
+    let mut new_job = make_job(q, task_name);
+    new_job.namespace = namespace.map(str::to_owned);
+    let job = s.enqueue(new_job).unwrap();
+    s.dequeue(q, now_millis() + 1000, namespace).unwrap();
+    let running = s.get_job(&job.id, None).unwrap().unwrap();
+    s.move_to_dlq(&running, "boom", None).unwrap();
+    s.list_dead(100, 0, namespace)
+        .unwrap()
+        .into_iter()
+        .find(|d| d.original_job_id == job.id)
+        .unwrap()
+        .id
+}
+
+/// #836: a scoped purge and a scoped read reach one namespace's dead letters;
+/// `None` stays unscoped, like `list_dead`.
+fn test_dead_letter_purge_and_get_are_namespace_scoped(s: &impl Storage) {
+    let q = "q-dlq-ns";
+    let (a, b) = (Some("dns-tenant-a"), Some("dns-tenant-b"));
+    let in_a = dead_letter_in(s, q, "dns_task", a);
+    let in_b = dead_letter_in(s, q, "dns_task", b);
+
+    // A read is scoped, and carries the payload a listing omits.
+    let read = s.get_dead(&in_a, a).unwrap().expect("own entry");
+    assert_eq!(read.payload, make_job(q, "dns_task").payload);
+    assert!(
+        s.get_dead(&in_a, b).unwrap().is_none(),
+        "read across tenants"
+    );
+    assert!(
+        s.get_dead(&in_a, None).unwrap().is_some(),
+        "None is unscoped"
+    );
+    assert!(s.get_dead("no-such-dead-id", a).unwrap().is_none());
+
+    // A scoped purge by task leaves the other tenant's entry.
+    assert_eq!(s.purge_dead_by_task("dns_task", a).unwrap(), 1);
+    assert!(s.get_dead(&in_a, None).unwrap().is_none());
+    assert!(s.get_dead(&in_b, None).unwrap().is_some());
+
+    // So does a scoped purge by age.
+    let in_a = dead_letter_in(s, q, "dns_task", a);
+    assert_eq!(s.purge_dead(now_millis() + 60_000, a).unwrap(), 1);
+    assert!(s.get_dead(&in_a, None).unwrap().is_none());
+    assert!(s.get_dead(&in_b, None).unwrap().is_some());
+    assert_eq!(s.purge_dead(now_millis() + 60_000, b).unwrap(), 1);
+}
+
 fn test_dead_letter_by_task(s: &impl Storage) {
     let q = "q-dlq-by-task";
 
@@ -665,7 +751,7 @@ fn test_dead_letter_by_task(s: &impl Storage) {
     assert_eq!(page[0].task_name, "task_a");
 
     // Purge removes only the matching task's entries.
-    assert_eq!(s.purge_dead_by_task("task_a").unwrap(), 2);
+    assert_eq!(s.purge_dead_by_task("task_a", None).unwrap(), 2);
     assert!(s
         .list_dead_by_task("task_a", 10, 0, None)
         .unwrap()
@@ -811,7 +897,7 @@ fn test_workers(s: &impl Storage) {
     s.heartbeat("w-test-1", Some(r#"{"db":"unhealthy","redis":"healthy"}"#))
         .unwrap();
 
-    let workers = s.list_workers().unwrap();
+    let workers = s.list_workers(None).unwrap();
     assert!(!workers.is_empty());
     let w = workers.iter().find(|w| w.worker_id == "w-test-1").unwrap();
     assert_eq!(w.threads, 4);
@@ -839,7 +925,7 @@ fn test_workers(s: &impl Storage) {
     ))
     .unwrap();
     let quiet = s
-        .list_workers()
+        .list_workers(None)
         .unwrap()
         .into_iter()
         .find(|w| w.worker_id == "w-test-no-registry")
@@ -849,7 +935,7 @@ fn test_workers(s: &impl Storage) {
     // Test update_worker_status
     s.update_worker_status("w-test-1", WorkerStatus::Draining)
         .unwrap();
-    let workers = s.list_workers().unwrap();
+    let workers = s.list_workers(None).unwrap();
     let w = workers.iter().find(|w| w.worker_id == "w-test-1").unwrap();
     assert_eq!(w.status, "draining");
 
@@ -864,15 +950,123 @@ fn test_workers(s: &impl Storage) {
     s.unregister_worker("w-test-1").unwrap();
 }
 
+/// An operator's drain request reaches only its own namespace's worker, and
+/// that worker reads it back on its next heartbeat.
+fn test_worker_drain_request(s: &impl Storage) {
+    let ns = Some("wdrain-tenant");
+    s.register_worker(&WorkerRegistration::new("w-drain", "q", 1).namespace(ns))
+        .unwrap();
+
+    assert_eq!(
+        s.heartbeat("w-drain", None).unwrap(),
+        Some(WorkerStatus::Active)
+    );
+    // Another namespace, the default one included, cannot reach it.
+    assert!(!s
+        .request_worker_drain("w-drain", Some("wdrain-other"))
+        .unwrap());
+    assert!(!s.request_worker_drain("w-drain", None).unwrap());
+    assert!(!s.request_worker_drain("w-nobody", ns).unwrap());
+    assert_eq!(
+        s.heartbeat("w-drain", None).unwrap(),
+        Some(WorkerStatus::Active)
+    );
+
+    assert!(s.request_worker_drain("w-drain", ns).unwrap());
+    assert_eq!(
+        s.heartbeat("w-drain", None).unwrap(),
+        Some(WorkerStatus::Draining)
+    );
+
+    // Gone once it unregisters, and a later request does not resurrect it.
+    s.unregister_worker("w-drain").unwrap();
+    assert!(!s.request_worker_drain("w-drain", ns).unwrap());
+    assert!(s
+        .list_workers(ns)
+        .unwrap()
+        .iter()
+        .all(|w| w.worker_id != "w-drain"));
+}
+
+/// A worker registers with its namespace, and a listing shows one namespace's
+/// workers (#836). `None` is the default namespace, not every namespace.
+fn test_workers_are_namespace_scoped(s: &impl Storage) {
+    let ns = Some("wns-tenant");
+    s.register_worker(&WorkerRegistration::new("w-ns-tenant", "q", 1).namespace(ns))
+        .unwrap();
+    s.register_worker(&WorkerRegistration::new("w-ns-default", "q", 1))
+        .unwrap();
+
+    let ids = |namespace| -> Vec<String> {
+        s.list_workers(namespace)
+            .unwrap()
+            .into_iter()
+            .map(|w| w.worker_id)
+            .collect()
+    };
+    let tenant = ids(ns);
+    assert!(tenant.contains(&"w-ns-tenant".to_string()));
+    assert!(!tenant.contains(&"w-ns-default".to_string()));
+    let default = ids(None);
+    assert!(default.contains(&"w-ns-default".to_string()));
+    assert!(!default.contains(&"w-ns-tenant".to_string()));
+    assert!(ids(Some("wns-nobody")).is_empty());
+
+    let row = s
+        .list_workers(ns)
+        .unwrap()
+        .into_iter()
+        .find(|w| w.worker_id == "w-ns-tenant")
+        .unwrap();
+    assert_eq!(row.namespace.as_deref(), ns);
+
+    // The id-keyed members stay namespace-blind: the live set spans both.
+    let live = s
+        .list_live_worker_ids(flexiq_core::job::now_millis() - 10_000)
+        .unwrap();
+    assert!(live.contains(&"w-ns-tenant".to_string()));
+    assert!(live.contains(&"w-ns-default".to_string()));
+
+    s.unregister_worker("w-ns-tenant").unwrap();
+    s.unregister_worker("w-ns-default").unwrap();
+}
+
 fn test_pause_resume_queue(s: &impl Storage) {
     let q = "q-pause-test";
-    s.pause_queue(q).unwrap();
-    let paused = s.list_paused_queues().unwrap();
-    assert!(paused.contains(&q.to_string()));
+    s.pause_queue(q, None).unwrap();
+    // A second pause is an update, not a duplicate row.
+    s.pause_queue(q, None).unwrap();
+    let paused = s.list_paused_queues(None).unwrap();
+    assert_eq!(paused.iter().filter(|name| *name == q).count(), 1);
 
-    s.resume_queue(q).unwrap();
-    let paused = s.list_paused_queues().unwrap();
+    s.resume_queue(q, None).unwrap();
+    let paused = s.list_paused_queues(None).unwrap();
     assert!(!paused.contains(&q.to_string()));
+}
+
+/// A pause is identified by `(namespace, queue_name)` (#836). Before it, the
+/// row was keyed by name alone and the scheduler read it unscoped, so pausing
+/// a queue in one tenant stopped the same-named queue in every tenant.
+fn test_pause_resume_queue_is_namespace_scoped(s: &impl Storage) {
+    let q = "q-pause-ns";
+    let (a, b) = (Some("qns-tenant-a"), Some("qns-tenant-b"));
+    let paused_in = |ns| s.list_paused_queues(ns).unwrap().contains(&q.to_string());
+
+    s.pause_queue(q, a).unwrap();
+    assert!(paused_in(a));
+    assert!(!paused_in(b), "a pause in one tenant reached another");
+    assert!(!paused_in(None), "a pause in a tenant reached the default");
+
+    // `None` is the default namespace, not a wildcard: pausing and resuming
+    // it leaves the tenant's pause alone.
+    s.pause_queue(q, None).unwrap();
+    s.resume_queue(q, None).unwrap();
+    assert!(paused_in(a));
+
+    s.resume_queue(q, b).unwrap();
+    assert!(paused_in(a), "a resume in one tenant reached another");
+    s.resume_queue(q, a).unwrap();
+    assert!(!paused_in(a));
 }
 
 fn test_execution_claims_purge(s: &impl Storage) {
@@ -2643,6 +2837,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_dequeue_batch_archives_expired_jobs(s);
     test_dispatch_order_lifo_map(s);
     test_complete(s);
+    test_queue_throughput(s);
     test_fail(s);
     test_retry(s);
     test_reschedule(s);
@@ -2661,6 +2856,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_every_enqueue_path_writes_dependency_rows(s);
     test_dead_letter_queue(s);
     test_dead_letter_by_task(s);
+    test_dead_letter_purge_and_get_are_namespace_scoped(s);
     test_purge_retention_covers_every_status(s);
     test_purge_retention_honors_per_entry_ttl(s);
     test_purge_retention_keeps_job_errors(s);
@@ -2672,7 +2868,10 @@ fn run_storage_tests(s: &impl Storage) {
     test_progress_tracking(s);
     test_record_and_get_errors(s);
     test_workers(s);
+    test_workers_are_namespace_scoped(s);
+    test_worker_drain_request(s);
     test_pause_resume_queue(s);
+    test_pause_resume_queue_is_namespace_scoped(s);
     test_periodic_crud(s);
     test_periodic_is_namespace_scoped(s);
     test_periodic_re_registration_keeps_last_run(s);
@@ -4178,7 +4377,7 @@ fn redis_purge_dead_drains_across_batches(s: &flexiq_core::RedisStorage) {
     }
 
     // Cutoff far in the future so every dead entry is eligible.
-    let removed = s.purge_dead(now_millis() + 3_600_000).unwrap();
+    let removed = s.purge_dead(now_millis() + 3_600_000, None).unwrap();
     assert!(
         removed >= 550,
         "batched purge_dead must remove all >500 eligible entries, got {removed}"

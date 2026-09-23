@@ -30,9 +30,10 @@ pub const INTERNAL: &str = "INTERNAL";
 pub const UNAUTHENTICATED: &str = "UNAUTHENTICATED";
 /// The credential is genuine but is not for this package.
 ///
-/// A scope is "may call this package" (D1), so this is the answer to a
-/// `produce` credential opening an executor stream. Never retryable: the same
-/// credential will be refused again.
+/// A scope is "may call this package" (D1) — or, in `flexiq.admin.v1`, "may
+/// read" and "may change" it — so this is the answer to a `produce` credential
+/// opening an executor stream. Never retryable: the same credential will be
+/// refused again.
 pub const SCOPE_DENIED: &str = "SCOPE_DENIED";
 /// Bytes the client sent could not be decoded.
 pub const MALFORMED_PAYLOAD: &str = "MALFORMED_PAYLOAD";
@@ -55,6 +56,13 @@ pub const NO_SUCH_METHOD: &str = "NO_SUCH_METHOD";
 /// No such job — or a job in another namespace, which is indistinguishable by
 /// design.
 pub const JOB_NOT_FOUND: &str = "JOB_NOT_FOUND";
+/// No such dead-letter entry — or one in another namespace, which is
+/// indistinguishable by design. `flexiq.admin.v1`.
+pub const DEAD_LETTER_NOT_FOUND: &str = "DEAD_LETTER_NOT_FOUND";
+/// No such periodic task in this namespace. `flexiq.admin.v1`.
+pub const PERIODIC_TASK_NOT_FOUND: &str = "PERIODIC_TASK_NOT_FOUND";
+/// No such registered worker in this namespace. `flexiq.admin.v1`.
+pub const WORKER_NOT_FOUND: &str = "WORKER_NOT_FOUND";
 /// A `depends_on` id names nothing this caller may depend on.
 pub const DEPENDENCY_NOT_FOUND: &str = "DEPENDENCY_NOT_FOUND";
 /// The queue is at its admission cap. Carries `queue`, `pending` and `cap`.
@@ -119,8 +127,8 @@ pub const KEY_LIMIT: &str = "limit";
 pub const KEY_ACTUAL: &str = "actual";
 /// The permitted value, `uint64`, in `limit`'s unit. `STEP_LIMIT_EXCEEDED`.
 pub const KEY_ALLOWED: &str = "allowed";
-/// The scope the credential lacks — one of `produce`, `execute`.
-/// `SCOPE_DENIED`.
+/// The scope the credential lacks — one of `produce`, `execute`, `inspect`,
+/// `admin`. `SCOPE_DENIED`.
 pub const KEY_SCOPE: &str = "scope";
 /// 0-based position in an `EnqueueBatch` request, `int32`.
 ///

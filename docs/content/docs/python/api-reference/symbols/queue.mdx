@@ -715,6 +715,12 @@ queue.request_cancel(job_id: str) -> bool
 queue.request_shutdown() -> None
 ```
 
+### `queue.request_worker_drain()`
+
+```python
+queue.request_worker_drain(worker_id: str) -> bool
+```
+
 ### `queue.requeue_job()`
 
 ```python

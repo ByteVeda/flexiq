@@ -1,4 +1,4 @@
-//! `flexiq.v1` as proto3 JSON, in both directions.
+//! `flexiq.v1` and `flexiq.admin.v1` as proto3 JSON, in both directions.
 //!
 //! Hand-written, and that is a decision rather than an omission. The crates
 //! that generate serde implementations for prost types need
@@ -9,20 +9,24 @@
 //! has one. The mapping is a few hundred lines; a second spelling of the error
 //! model is permanent.
 //!
-//! Three modules, split by direction:
+//! Split by direction, and by package where the messages differ:
 //!
 //! * [`wkt`] — the well-known types, whose JSON spellings are not guessable
 //!   from the protobuf encoding and belong in one place.
-//! * [`request`] — serde structs, so a misspelled field is named in the answer.
-//! * [`response`] — hand-built objects, so presence is a decision per field.
+//! * [`request`] and [`admin_request`] — serde structs, so a misspelled field
+//!   is named in the answer.
+//! * [`response`] and [`admin_response`] — hand-built objects, so presence is a
+//!   decision per field.
 //!
-//! What keeps all three honest is not the compiler: it is the test in
-//! [`response`] that reads `contracts/descriptor.binpb` and asserts a fully
-//! populated message emits exactly the JSON names the contract gives it. Field
-//! *names* are frozen alongside the numbers for this door's sake (design doc
-//! D4) — a rename is invisible to binary protobuf and fatal to a client that
-//! has only the JSON.
+//! What keeps them honest is not the compiler: it is the tests in both response
+//! modules that read `contracts/descriptor.binpb` and assert a fully populated
+//! message emits exactly the JSON names the contract gives it. Field *names*
+//! are frozen alongside the numbers for this door's sake (design doc D4) — a
+//! rename is invisible to binary protobuf and fatal to a client that has only
+//! the JSON.
 
+pub mod admin_request;
+pub mod admin_response;
 pub mod request;
 pub mod response;
 pub mod wkt;

@@ -171,6 +171,23 @@ impl WireError {
         wire
     }
 
+    /// An operator resource that is absent from the caller's namespace.
+    ///
+    /// `NOT_FOUND` with a reason naming the resource kind, the way
+    /// `JOB_NOT_FOUND` names a job; the message quotes the caller's own handle
+    /// back, truncated, and says nothing about other namespaces.
+    pub fn not_found(reason: &'static str, what: &str, handle: &str) -> Self {
+        const MAX_ECHOED_HANDLE: usize = 200;
+        let handle: String = handle.chars().take(MAX_ECHOED_HANDLE).collect();
+        Self {
+            code: Code::NotFound,
+            reason,
+            message: format!("no {what} '{handle}'"),
+            metadata: HashMap::new(),
+            retry_after: None,
+        }
+    }
+
     /// No usable credential.
     ///
     /// There is exactly one constructor, and it takes no argument, because the

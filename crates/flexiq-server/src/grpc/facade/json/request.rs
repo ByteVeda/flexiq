@@ -110,7 +110,9 @@ pub struct Structured {
 }
 
 impl Structured {
-    fn into_message(self) -> Result<pb::StructuredArgs, String> {
+    /// The message, shared with the admin door's periodic-task body so the two
+    /// read one call the same way.
+    pub(super) fn into_message(self) -> Result<pb::StructuredArgs, String> {
         Ok(pb::StructuredArgs {
             args: self.args.into_iter().map(|value| value.0).collect(),
             kwargs: self

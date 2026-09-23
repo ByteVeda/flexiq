@@ -66,26 +66,39 @@ credential must never be able to mint itself a wider one.
 
 ## Scopes
 
-A token grants one scope per proto package, and the two are deliberately not a
-hierarchy:
+A token grants scopes, and none of them is a hierarchy — no scope implies
+another:
 
 | Scope | Package | What it opens |
 | --- | --- | --- |
 | `produce` | `flexiq.v1` | Submit, read and cancel work |
 | `execute` | `flexiq.executor.v1` | Claim work and report on it |
+| `inspect` | `flexiq.admin.v1`, read-only methods | Look at queues, dead letters, workers, schedules and overrides |
+| `admin` | `flexiq.admin.v1`, every other method | Pause queues, replay and purge dead letters, manage schedules and overrides |
 
 A producer and an executor need opposite permissions, so **a token that can poll
 for work cannot enqueue it**, and a `produce` token asked for an executor RPC is
 refused with `PERMISSION_DENIED` and the reason `SCOPE_DENIED`, carrying the
-scope it lacked in the error metadata. Repeat `--scope` to grant both, and grant
-both only to something that genuinely does both.
+scope it lacked in the error metadata. Repeat `--scope` to grant several, and
+grant each only to something that genuinely needs it.
 
-Neither scope is an admin surface. Pausing queues, settings, dead-letter
-operations and webhook secrets stay behind the dashboard's session and role
-check, so a token that leaks costs you an enqueue path rather than a tenant.
+The operator package is split by method rather than granted whole: a method
+that declares `idempotency_level = NO_SIDE_EFFECTS` needs `inspect`, and every
+other one needs `admin`. An alerting job or a support tool gets `inspect` and
+can change nothing; an operator's token carries both:
+
+```bash
+flexiq-server token create --name ops --scope inspect --scope admin
+```
+
+`produce` reaches none of it, so a producer credential that leaks costs you an
+enqueue path rather than an operator. The settings store, webhook secrets and
+token minting stay behind the dashboard's session and role check — they are on
+no gRPC surface at all. [The admin door](/server/operate/admin) is the page for
+what `inspect` and `admin` reach.
 
 The table is about *calls*, not about the schema. Server reflection asks only
-that a caller be authenticated, so either row above reads both packages — a
+that a caller be authenticated, so any row above reads every package — a
 `produce` token can `describe` the executor RPCs it will then be refused. The
 gRPC door's
 [Reflection, and what it hands out](/server/operate/grpc#reflection-and-what-it-hands-out)

@@ -100,9 +100,10 @@ impl JsQueue {
     #[napi]
     pub async fn purge_dead_by_task(&self, task_name: String) -> Result<i64> {
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
             storage
-                .purge_dead_by_task(&task_name)
+                .purge_dead_by_task(&task_name, namespace.as_deref())
                 .map(|n| n as i64)
                 .map_err(to_napi_err)
         })
@@ -184,9 +185,10 @@ impl JsQueue {
     pub async fn purge_dead(&self, older_than_ms: i64) -> Result<i64> {
         let older_than_ms = non_negative(older_than_ms, "olderThanMs")?;
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
             storage
-                .purge_dead(older_than_ms)
+                .purge_dead(older_than_ms, namespace.as_deref())
                 .map(|n| n as i64)
                 .map_err(to_napi_err)
         })
@@ -209,22 +211,38 @@ impl JsQueue {
         .map_err(join_to_napi_err)?
     }
 
-    /// Pause a queue — workers stop dispatching its jobs until resumed.
+    /// Pause a queue in this queue's namespace — workers stop dispatching its
+    /// jobs until resumed.
     #[napi]
     pub fn pause_queue(&self, queue: String) -> Result<()> {
-        self.storage.pause_queue(&queue).map_err(to_napi_err)
+        self.storage
+            .pause_queue(&queue, self.namespace.as_deref())
+            .map_err(to_napi_err)
     }
 
-    /// Resume a paused queue.
+    /// Ask a worker in this queue's namespace to drain. `false` when no such
+    /// worker is registered there.
+    #[napi]
+    pub fn request_worker_drain(&self, worker_id: String) -> Result<bool> {
+        self.storage
+            .request_worker_drain(&worker_id, self.namespace.as_deref())
+            .map_err(to_napi_err)
+    }
+
+    /// Resume a paused queue in this queue's namespace.
     #[napi]
     pub fn resume_queue(&self, queue: String) -> Result<()> {
-        self.storage.resume_queue(&queue).map_err(to_napi_err)
+        self.storage
+            .resume_queue(&queue, self.namespace.as_deref())
+            .map_err(to_napi_err)
     }
 
-    /// List the names of currently-paused queues.
+    /// List the names of this namespace's paused queues.
     #[napi]
     pub fn list_paused_queues(&self) -> Result<Vec<String>> {
-        self.storage.list_paused_queues().map_err(to_napi_err)
+        self.storage
+            .list_paused_queues(self.namespace.as_deref())
+            .map_err(to_napi_err)
     }
 
     /// Read a key/value setting (the shared KV store), or `null`.

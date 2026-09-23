@@ -555,6 +555,24 @@ reads leak credentials, writes spoof a published policy.
   written, or deleted through it. The runtime's own readers and writers use the
   `Storage` settings methods, which stay unrestricted.
 
+## Task and queue override keys (cross-SDK)
+An override is a JSON document in the settings KV — written by a dashboard or
+the admin door, read by a worker at startup. The KV is one keyspace for the
+whole database, so the key carries the namespace (`overrides.rs`):
+
+| Namespace | Task | Queue |
+| --- | --- | --- |
+| default | `overrides:task:<name>` | `overrides:queue:<name>` |
+| `N` | `overrides:ns:<len>:<N>:task:<name>` | `overrides:ns:<len>:<N>:queue:<name>` |
+
+`<len>` is `N`'s length in **bytes** (UTF-8), so a `:` in `N` cannot collide
+two namespaces. The default namespace keeps the layout that predates
+namespacing; the `ns:` segment keeps the two layouts disjoint, so listing a
+namespace is "strip its prefix, the rest is the name". A shell MUST build keys
+from the handle's namespace — reading or writing the default layout from a
+namespaced handle shares one override between tenants — and MUST pass the
+vectors in `overrides.rs`'s tests.
+
 ## Contract level and the floor (cross-SDK)
 A deployment outlives individual SDK releases, so the storage carries the lowest
 level a process may speak and still join it.

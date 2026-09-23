@@ -179,6 +179,17 @@ public interface QueueBackend extends AutoCloseable, ConditionalSettings {
     String listWorkersJson();
 
     /**
+     * Ask one worker in this namespace to drain; it reads the request on its
+     * next heartbeat.
+     *
+     * @param workerId the worker's id
+     * @return whether such a worker was registered in this namespace
+     */
+    default boolean requestWorkerDrain(String workerId) {
+        throw new UnsupportedOperationException("draining a worker is not supported by this backend");
+    }
+
+    /**
      * Circuit-breaker states as a JSON array; defaults to none for backends without breakers.
      *
      * @return the breaker states as a JSON array

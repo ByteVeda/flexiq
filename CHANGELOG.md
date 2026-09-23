@@ -12,6 +12,19 @@ their entries below keep that name.
 
 ### Added
 
+- **The admin door** (#836). `flexiq.admin.v1.AdminService` puts the dashboard's operator
+  actions on the gRPC listener, and as JSON under `/v1/admin/`: list, pause and resume queues;
+  per-queue throughput over a window; list, read, replay, delete and purge dead letters; list and
+  drain workers; create, replace, pause, resume, trigger and delete periodic tasks; set and clear
+  task and queue overrides. Two new token scopes split it — `inspect` for the read-only methods,
+  `admin` for the rest — and a `produce` token reaches neither. Every call acts on the
+  credential's namespace only. Cron over the network, which #847 left to this service, is
+  `PutPeriodicTask`.
+- **Draining a worker from outside** (#836). `DrainWorker` (and the dashboards' equivalent)
+  marks a registered worker's row; every SDK's worker reads it back on its next heartbeat and
+  stops as it would on SIGTERM — it claims nothing new, finishes what it holds, and unregisters.
+  `Storage::heartbeat` now answers the row's status, and `Storage::request_worker_drain` is new.
+
 - **Triggers** (#847). `FLEXIQ_TRIGGER_LISTEN` turns `flexiq-server` into the thing a webhook
   sender or an object-store eventing platform calls: a URL that maps an inbound request to an
   enqueue per event it carries, with no service of your own in between. Triggers are configuration, not code — a JSON
@@ -61,8 +74,35 @@ their entries below keep that name.
   has now been declared complete twice while it was not, so a test diffs the root re-export group
   against `records.rs` and fails on the next record that misses it.
 
+### Changed
+
+- **Queue pauses are per namespace** (#836). A pause was one row per queue name for the whole
+  database, and every scheduler read it unscoped, so pausing `emails` in one tenant stopped
+  `emails` in every tenant. Migration `0020_queue_state_namespace` makes a pause
+  `(namespace, queue)`; every SDK's `pause`/`resume`/`paused_queues`, the dashboards and the
+  scheduler use the handle's namespace. **On upgrade, an existing pause belongs to the default
+  namespace** — a namespaced deployment that had a queue paused should pause it again.
+- **Workers record their namespace** (#836). Migration `0021_worker_namespace` adds it to the
+  registry, and a worker listing — the dashboards', the SDKs' `workers()`, `/metrics` and the
+  readiness probe's worker count — shows one namespace's workers. A worker that registered before
+  the upgrade reads as the default namespace's until it restarts.
+- **Task and queue overrides are per namespace** (#836). A namespaced handle reads and writes
+  `overrides:ns:<len>:<ns>:task:<name>` (and `…:queue:…`) instead of sharing
+  `overrides:task:<name>` with every tenant; the default namespace keeps the old keys, so a
+  single-tenant deployment changes nothing. An override a namespaced dashboard stored before the
+  upgrade is no longer read — set it again. The layout is in `BINDING_CONTRACT.md`.
+- **Dead-letter purges honour the namespace** (#836). `purge_dead` and `purge_dead_by_task` take
+  one, so an SDK or dashboard purge from a namespaced handle no longer deletes other tenants'
+  entries.
+
 ### Fixed
 
+- **A Python worker start no longer resumes a paused schedule.** Every start re-registered each
+  `@queue.periodic` with `enabled: true`, so a restart silently undid an operator's pause. It now
+  declares the schedule, which keeps the pause and the last run (#919's conditional write).
+- **The Java worker applies task and queue overrides.** Overrides set from a dashboard reached
+  every worker but a Java one. It now reads them at start — rate limit, concurrency cap and retry
+  backoff for a task; rate limit and concurrency cap for a queue — like the other SDKs.
 - **`cancel()` reaches attached executors and push targets behind `flexiq-server`** (#846). A
   cancel only ever set the storage flag, and only the native pool reads it — so under
   `flexiq-server` neither an attached executor nor a push target heard of one, and the job ran to

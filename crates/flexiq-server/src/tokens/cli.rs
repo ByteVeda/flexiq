@@ -65,6 +65,10 @@ enum ScopeArg {
     Produce,
     /// `flexiq.executor.v1` — claim work and report on it.
     Execute,
+    /// `flexiq.admin.v1`, read-only methods.
+    Inspect,
+    /// `flexiq.admin.v1`, every other method.
+    Admin,
 }
 
 impl From<ScopeArg> for Scope {
@@ -72,6 +76,8 @@ impl From<ScopeArg> for Scope {
         match arg {
             ScopeArg::Produce => Self::Produce,
             ScopeArg::Execute => Self::Execute,
+            ScopeArg::Inspect => Self::Inspect,
+            ScopeArg::Admin => Self::Admin,
         }
     }
 }
@@ -246,8 +252,9 @@ mod tests {
     fn scopes_repeat_and_are_spelled_as_the_wire_spells_them() {
         let cli = parse(&[
             "token", "create", "--name", "ci", "--scope", "produce", "--scope", "execute",
+            "--scope", "inspect", "--scope", "admin",
         ])
-        .expect("both scopes");
+        .expect("every scope");
         let Wrapper::Token(TokenCommand {
             action: Action::Create { scopes, .. },
         }) = cli.command
@@ -257,7 +264,7 @@ mod tests {
         let set = ScopeSet::of(&scopes.iter().copied().map(Scope::from).collect::<Vec<_>>());
         assert_eq!(set, ScopeSet::ALL);
         // A scope this build does not have must not parse into one it does.
-        assert!(parse(&["token", "create", "--name", "ci", "--scope", "admin"]).is_err());
+        assert!(parse(&["token", "create", "--name", "ci", "--scope", "teleport"]).is_err());
     }
 
     #[test]

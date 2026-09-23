@@ -1,9 +1,11 @@
 //! What a credential may do, at the granularity the wire contract draws it.
 //!
-//! One scope per proto package (design doc D1). A package is the right unit
-//! because the audiences differ — a producer submits work and an executor runs
-//! it — and because a scope that named an RPC would have to grow every time the
-//! service does.
+//! One scope per proto package (design doc D1), except the operator package,
+//! which has two: `inspect` for its read-only methods and `admin` for the rest.
+//! A package is the right unit because the audiences differ — a producer
+//! submits work and an executor runs it — and because a scope that named an RPC
+//! would have to grow every time the service does. The operator split is drawn
+//! by each method's idempotency level for the same reason (#836).
 //!
 //! This lives outside `grpc/` because a scope is a property of a *token*, and
 //! tokens are minted, listed and revoked by builds compiled without the `grpc`
@@ -23,17 +25,25 @@ pub enum Scope {
     Produce,
     /// `flexiq.executor.v1` — claim work and report on it.
     Execute,
+    /// `flexiq.admin.v1`, read-only methods — look at queues, dead letters,
+    /// workers, schedules and overrides.
+    Inspect,
+    /// `flexiq.admin.v1`, every other method — pause, replay, delete, purge,
+    /// schedule and override.
+    Admin,
 }
 
 impl Scope {
     /// Every scope there is, in the order a listing shows them.
-    pub const ALL: [Self; 2] = [Self::Produce, Self::Execute];
+    pub const ALL: [Self; 4] = [Self::Produce, Self::Execute, Self::Inspect, Self::Admin];
 
     /// This scope's bit in a [`ScopeSet`].
     const fn bit(self) -> u8 {
         match self {
             Self::Produce => 1 << 0,
             Self::Execute => 1 << 1,
+            Self::Inspect => 1 << 2,
+            Self::Admin => 1 << 3,
         }
     }
 
@@ -42,6 +52,8 @@ impl Scope {
         match self {
             Self::Produce => "produce",
             Self::Execute => "execute",
+            Self::Inspect => "inspect",
+            Self::Admin => "admin",
         }
     }
 
@@ -80,7 +92,9 @@ pub struct ScopeSet(u8);
 
 impl ScopeSet {
     /// Every scope this build knows.
-    pub const ALL: Self = Self(Scope::Produce.bit() | Scope::Execute.bit());
+    pub const ALL: Self = Self(
+        Scope::Produce.bit() | Scope::Execute.bit() | Scope::Inspect.bit() | Scope::Admin.bit(),
+    );
 
     /// No scopes at all. A credential carrying this opens nothing.
     pub const NONE: Self = Self(0);
@@ -195,7 +209,8 @@ mod tests {
         for scope in Scope::ALL {
             assert_eq!(Scope::parse(scope.as_str()), Some(scope));
         }
-        assert_eq!(Scope::parse("admin"), None);
+        assert_eq!(Scope::parse("teleport"), None);
+        assert_eq!(Scope::parse("Admin"), None);
         assert_eq!(Scope::parse(""), None);
     }
 
@@ -222,5 +237,17 @@ mod tests {
         for scope in Scope::ALL {
             assert!(ScopeSet::ALL.contains(scope));
         }
+    }
+
+    /// Reading the operator package and changing it are two grants, and
+    /// neither is implied by the producer's.
+    #[test]
+    fn the_operator_scopes_are_not_a_hierarchy() {
+        let read = ScopeSet::of(&[Scope::Inspect]);
+        assert!(!read.contains(Scope::Admin));
+        let write = ScopeSet::of(&[Scope::Admin]);
+        assert!(!write.contains(Scope::Inspect));
+        let produce = ScopeSet::of(&[Scope::Produce]);
+        assert!(!produce.contains(Scope::Inspect) && !produce.contains(Scope::Admin));
     }
 }

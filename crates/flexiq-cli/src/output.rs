@@ -15,7 +15,10 @@
 //! That makes this a second implementation of a rendering the server already
 //! has, and a second implementation of a shared format drifts unless something
 //! holds it. `crates/flexiq-server/tests/grpc_cli.rs` holds it: it renders one
-//! `Job` both ways and asserts the two objects are equal.
+//! `Job`, and every `flexiq.admin.v1` response [`admin`] writes, both ways and
+//! asserts the two objects are equal.
+
+pub mod admin;
 
 use anyhow::{anyhow, Result};
 use base64::Engine as _;
@@ -284,6 +287,12 @@ fn status_json(status: i32) -> Value {
         Ok(known) => known.as_str_name().into(),
         Err(_) => status.into(),
     }
+}
+
+/// Bytes as proto3 JSON writes them, for a payload printed beside a table.
+/// The alphabet is ASCII, so the text needs no escaping.
+pub fn base64(bytes: &[u8]) -> String {
+    BASE64.encode(bytes)
 }
 
 /// An `int64`, as a string.

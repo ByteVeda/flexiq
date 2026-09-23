@@ -522,7 +522,9 @@ fn the_scheduler_starts_without_anyone_attaching() {
     // What `queue.workers()` reads. Nothing in this binary ever attached, so
     // a `remote` row here would mean the scheduler is reporting a pool that
     // does not exist.
-    let workers = storage.list_workers().expect("read the worker registry");
+    let workers = storage
+        .list_workers(None)
+        .expect("read the worker registry");
     assert_eq!(workers.len(), 1, "one scheduler, one registration");
     assert_eq!(
         workers[0].pool_type.as_deref(),

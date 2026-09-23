@@ -578,6 +578,17 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
     List<WorkerInfo> listWorkers();
 
     /**
+     * Ask one worker in this namespace to drain. It reads the request on its
+     * next heartbeat, stops claiming, finishes its running jobs and
+     * unregisters — the same stop {@link org.byteveda.flexiq.worker.Worker#close()}
+     * performs.
+     *
+     * @param workerId the worker's id, as {@link #listWorkers()} reports it
+     * @return whether such a worker was registered in this namespace
+     */
+    boolean drainWorker(String workerId);
+
+    /**
      * Every configured task's circuit-breaker state.
      *
      * @return one entry per task with a breaker
@@ -777,6 +788,14 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
     default void setMinContract(int level) {
         throw new UnsupportedOperationException("the contract floor requires the native backend");
     }
+
+    /**
+     * The namespace this client reads and writes under, as set by
+     * {@link Builder#namespace(String)}.
+     *
+     * @return the namespace, or empty for the default namespace
+     */
+    Optional<String> namespace();
 
     /**
      * The retention windows a worker is applying to this queue's namespace, or
@@ -1649,7 +1668,8 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
          * @return the client
          */
         public FlexiQ open(QueueBackend backend) {
-            return new DefaultFlexiQ(backend, effectiveSerializer(), namedCodecs, middlewareTimeout);
+            return new DefaultFlexiQ(
+                    backend, effectiveSerializer(), namedCodecs, middlewareTimeout, configuredNamespace());
         }
 
         /**
@@ -1666,7 +1686,16 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
                 throw new ConfigurationException("url (dsn) is required");
             }
             return new DefaultFlexiQ(
-                    JniQueueBackend.open(encodeOptions()), effectiveSerializer(), namedCodecs, middlewareTimeout);
+                    JniQueueBackend.open(encodeOptions()),
+                    effectiveSerializer(),
+                    namedCodecs,
+                    middlewareTimeout,
+                    configuredNamespace());
+        }
+
+        /** The configured namespace; {@code null} is the default one. */
+        private @Nullable String configuredNamespace() {
+            return (String) options.get("namespace");
         }
 
         /** Create the SQLite file's parent directory (skip in-memory databases). */

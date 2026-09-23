@@ -46,9 +46,9 @@ const (
 //
 // What this service deliberately does not offer, and will not grow:
 //
-//   - An admin surface. Pausing queues, settings, dead-letter operations,
-//     webhook secrets and circuit-breaker internals stay behind the dashboard's
-//     session and role check. An operator surface and a producer surface have
+//   - An admin surface. Pausing queues, dead-letter operations, workers,
+//     periodic tasks and overrides are flexiq.admin.v1, a separate package
+//     behind separate scopes: an operator surface and a producer surface have
 //     different audiences and must not share a credential.
 //   - A way to name a namespace. One listener serves exactly one namespace, and
 //     it comes from the server's own configuration. A read for a job in another
@@ -200,9 +200,9 @@ func (c *producerServiceClient) GetWorkflowRun(ctx context.Context, in *GetWorkf
 //
 // What this service deliberately does not offer, and will not grow:
 //
-//   - An admin surface. Pausing queues, settings, dead-letter operations,
-//     webhook secrets and circuit-breaker internals stay behind the dashboard's
-//     session and role check. An operator surface and a producer surface have
+//   - An admin surface. Pausing queues, dead-letter operations, workers,
+//     periodic tasks and overrides are flexiq.admin.v1, a separate package
+//     behind separate scopes: an operator surface and a producer surface have
 //     different audiences and must not share a credential.
 //   - A way to name a namespace. One listener serves exactly one namespace, and
 //     it comes from the server's own configuration. A read for a job in another

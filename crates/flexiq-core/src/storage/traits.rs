@@ -351,14 +351,19 @@ pub trait Storage: Send + Sync + Clone {
         namespace: Option<&str>,
     ) -> Result<Vec<DeadJob>>;
     /// Delete every dead-letter entry for a task. Returns the number removed.
-    fn purge_dead_by_task(&self, task_name: &str) -> Result<u64>;
+    /// `namespace` of `None` purges every namespace, like `list_dead`'s read.
+    fn purge_dead_by_task(&self, task_name: &str, namespace: Option<&str>) -> Result<u64>;
+    /// One dead-letter entry, payload included, or `None` when absent. An
+    /// entry in another namespace reads as absent.
+    fn get_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<Option<DeadJob>>;
     /// Re-enqueue a dead-letter entry as a fresh job, deleting the entry.
     /// Returns the new job's id; `JobNotFound` if the entry is absent.
     /// An entry in another namespace reports `JobNotFound`.
     fn retry_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<String>;
     /// Purge dead-letter entries older than the cutoff. Returns the count
-    /// removed.
-    fn purge_dead(&self, older_than_ms: i64) -> Result<u64>;
+    /// removed. `namespace` of `None` purges every namespace, like
+    /// `list_dead`'s read; retention uses [`Self::purge_dead_with_ttl`].
+    fn purge_dead(&self, older_than_ms: i64, namespace: Option<&str>) -> Result<u64>;
     /// Delete one dead-letter entry. Returns `false` when no row matched.
     /// An entry in another namespace reports `false`.
     fn delete_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<bool>;
@@ -663,14 +668,34 @@ pub trait Storage: Send + Sync + Clone {
     fn register_worker(&self, registration: &WorkerRegistration<'_>) -> Result<()>;
     /// Refresh a worker's heartbeat timestamp, optionally updating its
     /// resource-health JSON.
-    fn heartbeat(&self, worker_id: &str, resource_health: Option<&str>) -> Result<()>;
+    ///
+    /// Answers the status the worker's row holds afterwards — `None` once the
+    /// row is gone — so a worker learns of a drain an operator requested on
+    /// the call it already makes every few seconds.
+    fn heartbeat(
+        &self,
+        worker_id: &str,
+        resource_health: Option<&str>,
+    ) -> Result<Option<WorkerStatus>>;
+    /// Ask one worker in `namespace` to drain: set its status to `Draining`,
+    /// which it reads back on its next [`Self::heartbeat`] and answers by
+    /// stopping gracefully. `false` when no such worker is registered in that
+    /// namespace — a worker in another namespace reads as absent. `None` is
+    /// the default namespace.
+    fn request_worker_drain(&self, worker_id: &str, namespace: Option<&str>) -> Result<bool>;
     /// Set a worker's lifecycle status.
     fn update_worker_status(&self, worker_id: &str, status: WorkerStatus) -> Result<()>;
-    /// Every registered worker with its heartbeat state.
-    fn list_workers(&self) -> Result<Vec<WorkerInfo>>;
-    /// Ids of workers whose heartbeat is at or after `cutoff_ms`. A narrow
-    /// projection of [`Self::list_workers`] for callers that only need the live
-    /// set and must not pay to load every worker's `resource_health` blob.
+    /// One namespace's registered workers with their heartbeat state.
+    ///
+    /// `None` is the **default namespace**, never a wildcard (#836): the
+    /// namespace is what the worker registered with, and a worker registered
+    /// before `0021_worker_namespace` reads as the default's. The id-keyed
+    /// members around this one stay namespace-blind — a worker id is globally
+    /// unique, and a dead worker is dead in every namespace.
+    fn list_workers(&self, namespace: Option<&str>) -> Result<Vec<WorkerInfo>>;
+    /// Ids of workers in **every** namespace whose heartbeat is at or after
+    /// `cutoff_ms`, for callers that only need the live set and must not pay
+    /// to load every worker's `resource_health` blob.
     fn list_live_worker_ids(&self, cutoff_ms: i64) -> Result<Vec<String>>;
     /// Remove workers whose heartbeat is stale past the dead-worker threshold.
     /// Returns the reaped worker ids.
@@ -681,13 +706,18 @@ pub trait Storage: Send + Sync + Clone {
     fn list_claims_by_worker(&self, worker_id: &str) -> Result<Vec<String>>;
 
     // ── Queue pause/resume ───────────────────────────────────────
+    //
+    // A pause is identified by `(namespace, queue_name)` (#836), and
+    // `namespace: None` is the **default namespace**, never a wildcard — the
+    // periodic rule above, and the one `dequeue` follows. A scheduler reads
+    // only its own namespace's pauses.
 
-    /// Pause a queue so no new jobs are dispatched from it.
-    fn pause_queue(&self, queue_name: &str) -> Result<()>;
-    /// Resume a paused queue.
-    fn resume_queue(&self, queue_name: &str) -> Result<()>;
-    /// Names of all currently paused queues.
-    fn list_paused_queues(&self) -> Result<Vec<String>>;
+    /// Pause a queue in one namespace so no new jobs are dispatched from it.
+    fn pause_queue(&self, queue_name: &str, namespace: Option<&str>) -> Result<()>;
+    /// Resume a paused queue in one namespace.
+    fn resume_queue(&self, queue_name: &str, namespace: Option<&str>) -> Result<()>;
+    /// Names of the namespace's paused queues.
+    fn list_paused_queues(&self, namespace: Option<&str>) -> Result<Vec<String>>;
 
     // ── Job expiry ───────────────────────────────────────────────
 
@@ -984,6 +1014,16 @@ pub trait Storage: Send + Sync + Clone {
     /// Statistics broken down per queue name.
     fn stats_all_queues(
         &self,
+        namespace: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, QueueStats>>;
+    /// Jobs that reached a terminal status at or after `since_ms`, per queue —
+    /// a windowed count, where [`Self::stats_all_queues`] is a snapshot. Only
+    /// the terminal counters (`completed`, `failed`, `dead`, `cancelled`) are
+    /// ever non-zero, and a queue with none in the window is absent.
+    /// `namespace` of `None` counts every namespace, like `stats_all_queues`.
+    fn queue_throughput(
+        &self,
+        since_ms: i64,
         namespace: Option<&str>,
     ) -> Result<std::collections::HashMap<String, QueueStats>>;
 

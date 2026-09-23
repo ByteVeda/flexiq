@@ -1,12 +1,13 @@
 ---
 title: The fq command line
-description: "A standalone binary that drives a FlexiQ server over gRPC — enqueue jobs, read and cancel them, and read queue counts, with no SDK and no database credential."
+description: "A standalone binary that drives a FlexiQ server over gRPC — enqueue, read and cancel jobs, and operate queues, dead letters, workers, schedules and overrides, with no SDK and no database credential."
 ---
 
-`fq` is one binary. It speaks `flexiq.v1.ProducerService` over gRPC and links no
-FlexiQ SDK: no language runtime, no native extension, no database driver. If you
-run `flexiq-server` and write your application in something the SDKs do not
-cover, this is your command line.
+`fq` is one binary. It speaks `flexiq.v1.ProducerService` and
+`flexiq.admin.v1.AdminService` over gRPC and links no FlexiQ SDK: no language
+runtime, no native extension, no database driver. If you run `flexiq-server` and
+write your application in something the SDKs do not cover, this is your command
+line.
 
 It is also the only command line that talks to the **server**. An SDK's CLI
 opens the database off a DSN, which is the wrong door for an operator holding a
@@ -15,9 +16,8 @@ else.
 
 <Callout title="What it cannot do yet">
 Talking to the server instead of the database means `fq` can only do what the
-wire exposes, which today is less than an SDK's CLI can do. There is no `fq
-tail` and no `fq dlq`, among others. [What the wire cannot do
-yet](#what-the-wire-cannot-do-yet) is the full list.
+wire exposes. There is no `fq tail`. [What the
+wire cannot do yet](#what-the-wire-cannot-do-yet) is the full list.
 </Callout>
 
 ## Getting it
@@ -209,10 +209,68 @@ dead       0
 cancelled  0
 ```
 
-Counts only. There are no rates, and there is no way to discover a queue name
-you were not told — an omitted argument means *aggregate the namespace*, not
-*list what is in it*. Both are [holes in the
-wire](#what-the-wire-cannot-do-yet), not omissions here.
+An omitted argument means *aggregate the namespace*, not *list what is in it*;
+`fq queues --list` is the listing, and `fq throughput` the rates — both on the
+admin door, below.
+
+## Operating a deployment
+
+Everything below calls [the admin door](/server/operate/admin), so the token
+needs `inspect` to read and `admin` to change — a `produce` token is refused
+`SCOPE_DENIED`. Durations are milliseconds, like every other flag here.
+
+```bash
+fq queues --list                      # every queue, with a paused column
+fq pause emails                       # stop dispatch; fq resume emails lifts it
+fq throughput --window-ms 600000      # finished jobs per queue, and per minute
+fq workers
+fq drain <WORKER_ID>                  # stop claiming, finish, unregister
+```
+
+A drain is read by the worker on its next heartbeat, so `fq drain` answers
+with the worker `draining`; `fq workers` stops listing it once it has stopped.
+
+```text
+queue    paused  pending  running  completed  failed  dead  cancelled
+-------  ------  -------  -------  ---------  ------  ----  ---------
+dlq      no      0        0        0          0       1     0
+emails   no      1        0        0          0       0     0
+reports  no      0        0        1          0       0     0
+```
+
+The dead-letter queue:
+
+```bash
+fq dlq list                           # newest first; --all follows every page
+fq dlq show <ID> --payload
+fq dlq replay <ID>                    # enqueue it again; prints the new job
+fq dlq delete <ID>
+fq dlq purge --task charge            # or --before <RFC3339>, --older-than-ms, --all
+```
+
+`purge` takes exactly one filter, so emptying the whole queue has to say
+`--all`.
+
+Periodic tasks, with arguments read the way `fq enqueue` reads them:
+
+```bash
+fq periodic put nightly-report daily --task build_report --cron '0 0 2 * * *' \
+  --timezone Europe/Berlin
+fq periodic pause nightly-report      # resume, trigger, delete, show, list
+```
+
+`put` never resumes a paused task, and `trigger` fires one run now without
+moving the schedule. Overrides:
+
+```bash
+fq overrides set-task send_email --rate-limit 100/m --timeout-ms 30000
+fq overrides list
+fq overrides clear-task send_email
+```
+
+`set-task` and `set-queue` **replace** the override — a flag left out is no
+longer overridden — and a worker reads overrides when it starts, so a change
+reaches no worker already running.
 
 ## Output
 
@@ -280,20 +338,12 @@ else.
 
 ## What the wire cannot do yet
 
-`fq` is deliberately no larger than the producer door. Every operator action
-below exists in the dashboard, and none of it is on the wire — so none of it can
-be a subcommand here. Each row names the issue that would unblock it.
+`fq` is deliberately no larger than the wire. What is not on it cannot be a
+subcommand here:
 
-| Missing | Blocked on |
+| Missing | Why |
 | --- | --- |
 | Follow a job or a queue as it changes (`fq tail`) | [#837](https://github.com/ByteVeda/flexiq/issues/837) — there is no `WatchJobs` stream, and a poll loop hidden behind a subcommand is the cost that issue exists to remove. |
-| List, inspect or replay dead letters (`fq dlq`) | [#836](https://github.com/ByteVeda/flexiq/issues/836) |
-| Pause or resume a queue | [#836](https://github.com/ByteVeda/flexiq/issues/836) |
-| List workers, drain one, read heartbeats | [#836](https://github.com/ByteVeda/flexiq/issues/836) |
-| Create, update, delete or trigger a periodic task | [#836](https://github.com/ByteVeda/flexiq/issues/836) |
-| Read or change a rate limit or a concurrency cap | [#836](https://github.com/ByteVeda/flexiq/issues/836) |
-| Enumerate the queues in a namespace | [#836](https://github.com/ByteVeda/flexiq/issues/836) — `QueueStats` aggregates, it does not enumerate. |
-| Read queue rates rather than counts | [#836](https://github.com/ByteVeda/flexiq/issues/836) |
 
-Until then, those operations need the dashboard or an SDK with a database
+Until then, following a job needs the dashboard or an SDK with a database
 connection.

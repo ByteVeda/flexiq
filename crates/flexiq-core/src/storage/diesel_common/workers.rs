@@ -5,8 +5,13 @@
 macro_rules! impl_diesel_worker_ops {
     ($storage_type:ty) => {
         impl $storage_type {
-            /// Update the heartbeat timestamp for a worker.
-            pub fn heartbeat(&self, worker_id: &str, resource_health: Option<&str>) -> Result<()> {
+            /// Update the heartbeat timestamp for a worker, and read back the
+            /// status its row now holds — `None` once the row is gone.
+            pub fn heartbeat(
+                &self,
+                worker_id: &str,
+                resource_health: Option<&str>,
+            ) -> Result<Option<$crate::storage::records::WorkerStatus>> {
                 let mut conn = self.conn()?;
                 let now = now_millis();
 
@@ -18,7 +23,34 @@ macro_rules! impl_diesel_worker_ops {
                     ))
                     .execute(&mut conn)?;
 
-                Ok(())
+                let status: Option<String> = workers::table
+                    .filter(workers::worker_id.eq(worker_id))
+                    .select(workers::status)
+                    .first(&mut conn)
+                    .optional()?;
+                Ok(status.map(|status| $crate::storage::records::WorkerStatus::from_wire(&status)))
+            }
+
+            /// Ask one worker in `namespace` to drain. `false` when no such
+            /// worker is registered there — including one in another namespace.
+            pub fn request_worker_drain(
+                &self,
+                worker_id: &str,
+                namespace: Option<&str>,
+            ) -> Result<bool> {
+                let mut conn = self.conn()?;
+                let draining = $crate::storage::records::WorkerStatus::Draining.as_str();
+                let target = diesel::update(workers::table)
+                    .filter(workers::worker_id.eq(worker_id))
+                    .into_boxed();
+                let target = match namespace {
+                    Some(ns) => target.filter(workers::namespace.eq(ns)),
+                    None => target.filter(workers::namespace.is_null()),
+                };
+                let updated = target
+                    .set(workers::status.eq(draining))
+                    .execute(&mut conn)?;
+                Ok(updated > 0)
             }
 
             /// Update the status of a worker.
@@ -37,11 +69,20 @@ macro_rules! impl_diesel_worker_ops {
                 Ok(())
             }
 
-            /// List all workers with their heartbeat status.
-            pub fn list_workers(&self) -> Result<Vec<$crate::storage::records::WorkerInfo>> {
+            /// The namespace's workers with their heartbeat status. `None` is
+            /// the default namespace, never "every namespace".
+            pub fn list_workers(
+                &self,
+                namespace: Option<&str>,
+            ) -> Result<Vec<$crate::storage::records::WorkerInfo>> {
                 let mut conn = self.conn()?;
 
-                let rows = workers::table
+                let query = workers::table.into_boxed();
+                let query = match namespace {
+                    Some(ns) => query.filter(workers::namespace.eq(ns)),
+                    None => query.filter(workers::namespace.is_null()),
+                };
+                let rows = query
                     .select(WorkerRow::as_select())
                     .load::<WorkerRow>(&mut conn)?;
 

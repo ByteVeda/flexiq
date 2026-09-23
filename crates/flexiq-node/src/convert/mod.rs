@@ -30,7 +30,7 @@ pub use pubsub::{
 };
 pub use stats::{
     dead_job_to_js, job_error_to_js, metric_to_js, stats_to_js, status_code, worker_to_js,
-    JsDeadJob, JsDeadJobPage, JsJobError, JsMetric, JsStats, JsWorkerRow,
+    JsDeadJob, JsDeadJobPage, JsHeartbeat, JsJobError, JsMetric, JsStats, JsWorkerRow,
 };
 pub use task_config::{queue_codel, queue_config, task_config};
 #[cfg(feature = "workflows")]

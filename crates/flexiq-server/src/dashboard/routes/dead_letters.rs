@@ -30,7 +30,11 @@ pub async fn list(State(state): State<SharedState>, params: Params) -> ApiResult
 /// The SDK dashboards purge with an age of zero, i.e. everything; the cutoff
 /// is computed here so the semantics stay identical.
 pub async fn purge(State(state): State<SharedState>) -> ApiResult<Json<Value>> {
-    let purged = on_storage(&state, |storage| storage.purge_dead(now_millis())).await?;
+    let namespace = state.namespace.clone();
+    let purged = on_storage(&state, move |storage| {
+        storage.purge_dead(now_millis(), namespace.as_deref())
+    })
+    .await?;
     Ok(Json(json!({ "purged": purged })))
 }
 

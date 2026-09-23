@@ -6,11 +6,14 @@
 //! dashboard or the webhook, and `SIGTERM` drains it alongside them.
 //!
 //! What it serves is `grpc.health.v1`, server reflection, the `flexiq.v1`
-//! [`ProducerService`](producer::Producer) and — over ordinary HTTP, on the
-//! same port — that same service's [JSON facade](facade). The
-//! `flexiq.executor.v1` stream lands on this listener when it arrives; the
-//! contract all of them must keep lives in
-//! `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`.
+//! [`ProducerService`](producer::Producer), the `flexiq.admin.v1`
+//! [`AdminService`](admin::Admin) and — over ordinary HTTP, on the same port —
+//! both services' [JSON facade](facade). The `flexiq.executor.v1` stream lands
+//! on this listener when a dispatcher is present. Producer and operator are
+//! separate packages behind separate scopes: the two audiences never share a
+//! credential. The contract all of them must keep lives in
+//! `tasks/specs/2026-09-01-flexiq-v1-proto-design.md` and, for the operator
+//! door, `tasks/specs/2026-09-23-admin-service-design.md`.
 //!
 //! The two rules that shape everything above it: **this door serves exactly
 //! one namespace**, the process's own, and refuses to start without one; and
@@ -20,6 +23,7 @@
 //! carries no credential.
 //! See [`crate::config::grpc`] and [`auth`].
 
+pub mod admin;
 pub mod auth;
 pub mod blocking;
 pub mod executor;

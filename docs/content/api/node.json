@@ -1559,6 +1559,20 @@
     },
     {
       "owner": "JsQueue",
+      "name": "requestWorkerDrain",
+      "kind": "method",
+      "signature": "requestWorkerDrain(workerId: string): boolean",
+      "params": [
+        {
+          "name": "workerId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
       "name": "requeueJob",
       "kind": "method",
       "signature": "requeueJob(jobId: string): boolean",
@@ -2046,7 +2060,7 @@
       "owner": "JsQueue",
       "name": "workerHeartbeat",
       "kind": "method",
-      "signature": "workerHeartbeat(workerId: string, resourceHealth?: string | undefined | null): Promise<Array<string>>",
+      "signature": "workerHeartbeat(workerId: string, resourceHealth?: string | undefined | null): Promise<JsHeartbeat>",
       "params": [
         {
           "name": "workerId",
@@ -2059,7 +2073,7 @@
           "default": "optional"
         }
       ],
-      "returns": "Promise<Array<string>>"
+      "returns": "Promise<JsHeartbeat>"
     },
     {
       "owner": "JsQueue",

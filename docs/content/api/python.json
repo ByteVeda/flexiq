@@ -2003,6 +2003,20 @@
     },
     {
       "owner": "PyQueue",
+      "name": "request_worker_drain",
+      "kind": "method",
+      "signature": "request_worker_drain(worker_id: str) -> bool",
+      "params": [
+        {
+          "name": "worker_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
       "name": "requeue_job",
       "kind": "method",
       "signature": "requeue_job(job_id: str) -> bool",

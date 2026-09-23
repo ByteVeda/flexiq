@@ -95,7 +95,9 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_purgeDead<'
 ) -> jlong {
     guard(&mut env, 0, |_env| {
         let queue = unsafe { borrow_queue(handle) };
-        Ok(queue.storage.purge_dead(older_than_ms)? as jlong)
+        Ok(queue
+            .storage
+            .purge_dead(older_than_ms, queue.namespace.as_deref())? as jlong)
     })
 }
 
@@ -135,7 +137,9 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_purgeDeadBy
     guard(&mut env, 0, |env| {
         let queue = unsafe { borrow_queue(handle) };
         let task = read_string(env, &task_name)?;
-        Ok(queue.storage.purge_dead_by_task(&task)? as jlong)
+        Ok(queue
+            .storage
+            .purge_dead_by_task(&task, queue.namespace.as_deref())? as jlong)
     })
 }
 
@@ -164,8 +168,30 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_pauseQueue<
     guard(&mut env, (), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let name = read_string(env, &queue_name)?;
-        queue.storage.pause_queue(&name)?;
+        queue
+            .storage
+            .pause_queue(&name, queue.namespace.as_deref())?;
         Ok(())
+    })
+}
+
+/// `boolean requestWorkerDrain(long handle, String workerId)` — mark one of this
+/// namespace's workers draining. False when no such worker is registered here.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_requestWorkerDrain<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    worker_id: JString<'local>,
+) -> jboolean {
+    guard(&mut env, JNI_FALSE, |env| {
+        let queue = unsafe { borrow_queue(handle) };
+        let id = read_string(env, &worker_id)?;
+        Ok(super::to_jboolean(
+            queue
+                .storage
+                .request_worker_drain(&id, queue.namespace.as_deref())?,
+        ))
     })
 }
 
@@ -180,7 +206,9 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_resumeQueue
     guard(&mut env, (), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let name = read_string(env, &queue_name)?;
-        queue.storage.resume_queue(&name)?;
+        queue
+            .storage
+            .resume_queue(&name, queue.namespace.as_deref())?;
         Ok(())
     })
 }
@@ -194,7 +222,10 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_listPausedQ
 ) -> jstring {
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
-        new_string(env, to_json(&queue.storage.list_paused_queues()?)?)
+        let paused = queue
+            .storage
+            .list_paused_queues(queue.namespace.as_deref())?;
+        new_string(env, to_json(&paused)?)
     })
 }
 

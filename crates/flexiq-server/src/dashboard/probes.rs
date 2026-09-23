@@ -57,7 +57,14 @@ pub async fn readiness(
         }
     }
 
-    match on_storage(&state, |storage| storage.list_workers()).await {
+    // This namespace's workers: a readiness probe for one tenant reports that
+    // tenant's fleet, not whoever else shares the database.
+    let namespace = state.namespace.clone();
+    match on_storage(&state, move |storage| {
+        storage.list_workers(namespace.as_deref())
+    })
+    .await
+    {
         Ok(workers) => {
             checks.insert(
                 "workers".into(),
@@ -104,11 +111,13 @@ pub async fn metrics(
     require_probe_access(&state, &headers, &context)?;
 
     let namespace = state.namespace.clone();
-    let per_queue = on_storage(&state, move |storage| {
-        storage.stats_all_queues(namespace.as_deref())
+    let (per_queue, workers) = on_storage(&state, move |storage| {
+        Ok((
+            storage.stats_all_queues(namespace.as_deref())?,
+            storage.list_workers(namespace.as_deref())?,
+        ))
     })
     .await?;
-    let workers = on_storage(&state, |storage| storage.list_workers()).await?;
 
     let mut body = crate::metrics::storage_gauges(
         per_queue,

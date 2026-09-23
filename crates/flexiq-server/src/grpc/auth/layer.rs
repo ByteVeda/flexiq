@@ -123,7 +123,8 @@ where
             // contract, and the request still needs its headers afterwards.
             // tonic's own interceptor takes a request apart the same way.
             let metadata = MetadataMap::from_headers(std::mem::take(&mut parts.headers));
-            let outcome = authorize(&*authenticator, parts.uri.path(), &metadata).await;
+            let outcome =
+                authorize(&*authenticator, &parts.method, parts.uri.path(), &metadata).await;
             parts.headers = metadata.into_headers();
 
             match outcome {
@@ -150,10 +151,11 @@ where
 /// policy is testable without a service behind it.
 async fn authorize(
     authenticator: &dyn Authenticator,
+    method: &http::Method,
     path: &str,
     metadata: &MetadataMap,
 ) -> Result<Option<Principal>, Status> {
-    let requirement = gate::requirement(path);
+    let requirement = gate::requirement(method, path);
     if requirement == Requirement::Public {
         // Not merely allowed through: not even *asked*. A public path must not
         // reach storage, or an unauthenticated caller could keep the pool busy.
@@ -198,6 +200,9 @@ mod tests {
         }
     }
 
+    /// What every gRPC call is sent as.
+    const POST: http::Method = http::Method::POST;
+
     fn grants_everything() -> Fixed {
         Fixed(Principal::new("prod", ScopeSet::ALL))
     }
@@ -206,6 +211,7 @@ mod tests {
     async fn health_is_routed_without_a_credential() {
         let outcome = authorize(
             &Refuses,
+            &POST,
             "/grpc.health.v1.Health/Check",
             &MetadataMap::new(),
         )
@@ -221,7 +227,7 @@ mod tests {
             "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
             "/whatever",
         ] {
-            let Err(status) = authorize(&Refuses, path, &MetadataMap::new()).await else {
+            let Err(status) = authorize(&Refuses, &POST, path, &MetadataMap::new()).await else {
                 panic!("{path} must be gated");
             };
             assert_eq!(status.code(), Code::Unauthenticated, "path: {path}");
@@ -232,6 +238,7 @@ mod tests {
     async fn an_authenticated_call_carries_its_principal_onward() {
         let principal = authorize(
             &grants_everything(),
+            &POST,
             "/flexiq.v1.ProducerService/Enqueue",
             &MetadataMap::new(),
         )
@@ -246,6 +253,7 @@ mod tests {
         let produce_only = Fixed(Principal::new("prod", ScopeSet::of(&[Scope::Produce])));
         assert!(authorize(
             &produce_only,
+            &POST,
             "/flexiq.v1.ProducerService/Enqueue",
             &MetadataMap::new()
         )
@@ -254,6 +262,7 @@ mod tests {
 
         let status = authorize(
             &produce_only,
+            &POST,
             "/flexiq.executor.v1.ExecutorService/Dispatch",
             &MetadataMap::new(),
         )

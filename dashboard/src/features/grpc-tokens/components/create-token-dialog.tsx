@@ -27,6 +27,8 @@ const MAX_DAYS = 365;
 const SCOPE_HELP: Record<string, string> = {
   produce: "Submit, read and cancel work.",
   execute: "Claim work and report on it.",
+  inspect: "Look at queues, dead letters, workers, schedules and overrides.",
+  admin: "Pause queues, replay dead letters, manage schedules and overrides.",
 };
 
 export function CreateGrpcTokenDialog() {

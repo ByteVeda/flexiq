@@ -39,16 +39,13 @@ pub const METRICS_PATH: &str = "/metrics";
 /// The label a path that is not a served method collapses to.
 const OTHER: &str = "other";
 
-/// The `flexiq.v1` service, as the wire spells it.
-const PRODUCER_SERVICE: &str = "flexiq.v1.ProducerService";
-
-/// Full method paths this build serves outside `flexiq.v1`.
+/// Full method paths this build serves outside the two transcoded services.
 ///
-/// Written out rather than derived: the executor package's RPCs are not in the
-/// producer descriptor, and health and reflection come from crates that publish
-/// no such list. Five names is cheaper than a lookup that could go stale
-/// silently, and a name missing from here degrades to `other` rather than
-/// misreporting.
+/// Written out rather than derived: the executor package is not transcoded, so
+/// the facade's closed set does not name its RPCs, and health and reflection
+/// come from crates that publish no such list. Five names is cheaper than a
+/// lookup that could go stale silently, and a name missing from here degrades
+/// to `other` rather than misreporting.
 const OTHER_SERVED_METHODS: [&str; 5] = [
     "flexiq.executor.v1.ExecutorService/Attach",
     "flexiq.executor.v1.ExecutorService/Heartbeat",
@@ -75,16 +72,14 @@ pub fn labels(
 
     let bare = path.trim_start_matches('/');
 
-    if let Some(rpc) = bare.strip_prefix(PRODUCER_SERVICE).and_then(|rest| {
-        let name = rest.strip_prefix('/')?;
-        facade::routes::Rpc::ALL
-            .into_iter()
-            .find(|rpc| rpc.as_str() == name)
+    // A producer or admin RPC, reached over gRPC: one series per method,
+    // spelled exactly as the facade labels the same method below.
+    if let Some(rpc) = facade::routes::Rpc::ALL.into_iter().find(|rpc| {
+        bare.strip_prefix(rpc.service().full_name())
+            .and_then(|rest| rest.strip_prefix('/'))
+            == Some(rpc.as_str())
     }) {
-        return (
-            Cow::Owned(format!("{PRODUCER_SERVICE}/{}", rpc.as_str())),
-            door,
-        );
+        return (Cow::Owned(rpc.full_method()), door);
     }
 
     if let Some(served) = OTHER_SERVED_METHODS
@@ -97,10 +92,7 @@ pub fn labels(
     }
 
     if let Some(binding) = facade::routes::resolve(method, path) {
-        return (
-            Cow::Owned(format!("{PRODUCER_SERVICE}/{}", binding.rpc().as_str())),
-            door,
-        );
+        return (Cow::Owned(binding.rpc().full_method()), door);
     }
 
     (Cow::Borrowed(OTHER), door)
@@ -172,6 +164,59 @@ mod tests {
     fn the_cancel_suffix_resolves_to_cancel_and_not_to_get() {
         let (method, _) = labels(&http::Method::POST, "/v1/jobs/018fabc:cancel", &headers(""));
         assert_eq!(method, "flexiq.v1.ProducerService/CancelJob");
+    }
+
+    /// An operator call is one series per RPC whichever door it came through,
+    /// and a queue name never becomes a label.
+    #[test]
+    fn an_admin_rpc_has_one_label_on_both_doors() {
+        let (over_grpc, _) = labels(
+            &http::Method::POST,
+            "/flexiq.admin.v1.AdminService/PauseQueue",
+            &grpc(),
+        );
+        let (over_http, door) = labels(
+            &http::Method::POST,
+            "/v1/admin/queues/emails:pause",
+            &headers(""),
+        );
+        assert_eq!(over_grpc, "flexiq.admin.v1.AdminService/PauseQueue");
+        assert_eq!(over_http, over_grpc);
+        assert_eq!(door, "http");
+
+        let (cleared, _) = labels(
+            &http::Method::POST,
+            "/v1/admin/queues/emails/override:clear",
+            &headers(""),
+        );
+        assert_eq!(cleared, "flexiq.admin.v1.AdminService/ClearQueueOverride");
+
+        // A worker id never becomes a label either.
+        let (drained, _) = labels(
+            &http::Method::POST,
+            "/v1/admin/workers/w-1:drain",
+            &headers(""),
+        );
+        assert_eq!(drained, "flexiq.admin.v1.AdminService/DrainWorker");
+
+        let (unknown, _) = labels(
+            &http::Method::POST,
+            "/flexiq.admin.v1.AdminService/Bogus",
+            &grpc(),
+        );
+        assert_eq!(unknown, OTHER);
+    }
+
+    /// The two services' names do not leak into each other: an admin method
+    /// under the producer's service is not a method this build serves.
+    #[test]
+    fn a_method_is_only_served_under_its_own_service() {
+        let (method, _) = labels(
+            &http::Method::POST,
+            "/flexiq.v1.ProducerService/PauseQueue",
+            &grpc(),
+        );
+        assert_eq!(method, OTHER);
     }
 
     #[test]

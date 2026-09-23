@@ -29,6 +29,7 @@ half of this one moved. The canonical guides:
 | Roles, every environment variable, the image | **[Server](https://docs.byteveda.org/flexiq/python/operate/server)** |
 | Minting, scoping, rotating and revoking API tokens | **[API tokens](https://docs.byteveda.org/flexiq/python/operate/server/tokens)** |
 | The producer and executor doors, the JSON facade, TLS | **[The gRPC door](https://docs.byteveda.org/flexiq/python/operate/server/grpc)** |
+| Queues, dead letters, workers, periodic tasks and overrides over the wire | **[The admin door](https://docs.byteveda.org/flexiq/python/operate/server/admin)** |
 | Env vars, the egress guard, the limits worth knowing first | **[Push dispatch](https://docs.byteveda.org/flexiq/python/operate/server/push)** |
 | Webhooks and object-store events as enqueue sources | **[Triggers](https://docs.byteveda.org/flexiq/python/operate/server/triggers)** |
 | What to scale on, per role | **[Scaling](https://docs.byteveda.org/flexiq/python/operate/server/scaling)** |

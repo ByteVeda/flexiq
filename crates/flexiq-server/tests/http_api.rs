@@ -449,7 +449,7 @@ async fn a_grpc_token_mint_refuses_a_request_it_cannot_honour() {
         ("empty scopes", json!({ "name": "ci", "scopes": [] })),
         (
             "an unknown scope",
-            json!({ "name": "ci", "scopes": ["admin"] }),
+            json!({ "name": "ci", "scopes": ["teleport"] }),
         ),
         (
             "a lifetime past the cap",
@@ -487,7 +487,7 @@ async fn the_grpc_scope_list_is_served() {
         .iter()
         .map(|scope| scope["name"].as_str().expect("a name"))
         .collect();
-    assert_eq!(names, vec!["produce", "execute"]);
+    assert_eq!(names, vec!["produce", "execute", "inspect", "admin"]);
 }
 
 #[tokio::test]
@@ -635,6 +635,57 @@ async fn overrides_are_validated_and_merged() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["name"], json!("send_email"));
     assert_eq!(rows[0]["advertised"], json!(false));
+}
+
+/// #836: a namespaced dashboard writes its tenant's override key and pauses
+/// its tenant's queue; neither reaches the default namespace.
+#[tokio::test]
+async fn overrides_and_pauses_stay_in_their_namespace() {
+    let storage = temp_storage("http-overrides-ns");
+    let tenant = dashboard_state_in_namespace(&storage, AuthMode::Open, "prod");
+    let default = dashboard_state(&storage, AuthMode::Open);
+
+    let (status, _, _) = call(
+        &tenant,
+        json_request(
+            "PUT",
+            "/api/tasks/send_email/override",
+            json!({ "timeout": 60 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = call(
+        &tenant,
+        json_request("POST", "/api/queues/emails/pause", json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Stored under the namespaced key the workers of `prod` read.
+    assert!(storage
+        .get_setting("overrides:ns:4:prod:task:send_email")
+        .unwrap()
+        .is_some());
+    assert!(storage
+        .get_setting("overrides:task:send_email")
+        .unwrap()
+        .is_none());
+
+    let (_, _, listed) = call(&default, get("/api/tasks")).await;
+    assert_eq!(
+        listed,
+        json!([]),
+        "the default namespace saw a tenant's override"
+    );
+    let (_, _, paused) = call(&default, get("/api/queues/paused")).await;
+    assert_eq!(
+        paused,
+        json!([]),
+        "the default namespace saw a tenant's pause"
+    );
+    let (_, _, paused) = call(&tenant, get("/api/queues/paused")).await;
+    assert_eq!(paused, json!(["emails"]));
 }
 
 #[tokio::test]

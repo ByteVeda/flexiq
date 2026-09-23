@@ -125,7 +125,9 @@ dashboard handler surfaces the same errors as `400 Bad Request`.
 
 Overrides live as JSON entries under
 `overrides:task:<task_name>` and `overrides:queue:<queue_name>` keys
-in the `dashboard_settings` table. SQLite, PostgreSQL, and Redis
+in the `dashboard_settings` table — for a `Queue` with a `namespace`,
+under `overrides:ns:<len>:<namespace>:task:<task_name>` instead, so
+tenants sharing a database never share an override. SQLite, PostgreSQL, and Redis
 backends all support them uniformly — no new schema. The encoded
 JSON only includes fields the operator actually set, so removing a
 field by passing `None` shrinks the row rather than leaving stale

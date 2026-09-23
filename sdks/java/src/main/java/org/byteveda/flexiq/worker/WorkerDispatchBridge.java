@@ -70,6 +70,9 @@ final class WorkerDispatchBridge implements WorkerBridge {
     private final long middlewareTimeoutMillis;
     // Resolved once startWorker returns; job tasks await it before completing.
     private final CompletableFuture<WorkerControl> control = new CompletableFuture<>();
+    // What a drain request runs. A future so a request that beats the binding
+    // still runs, once the worker exists.
+    private final CompletableFuture<Runnable> onDrain = new CompletableFuture<>();
 
     WorkerDispatchBridge(
             @Nullable QueueBackend backend,
@@ -95,6 +98,16 @@ final class WorkerDispatchBridge implements WorkerBridge {
 
     void bind(WorkerControl control) {
         this.control.complete(control);
+    }
+
+    /** Bind what an operator's drain request runs: the owning worker's stop. */
+    void bindDrain(Runnable drain) {
+        onDrain.complete(drain);
+    }
+
+    @Override
+    public void onDrainRequested() {
+        onDrain.thenAccept(Runnable::run);
     }
 
     @Override

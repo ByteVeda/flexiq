@@ -3,7 +3,7 @@ import {
   applyTaskOverrides,
   MiddlewareDisableStore,
   middlewareKey,
-  OverridesStore,
+  type OverridesStore,
 } from "./dashboard/stores";
 import { type Emitter, OUTCOME_KIND_EVENTS, type OutcomeEvent } from "./events";
 import type { Middleware } from "./middleware";
@@ -46,6 +46,8 @@ const OUTCOME_HOOKS: Record<keyof typeof OUTCOME_KIND_EVENTS, keyof Middleware> 
 export interface WorkerStartParams {
   tasks: ReadonlyMap<string, RegisteredTask>;
   queueLimits: ReadonlyMap<string, QueueLimits>;
+  /** The queue's overrides, scoped to its namespace; applied at startup. */
+  overrides: OverridesStore;
   serializer: Serializer;
   /** Named codec registry for per-task payload decode (see `TaskOptions.codecs`). */
   codecs?: ReadonlyMap<string, PayloadCodec>;
@@ -99,7 +101,17 @@ export class Worker {
    * @internal
    */
   static start(queue: NativeQueue, params: WorkerStartParams): Worker {
-    const { tasks, queueLimits, serializer, codecs, middleware, emitter, resources, run } = params;
+    const {
+      tasks,
+      queueLimits,
+      overrides,
+      serializer,
+      codecs,
+      middleware,
+      emitter,
+      resources,
+      run,
+    } = params;
 
     // Dashboard-tunable state: per-task middleware disables are re-read on
     // every invocation (live toggles); task/queue overrides apply here, at
@@ -193,12 +205,8 @@ export class Worker {
       // fingerprint on the worker row has to describe what this worker can
       // run, and `taskConfigs` omits every task that took the defaults.
       tasks: [...tasks.keys()],
-      taskConfigs: applyTaskOverrides(
-        buildTaskConfigs(tasks),
-        tasks.keys(),
-        new OverridesStore(queue),
-      ),
-      queueConfigs: applyQueueOverrides(buildQueueConfigs(queueLimits), new OverridesStore(queue)),
+      taskConfigs: applyTaskOverrides(buildTaskConfigs(tasks), tasks.keys(), overrides),
+      queueConfigs: applyQueueOverrides(buildQueueConfigs(queueLimits), overrides),
       resources: resources.isEmpty ? undefined : resources.names,
       mesh: run?.mesh,
       retention: run?.retention,
@@ -245,14 +253,23 @@ export class Worker {
     let onlineReported = false;
     const previousUnhealthy = new Set<string>();
     const lifecycle = { stopped: false };
+    // Set once constructed below; the first beat resolves after that.
+    let self: Worker | undefined;
     const sendHeartbeat = (): void => {
       const snapshot = resources.healthSnapshot();
       void queue
         .workerHeartbeat(native.id, snapshot && JSON.stringify(snapshot))
-        .then((reapedWorkerIds) => {
+        .then(({ reaped: reapedWorkerIds, status }) => {
           // A beat that resolves after stop() must not emit lifecycle events
           // out of order (clearInterval can't cancel an in-flight promise).
           if (lifecycle.stopped) {
+            return;
+          }
+          // An operator asked this worker to drain: stop as a SIGTERM would.
+          // Terminal — stop() is memoized and ends the heartbeat.
+          if (status === "draining") {
+            log.info(() => `worker ${native.id} draining at an operator's request`);
+            void self?.stop();
             return;
           }
           // Online = the first heartbeat storage acknowledged, once.
@@ -299,7 +316,7 @@ export class Worker {
     // Managed log-topic consumers: one poll loop each, beside the heartbeat.
     const consumerStops = startLogConsumers(queue, serializer, params.logConsumers ?? []);
 
-    return new Worker(
+    self = new Worker(
       native,
       queue,
       resources,
@@ -309,6 +326,7 @@ export class Worker {
       lifecycle,
       params.onStopped,
     );
+    return self;
   }
 
   /**

@@ -221,6 +221,8 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   private readonly liveWorkers = new Set<Worker>();
   private readonly liveExecutors = new Set<Executor>();
   private readonly webhookManager: WebhookManager;
+  /** Overrides are keyed by namespace, so every read and write goes through this queue's. */
+  private readonly overrides: OverridesStore;
   /** Built lazily — its constructor throws on addons lacking the `workflows` feature. */
   private workflowManager?: WorkflowManager;
   /** Shared by workers and `workflows.resolveGate()` so gate timers clear. */
@@ -240,6 +242,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       chain.length > 0 ? new CodecSerializer(baseSerializer, chain) : baseSerializer;
     this.codecs = new Map(Object.entries(options.codecs ?? {}));
     this.webhookManager = new WebhookManager(this.native, this.emitter);
+    this.overrides = new OverridesStore(this.native, options.namespace);
     // Claim any `task()` declared before this queue existed — under ESM a static
     // import of the task modules runs before the module body that constructs the
     // queue, so this is the common case. Cheap and idempotent, so it also runs
@@ -1678,11 +1681,11 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
 
   /** Every persisted task override keyed by task name. */
   listTaskOverrides(): Map<string, TaskOverride> {
-    return new OverridesStore(this.native).listTasks();
+    return this.overrides.listTasks();
   }
 
   getTaskOverride(taskName: string): TaskOverride | undefined {
-    return new OverridesStore(this.native).getTask(taskName);
+    return this.overrides.getTask(taskName);
   }
 
   /**
@@ -1691,28 +1694,28 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
    * `timeout`, `priority`, `paused`. Applied on the next worker start.
    */
   setTaskOverride(taskName: string, fields: Record<string, unknown>): TaskOverride {
-    return new OverridesStore(this.native).setTask(taskName, fields);
+    return this.overrides.setTask(taskName, fields);
   }
 
   clearTaskOverride(taskName: string): boolean {
-    return new OverridesStore(this.native).clearTask(taskName);
+    return this.overrides.clearTask(taskName);
   }
 
   listQueueOverrides(): Map<string, QueueOverride> {
-    return new OverridesStore(this.native).listQueues();
+    return this.overrides.listQueues();
   }
 
   getQueueOverride(queueName: string): QueueOverride | undefined {
-    return new OverridesStore(this.native).getQueue(queueName);
+    return this.overrides.getQueue(queueName);
   }
 
   /** Allowed fields: `rate_limit`, `max_concurrent`, `paused`. */
   setQueueOverride(queueName: string, fields: Record<string, unknown>): QueueOverride {
-    return new OverridesStore(this.native).setQueue(queueName, fields);
+    return this.overrides.setQueue(queueName, fields);
   }
 
   clearQueueOverride(queueName: string): boolean {
-    return new OverridesStore(this.native).clearQueue(queueName);
+    return this.overrides.clearQueue(queueName);
   }
 
   /**
@@ -1863,6 +1866,15 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     return this.native.listWorkers();
   }
 
+  /**
+   * Ask one worker in this namespace to drain. It reads the request on its
+   * next heartbeat and stops as {@link Worker.stop} stops it. Resolves `false`
+   * when no such worker is registered.
+   */
+  async drainWorker(workerId: string): Promise<boolean> {
+    return this.native.requestWorkerDrain(workerId);
+  }
+
   /** Start a worker that runs the registered tasks. Hold the returned {@link Worker}. */
   runWorker(options?: WorkerRunOptions): Worker {
     // A worker entrypoint that imported its task modules directly never has to
@@ -1872,6 +1884,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       onStopped: () => this.liveWorkers.delete(worker),
       tasks: this.tasks,
       queueLimits: this.queueLimits,
+      overrides: this.overrides,
       serializer: this.serializer,
       codecs: this.codecs,
       middleware: this.middleware,

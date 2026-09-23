@@ -119,11 +119,13 @@ described as having established more:
 
 ## The surface
 
-Two packages, two doors, and one scope per package. A single credential **may**
-carry both scopes, though a producer and an executor are usually separate
-processes holding a token each. `flexiq.executor.v1` **may** import `flexiq.v1`;
-the reverse import is forbidden, so a client generated for the producer door
-stays compilable on its own.
+Three packages and three doors: one scope each for the producer and the
+executor, and two for the operator — `inspect` for its read-only methods,
+`admin` for the rest. A single credential **may** carry several scopes, though a
+producer, an executor and an operator are usually separate processes holding a
+token each. `flexiq.executor.v1` and `flexiq.admin.v1` **may** import
+`flexiq.v1`; the reverse import is forbidden, so a client generated for the
+producer door stays compilable on its own.
 
 ### A producer client — `flexiq.v1.ProducerService`
 
@@ -276,14 +278,45 @@ An executor client:
   resource cap.** Anything a client could name is something a client could
   forge; the scheduler applies every one of those from the dispatch it recorded.
 - **`flexiq.executor.v1` has no HTTP binding, ever.** The JSON facade serves
-  `flexiq.v1` and nothing else, so this door needs a real gRPC library.
-- **Neither door reaches the admin surface.** See
+  `flexiq.v1` and `flexiq.admin.v1` and nothing else, so this door needs a real
+  gRPC library.
+- **No producer or executor credential reaches the operator door.** It takes
+  `inspect` or `admin`, which neither carries; and some operator actions are on
+  no door at all — see
   [The delta from an embedded SDK](#the-delta-from-an-embedded-sdk).
+
+### An operator client — `flexiq.admin.v1.AdminService`
+
+Every RPC is **MAY**: an operator client implements the operations it needs.
+Each acts on the credential's namespace alone, and a resource in another
+namespace answers `NOT_FOUND` exactly as an absent one does. The scope a method
+needs is a function of its idempotency level — `NO_SIDE_EFFECTS` takes
+`inspect`, anything else `admin` — so a client can compute it from the
+descriptor.
+
+| RPC | Idempotency | Scope | Notes |
+|---|---|---|---|
+| `ListQueues` | `NO_SIDE_EFFECTS` | `inspect` | Unpaginated; bounded by the number of queues. |
+| `PauseQueue`, `ResumeQueue` | `IDEMPOTENT` | `admin` | Answer with the queue as the call left it. |
+| `GetThroughput` | `NO_SIDE_EFFECTS` | `inspect` | Counts over a window, never a rate. |
+| `ListDeadLetters`, `GetDeadLetter` | `NO_SIDE_EFFECTS` | `inspect` | Cursor paging as `ListJobs`. |
+| `ReplayDeadLetter` | none | `admin` | Each successful call makes a job. |
+| `DeleteDeadLetter` | `IDEMPOTENT` | `admin` | A second call answers `DEAD_LETTER_NOT_FOUND`. |
+| `PurgeDeadLetters` | none | `admin` | |
+| `ListWorkers` | `NO_SIDE_EFFECTS` | `inspect` | |
+| `DrainWorker` | `IDEMPOTENT` | `admin` | Records the request; the worker reads it on its next heartbeat, stops gracefully and unregisters. Registered workers only — an attached executor or push target has no row. |
+| `ListPeriodicTasks`, `GetPeriodicTask` | `NO_SIDE_EFFECTS` | `inspect` | |
+| `PutPeriodicTask` | `IDEMPOTENT` | `admin` | Never changes whether an existing task is paused. |
+| `DeletePeriodicTask`, `PausePeriodicTask`, `ResumePeriodicTask` | `IDEMPOTENT` | `admin` | |
+| `TriggerPeriodicTask` | none | `admin` | Each call makes a job. |
+| `ListOverrides` | `NO_SIDE_EFFECTS` | `inspect` | |
+| `SetTaskOverride`, `SetQueueOverride`, `ClearTaskOverride`, `ClearQueueOverride` | `IDEMPOTENT` | `admin` | A set replaces the whole override. A worker reads overrides at start, so a change reaches no running worker. |
 
 ### If there is no gRPC library either
 
-The eight `flexiq.v1` RPCs are also served as ordinary HTTP with JSON bodies, on
-the same listener and the same credential. `GET` is served for exactly the four
+The eight `flexiq.v1` RPCs and the twenty-three `flexiq.admin.v1` RPCs — the
+latter under `/v1/admin/` — are also served as ordinary HTTP with JSON bodies, on
+the same listener and the same credential. `GET` is served for exactly the
 `NO_SIDE_EFFECTS` RPCs and `POST` for everything else, so the method is never a
 judgement call.
 
@@ -423,6 +456,9 @@ The closed list, with the code each arrives under:
 | `MALFORMED_PAYLOAD` | `INVALID_ARGUMENT` | Bytes the client sent could not be decoded. |
 | `NO_SUCH_METHOD` | `UNIMPLEMENTED` | The path names no RPC. |
 | `JOB_NOT_FOUND` | `NOT_FOUND` | No such job — or a job in another namespace, indistinguishable by design. |
+| `DEAD_LETTER_NOT_FOUND` | `NOT_FOUND` | No such dead-letter entry in this namespace. `flexiq.admin.v1`. |
+| `PERIODIC_TASK_NOT_FOUND` | `NOT_FOUND` | No such periodic task in this namespace. `flexiq.admin.v1`. |
+| `WORKER_NOT_FOUND` | `NOT_FOUND` | No such registered worker in this namespace. `flexiq.admin.v1`. |
 | `DEPENDENCY_NOT_FOUND` | `FAILED_PRECONDITION` | A `depends_on` id names nothing this caller may depend on. |
 | `QUEUE_FULL` | `RESOURCE_EXHAUSTED` | Carries `queue`, `pending`, `cap`. |
 | `RATE_LIMITED` | `RESOURCE_EXHAUSTED` | A rate limit rejected the call. |
@@ -455,7 +491,7 @@ width and signedness are per key.
 |---|---|---|
 | `queue` | `QUEUE_FULL` | queue name, verbatim |
 | `pending`, `cap` | `QUEUE_FULL` | `int64`, jobs |
-| `scope` | `SCOPE_DENIED` | one of `produce`, `execute` |
+| `scope` | `SCOPE_DENIED` | one of `produce`, `execute`, `inspect`, `admin` |
 | `speaks`, `required` | `CONTRACT_TOO_OLD` | `uint32`, contract level |
 | `limit` | `STEP_LIMIT_EXCEEDED` | one of `step bytes`, `total bytes`, `step count` |
 | `actual`, `allowed` | `STEP_LIMIT_EXCEEDED` | `uint64`, in `limit`'s unit |
@@ -566,25 +602,29 @@ token — there is no uncredentialled bind — but neither puts one on a wire.
 
 ### Scopes
 
-There are exactly two, and **they are not a hierarchy**:
+There are four, and **they are not a hierarchy**:
 
 | Scope | Opens |
 |---|---|
-| `produce` | `flexiq.v1` — every RPC in the package, and the JSON facade |
+| `produce` | `flexiq.v1` — every RPC in the package, and its JSON facade |
 | `execute` | `flexiq.executor.v1` — every RPC in the package |
+| `inspect` | `flexiq.admin.v1` — every `NO_SIDE_EFFECTS` RPC, and `GET` on its JSON facade |
+| `admin` | `flexiq.admin.v1` — every other RPC, and `POST` on its JSON facade |
 
-**A scope is "may call this package", not "may call this RPC".** A token with
-`produce` cannot open an executor stream; a token with `execute` cannot enqueue.
-The refusal is `PERMISSION_DENIED` with reason `SCOPE_DENIED`, carrying the
-scope that was lacking. A credential is granted both only when it genuinely does
-both.
+**A scope is "may call this package" — or, for the operator package, "may read
+it" and "may change it" — never "may call this RPC".** A token with `produce`
+cannot open an executor stream or pause a queue; a token with `execute` cannot
+enqueue; a token with `inspect` cannot replay a dead letter. The refusal is
+`PERMISSION_DENIED` with reason `SCOPE_DENIED`, carrying the scope that was
+lacking. A credential is granted a scope only when it genuinely needs it.
 
 The consequence for a client author: a new RPC in a package a client already
-calls needs no new grant, and no RPC will ever be individually grantable.
+calls needs no new grant beyond the one its idempotency level names, and no RPC
+will ever be individually grantable.
 
 ### The namespace
 
-**There is no namespace field on the wire, on either package.** A client cannot
+**There is no namespace field on the wire, in any package.** A client cannot
 name one, and this is not an omission to be fixed — anything a client could name
 is something a client could forge.
 
@@ -641,12 +681,12 @@ two builds may share one database**, dialled by the `contract:min_sdk` setting.
 |---|---|---|
 | **Governs** | the wire shape a client generates against | whether two builds may share one database |
 | **Moves when** | never, for an additive change | an older build can no longer read what a newer one writes |
-| **A remote client sees it** | yes — it is in the package name | **no. There is no contract-level field in either package.** |
+| **A remote client sees it** | yes — it is in the package name | **no. There is no contract-level field in any package.** |
 
 This is the answer to "what does the floor mean to a client that never touches
 the database", and it is: **nothing, and that is by construction.**
 
-- There is **no handshake, interceptor or metadata key** on either package that
+- There is **no handshake, interceptor or metadata key** on any package that
   carries a client-declared contract version. A client cannot declare one and
   the server does not ask.
 - The check, `ensure_contract_supported`, runs **once per process, at storage
@@ -688,12 +728,13 @@ Everything an in-process SDK can do that a remote client cannot. **None of it is
 a gap waiting to be closed** — each line is a recorded decision, stated here so
 nobody has to discover it.
 
-Absent from both packages entirely, with no RPC partially implementing any of
+Absent from every package entirely, with no RPC partially implementing any of
 them:
 
 | Absent | Because |
 |---|---|
-| Every admin operation — pausing queues, settings, dead-letter retry and purge, webhook secrets, circuit-breaker internals | An operator surface and a producer surface must not share a credential. They stay behind the dashboard's session and role check. |
+| Webhook secrets, token minting, circuit-breaker internals | Operator actions that stay behind the dashboard's session and role check. The rest of the operator surface is `flexiq.admin.v1`, behind scopes a producer never holds. |
+| Draining an attached executor or a push target | `DrainWorker` works through the worker registry, and neither has a row of its own. |
 | Settings, including the compare-and-set write | Same credential boundary. |
 | Migrations, and the contract floor | A storage concern between processes that hold the database credential. |
 | Scheduler and retention election | Internal to `flexiq-server`. |

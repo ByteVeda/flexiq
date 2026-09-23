@@ -593,7 +593,8 @@ impl PyQueue {
                 // The native module's version, which maturin builds from the
                 // same workspace version the wheel carries.
                 .sdk(Some("python"), Some(env!("CARGO_PKG_VERSION")))
-                .registry_fingerprint(fingerprint.as_deref()),
+                .registry_fingerprint(fingerprint.as_deref())
+                .namespace(self.namespace.as_deref()),
         );
 
         // Build the dispatcher up front for the prefork case so we can install
@@ -805,7 +806,7 @@ impl PyQueue {
         loop {
             // Release GIL for one iteration of result polling
             let action = py.detach(|| {
-                if super::stop_requested(&shutdown_state) {
+                if super::stop_requested(&shutdown_state, &worker_id) {
                     return PollAction::Shutdown;
                 }
                 match result_rx.recv_timeout(std::time::Duration::from_millis(100)) {
@@ -921,6 +922,7 @@ impl PyQueue {
 
         // Unregister worker on shutdown
         let _ = self.storage.unregister_worker(&worker_id);
+        self.clear_drained(&worker_id);
 
         Ok(())
     }
@@ -932,15 +934,27 @@ impl PyQueue {
     /// the dead-worker scan O(N) per cluster, and each returns the same dead ids
     /// so a `WORKER_OFFLINE` webhook fires N times per death. A non-leader
     /// returns an empty list and emits nothing.
+    ///
+    /// The beat also reads back the row's status. `Draining` — an operator's
+    /// drain request, or this worker's own SIGTERM — stops this worker's run
+    /// the way `request_shutdown` stops every run: no new claims, running jobs
+    /// finish within the drain timeout, then the row is unregistered.
     #[pyo3(signature = (worker_id, resource_health=None))]
     pub fn worker_heartbeat(
         &self,
         worker_id: &str,
         resource_health: Option<&str>,
     ) -> PyResult<Vec<String>> {
-        self.storage
+        let status = self
+            .storage
             .heartbeat(worker_id, resource_health)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        // The line names no worker: the id comes off a Python argument, and a
+        // log line built from caller input is what the log-injection rule
+        // flags. The dashboard and `ListWorkers` show which one is draining.
+        if status == Some(WorkerStatus::Draining) && self.mark_drained(worker_id) {
+            log::info!("[flexiq] drain requested: finishing running tasks, then stopping");
+        }
 
         Ok(flexiq_core::storage::reap_dead_workers_if_leader(
             &self.storage,

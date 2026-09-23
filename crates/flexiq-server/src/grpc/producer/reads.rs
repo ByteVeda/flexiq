@@ -155,7 +155,10 @@ pub(super) fn not_found(id: &str) -> Status {
     WireError::from_queue_error(&flexiq_core::error::QueueError::JobNotFound(id.to_string())).into()
 }
 
-fn page_size(requested: i32) -> Result<i32, WireError> {
+/// The rows a page carries for a requested `page_size`: zero is the default,
+/// a large value is capped and a negative one refused. Shared with the admin
+/// door's listings.
+pub(crate) fn page_size(requested: i32) -> Result<i32, WireError> {
     match requested {
         0 => Ok(DEFAULT_PAGE_SIZE),
         n if n < 0 => Err(WireError::invalid_request("page_size must not be negative")),

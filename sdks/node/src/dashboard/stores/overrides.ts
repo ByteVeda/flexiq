@@ -1,10 +1,12 @@
 // Persistent task & queue runtime overrides. Operators tune task/queue
 // behaviour from the dashboard; decorator/registration values stay the
-// defaults and any override recorded here wins. Storage layout follows the
-// cross-SDK contract:
+// defaults and any override recorded here wins. Each key holds the JSON of the
+// overridden fields; the settings KV spans the whole database, so the key
+// carries the namespace (cross-SDK contract):
 //
-// - `overrides:task:<task_name>` — JSON of overridden fields for that task
-// - `overrides:queue:<queue_name>` — JSON of overridden fields for that queue
+// - default namespace: `overrides:task:<name>` / `overrides:queue:<name>`
+// - namespace `N`: `overrides:ns:<len>:<N>:task:<name>` / `…:queue:<name>`,
+//   `<len>` being `N`'s UTF-8 byte length so a `:` in `N` cannot alias another
 //
 // Overrides are applied at worker startup; changes do not affect a running
 // worker until it restarts (queue `paused` propagates live via pause/resume).
@@ -14,10 +16,31 @@ import { type SettingsStore, updateSetting } from "../../settingsKv";
 import { createLogger } from "../../utils";
 import { ValidationError } from "../errors";
 
-const TASK_PREFIX = "overrides:task:";
-const QUEUE_PREFIX = "overrides:queue:";
-
 const log = createLogger("dashboard");
+
+/** Which subject an override applies to. */
+export type OverrideScope = "task" | "queue";
+
+/**
+ * The key prefix every override in `scope` and `namespace` shares; strip it
+ * from a key to get the subject's name. `undefined` is the default namespace,
+ * which is distinct from the empty-string namespace.
+ */
+export function overridePrefix(scope: OverrideScope, namespace?: string): string {
+  if (namespace === undefined) {
+    return `overrides:${scope}:`;
+  }
+  return `overrides:ns:${Buffer.byteLength(namespace, "utf8")}:${namespace}:${scope}:`;
+}
+
+/** The settings key of one subject's override. */
+export function overrideKey(
+  scope: OverrideScope,
+  namespace: string | undefined,
+  name: string,
+): string {
+  return overridePrefix(scope, namespace) + name;
+}
 
 /** The settings-KV surface both `Queue` and the native handle satisfy. */
 export type SettingsAccess = SettingsStore;
@@ -143,25 +166,28 @@ function parseJsonObject(raw: string | null): Record<string, unknown> {
   }
 }
 
-/** CRUD for per-task and per-queue runtime overrides. */
+/**
+ * CRUD for per-task and per-queue runtime overrides of one namespace;
+ * `namespace` is the queue's own, `undefined` meaning the default namespace.
+ */
 export class OverridesStore {
-  constructor(private readonly settings: SettingsAccess) {}
+  constructor(
+    private readonly settings: SettingsAccess,
+    private readonly namespace?: string,
+  ) {}
 
   // ── Tasks ─────────────────────────────────────────────────────────
 
   listTasks(): Map<string, TaskOverride> {
     const out = new Map<string, TaskOverride>();
-    for (const [key, raw] of Object.entries(this.settings.listSettings())) {
-      if (key.startsWith(TASK_PREFIX)) {
-        const name = key.slice(TASK_PREFIX.length);
-        out.set(name, rowToTask(name, parseJsonObject(raw)));
-      }
+    for (const [name, row] of this.listRows("task")) {
+      out.set(name, rowToTask(name, row));
     }
     return out;
   }
 
   getTask(taskName: string): TaskOverride | undefined {
-    const raw = this.settings.getSetting(TASK_PREFIX + taskName);
+    const raw = this.settings.getSetting(this.key("task", taskName));
     return raw ? rowToTask(taskName, parseJsonObject(raw)) : undefined;
   }
 
@@ -171,28 +197,25 @@ export class OverridesStore {
     if (!taskName) {
       throw new ValidationError("task_name must not be empty");
     }
-    return rowToTask(taskName, this.mergeRow(TASK_PREFIX + taskName, fields));
+    return rowToTask(taskName, this.mergeRow(this.key("task", taskName), fields));
   }
 
   clearTask(taskName: string): boolean {
-    return this.settings.deleteSetting(TASK_PREFIX + taskName);
+    return this.settings.deleteSetting(this.key("task", taskName));
   }
 
   // ── Queues ────────────────────────────────────────────────────────
 
   listQueues(): Map<string, QueueOverride> {
     const out = new Map<string, QueueOverride>();
-    for (const [key, raw] of Object.entries(this.settings.listSettings())) {
-      if (key.startsWith(QUEUE_PREFIX)) {
-        const name = key.slice(QUEUE_PREFIX.length);
-        out.set(name, rowToQueue(name, parseJsonObject(raw)));
-      }
+    for (const [name, row] of this.listRows("queue")) {
+      out.set(name, rowToQueue(name, row));
     }
     return out;
   }
 
   getQueue(queueName: string): QueueOverride | undefined {
-    const raw = this.settings.getSetting(QUEUE_PREFIX + queueName);
+    const raw = this.settings.getSetting(this.key("queue", queueName));
     return raw ? rowToQueue(queueName, parseJsonObject(raw)) : undefined;
   }
 
@@ -201,11 +224,25 @@ export class OverridesStore {
     if (!queueName) {
       throw new ValidationError("queue_name must not be empty");
     }
-    return rowToQueue(queueName, this.mergeRow(QUEUE_PREFIX + queueName, fields));
+    return rowToQueue(queueName, this.mergeRow(this.key("queue", queueName), fields));
   }
 
   clearQueue(queueName: string): boolean {
-    return this.settings.deleteSetting(QUEUE_PREFIX + queueName);
+    return this.settings.deleteSetting(this.key("queue", queueName));
+  }
+
+  private key(scope: OverrideScope, name: string): string {
+    return overrideKey(scope, this.namespace, name);
+  }
+
+  /** `[name, row]` for every override of `scope` in this store's namespace. */
+  private *listRows(scope: OverrideScope): Generator<[string, Record<string, unknown>]> {
+    const prefix = overridePrefix(scope, this.namespace);
+    for (const [key, raw] of Object.entries(this.settings.listSettings())) {
+      if (key.startsWith(prefix)) {
+        yield [key.slice(prefix.length), parseJsonObject(raw)];
+      }
+    }
   }
 
   /** Patch `fields` into the override at `key` without losing a concurrent edit. */

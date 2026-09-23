@@ -222,15 +222,42 @@ macro_rules! impl_diesel_dead_letter_ops {
                 Ok(rows.into_iter().map(DeadJob::from_narrow).collect())
             }
 
-            /// Delete every dead letter entry for a task. Returns the count removed.
-            pub fn purge_dead_by_task(&self, task_name: &str) -> Result<u64> {
+            /// Delete every dead letter entry for a task. Returns the count
+            /// removed. `namespace` of `None` purges every namespace, matching
+            /// `list_dead`.
+            pub fn purge_dead_by_task(
+                &self,
+                task_name: &str,
+                namespace: Option<&str>,
+            ) -> Result<u64> {
                 let mut conn = self.conn()?;
 
-                let affected =
+                let mut delete =
                     diesel::delete(dead_letter::table.filter(dead_letter::task_name.eq(task_name)))
-                        .execute(&mut conn)?;
+                        .into_boxed();
+                if let Some(ns) = namespace {
+                    delete = delete.filter(dead_letter::namespace.eq(ns));
+                }
 
-                Ok(affected as u64)
+                Ok(delete.execute(&mut conn)? as u64)
+            }
+
+            /// One dead letter entry with its payload, or `None` when absent.
+            /// An entry in another namespace reads as absent.
+            pub fn get_dead(
+                &self,
+                dead_id: &str,
+                namespace: Option<&str>,
+            ) -> Result<Option<DeadJob>> {
+                let mut conn = self.conn()?;
+                let row: Option<DeadLetterRow> = dead_letter::table
+                    .find(dead_id)
+                    .select(DeadLetterRow::as_select())
+                    .first(&mut conn)
+                    .optional()?;
+                Ok(row
+                    .filter(|row| Self::in_namespace(row.namespace.as_deref(), namespace))
+                    .map(DeadJob::from))
             }
 
             /// Re-enqueue a dead letter job. Returns the new job ID.
@@ -351,14 +378,21 @@ macro_rules! impl_diesel_dead_letter_ops {
             }
 
             /// Purge dead letter entries older than the given timestamp.
+            /// `namespace` of `None` purges every namespace, matching
+            /// `list_dead`.
             ///
             /// Deletes in bounded batches, each its own txn — see
             /// `diesel_common::purge`.
-            pub fn purge_dead(&self, older_than_ms: i64) -> Result<u64> {
+            pub fn purge_dead(&self, older_than_ms: i64, namespace: Option<&str>) -> Result<u64> {
                 $crate::storage::diesel_common::purge::drain_batches(|| {
                     self.write_transaction(|conn| {
-                        let ids: Vec<String> = dead_letter::table
+                        let mut batch = dead_letter::table
                             .filter(dead_letter::failed_at.lt(older_than_ms))
+                            .into_boxed();
+                        if let Some(ns) = namespace {
+                            batch = batch.filter(dead_letter::namespace.eq(ns));
+                        }
+                        let ids: Vec<String> = batch
                             .select(dead_letter::id)
                             .limit($crate::storage::diesel_common::purge::PURGE_BATCH)
                             .load(conn)?;

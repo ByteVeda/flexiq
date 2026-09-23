@@ -1,4 +1,5 @@
-//! The JSON facade: `flexiq.v1` for a client that speaks HTTP and not gRPC.
+//! The JSON facade: `flexiq.v1` and `flexiq.admin.v1` for a client that speaks
+//! HTTP and not gRPC.
 //!
 //! `structured` arguments exist so that a client with no CBOR library can
 //! enqueue (#715). That is only true if such a client has a door to knock on,
@@ -18,19 +19,22 @@
 //! maintainer, and the sidecar alternative puts a proxy in the data path of a
 //! project whose whole pitch is that it needs no broker.
 //!
-//! It is **not a second implementation of anything**. [`routes`]'s handlers
-//! call the same `ProducerService` trait methods the tonic codec calls, on the
-//! same `Producer` value, behind the same
-//! [`AuthLayer`](crate::grpc::auth::AuthLayer) — one process, one handler, no
-//! loopback hop. What differs is the reading and the writing, and both live
-//! in [`json`].
+//! It is **not a second implementation of anything**. The handlers in
+//! [`routes`] and [`admin`] call the same `ProducerService` and `AdminService`
+//! trait methods the tonic codec calls, on the same `Producer` and `Admin`
+//! values, behind the same [`AuthLayer`](crate::grpc::auth::AuthLayer) — one
+//! process, one handler, no loopback hop. What differs is the reading and the
+//! writing, and both live in [`json`].
 //!
-//! It serves the `flexiq.v1` package and nothing else. The executor service is
-//! not transcoded: a worker surface has different credentials, different
-//! failure modes, and no reason to be reachable from a browser. Temporal's
-//! protos carry the comment "We do not expose worker API to HTTP" once per
-//! worker RPC; here it is a property of which package the facade covers, and a
-//! test.
+//! It serves the `flexiq.v1` producer package and the `flexiq.admin.v1`
+//! operator package, each in full, and nothing else. The operator paths sit
+//! under `/v1/admin`, where the gate asks `inspect` of a `GET` and `admin` of
+//! anything else — the same split the gRPC door makes by idempotency level. The
+//! executor service is not transcoded: a worker surface has different
+//! credentials, different failure modes, and no reason to be reachable from a
+//! browser. Temporal's protos carry the comment "We do not expose worker API to
+//! HTTP" once per worker RPC; here it is a property of which packages the
+//! facade covers, and a test.
 //!
 //! Streaming is not transcoded either, and there is nothing to transcode: v1
 //! has no server stream. A completion watch is a real feature deserving its own
@@ -46,6 +50,7 @@
 //! JSON body and an HTTP status, so [`refusal`] renders the one `Status` for
 //! whichever door asked.
 
+pub mod admin;
 #[cfg(test)]
 pub mod descriptor;
 pub mod error;
@@ -58,12 +63,13 @@ use http::request::Parts;
 use http::{header, HeaderMap};
 use tonic::Status;
 
+use crate::grpc::admin::Admin;
 use crate::grpc::producer::Producer;
 use crate::grpc::status::WireError;
 
 /// The facade's routes, with the two fallbacks that keep every answer JSON.
-pub fn router(producer: Producer) -> Router {
-    routes::router(producer)
+pub fn router(producer: Producer, admin: Admin) -> Router {
+    routes::router(producer, admin)
         // A path this door serves, with a method it does not: there is no such
         // RPC, which is the same answer an unrouted path gets.
         .method_not_allowed_fallback(unrouted)

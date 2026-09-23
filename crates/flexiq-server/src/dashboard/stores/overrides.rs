@@ -1,21 +1,16 @@
 //! Per-task and per-queue runtime overrides.
 //!
-//! Layout in the settings store: `overrides:task:<task_name>` and
-//! `overrides:queue:<queue_name>`, each a JSON object of only the fields an
-//! operator actually set. Workers read them at startup, so the contract is
-//! deliberately narrow — an unknown field is rejected rather than written,
-//! because nothing would ever consume it.
+//! One JSON object per subject in the settings store, holding only the fields
+//! an operator actually set, under the namespaced key
+//! [`flexiq_core::override_key`] builds. Workers read them at startup, so the
+//! contract is deliberately narrow — an unknown field is rejected rather than
+//! written, because nothing would ever consume it.
 
-use flexiq_core::{now_millis, Result, Storage};
+use flexiq_core::{now_millis, override_prefix, OverrideScope, Result, Storage};
 use serde_json::{json, Map, Value};
 
 use crate::dashboard::error::ApiError;
 use crate::dashboard::stores::kv;
-
-/// Settings-key prefix for task overrides.
-pub const TASK_PREFIX: &str = "overrides:task:";
-/// Settings-key prefix for queue overrides.
-pub const QUEUE_PREFIX: &str = "overrides:queue:";
 
 /// Fields a task override may carry.
 pub const TASK_FIELDS: [&str; 7] = [
@@ -45,11 +40,17 @@ pub enum Scope {
 }
 
 impl Scope {
-    fn prefix(self) -> &'static str {
-        match self {
-            Self::Task => TASK_PREFIX,
-            Self::Queue => QUEUE_PREFIX,
-        }
+    /// Every override key of this scope in `namespace` starts with this.
+    fn prefix(self, namespace: Option<&str>) -> String {
+        let scope = match self {
+            Self::Task => OverrideScope::Task,
+            Self::Queue => OverrideScope::Queue,
+        };
+        override_prefix(scope, namespace)
+    }
+
+    fn key(self, namespace: Option<&str>, name: &str) -> String {
+        format!("{}{name}", self.prefix(namespace))
     }
 
     fn allowed(self) -> &'static [&'static str] {
@@ -83,21 +84,29 @@ pub fn to_api_json(scope: Scope, name: &str, stored: &Map<String, Value>) -> Val
         };
         body.insert((*field).into(), value);
     }
-    body.insert(
-        "updated_at".into(),
-        json!(normalise_timestamp(
-            stored
-                .get("updated_at")
-                .and_then(Value::as_i64)
-                .unwrap_or(0)
-        )),
-    );
+    body.insert("updated_at".into(), json!(updated_at(stored)));
     Value::Object(body)
 }
 
-/// Every stored override in a scope, as `(name, stored fields)`.
-pub fn list(scope: Scope, storage: &impl Storage) -> Result<Vec<(String, Map<String, Value>)>> {
-    Ok(kv::scan_prefix(storage, scope.prefix())?
+/// When a stored override last changed, in Unix milliseconds; zero if never
+/// stamped.
+pub fn updated_at(stored: &Map<String, Value>) -> i64 {
+    normalise_timestamp(
+        stored
+            .get("updated_at")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+    )
+}
+
+/// Every stored override of a scope in one namespace, as
+/// `(name, stored fields)`. `None` is the default namespace.
+pub fn list(
+    scope: Scope,
+    storage: &impl Storage,
+    namespace: Option<&str>,
+) -> Result<Vec<(String, Map<String, Value>)>> {
+    Ok(kv::scan_prefix(storage, &scope.prefix(namespace))?
         .into_iter()
         .map(|(name, raw)| {
             let fields = serde_json::from_str::<Map<String, Value>>(&raw).unwrap_or_default();
@@ -107,8 +116,13 @@ pub fn list(scope: Scope, storage: &impl Storage) -> Result<Vec<(String, Map<Str
 }
 
 /// One override's stored fields, or `None` when nothing is set.
-pub fn get(scope: Scope, storage: &impl Storage, name: &str) -> Result<Option<Map<String, Value>>> {
-    let Some(raw) = storage.get_setting(&format!("{}{name}", scope.prefix()))? else {
+pub fn get(
+    scope: Scope,
+    storage: &impl Storage,
+    namespace: Option<&str>,
+    name: &str,
+) -> Result<Option<Map<String, Value>>> {
+    let Some(raw) = storage.get_setting(&scope.key(namespace, name))? else {
         return Ok(None);
     };
     Ok(Some(
@@ -123,6 +137,7 @@ pub fn get(scope: Scope, storage: &impl Storage, name: &str) -> Result<Option<Ma
 pub fn set(
     scope: Scope,
     storage: &impl Storage,
+    namespace: Option<&str>,
     name: &str,
     patch: &Map<String, Value>,
 ) -> std::result::Result<Map<String, Value>, ApiError> {
@@ -133,7 +148,7 @@ pub fn set(
 
     let merged = kv::update(
         storage,
-        &format!("{}{name}", scope.prefix()),
+        &scope.key(namespace, name),
         |stored: &mut Map<String, Value>| {
             stored.remove("updated_at");
             for (field, value) in patch {
@@ -150,9 +165,54 @@ pub fn set(
     Ok(merged)
 }
 
+/// Replace an override outright — the admin door's write, where the dashboard's
+/// is a merge.
+///
+/// Fields listed in `keep` survive from the stored document: the queue scope's
+/// `paused` mirrors the live pause and has its own RPC, so replacing the rest
+/// must not reset it. A document left with no field is deleted, and the result
+/// is `None`.
+pub fn replace(
+    scope: Scope,
+    storage: &impl Storage,
+    namespace: Option<&str>,
+    name: &str,
+    fields: &Map<String, Value>,
+    keep: &[&str],
+) -> std::result::Result<Option<Map<String, Value>>, ApiError> {
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("name must not be empty".into()));
+    }
+    validate(scope, fields)?;
+
+    let key = scope.key(namespace, name);
+    let replaced = kv::update(storage, &key, |stored: &mut Map<String, Value>| {
+        let mut next: Map<String, Value> = keep
+            .iter()
+            .filter_map(|field| Some(((*field).to_string(), stored.get(*field)?.clone())))
+            .collect();
+        next.extend(fields.iter().map(|(k, v)| (k.clone(), v.clone())));
+        if !next.is_empty() {
+            next.insert("updated_at".into(), json!(now_millis()));
+        }
+        *stored = next.clone();
+        next
+    })?;
+    if replaced.is_empty() {
+        storage.delete_setting(&key)?;
+        return Ok(None);
+    }
+    Ok(Some(replaced))
+}
+
 /// Remove an override entirely.
-pub fn clear(scope: Scope, storage: &impl Storage, name: &str) -> Result<bool> {
-    storage.delete_setting(&format!("{}{name}", scope.prefix()))
+pub fn clear(
+    scope: Scope,
+    storage: &impl Storage,
+    namespace: Option<&str>,
+    name: &str,
+) -> Result<bool> {
+    storage.delete_setting(&scope.key(namespace, name))
 }
 
 /// Reject unknown fields and out-of-range values before anything is written.

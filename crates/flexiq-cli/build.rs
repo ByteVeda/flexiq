@@ -1,4 +1,5 @@
-//! Generate the `flexiq.v1` client from the committed descriptor.
+//! Generate the `flexiq.v1` and `flexiq.admin.v1` clients from the committed
+//! descriptor.
 //!
 //! Compiling the `FileDescriptorSet` rather than the `.proto` files keeps
 //! `protoc` off the build path, and it makes the CLI's types derive from the

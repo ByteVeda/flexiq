@@ -1,7 +1,7 @@
 //! Reading the committed contract, for the tests that hold this door to it.
 //!
 //! Both of the facade's drift checks ask the same artifact the same kind of
-//! question — *what does `flexiq.v1` actually say?* — so they ask it through
+//! question — *what does the contract actually say?* — so they ask it through
 //! one reader. The artifact is `contracts/descriptor.binpb`: what buf lints,
 //! what `buf breaking` gates, what `build.rs` generates the Rust types from and
 //! what the server hands out over reflection. A test that consulted anything
@@ -19,6 +19,9 @@ pub const PRODUCER_PACKAGE: &str = "flexiq.v1";
 
 /// The executor package, which it must not cover at all.
 pub const EXECUTOR_PACKAGE: &str = "flexiq.executor.v1";
+
+/// The `flexiq.admin.v1` package, which it must also cover in full.
+pub const ADMIN_PACKAGE: &str = "flexiq.admin.v1";
 
 /// One RPC, as the contract declares it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,14 +64,14 @@ pub fn rpcs(package: &str) -> Vec<Rpc> {
     found
 }
 
-/// Every JSON field name of one `flexiq.v1` message.
+/// Every JSON field name of one message declared in `package`.
 ///
 /// `json_name` is what a JSON writer must emit and a JSON reader must accept;
 /// buf fills it in, and a field that somehow arrived without one falls back to
 /// the lowerCamelCase form the specification derives.
-pub fn json_names(message: &str) -> BTreeSet<String> {
+pub fn json_names(package: &str, message: &str) -> BTreeSet<String> {
     for file in files() {
-        if file.package() != PRODUCER_PACKAGE {
+        if file.package() != package {
             continue;
         }
         for declared in &file.message_type {
@@ -88,7 +91,7 @@ pub fn json_names(message: &str) -> BTreeSet<String> {
             }
         }
     }
-    panic!("{PRODUCER_PACKAGE}.{message} is not in the committed descriptor");
+    panic!("{package}.{message} is not in the committed descriptor");
 }
 
 /// The specification's own derivation: drop each underscore and capitalise the
@@ -128,9 +131,10 @@ mod tests {
 
     #[test]
     fn a_message_reports_the_json_names_the_contract_gives_it() {
-        let names = json_names("QueueStatsResponse");
+        let names = json_names(PRODUCER_PACKAGE, "QueueStatsResponse");
         assert!(names.contains("pending") && names.contains("cancelled"));
-        assert!(json_names("Job").contains("taskName"));
+        assert!(json_names(PRODUCER_PACKAGE, "Job").contains("taskName"));
+        assert!(json_names(ADMIN_PACKAGE, "DeadLetter").contains("originalJobId"));
     }
 
     #[test]

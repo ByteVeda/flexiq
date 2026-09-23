@@ -348,8 +348,24 @@ impl RedisStorage {
         })
     }
 
+    /// One dead-letter entry with its payload, or `None` when absent. An entry
+    /// in another namespace reads as absent.
+    pub fn get_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<Option<DeadJob>> {
+        let mut conn = self.conn()?;
+        let data: Option<String> = conn.get(self.key(&["dlq", dead_id])).map_err(map_err)?;
+        let Some(d) = data else {
+            return Ok(None);
+        };
+        let entry: DeadJobEntry = serde_json::from_str(&d)?;
+        if namespace.is_some_and(|scope| entry.namespace.as_deref() != Some(scope)) {
+            return Ok(None);
+        }
+        Ok(Some(entry.into()))
+    }
+
     /// Delete every dead-letter entry for a task. Returns the number removed.
-    pub fn purge_dead_by_task(&self, task_name: &str) -> Result<u64> {
+    /// `namespace` of `None` purges every namespace, matching `list_dead`.
+    pub fn purge_dead_by_task(&self, task_name: &str, namespace: Option<&str>) -> Result<u64> {
         let mut conn = self.conn()?;
         let dlq_all = self.key(&["dlq", "all"]);
 
@@ -367,7 +383,9 @@ impl RedisStorage {
                 // Propagate (don't skip) on a corrupt entry: silently ignoring it
                 // would leave a task-owned row behind and under-report the count.
                 let entry: DeadJobEntry = serde_json::from_str(&d)?;
-                if entry.task_name == task_name {
+                let in_scope =
+                    namespace.is_none_or(|scope| entry.namespace.as_deref() == Some(scope));
+                if entry.task_name == task_name && in_scope {
                     to_delete.push((id, entry.notes, entry.original_job_id));
                 }
             }
@@ -476,11 +494,15 @@ impl RedisStorage {
     }
 
     /// Purge dead-letter entries older than the cutoff. Returns the count
-    /// removed.
-    pub fn purge_dead(&self, older_than_ms: i64) -> Result<u64> {
+    /// removed. `namespace` of `None` purges every namespace, matching
+    /// `list_dead`.
+    pub fn purge_dead(&self, older_than_ms: i64, namespace: Option<&str>) -> Result<u64> {
         let mut conn = self.conn()?;
         let dlq_all = self.key(&["dlq", "all"]);
         let mut total = 0u64;
+        // Entries in the window that belong to another namespace stay behind,
+        // so the next batch starts past them rather than re-reading them.
+        let mut skipped: isize = 0;
 
         // Every id in the `-inf..=cutoff` score window is eligible, and each
         // batch is deleted before the next query, so re-reading the window
@@ -488,34 +510,49 @@ impl RedisStorage {
         // entire below-cutoff set at once.
         loop {
             let ids: Vec<String> = conn
-                .zrangebyscore_limit(&dlq_all, "-inf", older_than_ms as f64, 0, SCAN_BATCH)
+                .zrangebyscore_limit(&dlq_all, "-inf", older_than_ms as f64, skipped, SCAN_BATCH)
                 .map_err(map_err)?;
             if ids.is_empty() {
                 break;
             }
 
             // Load blobs to attribute each dead row to its subscription so the
-            // sub:dead index shrinks with the purge (no-op for non-pub/sub rows).
+            // sub:dead index shrinks with the purge (no-op for non-pub/sub rows),
+            // and to read its namespace.
             let blob_keys: Vec<String> = ids.iter().map(|id| self.key(&["dlq", id])).collect();
             let blobs: Vec<Option<String>> = conn.mget(&blob_keys).map_err(map_err)?;
 
             let pipe = &mut redis::pipe();
+            let mut purged = 0u64;
             for (id, blob) in ids.iter().zip(&blobs) {
+                let entry = blob
+                    .as_deref()
+                    .and_then(|d| serde_json::from_str::<DeadJobEntry>(d).ok());
+                // An unreadable entry cannot prove it is out of scope, so a
+                // scoped purge leaves it; the unscoped purge takes it as before.
+                let in_scope = match (namespace, &entry) {
+                    (None, _) => true,
+                    (Some(scope), Some(entry)) => entry.namespace.as_deref() == Some(scope),
+                    (Some(_), None) => false,
+                };
+                if !in_scope {
+                    skipped += 1;
+                    continue;
+                }
                 pipe.del(self.key(&["dlq", id]));
                 pipe.zrem(&dlq_all, id.as_str());
-                if let Some(d) = blob {
-                    if let Ok(entry) = serde_json::from_str::<DeadJobEntry>(d) {
-                        self.push_pubsub_dead_remove(
-                            pipe,
-                            entry.notes.as_deref(),
-                            &entry.original_job_id,
-                        );
-                    }
+                if let Some(entry) = entry {
+                    self.push_pubsub_dead_remove(
+                        pipe,
+                        entry.notes.as_deref(),
+                        &entry.original_job_id,
+                    );
                 }
+                purged += 1;
             }
             pipe.query::<()>(&mut conn).map_err(map_err)?;
 
-            total += ids.len() as u64;
+            total += purged;
             if (ids.len() as isize) < SCAN_BATCH {
                 break;
             }

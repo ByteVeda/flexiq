@@ -413,7 +413,8 @@ public final class DashboardServer implements AutoCloseable {
         SettingsAccess settings = SettingsAccess.of(queue);
         SettingsHandlers settingsApi = new SettingsHandlers(settings);
         RetentionHandlers retention = new RetentionHandlers(queue);
-        OverridesHandlers overrides = new OverridesHandlers(queue, new OverridesStore(settings));
+        OverridesHandlers overrides = new OverridesHandlers(
+                queue, new OverridesStore(settings, queue.namespace().orElse(null)));
         MetricsHandlers metrics = new MetricsHandlers(queue);
         WorkflowsHandlers workflows = new WorkflowsHandlers(queue);
         WebhooksHandlers webhooks = new WebhooksHandlers(queue);

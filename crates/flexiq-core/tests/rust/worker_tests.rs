@@ -185,7 +185,7 @@ fn a_worker_records_a_fingerprint_of_its_task_registry() {
         .spawn()
         .expect("spawn");
 
-    let workers = storage.list_workers().expect("list_workers");
+    let workers = storage.list_workers(None).expect("list_workers");
     let worker = workers.first().expect("the worker registered");
     // The value `crates/flexiq-core/BINDING_CONTRACT.md` pins for this set.
     assert_eq!(
@@ -196,6 +196,45 @@ fn a_worker_records_a_fingerprint_of_its_task_registry() {
     handle.shutdown().expect("shutdown");
 }
 
+/// An operator's drain request reaches a running worker on its next heartbeat:
+/// it stops claiming, so a job enqueued afterwards stays pending.
+#[test]
+fn a_drain_request_stops_the_worker_claiming() {
+    let storage = test_backend();
+    let handle = Worker::new(storage.clone())
+        .register("noop", |_job: &Job| Ok(None))
+        .spawn()
+        .expect("spawn");
+    assert!(storage
+        .request_worker_drain(handle.worker_id(), None)
+        .expect("request"));
+
+    // One heartbeat interval, with headroom for a slow runner.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !handle.drain_requested() {
+        assert!(
+            Instant::now() < deadline,
+            "the drain request was never read"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let job = storage.enqueue(make_job("noop", b"", 0)).expect("enqueue");
+    std::thread::sleep(Duration::from_secs(2));
+    let stored = storage
+        .get_job(&job.id, None)
+        .expect("read")
+        .expect("present");
+    assert_eq!(
+        stored.status,
+        JobStatus::Pending,
+        "a draining worker claimed a job"
+    );
+
+    handle.shutdown().expect("shutdown");
+    assert!(storage.list_workers(None).expect("list").is_empty());
+}
+
 /// Nothing registered is nothing to report. A row that overstates what a worker
 /// runs is worse than a row that says nothing: an unregistered task name is a
 /// fatal, non-retryable failure.
@@ -204,7 +243,7 @@ fn a_worker_with_nothing_registered_reports_no_fingerprint() {
     let storage = test_backend();
     let handle = Worker::new(storage.clone()).spawn().expect("spawn");
 
-    let workers = storage.list_workers().expect("list_workers");
+    let workers = storage.list_workers(None).expect("list_workers");
     assert_eq!(
         workers.first().expect("registered").registry_fingerprint,
         None
@@ -244,7 +283,7 @@ fn a_supplied_pool_reports_no_fingerprint_for_handlers_it_will_not_run() {
         .spawn()
         .expect("spawn");
 
-    let workers = storage.list_workers().expect("list_workers");
+    let workers = storage.list_workers(None).expect("list_workers");
     let worker = workers.first().expect("the worker registered");
     assert_eq!(worker.pool_type.as_deref(), Some("remote"));
     assert_eq!(worker.registry_fingerprint, None);

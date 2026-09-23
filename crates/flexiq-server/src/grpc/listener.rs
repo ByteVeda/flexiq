@@ -26,6 +26,7 @@ use tonic::transport::Server;
 
 use crate::config::grpc::GrpcConfig;
 use crate::config::listen::ListenAddress;
+use crate::grpc::admin::Admin;
 use crate::grpc::auth::{self, AuthLayer};
 use crate::grpc::executor::ExecutorDoor;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
@@ -122,8 +123,8 @@ impl Listener {
         }
     }
 
-    /// Serve the producer service, the JSON facade, health and reflection until
-    /// `shutdown` fires.
+    /// Serve the producer and admin services, the JSON facade, health and
+    /// reflection until `shutdown` fires.
     ///
     /// `executor` is the `flexiq.executor.v1` door, present whenever this
     /// process has a dispatcher to attach executors to. It is registered on the
@@ -138,6 +139,9 @@ impl Listener {
         shutdown: Shutdown,
     ) -> Result<()> {
         let producer = Producer::new(storage.clone(), workflows);
+        // Always registered: what separates an operator from a producer is the
+        // token's scope, checked by the one gate in front of both.
+        let admin = Admin::new(storage.clone());
         let health = health::serve(
             storage.clone(),
             self.config.namespace.clone(),
@@ -156,14 +160,15 @@ impl Listener {
             executor.clone(),
             Arc::clone(&rpc_metrics),
         )
-        .merge(facade::router(producer.clone()));
+        .merge(facade::router(producer.clone(), admin.clone()));
 
         // That router is what the gRPC services are then added to, rather than
         // a second listener or a service behind a proxy: an HTTP request
-        // reaches the same `Producer` through the same layer, in this process,
+        // reaches the same `Producer` or `Admin` through the same layer, in this process,
         // with no loopback hop.
         let mut routes = Routes::from(http)
             .add_service(producer.into_service())
+            .add_service(admin.into_service())
             .add_service(health.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
             .add_service(reflection::v1()?.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
             .add_service(
