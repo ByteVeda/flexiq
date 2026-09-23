@@ -404,6 +404,30 @@ impl RedisStorage {
         Ok(map)
     }
 
+    /// Jobs that reached a terminal status at or after `since_ms`, per queue.
+    ///
+    /// A terminal job lives only in the archive, whose `all` index is scored by
+    /// `completed_at` — so the window is one range read, not a scan.
+    pub fn queue_throughput(
+        &self,
+        since_ms: i64,
+        namespace: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, QueueStats>> {
+        let mut conn = self.conn()?;
+        let ids: Vec<String> = conn
+            .zrangebyscore(self.key(&["archived", "all"]), since_ms as f64, "+inf")
+            .map_err(map_err)?;
+
+        let mut map = std::collections::HashMap::<String, QueueStats>::new();
+        for job in self.load_archived_jobs(&mut conn, &ids)? {
+            let in_scope = namespace.is_none_or(|scope| job.namespace.as_deref() == Some(scope));
+            if in_scope && Self::is_terminal_status(job.status as i32) {
+                map.entry(job.queue.clone()).or_default().add(job.status, 1);
+            }
+        }
+        Ok(map)
+    }
+
     #[allow(clippy::too_many_arguments)]
     /// `list_jobs` with extra filters (metadata/error substring, created-at
     /// range). Rows are blob-free like every listing.

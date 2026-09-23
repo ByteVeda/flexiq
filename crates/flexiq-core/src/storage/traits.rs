@@ -1002,6 +1002,16 @@ pub trait Storage: Send + Sync + Clone {
         &self,
         namespace: Option<&str>,
     ) -> Result<std::collections::HashMap<String, QueueStats>>;
+    /// Jobs that reached a terminal status at or after `since_ms`, per queue —
+    /// a windowed count, where [`Self::stats_all_queues`] is a snapshot. Only
+    /// the terminal counters (`completed`, `failed`, `dead`, `cancelled`) are
+    /// ever non-zero, and a queue with none in the window is absent.
+    /// `namespace` of `None` counts every namespace, like `stats_all_queues`.
+    fn queue_throughput(
+        &self,
+        since_ms: i64,
+        namespace: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, QueueStats>>;
 
     // ── Filtered job listing ─────────────────────────────────────
 

@@ -132,6 +132,42 @@ fn test_dequeue_batch_archives_expired_jobs(s: &impl Storage) {
     assert!(!pending.iter().any(|job| job.id == expired.id));
 }
 
+/// #836: terminal jobs in a window, per queue and per namespace. Pending and
+/// running jobs are not throughput.
+fn test_queue_throughput(s: &impl Storage) {
+    let q = "q-throughput";
+    let ns = Some("tp-tenant");
+    let before = now_millis() - 1;
+    let in_ns = |task: &str| {
+        let mut job = make_job(q, task);
+        job.namespace = ns.map(str::to_owned);
+        s.enqueue(job).unwrap()
+    };
+
+    for _ in 0..2 {
+        let job = in_ns("tp_task");
+        s.dequeue(q, now_millis() + 1000, ns).unwrap();
+        s.complete(&job.id, None, ns).unwrap();
+    }
+    let cancelled = in_ns("tp_task");
+    assert!(s.cancel_job(&cancelled.id, ns).unwrap());
+    in_ns("tp_task"); // pending: not throughput
+                      // Another namespace's completion stays out of this one's count.
+    let other = s.enqueue(make_job(q, "tp_task")).unwrap();
+    s.dequeue(q, now_millis() + 1000, None).unwrap();
+    s.complete(&other.id, None, None).unwrap();
+
+    let counts = s.queue_throughput(before, ns).unwrap();
+    let stats = counts.get(q).expect("the queue had terminal jobs");
+    assert_eq!(stats.completed, 2);
+    assert_eq!(stats.cancelled, 1);
+    assert_eq!((stats.pending, stats.running, stats.failed), (0, 0, 0));
+
+    // A window that starts after everything finished is empty.
+    let later = s.queue_throughput(now_millis() + 60_000, ns).unwrap();
+    assert!(!later.contains_key(q), "{later:?}");
+}
+
 fn test_complete(s: &impl Storage) {
     let q = "q-complete";
     let job = s.enqueue(make_job(q, "complete_task")).unwrap();
@@ -2763,6 +2799,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_dequeue_batch_archives_expired_jobs(s);
     test_dispatch_order_lifo_map(s);
     test_complete(s);
+    test_queue_throughput(s);
     test_fail(s);
     test_retry(s);
     test_reschedule(s);

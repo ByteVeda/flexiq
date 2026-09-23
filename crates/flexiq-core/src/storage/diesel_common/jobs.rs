@@ -1648,6 +1648,67 @@ macro_rules! impl_diesel_job_ops {
                 Ok(map)
             }
 
+            /// Jobs that reached a terminal status at or after `since_ms`,
+            /// per queue. Only the four terminal counters are ever non-zero.
+            pub fn queue_throughput(
+                &self,
+                since_ms: i64,
+                namespace: Option<&str>,
+            ) -> Result<std::collections::HashMap<String, QueueStats>> {
+                let terminal = [
+                    JobStatus::Complete as i32,
+                    JobStatus::Failed as i32,
+                    JobStatus::Dead as i32,
+                    JobStatus::Cancelled as i32,
+                ];
+                let mut conn = self.conn()?;
+
+                // Two arms rather than a boxed filter: Diesel cannot group a
+                // boxed query.
+                let live = jobs::table
+                    .filter(jobs::completed_at.ge(since_ms))
+                    .filter(jobs::status.eq_any(terminal));
+                let live_rows: Vec<(String, i32, i64)> = match namespace {
+                    Some(ns) => live
+                        .filter(jobs::namespace.eq(ns))
+                        .group_by((jobs::queue, jobs::status))
+                        .select((jobs::queue, jobs::status, diesel::dsl::count(jobs::id)))
+                        .load(&mut conn)?,
+                    None => live
+                        .group_by((jobs::queue, jobs::status))
+                        .select((jobs::queue, jobs::status, diesel::dsl::count(jobs::id)))
+                        .load(&mut conn)?,
+                };
+
+                let archived = archived_jobs::table
+                    .filter(archived_jobs::completed_at.ge(since_ms))
+                    .filter(archived_jobs::status.eq_any(terminal));
+                let group = (archived_jobs::queue, archived_jobs::status);
+                let columns = (
+                    archived_jobs::queue,
+                    archived_jobs::status,
+                    diesel::dsl::count(archived_jobs::id),
+                );
+                let archived_rows: Vec<(String, i32, i64)> = match namespace {
+                    Some(ns) => archived
+                        .filter(archived_jobs::namespace.eq(ns))
+                        .group_by(group)
+                        .select(columns)
+                        .load(&mut conn)?,
+                    None => archived.group_by(group).select(columns).load(&mut conn)?,
+                };
+
+                // A job is in one table or the other, never both, so the two
+                // counts for one (queue, status) add.
+                let mut map = std::collections::HashMap::<String, QueueStats>::new();
+                for (queue, status, count) in live_rows.into_iter().chain(archived_rows) {
+                    if let Some(status) = JobStatus::from_i32(status) {
+                        map.entry(queue).or_default().add(status, count);
+                    }
+                }
+                Ok(map)
+            }
+
             /// Merge a `(status, count)` GROUP BY result into a `QueueStats`.
             fn apply_status_count(stats: &mut QueueStats, rows: Vec<(i32, i64)>) {
                 for (status, count) in rows {

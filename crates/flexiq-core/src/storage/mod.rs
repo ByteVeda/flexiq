@@ -24,7 +24,7 @@ pub mod traits;
 pub use traits::Storage;
 
 use crate::error::Result;
-use crate::job::{Job, NewJob};
+use crate::job::{Job, JobStatus, NewJob};
 use crate::storage::records::{SettleClaimant, SettleGrant, StaleJob};
 
 // ── Shared constants ───────────────────────────────────────────────────
@@ -227,6 +227,21 @@ pub struct QueueStats {
     pub dead: i64,
     /// Jobs that were cancelled.
     pub cancelled: i64,
+}
+
+impl QueueStats {
+    /// Add `count` jobs to the counter for `status`.
+    pub fn add(&mut self, status: JobStatus, count: i64) {
+        let counter = match status {
+            JobStatus::Pending => &mut self.pending,
+            JobStatus::Running => &mut self.running,
+            JobStatus::Complete => &mut self.completed,
+            JobStatus::Failed => &mut self.failed,
+            JobStatus::Dead => &mut self.dead,
+            JobStatus::Cancelled => &mut self.cancelled,
+        };
+        *counter += count;
+    }
 }
 
 /// Per-table cutoffs a retention dry-run counts against. Each is the
@@ -1403,6 +1418,14 @@ macro_rules! impl_storage {
             {
                 self.stats_all_queues(namespace)
             }
+            fn queue_throughput(
+                &self,
+                since_ms: i64,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<std::collections::HashMap<String, $crate::storage::QueueStats>>
+            {
+                self.queue_throughput(since_ms, namespace)
+            }
             fn list_jobs_filtered(
                 &self,
                 status: Option<i32>,
@@ -2331,6 +2354,13 @@ impl Storage for StorageBackend {
         namespace: Option<&str>,
     ) -> Result<std::collections::HashMap<String, QueueStats>> {
         delegate!(self, stats_all_queues, namespace)
+    }
+    fn queue_throughput(
+        &self,
+        since_ms: i64,
+        namespace: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, QueueStats>> {
+        delegate!(self, queue_throughput, since_ms, namespace)
     }
     fn list_jobs_filtered(
         &self,
