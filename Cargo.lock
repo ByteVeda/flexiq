@@ -1417,6 +1417,7 @@ dependencies = [
  "hex",
  "hmac",
  "http",
+ "http-body",
  "jsonwebtoken",
  "log",
  "pbkdf2",

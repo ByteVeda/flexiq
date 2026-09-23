@@ -193,6 +193,7 @@ the first delivery made instead of making another:
 | `401` | `{"error": "unauthorized"}` | The verifier refused it |
 | `404` / `405` | `{"error": …}` | No trigger on this path / not a `POST` |
 | `413` / `415` / `400` / `422` | `{"error": …}` | Body or event batch too large / unreadable type / malformed / unmappable |
+| `408` | `{"error": …}` | The body took longer than 30 seconds to arrive |
 | `429` | `{"error": "rate limited"}` | The bucket is empty; see `Retry-After` |
 
 Deduplication holds while the first job is still pending or running — it is an

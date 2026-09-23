@@ -141,6 +141,8 @@ prost-types = { version = "0.14", optional = true }
 # every `cargo check --workspace`.
 flexiq-cli = { path = "../flexiq-cli" }
 tower = { version = "0.5", features = ["util"] }
+# A hand-written body that never finishes, for the trigger's body-read timeout.
+http-body = "1"
 # The generator behind contracts/openapi.json. Depended on only by the facade's
 # drift test, which holds the route table to the `google.api.http` annotations
 # that document is generated from — so the reader for that extension exists

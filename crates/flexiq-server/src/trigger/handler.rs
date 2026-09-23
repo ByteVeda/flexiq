@@ -2,8 +2,9 @@
 //!
 //! The order is the security argument, so it is fixed:
 //!
-//! 1. **bound the body** — before anything reads it, so a slow or huge upload
-//!    costs at most the trigger's own limit;
+//! 1. **bound the body** — in size and in time, before anything reads it, so
+//!    a huge upload costs at most the trigger's own limit and a slow one at
+//!    most [`BODY_READ_TIMEOUT`];
 //! 2. **verify the sender** — on the raw bytes, before any of them are
 //!    interpreted;
 //! 3. **parse, unwrap and map** — a request that cannot become a job is
@@ -15,9 +16,9 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
@@ -33,6 +34,10 @@ use crate::trigger::enqueue::{self, Enqueued, Planned, MAX_KEY_LEN};
 use crate::trigger::metrics;
 use crate::trigger::object_store::{self, Provider, Unwrapped};
 use crate::trigger::rate;
+
+/// Longest a request body may take to arrive. The size cap alone lets a
+/// sender trickle a byte at a time and hold a connection open indefinitely.
+pub const BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What the listener serves: the definitions, indexed by path, and where
 /// their jobs go.
@@ -81,6 +86,8 @@ pub enum Outcome {
     Handshake(Value),
     /// The body exceeded the trigger's limit, or could not be read.
     TooLarge,
+    /// The body did not arrive within [`BODY_READ_TIMEOUT`].
+    TimedOut,
     /// The sender could not prove its origin.
     Unauthorized,
     /// The body's content type is not one a trigger reads.
@@ -106,6 +113,7 @@ impl Outcome {
             Self::Enqueued(_) => "enqueued",
             Self::Handshake(_) => "handshake",
             Self::TooLarge => "too_large",
+            Self::TimedOut => "timed_out",
             Self::Unauthorized => "unauthorized",
             Self::UnsupportedMediaType(_) => "unsupported_media_type",
             Self::Malformed(_) => "malformed",
@@ -136,6 +144,10 @@ impl IntoResponse for Outcome {
             }
             Self::Handshake(body) => (StatusCode::OK, Json(body)).into_response(),
             Self::TooLarge => error(StatusCode::PAYLOAD_TOO_LARGE, "the body is too large"),
+            Self::TimedOut => error(
+                StatusCode::REQUEST_TIMEOUT,
+                "the body did not arrive in time",
+            ),
             Self::Unauthorized => error(StatusCode::UNAUTHORIZED, "unauthorized"),
             Self::UnsupportedMediaType(message) => {
                 error(StatusCode::UNSUPPORTED_MEDIA_TYPE, &message)
@@ -208,8 +220,9 @@ async fn handle(
     headers: &HeaderMap,
     body: Body,
 ) -> Outcome {
-    let Ok(body) = axum::body::to_bytes(body, trigger.max_body_bytes).await else {
-        return Outcome::TooLarge;
+    let body = match read_body(body, trigger.max_body_bytes, BODY_READ_TIMEOUT).await {
+        Ok(body) => body,
+        Err(refused) => return refused,
     };
     let inbound = Inbound {
         headers,
@@ -304,6 +317,16 @@ async fn handle(
     }
 }
 
+/// Read the whole body, refusing one over `limit` bytes or slower than
+/// `deadline`.
+async fn read_body(body: Body, limit: usize, deadline: Duration) -> Result<Bytes, Outcome> {
+    match tokio::time::timeout(deadline, axum::body::to_bytes(body, limit)).await {
+        Ok(Ok(body)) => Ok(body),
+        Ok(Err(_)) => Err(Outcome::TooLarge),
+        Err(_) => Err(Outcome::TimedOut),
+    }
+}
+
 /// Confirm an SNS subscription by fetching the URL it sent.
 ///
 /// The message was signed, so the URL is SNS's; the host check is kept anyway,
@@ -363,4 +386,48 @@ fn now_secs() -> i64 {
         .map_or(0, |elapsed| {
             i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    use axum::body::HttpBody;
+    use http_body::Frame;
+
+    use super::*;
+
+    /// A body whose sender never sends another byte.
+    struct Stalled;
+
+    impl HttpBody for Stalled {
+        type Data = Bytes;
+        type Error = Infallible;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+            Poll::Pending
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stalled_body_times_out() {
+        let read = read_body(Body::new(Stalled), 1024, Duration::from_millis(20)).await;
+        let refused = read.expect_err("a stalled body is refused");
+        assert_eq!(refused.label(), "timed_out");
+        assert_eq!(
+            refused.into_response().status(),
+            StatusCode::REQUEST_TIMEOUT
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_body_is_too_large_not_timed_out() {
+        let read = read_body(Body::from(vec![0u8; 16]), 8, Duration::from_secs(5)).await;
+        assert_eq!(read.expect_err("too large").label(), "too_large");
+    }
 }
