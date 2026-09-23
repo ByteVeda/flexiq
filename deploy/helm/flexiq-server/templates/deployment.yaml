@@ -38,6 +38,11 @@ spec:
         {{- if include "flexiq-server.createsSecret" . }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- end }}
+        # The trigger definitions are read once at boot too; hashing the
+        # rendered file is what makes an edited trigger take effect.
+        {{- if and .Values.triggers.enabled .Values.triggers.definitions }}
+        checksum/triggers: {{ dict "triggers" .Values.triggers.definitions | toJson | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -184,6 +189,19 @@ spec:
             - name: FLEXIQ_WEBHOOK_TLS_KEY
               value: /etc/flexiq/webhook-tls/tls.key
             {{- end }}
+            {{- if .Values.triggers.enabled }}
+            - name: FLEXIQ_TRIGGER_LISTEN
+              value: "0.0.0.0:{{ .Values.triggers.port }}"
+            - name: FLEXIQ_TRIGGERS_FILE
+              value: /etc/flexiq/triggers/triggers.json
+            {{- range .Values.triggers.secretEnv }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .key }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.push.enabled }}
             - name: FLEXIQ_PUSH_TARGET_URL
               value: {{ .Values.push.url | quote }}
@@ -240,6 +258,10 @@ spec:
             - name: webhook
               containerPort: {{ .Values.webhook.port }}
             {{- end }}
+            {{- if .Values.triggers.enabled }}
+            - name: triggers
+              containerPort: {{ .Values.triggers.port }}
+            {{- end }}
           # Liveness and readiness answer different questions, so they differ
           # where they can. Liveness is "is the process there" — /health, the one
           # route that is never gated. Readiness is "can it serve" — /readiness,
@@ -252,8 +274,9 @@ spec:
           # that fails takes the process down rather than leaving it
           # half-served. So the branches below are a fallback chain, richest
           # signal first: the dashboard's HTTP readiness, then the webhook's,
-          # then gRPC health, and finally a bare TCP connect for the attach
-          # port, which speaks no protocol a kubelet knows.
+          # then gRPC health, then the trigger listener's /healthz, and finally
+          # a bare TCP connect for the attach port, which speaks no protocol a
+          # kubelet knows.
           {{- if .Values.dashboard.enabled }}
           livenessProbe:
             httpGet: { path: /health, port: dashboard }
@@ -286,6 +309,10 @@ spec:
             {{- else }}
             tcpSocket: { port: grpc }
             {{- end }}
+          {{- else if .Values.triggers.enabled }}
+          {{- $probe := dict "httpGet" (dict "path" "/healthz" "port" "triggers") }}
+          livenessProbe: {{- toYaml $probe | nindent 12 }}
+          readinessProbe: {{- toYaml $probe | nindent 12 }}
           {{- else if .Values.attach.enabled }}
           {{- $probe := dict "tcpSocket" (dict "port" "attach") }}
           livenessProbe: {{- toYaml $probe | nindent 12 }}
@@ -303,17 +330,34 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if .Values.webhook.enabled }}
+          {{- if or .Values.webhook.enabled .Values.triggers.enabled }}
           volumeMounts:
+            {{- if .Values.webhook.enabled }}
             - name: webhook-tls
               mountPath: /etc/flexiq/webhook-tls
               readOnly: true
+            {{- end }}
+            {{- if .Values.triggers.enabled }}
+            - name: triggers
+              mountPath: /etc/flexiq/triggers
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if .Values.webhook.enabled }}
+      {{- if or .Values.webhook.enabled .Values.triggers.enabled }}
       volumes:
+        {{- if .Values.webhook.enabled }}
         - name: webhook-tls
           secret:
             secretName: {{ include "flexiq-server.webhookSecretName" . }}
+        {{- end }}
+        {{- if .Values.triggers.enabled }}
+        - name: triggers
+          configMap:
+            name: {{ .Values.triggers.existingConfigMap | default (printf "%s-triggers" $fullname) }}
+            items:
+              - key: {{ ternary .Values.triggers.existingConfigMapKey "triggers.json" (not (empty .Values.triggers.existingConfigMap)) }}
+                path: triggers.json
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

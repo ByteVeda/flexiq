@@ -10,6 +10,7 @@ pub mod dashboard;
 pub mod grpc;
 pub mod listen;
 pub mod push;
+pub mod trigger;
 pub mod webhook;
 
 use std::collections::HashMap;
@@ -20,6 +21,7 @@ use crate::config::dashboard::DashboardConfig;
 use crate::config::grpc::GrpcConfig;
 use crate::config::listen::AttachConfig;
 use crate::config::push::PushTargetConfig;
+use crate::config::trigger::TriggerConfig;
 use crate::config::webhook::WebhookConfig;
 
 /// Environment variables as a lookup map.
@@ -55,6 +57,9 @@ pub struct Config {
     /// The endpoint the scheduler POSTs claimed jobs to. `None` disables push
     /// dispatch, which is then the attach path's to serve.
     pub push: Option<PushTargetConfig>,
+    /// Where inbound triggers are answered, and the definitions they follow.
+    /// `None` disables the listener.
+    pub triggers: Option<TriggerConfig>,
     /// Whether opening storage applies pending schema changes. Off for a
     /// deployment whose database credentials do not permit DDL at runtime; the
     /// schema must then be applied out of band before the server starts.
@@ -86,6 +91,7 @@ impl Config {
             webhook: webhook::from_env(env)?,
             grpc: grpc::from_env(env, namespace.as_deref())?,
             push: push::from_env(env)?,
+            triggers: trigger::from_env(env, namespace.as_deref())?,
             namespace,
         };
 
@@ -94,12 +100,14 @@ impl Config {
             && config.webhook.is_none()
             && config.grpc.is_none()
             && config.push.is_none()
+            && config.triggers.is_none()
         {
             bail!(
                 "nothing to run: set FLEXIQ_LISTEN (executor attach), \
                  FLEXIQ_DASHBOARD (dashboard), FLEXIQ_WEBHOOK_LISTEN (sidecar \
                  injection), FLEXIQ_GRPC_LISTEN (the gRPC door), \
-                 FLEXIQ_PUSH_TARGET_URL (push dispatch), or any combination"
+                 FLEXIQ_PUSH_TARGET_URL (push dispatch), FLEXIQ_TRIGGER_LISTEN \
+                 (inbound triggers), or any combination"
             );
         }
         // Settle callbacks need somewhere for the target to report *to*, and
@@ -125,7 +133,8 @@ impl Config {
             && (config.attach.is_some()
                 || config.dashboard.is_some()
                 || config.grpc.is_some()
-                || config.push.is_some())
+                || config.push.is_some()
+                || config.triggers.is_some())
         {
             bail!(
                 "FLEXIQ_DSN is required — the storage connection string. Only a \

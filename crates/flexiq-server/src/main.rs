@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use flexiq_server::config::{
     dashboard::scrub_bootstrap_password, listen::scrub_attach_token,
-    push::scrub_push_target_secrets, Config,
+    push::scrub_push_target_secrets, trigger::scrub_trigger_secrets, Config,
 };
 use flexiq_server::runtime;
 use flexiq_server::tokens::cli::TokenCommand;
@@ -115,11 +115,20 @@ Configuration (environment only):
                                  URL
   FLEXIQ_PUSH_TARGET_AWS_SERVICE  overrides the service inferred from the target
                                  URL
+  FLEXIQ_TRIGGER_LISTEN         address of the inbound trigger listener, which
+                                 turns webhooks and object-store events into
+                                 enqueues, e.g. 0.0.0.0:8090 (default: off).
+                                 Plain HTTP; terminate TLS in front of it.
+                                 Requires FLEXIQ_NAMESPACE
+  FLEXIQ_TRIGGERS_FILE          JSON file of trigger definitions; required with
+                                 FLEXIQ_TRIGGER_LISTEN. Each definition names
+                                 the variable its secret is read from
 
 At least one of FLEXIQ_LISTEN, FLEXIQ_DASHBOARD, FLEXIQ_WEBHOOK_LISTEN,
-FLEXIQ_GRPC_LISTEN or FLEXIQ_PUSH_TARGET_URL must be set. FLEXIQ_DSN is
-required for all but a webhook-only deployment. FLEXIQ_PUSH_TARGET_URL and
-FLEXIQ_LISTEN are mutually exclusive — a Worker holds exactly one dispatcher.";
+FLEXIQ_GRPC_LISTEN, FLEXIQ_PUSH_TARGET_URL or FLEXIQ_TRIGGER_LISTEN must be
+set. FLEXIQ_DSN is required for all but a webhook-only deployment.
+FLEXIQ_PUSH_TARGET_URL and FLEXIQ_LISTEN are mutually exclusive — a Worker
+holds exactly one dispatcher.";
 
 #[derive(Parser)]
 #[command(
@@ -157,5 +166,8 @@ fn main() -> Result<()> {
     scrub_bootstrap_password();
     scrub_attach_token();
     scrub_push_target_secrets();
+    if let Some(triggers) = &config.triggers {
+        scrub_trigger_secrets(triggers);
+    }
     runtime::run(config)
 }

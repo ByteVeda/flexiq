@@ -1,11 +1,11 @@
 ---
 title: Server
-description: "One binary, five roles: what flexiq-server runs, every variable that configures it, and how the roles are laid out across replicas."
+description: "One binary, six roles: what flexiq-server runs, every variable that configures it, and how the roles are laid out across replicas."
 ---
 
 `flexiq-server` is the scheduler, the executor attach listener, the dashboard,
-the sidecar-injecting admission webhook, the gRPC door and the push dispatcher
-in one binary, with no language runtime inside it. Task bodies stay in your own
+the sidecar-injecting admission webhook, the gRPC door, the push dispatcher and
+the trigger listener in one binary, with no language runtime inside it. Task bodies stay in your own
 container — executors dial in and run them there, or the scheduler dials out to
 them — so the image is small and identical whichever SDK wrote the tasks.
 
@@ -20,9 +20,9 @@ FLEXIQ_DASHBOARD=127.0.0.1:8080 \
 flexiq-server
 ```
 
-## Five roles, four listeners
+## Six roles, five listeners
 
-One process runs any combination of five roles. Four are turned on by naming an
+One process runs any combination of six roles. Five are turned on by naming an
 address to listen on; push dispatch is turned on by naming a URL to dial **out**
 to, and opens no listener at all. Nothing else turns a role on, and nothing
 turns one on implicitly:
@@ -34,13 +34,14 @@ turns one on implicitly:
 | gRPC door | `FLEXIQ_GRPC_LISTEN` | `flexiq.v1`, `flexiq.executor.v1`, the JSON facade, `/metrics` | Yes |
 | Admission webhook | `FLEXIQ_WEBHOOK_LISTEN` | The mutating webhook that injects executor sidecars | **No** |
 | Push dispatch | `FLEXIQ_PUSH_TARGET_URL` | Nothing — it dials out instead of serving | Yes |
+| Triggers | `FLEXIQ_TRIGGER_LISTEN` | [Inbound webhooks and object-store events](/server/operate/triggers) that become enqueues | Yes |
 
 One pairing is not optional: `FLEXIQ_PUSH_TARGET_SETTLE=grpc` — which lets a
 target answer `202 Accepted` and report later — needs the gRPC door, because
 that door is the only inbound surface a push target has. Asking for one without
 the other is refused at boot.
 
-**At least one of the five must be set.** A process with no listener and no push
+**At least one of the six must be set.** A process with no listener and no push
 target has no work to do, and it says so at boot rather than idling as a
 healthy-looking pod that serves nothing. A push-only deployment is a supported
 shape and has no listener at all — [Push dispatch](/server/operate/push) is the
@@ -50,7 +51,7 @@ page for it.
 specs and never reads a job, so it is exempt; every other role fails at boot
 without a DSN rather than starting and failing each request.
 
-**The scheduler is not a sixth role.** Under attach it starts on the first
+**The scheduler is not a seventh role.** Under attach it starts on the first
 executor attach — over either door — because with nothing attached there is
 nowhere to dispatch to, and claiming jobs anyway would fail them retryably once
 placement timed out. A server with `FLEXIQ_GRPC_LISTEN` and no `FLEXIQ_LISTEN`
@@ -70,7 +71,7 @@ reads as unset, which is what makes `FOO=` in a Compose file mean "off".
 | --- | --- | --- |
 | `FLEXIQ_DSN` | — | Storage connection string. Required by every role but the webhook |
 | `FLEXIQ_BACKEND` | From the DSN scheme | `sqlite`, `postgres` or `redis`, when the scheme is not enough |
-| `FLEXIQ_NAMESPACE` | Unset | The tenant namespace this process schedules. Required by the gRPC role |
+| `FLEXIQ_NAMESPACE` | Unset | The tenant namespace this process schedules. Required by the gRPC and trigger roles |
 | `FLEXIQ_QUEUES` | `default` | Comma-separated queues to consume |
 | `FLEXIQ_WORKERS` | The dispatch path's slot count | Dispatch concurrency. Must be a positive integer |
 | `FLEXIQ_MAINTENANCE` | `on` | Whether this process runs retention sweeps |

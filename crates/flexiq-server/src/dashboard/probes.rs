@@ -110,7 +110,7 @@ pub async fn metrics(
     .await?;
     let workers = on_storage(&state, |storage| storage.list_workers()).await?;
 
-    let body = crate::metrics::storage_gauges(
+    let mut body = crate::metrics::storage_gauges(
         per_queue,
         workers.len(),
         state.dispatcher.as_ref().map(|d| d.capacity()),
@@ -120,6 +120,9 @@ pub async fn metrics(
         // outstanding" instead of "not observable here".
         None,
     );
+    // The trigger port is public and serves no metrics; its counters surface
+    // here when the role runs in this process.
+    body.push_str(&crate::trigger::metrics::render());
 
     Ok((
         [("content-type", crate::metrics::EXPOSITION_CONTENT_TYPE)],

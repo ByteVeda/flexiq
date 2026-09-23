@@ -16,4 +16,5 @@ pub mod log_safe;
 pub mod metrics;
 pub mod runtime;
 pub mod tokens;
+pub mod trigger;
 pub mod webhook;

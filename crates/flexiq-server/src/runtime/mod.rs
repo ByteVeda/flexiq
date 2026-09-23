@@ -301,6 +301,13 @@ pub fn run(config: Config) -> Result<()> {
         if let Some(webhook) = webhook {
             roles.spawn(webhook);
         }
+        if let (Some(triggers), Some(backend)) = (config.triggers.clone(), &backend) {
+            roles.spawn(crate::trigger::serve(
+                triggers,
+                backend.storage.clone(),
+                shutdown.clone(),
+            ));
+        }
         #[cfg(feature = "grpc")]
         if let (Some(grpc), Some(backend)) = (config.grpc.clone(), &backend) {
             // Said out loud, because "the producer door answers and the

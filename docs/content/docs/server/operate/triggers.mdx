@@ -1,0 +1,294 @@
+---
+title: Triggers
+description: "Turn an inbound webhook or an object-store event into an enqueue with no service of your own: the definitions file, the verifiers, payload mapping, rate limits and the object-store adapters."
+---
+
+Every job enters FlexiQ because something called enqueue. A trigger makes the
+server the thing that gets called: a URL that a webhook sender or an
+object-store eventing platform posts to, and that enqueues a task in
+response — one per event, when a delivery batches several. It replaces the
+small service you would otherwise write, deploy and operate for each
+integration — an endpoint that receives a Stripe webhook and
+enqueues, a function that fires on an S3 upload and enqueues.
+
+```bash
+FLEXIQ_DSN=postgres://user:pass@host/db \
+FLEXIQ_NAMESPACE=prod \
+FLEXIQ_TRIGGER_LISTEN=0.0.0.0:8090 \
+FLEXIQ_TRIGGERS_FILE=/etc/flexiq/triggers.json \
+GITHUB_WEBHOOK_SECRET=… \
+flexiq-server
+```
+
+A trigger is **configuration, not code**. It names one task, one queue and —
+through the process — one namespace, says how a request proves who sent it, and
+maps the request onto the task's arguments. There is no expression language and
+no transformation step; a payload that needs reshaping is the task's to reshape.
+
+## Environment variables
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FLEXIQ_TRIGGER_LISTEN` | Unset (off) | Address the listener binds, e.g. `0.0.0.0:8090` |
+| `FLEXIQ_TRIGGERS_FILE` | **Required** | Path to the JSON definitions file |
+| `FLEXIQ_NAMESPACE` | **Required** | The one namespace every trigger enqueues into |
+
+The listener speaks **plain HTTP**. Webhook senders call HTTPS URLs, so put it
+behind an ingress or load balancer that terminates TLS. It is the one port
+meant to face the internet, which is why it is a role of its own rather than a
+route on the dashboard or the gRPC door: exposing it exposes nothing else.
+
+The file is read **once, at boot**, and refused whole if any part of it is
+wrong — a misspelt field, a rate limit of zero, a secret variable that is not
+set. A pod that starts is a pod whose every trigger is valid. Changing a
+definition means restarting the process; the Helm chart does that for you when
+it owns the file.
+
+## A definition
+
+```json
+{
+  "triggers": [
+    {
+      "name": "stripe-events",
+      "path": "/t/stripe",
+      "task": "billing.handle_event",
+      "queue": "webhooks",
+      "rate_limit": "100/m",
+      "auth": { "kind": "stripe", "secret_env": "STRIPE_WEBHOOK_SECRET" },
+      "args": [],
+      "kwargs": {
+        "event_id": { "from": "body", "pointer": "/id" },
+        "event_type": { "from": "body", "pointer": "/type" },
+        "data": { "from": "body", "pointer": "/data/object" }
+      },
+      "unique_key": { "from": "body", "pointer": "/id" }
+    }
+  ]
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | **Required** | Unique; letters, digits, `-`, `_`, `.`. Names the rate-limit bucket and the metrics label |
+| `path` | **Required** | The URL path it answers `POST` on. Unique; `/healthz` is reserved |
+| `task` | **Required** | The task every job runs |
+| `queue` | `default` | The queue every job lands in |
+| `rate_limit` | **Required** | `<count>/<s\|m\|h>`, e.g. `100/m`. A count under one is refused |
+| `auth` | **Required** | How a request proves its origin — [below](#verifiers) |
+| `args` | The whole body | Positional arguments, each a [selector](#payload-mapping). `[]` sends none |
+| `kwargs` | None | Keyword arguments, each a selector |
+| `unique_key` | None (`/id` for object stores) | A selector naming the delivery id, so a redelivery deduplicates |
+| `priority` | `0` | Dispatch priority of its jobs |
+| `max_retries` | `3` | Retry budget of its jobs |
+| `timeout_secs` | `300` | Execution timeout of its jobs |
+| `max_body_bytes` | `262144` | Largest body accepted; at most 10 MiB |
+| `kind` | `http` | `http`, or `object_store` for the [adapters](#object-store-events) |
+| `provider` | — | With `kind: object_store`: `s3`, `s3_sns`, `gcs` or `azure` |
+
+**A request can choose what the task receives, never which task receives it.**
+Task, queue, namespace, priority and retry budget come from the definition and
+nothing a caller sends can change them — so a caller holding a valid signature
+still cannot aim a job anywhere the operator did not.
+
+## Verifiers
+
+Every trigger has one, and there is no anonymous kind: a public URL that
+enqueues without proof of origin is a public URL anyone can fill a queue
+through. A definition never holds a secret. `secret_env` names the environment
+variable the secret is in, so the file can live in a ConfigMap or a repository
+while the secret lives in a Secret.
+
+| `kind` | Checks | Fields |
+| --- | --- | --- |
+| `github` | `X-Hub-Signature-256: sha256=<hex>` over the body | `secret_env` |
+| `stripe` | `Stripe-Signature: t=…,v1=…` over `t.body`, and the timestamp's age | `secret_env`, `tolerance_secs` (300) |
+| `standard_webhooks` | `webhook-id`, `webhook-timestamp`, `webhook-signature` (Svix and others) | `secret_env` (`whsec_…`), `tolerance_secs` (300) |
+| `twilio` | `X-Twilio-Signature` over the public URL and the form parameters | `secret_env` (the auth token), `public_url` |
+| `hmac_sha256` | HMAC-SHA256 of the body in any header | `secret_env`, `header`, `prefix`, `encoding` (`hex` or `base64`) |
+| `shared_secret` | A secret sent verbatim in a header or the query | `secret_env`, and `header` (with an optional `prefix`) **or** `query` |
+| `google_oidc` | A Pub/Sub push subscription's Google-signed `Authorization: Bearer` token | `audience`, `service_account` |
+| `sns` | An SNS message's RSA signature, against the certificate SNS publishes | `topic_arns`, `require_signature_v2` (false), `tolerance_secs` (3600) |
+
+The last two hold no secret, and so name no `secret_env`. They check against
+keys the provider publishes, fetched over HTTPS with no redirects and cached —
+Google's signing keys for an hour, an SNS certificate for a day. A token naming
+a key the cache lacks refetches Google's set at most once a minute.
+
+- **`google_oidc`** checks an RS256 signature by one of Google's keys, the
+  issuer, the expiry, an audience that is exactly `audience` — by default the
+  push endpoint URL you gave the subscription — and a verified `email` that is
+  exactly `service_account`, the account the subscription authenticates as.
+- **`sns`** fetches the certificate only from the SNS endpoint of the
+  topic's own region and partition — for
+  `arn:aws:sns:us-east-1:…`, exactly `https://sns.us-east-1.amazonaws.com` —
+  so no look-alike host (an S3 bucket named `sns`, say) can supply it. It
+  refuses a topic not in
+  `topic_arns` before fetching anything, and refuses a message whose
+  `Timestamp` is further than `tolerance_secs` from now. SNS signs with
+  SHA1withRSA (version 1) unless the topic sets `SignatureVersion` to 2; set
+  that on the topic and `require_signature_v2: true` here to refuse SHA-1. It
+  applies only to the `s3_sns` provider, and that provider only to it.
+
+Body signatures are checked against the **raw body**, the bytes as they arrived —
+never a re-encoding of the parsed JSON, which is not a byte-for-byte round
+trip. A request that fails is answered `401` with no detail; the reason goes to
+the log. `hmac_sha256` and `shared_secret` secrets must be at least 16
+characters; the provider-issued ones are the provider's to size.
+
+A Twilio trigger needs `public_url`: the address Twilio was configured to call,
+without its query string. Behind an ingress, the host and scheme this process
+sees are not the ones Twilio signed.
+
+<Callout type="warn" title="A query-string secret is in every access log">
+  `shared_secret` with `query` exists because Event Grid offers no other
+  built-in way to authenticate a webhook endpoint. The URL, secret included,
+  lands in the logs of every proxy and load balancer in front of the listener.
+  Prefer a header wherever the sender supports one — and for Pub/Sub, prefer
+  `google_oidc`, which puts no credential in the URL at all.
+</Callout>
+
+## Payload mapping
+
+Each argument is a selector — where its value comes from:
+
+| Selector | Resolves to |
+| --- | --- |
+| `{"from": "body", "pointer": "/a/b"}` | A [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) into the body; `""` is the whole body |
+| `{"from": "header", "name": "X-GitHub-Event"}` | A request header, as a string |
+| `{"from": "query", "name": "source"}` | A query parameter, as a string |
+| `{"from": "const", "value": …}` | A fixed JSON value |
+
+Any of the first three takes `"optional": true`. A missing optional keyword
+argument is left out, so the task's default applies; a missing optional
+positional one becomes `null`, so the arguments after it do not shift. A
+missing required one refuses the request with `422`.
+
+The body is read as JSON (`application/json` or any `application/*+json`), or
+as a form (`application/x-www-form-urlencoded`), which becomes an object of
+strings so the same pointers address it. Anything else is `415`. The payload is
+encoded by the same encoder every producer uses, so a job a trigger enqueued is
+byte-identical to one an SDK enqueued with the same arguments. An integer past
+the signed 64-bit range is refused rather than rounded.
+
+## Rate limits and deduplication
+
+`rate_limit` is required, not optional. The bucket lives in storage, so the
+bound holds across every replica serving the trigger rather than multiplying by
+the replica count. An exhausted bucket is answered `429` with `Retry-After`.
+
+The bucket is drawn from **after** the signature check. Forged requests cost
+the sender whose trigger they target nothing, so a flood of them cannot spend
+that sender's budget and turn the limit into the denial of service it is there
+to prevent. A request that cannot be mapped is also refused before it costs a
+token.
+
+Senders redeliver whatever they do not see acknowledged. With `unique_key` set
+— GitHub's `X-GitHub-Delivery`, Stripe's `/id` — a redelivery returns the job
+the first delivery made instead of making another:
+
+| Status | Body | Meaning |
+| --- | --- | --- |
+| `202` | `{"jobs": [{"id": "…", "deduplicated": false}]}` | Enqueued |
+| `200` | `{"jobs": [{"id": "…", "deduplicated": true}]}` | Every job already existed |
+| `401` | `{"error": "unauthorized"}` | The verifier refused it |
+| `404` / `405` | `{"error": …}` | No trigger on this path / not a `POST` |
+| `413` / `415` / `400` / `422` | `{"error": …}` | Body or event batch too large / unreadable type / malformed / unmappable |
+| `408` | `{"error": …}` | The body took longer than 30 seconds to arrive |
+| `429` | `{"error": "rate limited"}` | The bucket is empty; see `Retry-After` |
+
+Deduplication holds while the first job is still pending or running — it is an
+enqueue guarantee, not an execution one. Tasks behind a trigger should still be
+idempotent.
+
+## Object-store events
+
+With `kind: object_store`, the body is first unwrapped from the provider's
+envelope into one plain event per object, and the mapping's body pointers
+address that event instead:
+
+```json
+{
+  "id": "…", "provider": "s3", "event_type": "Object Created",
+  "bucket": "uploads", "key": "reports/q3.csv", "size": 2048,
+  "etag": "…", "time": "2026-09-23T10:00:00Z", "raw": { }
+}
+```
+
+`size`, `etag` and `time` are `null` when the provider did not send them, and
+`raw` holds the provider's own event for anything the common shape drops. An
+object-store trigger keys on `/id` by default, because every one of these
+platforms redelivers.
+
+| `provider` | Delivered by | Authenticate with |
+| --- | --- | --- |
+| `s3` | An EventBridge rule targeting an API destination | `shared_secret` with `header`, set on the API destination's connection |
+| `s3_sns` | S3 event notifications to an SNS topic, with an HTTPS subscription | `sns` — required |
+| `gcs` | A Pub/Sub push subscription, default (wrapped) format | `google_oidc`, or `shared_secret` with `query` in the push endpoint URL |
+| `azure` | An Event Grid webhook subscription, Event Grid schema | `shared_secret` with `query`, in the endpoint URL |
+
+- **S3.** One event per request. Anything whose `source` is not `aws.s3` is
+  refused.
+- **S3 through SNS.** Each record in S3's notification becomes its own job,
+  keyed on the SNS message id and the record's position; object keys are
+  URL-decoded, as S3 encodes them. SNS posts its JSON as `text/plain`, and it
+  is read as JSON regardless. A `SubscriptionConfirmation` is confirmed by
+  fetching its `SubscribeURL` — only once its signature and topic check out,
+  and only from an SNS host. The `s3:TestEvent` S3 sends when a notification is
+  configured is acknowledged and enqueues nothing. Raw message delivery must be
+  off: it drops the envelope the signature covers.
+- **GCS.** The object is named by the message attributes; `size` and `etag`
+  come from the message data, and are `null` for a notification created with
+  no payload. An unwrapped push subscription is refused: it drops the
+  attributes the object is named by.
+- **Azure.** Event Grid posts an array, and each blob event becomes its own
+  job — at most 100 per request, each drawing its own token. A batch larger
+  than `rate_limit`'s count could never be admitted, so it is answered `413`
+  without spending any tokens; keep the subscription's `maxEventsPerBatch` at
+  or under that count. The
+  subscription-validation handshake is answered with its `validationCode` and
+  enqueues nothing. The CloudEvents schema is not accepted, because it
+  validates with an `OPTIONS` request this listener does not answer.
+
+## Metrics
+
+`flexiq_trigger_requests_total{trigger, outcome}` counts every request by how
+it ended — `enqueued`, `deduplicated`, `handshake`, `unauthorized`,
+`rate_limited`, `unmappable` and the rest. The trigger port is public and
+serves no metrics of its own; the counter appears on the dashboard's or the
+gRPC door's `/metrics` when either runs in the same process. A trigger-only
+process reports through its logs.
+
+## Helm
+
+```yaml
+namespace: prod
+triggers:
+  enabled: true
+  definitions:
+    - name: github-push
+      path: /t/github
+      task: ci.on_push
+      rate_limit: 60/m
+      auth: {kind: github, secret_env: GITHUB_WEBHOOK_SECRET}
+      unique_key: {from: header, name: X-GitHub-Delivery}
+  secretEnv:
+    - {name: GITHUB_WEBHOOK_SECRET, secretName: webhook-secrets, key: github}
+  ingress:
+    enabled: true
+    host: hooks.example.com
+```
+
+The chart renders `definitions` into a ConfigMap, mounts it where
+`FLEXIQ_TRIGGERS_FILE` points, and hashes it into a pod annotation so an edited
+definition rolls the pods. `existingConfigMap` uses a ConfigMap you manage
+instead, which then needs a `kubectl rollout restart` to take effect. The
+listener gets its own Service and its own Ingress, never shared with the
+dashboard's.
+
+## Cron
+
+Periodic tasks already exist in every SDK. Defining one over the network,
+rather than in application code, belongs to the admin service
+([#836](https://github.com/ByteVeda/flexiq/issues/836)) and is not a trigger
+kind.

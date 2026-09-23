@@ -19,6 +19,20 @@ their entries below keep that name.
 
 ### Added
 
+- **Triggers** (#847). `FLEXIQ_TRIGGER_LISTEN` turns `flexiq-server` into the thing a webhook
+  sender or an object-store eventing platform calls: a URL that maps an inbound request to an
+  enqueue per event it carries, with no service of your own in between. Triggers are configuration, not code — a JSON
+  file (`FLEXIQ_TRIGGERS_FILE`) fixes each trigger's task, queue and rate limit, and a request
+  supplies argument values through JSON Pointer, header, query and constant selectors, never a
+  destination. Every trigger verifies its sender (GitHub, Stripe, Standard Webhooks, Twilio, a
+  generic HMAC-SHA256 header, or a shared secret) against the raw body before anything else, then
+  draws from a storage-backed rate-limit bucket that holds across replicas, so forged requests
+  cannot spend a real sender's budget. A delivery id deduplicates redeliveries. `kind:
+  object_store` unwraps S3 (EventBridge, or SNS with its RSA signature verified and the
+  subscription confirmed), GCS (Pub/Sub push, optionally proven by its Google-signed OIDC token)
+  and Azure (Event Grid, handshake included) events into one common shape. The listener is plain HTTP on its own port, and the
+  Helm chart gains `triggers.*` with its own Service and Ingress. Cron over the network is left to
+  the admin service (#836).
 - **Push dispatch** (#843, #844). `FLEXIQ_PUSH_TARGET_URL` adds a second way for the scheduler to
   reach an executor: instead of waiting for one to attach, it POSTs each claimed job straight to
   an operator-configured HTTP endpoint — for a platform that starts a container from an inbound
@@ -34,7 +48,7 @@ their entries below keep that name.
   Three limits worth knowing before deploying it: a job has to finish inside one HTTP
   request — Cloud Run caps that at 60 minutes, Lambda at 15 (#845 tracks lifting this);
   `cancel()` abandons the request and fences the target's answer out rather than stopping the
-  target's own work (#846 tracks reaching it); and push dispatch does not honour `HTTP_PROXY` /
+  target's own work (#846, below, lets a target learn of it); and push dispatch does not honour `HTTP_PROXY` /
   `HTTPS_PROXY` / `ALL_PROXY`, since a proxy would resolve the target outside the egress guard.
 - **`DebounceOptions` and `TaskHandler` are reachable from the crate root** (#921). Both belong on
   `flexiq-core`'s curated root re-export — the blessed import path new code is meant to prefer —
@@ -43,9 +57,52 @@ their entries below keep that name.
   had to name each through its module. `flexiq` re-exports core's root wholesale, so they are
   `flexiq::DebounceOptions` and `flexiq::TaskHandler` too. Purely additive; the module paths
   still resolve.
+- **The last six records reach the crate root, completing the list** (#948). The entry above said
+  every record beside `DebounceOptions` was already re-exported; six were not. `SubscriptionMode`,
+  `Topic`, `TopicMessage`, `TopicLogStats`, `WorkerRegistration` and `WorkerStatus` are now on
+  `flexiq-core`'s root re-export, so all 25 of `storage::records`' public types are reachable as
+  `flexiq_core::X` — and, through `flexiq`'s wholesale re-export, as `flexiq::X`. The pub/sub four
+  were the conspicuous gap: `Subscription` and `NewSubscription` were on the list but the `Topic`
+  trio and the `SubscriptionMode` that travels with them were not, so converting one subscription
+  meant naming both paths in one file. Purely additive; the module paths still resolve. The list
+  has now been declared complete twice while it was not, so a test diffs the root re-export group
+  against `records.rs` and fails on the next record that misses it.
 
 ### Fixed
 
+- **`cancel()` reaches attached executors and push targets behind `flexiq-server`** (#846). A
+  cancel only ever set the storage flag, and only the native pool reads it — so under
+  `flexiq-server` neither an attached executor nor a push target heard of one, and the job ran to
+  the end while the API reported success. `Worker` now relays the flag to any dispatcher it was
+  handed, once a second, through one batch read (`Storage::cancel_requested_among`). An attached
+  executor gets its `cancel` frame; a push dispatch settles `Cancelled`. A push target that
+  answered `202` learns of it from its next `ExtendLease`, `ReportProgress`, `WriteTaskLog` or
+  `Settle`, which is refused with the new `ErrorInfo` reason `JOB_CANCELLED` (a lost race now
+  carries `CLAIM_LOST`, rather than no reason). What `cancel()` promises under each topology is
+  written down in the push contract and the server docs: under push it stops the result from
+  landing and tells a target that asks, but does not stop the work. The Rust SDK's pool had no
+  cancel at all; a task now calls `flexiq::check_cancelled()?` (or reads
+  `flexiq::cancel_requested()`), which returns the new `Abort::Cancelled` once the relay has
+  delivered a cancel, and the job settles `Cancelled` without a retry.
+- **A float's width on the wire is pinned, so `auto:` keys no longer diverge over one** (#905).
+  `contracts/wire-vectors.json` left float width free — a writer could emit half or single
+  precision for 1.5 — and pinned the `float` case's decoded value instead of its bytes. Both
+  widths decode to the same number, so a narrowing writer interoperated fine and silently stopped
+  idempotent enqueues deduping: the `auto:` key is a sha256 over the serialized payload, so two
+  conforming runtimes derived different keys for the same float argument and each enqueued its own
+  active job. The same class of bug as the indefinite-length maps of #638. A finite float now
+  carries the 64-bit head `fb`, never `f9` or `fa`; readers still accept the narrower widths, and
+  the `float` case moved into `encode` where its bytes are asserted by every SDK suite, beside two
+  new `float-narrow-*` cases pinning the half- and single-precision payloads a reader must still
+  accept and a writer must not produce. Two encoders needed fixing to comply, both over a 32-bit
+  float. A Java `float` argument reached the wire as a 4-byte CBOR float where the same value
+  passed as a `double` took 8, at any depth in a payload; a Go `float32` did the same, because
+  `ShortestFloatNone` governs a `float64` only and there is no encoder option for the narrower
+  kind — so the Go client widens the encoded bytes on the way out. A **non-finite** float is a
+  stated exemption rather than part of the rule — CBOR
+  libraries hard-code RFC 8949's two-byte spelling of an infinity and a NaN, some without a way to
+  write one wide and others without a way to write one narrow — so a payload carrying one still
+  wants `unique_key`. Neither value can reach the `structured` gRPC door, which refuses both.
 - **A failed Rust task records an empty traceback, not a null one** (#930). `flexiq`'s failure
   formatter wrote `"traceback": null`, a third shape the binding contract does not describe — it
   specifies an array of strings, `[]` when the language or runtime has no frames to offer. Rust was
