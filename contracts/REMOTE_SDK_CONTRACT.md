@@ -304,6 +304,7 @@ descriptor.
 | `DeleteDeadLetter` | `IDEMPOTENT` | `admin` | A second call answers `DEAD_LETTER_NOT_FOUND`. |
 | `PurgeDeadLetters` | none | `admin` | |
 | `ListWorkers` | `NO_SIDE_EFFECTS` | `inspect` | |
+| `DrainWorker` | `IDEMPOTENT` | `admin` | Records the request; the worker reads it on its next heartbeat, stops gracefully and unregisters. Registered workers only — an attached executor or push target has no row. |
 | `ListPeriodicTasks`, `GetPeriodicTask` | `NO_SIDE_EFFECTS` | `inspect` | |
 | `PutPeriodicTask` | `IDEMPOTENT` | `admin` | Never changes whether an existing task is paused. |
 | `DeletePeriodicTask`, `PausePeriodicTask`, `ResumePeriodicTask` | `IDEMPOTENT` | `admin` | |
@@ -313,7 +314,7 @@ descriptor.
 
 ### If there is no gRPC library either
 
-The eight `flexiq.v1` RPCs and the twenty-two `flexiq.admin.v1` RPCs — the
+The eight `flexiq.v1` RPCs and the twenty-three `flexiq.admin.v1` RPCs — the
 latter under `/v1/admin/` — are also served as ordinary HTTP with JSON bodies, on
 the same listener and the same credential. `GET` is served for exactly the
 `NO_SIDE_EFFECTS` RPCs and `POST` for everything else, so the method is never a
@@ -457,6 +458,7 @@ The closed list, with the code each arrives under:
 | `JOB_NOT_FOUND` | `NOT_FOUND` | No such job — or a job in another namespace, indistinguishable by design. |
 | `DEAD_LETTER_NOT_FOUND` | `NOT_FOUND` | No such dead-letter entry in this namespace. `flexiq.admin.v1`. |
 | `PERIODIC_TASK_NOT_FOUND` | `NOT_FOUND` | No such periodic task in this namespace. `flexiq.admin.v1`. |
+| `WORKER_NOT_FOUND` | `NOT_FOUND` | No such registered worker in this namespace. `flexiq.admin.v1`. |
 | `DEPENDENCY_NOT_FOUND` | `FAILED_PRECONDITION` | A `depends_on` id names nothing this caller may depend on. |
 | `QUEUE_FULL` | `RESOURCE_EXHAUSTED` | Carries `queue`, `pending`, `cap`. |
 | `RATE_LIMITED` | `RESOURCE_EXHAUSTED` | A rate limit rejected the call. |
@@ -732,7 +734,7 @@ them:
 | Absent | Because |
 |---|---|
 | Webhook secrets, token minting, circuit-breaker internals | Operator actions that stay behind the dashboard's session and role check. The rest of the operator surface is `flexiq.admin.v1`, behind scopes a producer never holds. |
-| Draining a worker | A worker cannot yet be told to drain from outside; an RPC that reported success for a signal nothing reads would lie. |
+| Draining an attached executor or a push target | `DrainWorker` works through the worker registry, and neither has a row of its own. |
 | Settings, including the compare-and-set write | Same credential boundary. |
 | Migrations, and the contract floor | A storage concern between processes that hold the database credential. |
 | Scheduler and retention election | Internal to `flexiq-server`. |

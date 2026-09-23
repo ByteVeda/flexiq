@@ -88,8 +88,16 @@ not idempotent: each successful call makes a job.
 their queues, status, concurrency and last heartbeat. A worker registered by a
 release before this one reads as the default namespace's until it restarts.
 
-There is no drain call. A worker cannot yet be told to drain from outside, and
-an RPC that reported success for a signal nothing reads would be a lie.
+`POST /v1/admin/workers/{id}:drain` asks one to stop gracefully — the stop a
+SIGTERM gives it: it claims nothing new, finishes what it holds, and
+unregisters. The worker reads the request on its next heartbeat, a few seconds
+later, so the call answers with the worker `DRAINING` and the drain itself
+shows as the worker leaving the listing. A worker in another namespace, or one
+already gone, is `WORKER_NOT_FOUND`.
+
+A drain reaches registered workers — the rows this listing shows. An executor
+attached to the scheduler, or a push target, has no row of its own and is not
+drained this way.
 
 ## Periodic tasks
 
@@ -139,17 +147,18 @@ queue's override has no `paused`: `PauseQueue` is the one way to pause a queue.
 <Callout type="warn" title="An override reaches the next worker start">
 Workers read overrides when they start. A change made here applies to every
 worker that starts afterwards and to no worker already running — restart the
-fleet to apply it now. The Java SDK's worker does not read overrides yet.
+fleet to apply it now.
 </Callout>
 
 ## Errors
 
 Every refusal carries a `google.rpc.ErrorInfo` reason from the same closed list
-the producer door uses, plus two of this door's own:
+the producer door uses, plus three of this door's own:
 
 | Reason | Code | When |
 | --- | --- | --- |
 | `DEAD_LETTER_NOT_FOUND` | `NOT_FOUND` | No such entry in this namespace |
 | `PERIODIC_TASK_NOT_FOUND` | `NOT_FOUND` | No such periodic task in this namespace |
+| `WORKER_NOT_FOUND` | `NOT_FOUND` | No such registered worker in this namespace |
 | `INVALID_REQUEST` | `INVALID_ARGUMENT` | An empty name, a bad cron expression, timezone, rate or window |
 | `SCOPE_DENIED` | `PERMISSION_DENIED` | The token lacks `inspect` or `admin`; the metadata says which |

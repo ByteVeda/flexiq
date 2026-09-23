@@ -16,7 +16,7 @@ else.
 
 <Callout title="What it cannot do yet">
 Talking to the server instead of the database means `fq` can only do what the
-wire exposes. There is no `fq tail`, and no way to drain a worker. [What the
+wire exposes. There is no `fq tail`. [What the
 wire cannot do yet](#what-the-wire-cannot-do-yet) is the full list.
 </Callout>
 
@@ -224,7 +224,11 @@ fq queues --list                      # every queue, with a paused column
 fq pause emails                       # stop dispatch; fq resume emails lifts it
 fq throughput --window-ms 600000      # finished jobs per queue, and per minute
 fq workers
+fq drain <WORKER_ID>                  # stop claiming, finish, unregister
 ```
+
+A drain is read by the worker on its next heartbeat, so `fq drain` answers
+with the worker `draining`; `fq workers` stops listing it once it has stopped.
 
 ```text
 queue    paused  pending  running  completed  failed  dead  cancelled
@@ -340,7 +344,6 @@ subcommand here:
 | Missing | Why |
 | --- | --- |
 | Follow a job or a queue as it changes (`fq tail`) | [#837](https://github.com/ByteVeda/flexiq/issues/837) — there is no `WatchJobs` stream, and a poll loop hidden behind a subcommand is the cost that issue exists to remove. |
-| Drain a worker | A worker cannot yet be told to drain from outside, so the admin door has no such call. |
 
-Following a job needs the dashboard or an SDK with a database connection until
-then; draining a worker has no door yet at all.
+Until then, following a job needs the dashboard or an SDK with a database
+connection.

@@ -14,12 +14,16 @@ their entries below keep that name.
 
 - **The admin door** (#836). `flexiq.admin.v1.AdminService` puts the dashboard's operator
   actions on the gRPC listener, and as JSON under `/v1/admin/`: list, pause and resume queues;
-  per-queue throughput over a window; list, read, replay, delete and purge dead letters; list
-  workers; create, replace, pause, resume, trigger and delete periodic tasks; set and clear task
-  and queue overrides. Two new token scopes split it — `inspect` for the read-only methods,
+  per-queue throughput over a window; list, read, replay, delete and purge dead letters; list and
+  drain workers; create, replace, pause, resume, trigger and delete periodic tasks; set and clear
+  task and queue overrides. Two new token scopes split it — `inspect` for the read-only methods,
   `admin` for the rest — and a `produce` token reaches neither. Every call acts on the
   credential's namespace only. Cron over the network, which #847 left to this service, is
-  `PutPeriodicTask`. Worker drain is not included: nothing can tell a worker to drain yet.
+  `PutPeriodicTask`.
+- **Draining a worker from outside** (#836). `DrainWorker` (and the dashboards' equivalent)
+  marks a registered worker's row; every SDK's worker reads it back on its next heartbeat and
+  stops as it would on SIGTERM — it claims nothing new, finishes what it holds, and unregisters.
+  `Storage::heartbeat` now answers the row's status, and `Storage::request_worker_drain` is new.
 
 - **Triggers** (#847). `FLEXIQ_TRIGGER_LISTEN` turns `flexiq-server` into the thing a webhook
   sender or an object-store eventing platform calls: a URL that maps an inbound request to an
@@ -93,6 +97,12 @@ their entries below keep that name.
 
 ### Fixed
 
+- **A Python worker start no longer resumes a paused schedule.** Every start re-registered each
+  `@queue.periodic` with `enabled: true`, so a restart silently undid an operator's pause. It now
+  declares the schedule, which keeps the pause and the last run (#919's conditional write).
+- **The Java worker applies task and queue overrides.** Overrides set from a dashboard reached
+  every worker but a Java one. It now reads them at start — rate limit, concurrency cap and retry
+  backoff for a task; rate limit and concurrency cap for a queue — like the other SDKs.
 - **`cancel()` reaches attached executors and push targets behind `flexiq-server`** (#846). A
   cancel only ever set the storage flag, and only the native pool reads it — so under
   `flexiq-server` neither an attached executor nor a push target heard of one, and the job ran to
