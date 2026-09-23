@@ -949,10 +949,11 @@ impl PyQueue {
             .storage
             .heartbeat(worker_id, resource_health)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        // The line names no worker: the id comes off a Python argument, and a
+        // log line built from caller input is what the log-injection rule
+        // flags. The dashboard and `ListWorkers` show which one is draining.
         if status == Some(WorkerStatus::Draining) && self.mark_drained(worker_id) {
-            log::info!(
-                "[flexiq] worker {worker_id} draining: finishing running tasks, then stopping"
-            );
+            log::info!("[flexiq] drain requested: finishing running tasks, then stopping");
         }
 
         Ok(flexiq_core::storage::reap_dead_workers_if_leader(
