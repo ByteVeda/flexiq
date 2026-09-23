@@ -97,6 +97,15 @@ class QueueOperationsMixin:
         """List all registered workers and their heartbeat status."""
         return self._inner.list_workers()  # type: ignore[no-any-return]
 
+    def drain_worker(self, worker_id: str) -> bool:
+        """Ask one worker in this namespace to drain.
+
+        The worker reads the request on its next heartbeat, stops claiming,
+        finishes its running tasks and unregisters — the same graceful stop a
+        SIGTERM gives it. Returns ``False`` if no such worker is registered.
+        """
+        return self._inner.request_worker_drain(worker_id)  # type: ignore[no-any-return]
+
     # -- Queue Pause/Resume --
 
     def pause(self, queue_name: str = "default") -> None:

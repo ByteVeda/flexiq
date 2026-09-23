@@ -8,6 +8,7 @@ mod worker;
 #[cfg(feature = "workflows")]
 mod workflow_ops;
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use pyo3::prelude::*;
@@ -43,16 +44,22 @@ pub(crate) struct ShutdownState {
     /// Live `run_worker` calls, counted from Python entry — see
     /// [`PyQueue::begin_run`].
     active: usize,
+    /// Workers an operator asked to drain, read back on their heartbeat. Per
+    /// worker, not per queue: a drain names one worker, and its siblings on
+    /// the same `Queue` keep running.
+    drained: HashSet<String>,
 }
 
-/// Whether a stop has been requested of the runs currently live on a queue.
+/// Whether the run of `worker_id` should stop: the whole queue was asked to,
+/// or an operator asked this one worker to drain.
 ///
 /// Takes the state directly so the worker loop can poll it with the GIL
 /// released, where `&PyQueue` cannot travel.
-pub(crate) fn stop_requested(shutdown: &Mutex<ShutdownState>) -> bool {
-    // Two plain fields with no invariant a panic can break, so recovering from
+pub(crate) fn stop_requested(shutdown: &Mutex<ShutdownState>, worker_id: &str) -> bool {
+    // Plain fields with no invariant a panic can break, so recovering from
     // poisoning beats dropping a stop request on the floor.
-    shutdown.lock().unwrap_or_else(|e| e.into_inner()).requested
+    let state = shutdown.lock().unwrap_or_else(|e| e.into_inner());
+    state.requested || state.drained.contains(worker_id)
 }
 
 /// The core queue engine exposed to Python.
@@ -353,6 +360,7 @@ impl PyQueue {
         state.active = state.active.saturating_sub(1);
         if state.active == 0 {
             state.requested = false;
+            state.drained.clear();
         }
     }
 
@@ -1071,6 +1079,19 @@ impl PyQueue {
     /// see [`stop_requested`] for why that is the safe direction here.
     pub(crate) fn shutdown_state(&self) -> std::sync::MutexGuard<'_, ShutdownState> {
         self.shutdown.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Stop the run of `worker_id` as `request_shutdown` stops every run.
+    /// Terminal: nothing un-marks it before that run ends. `true` the first
+    /// time, so the caller can announce the drain once.
+    pub(crate) fn mark_drained(&self, worker_id: &str) -> bool {
+        self.shutdown_state().drained.insert(worker_id.to_string())
+    }
+
+    /// Forget a finished run's drain mark, so a worker id reused by a later
+    /// `run_worker` starts unstopped.
+    pub(crate) fn clear_drained(&self, worker_id: &str) {
+        self.shutdown_state().drained.remove(worker_id);
     }
 
     /// Install the active worker dispatcher. Called by `run_worker` before

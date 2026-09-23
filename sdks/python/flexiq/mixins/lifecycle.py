@@ -34,6 +34,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("flexiq")
 
+# Seconds between worker heartbeats. A beat is also how an operator's drain
+# request reaches the worker, so this bounds how long one waits to be read.
+HEARTBEAT_INTERVAL_SECONDS = 5.0
+
 
 class QueueLifecycleMixin:
     """Worker startup, heartbeat, resource status aggregation, and test mode."""
@@ -377,7 +381,11 @@ class QueueLifecycleMixin:
         worker_id: str,
         stop_event: threading.Event,
     ) -> None:
-        """Send periodic heartbeats to storage with current resource health."""
+        """Send periodic heartbeats to storage with current resource health.
+
+        The beat also reads back an operator's drain request; the binding then
+        stops this worker's run exactly as :meth:`shutdown` stops every run.
+        """
         prev_unhealthy: set[str] = set()
         while not stop_event.is_set():
             resource_health = self._build_resource_health_json()
@@ -408,7 +416,7 @@ class QueueLifecycleMixin:
                     )
                 prev_unhealthy = current_unhealthy
 
-            stop_event.wait(timeout=5.0)
+            stop_event.wait(timeout=HEARTBEAT_INTERVAL_SECONDS)
 
     # -- Resource Status --
 

@@ -540,6 +540,14 @@ impl PyQueue {
 
     // ── Worker API ───────────────────────────────────────────────
 
+    /// Ask a worker in this queue's namespace to drain. `False` when no such
+    /// worker is registered there.
+    pub fn request_worker_drain(&self, worker_id: &str) -> PyResult<bool> {
+        self.storage
+            .request_worker_drain(worker_id, self.namespace.as_deref())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// List the workers registered in this queue's namespace.
     pub fn list_workers(&self) -> PyResult<Vec<Py<PyAny>>> {
         let rows = self
