@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { SearchModal } from "@/components/docs";
 import {
-  BenchmarkFold,
   Footer,
   Hero,
   HowItWorks,
@@ -79,7 +78,6 @@ export default function Home() {
         <HowItWorks />
         <ServerFold />
         <ScenarioFinder />
-        <BenchmarkFold />
         <SectionGrid />
       </main>
       <Footer />
