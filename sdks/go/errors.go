@@ -46,6 +46,7 @@ const (
 	ReasonJobNotFound                  Reason = "JOB_NOT_FOUND"
 	ReasonDeadLetterNotFound           Reason = "DEAD_LETTER_NOT_FOUND"
 	ReasonPeriodicTaskNotFound         Reason = "PERIODIC_TASK_NOT_FOUND"
+	ReasonWorkerNotFound               Reason = "WORKER_NOT_FOUND"
 	ReasonDependencyNotFound           Reason = "DEPENDENCY_NOT_FOUND"
 	ReasonQueueFull                    Reason = "QUEUE_FULL"
 	ReasonRateLimited                  Reason = "RATE_LIMITED"

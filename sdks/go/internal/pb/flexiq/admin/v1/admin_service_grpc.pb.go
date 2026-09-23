@@ -47,6 +47,7 @@ const (
 	AdminService_DeleteDeadLetter_FullMethodName    = "/flexiq.admin.v1.AdminService/DeleteDeadLetter"
 	AdminService_PurgeDeadLetters_FullMethodName    = "/flexiq.admin.v1.AdminService/PurgeDeadLetters"
 	AdminService_ListWorkers_FullMethodName         = "/flexiq.admin.v1.AdminService/ListWorkers"
+	AdminService_DrainWorker_FullMethodName         = "/flexiq.admin.v1.AdminService/DrainWorker"
 	AdminService_ListPeriodicTasks_FullMethodName   = "/flexiq.admin.v1.AdminService/ListPeriodicTasks"
 	AdminService_GetPeriodicTask_FullMethodName     = "/flexiq.admin.v1.AdminService/GetPeriodicTask"
 	AdminService_PutPeriodicTask_FullMethodName     = "/flexiq.admin.v1.AdminService/PutPeriodicTask"
@@ -80,8 +81,9 @@ const (
 //
 //   - A settings door. The settings KV holds credentials and published
 //     policy; a generic read or write of it is not an operator operation.
-//   - Draining a worker. A worker cannot yet be told to drain from outside,
-//     and an RPC that reported success for a signal nobody reads would lie.
+//   - Draining an attached or push executor. `DrainWorker` reaches registered
+//     workers — the rows `ListWorkers` shows; an executor behind the
+//     scheduler has no row of its own.
 //   - Live effect for overrides. A worker reads overrides when it starts, so a
 //     change reaches the next worker start and no running worker.
 type AdminServiceClient interface {
@@ -108,6 +110,13 @@ type AdminServiceClient interface {
 	PurgeDeadLetters(ctx context.Context, in *PurgeDeadLettersRequest, opts ...grpc.CallOption) (*PurgeDeadLettersResponse, error)
 	// The namespace's registered workers and their heartbeats.
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
+	// Ask one worker to drain: it stops claiming work, finishes what it holds,
+	// and unregisters — the same graceful stop a SIGTERM gives it.
+	//
+	// The worker reads the request on its next heartbeat, a few seconds later,
+	// so the answer is the request recorded, not the drain done: the worker
+	// comes back DRAINING, and leaves ListWorkers once it has stopped.
+	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error)
 	// Every periodic task in the namespace.
 	ListPeriodicTasks(ctx context.Context, in *ListPeriodicTasksRequest, opts ...grpc.CallOption) (*ListPeriodicTasksResponse, error)
 	// Read one periodic task.
@@ -246,6 +255,16 @@ func (c *adminServiceClient) ListWorkers(ctx context.Context, in *ListWorkersReq
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListWorkersResponse)
 	err := c.cc.Invoke(ctx, AdminService_ListWorkers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DrainWorkerResponse)
+	err := c.cc.Invoke(ctx, AdminService_DrainWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -391,8 +410,9 @@ func (c *adminServiceClient) ClearQueueOverride(ctx context.Context, in *ClearQu
 //
 //   - A settings door. The settings KV holds credentials and published
 //     policy; a generic read or write of it is not an operator operation.
-//   - Draining a worker. A worker cannot yet be told to drain from outside,
-//     and an RPC that reported success for a signal nobody reads would lie.
+//   - Draining an attached or push executor. `DrainWorker` reaches registered
+//     workers — the rows `ListWorkers` shows; an executor behind the
+//     scheduler has no row of its own.
 //   - Live effect for overrides. A worker reads overrides when it starts, so a
 //     change reaches the next worker start and no running worker.
 type AdminServiceServer interface {
@@ -419,6 +439,13 @@ type AdminServiceServer interface {
 	PurgeDeadLetters(context.Context, *PurgeDeadLettersRequest) (*PurgeDeadLettersResponse, error)
 	// The namespace's registered workers and their heartbeats.
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
+	// Ask one worker to drain: it stops claiming work, finishes what it holds,
+	// and unregisters — the same graceful stop a SIGTERM gives it.
+	//
+	// The worker reads the request on its next heartbeat, a few seconds later,
+	// so the answer is the request recorded, not the drain done: the worker
+	// comes back DRAINING, and leaves ListWorkers once it has stopped.
+	DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error)
 	// Every periodic task in the namespace.
 	ListPeriodicTasks(context.Context, *ListPeriodicTasksRequest) (*ListPeriodicTasksResponse, error)
 	// Read one periodic task.
@@ -492,6 +519,9 @@ func (UnimplementedAdminServiceServer) PurgeDeadLetters(context.Context, *PurgeD
 }
 func (UnimplementedAdminServiceServer) ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListWorkers not implemented")
+}
+func (UnimplementedAdminServiceServer) DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DrainWorker not implemented")
 }
 func (UnimplementedAdminServiceServer) ListPeriodicTasks(context.Context, *ListPeriodicTasksRequest) (*ListPeriodicTasksResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListPeriodicTasks not implemented")
@@ -726,6 +756,24 @@ func _AdminService_ListWorkers_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AdminServiceServer).ListWorkers(ctx, req.(*ListWorkersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_DrainWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DrainWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).DrainWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_DrainWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).DrainWorker(ctx, req.(*DrainWorkerRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -992,6 +1040,10 @@ var AdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListWorkers",
 			Handler:    _AdminService_ListWorkers_Handler,
+		},
+		{
+			MethodName: "DrainWorker",
+			Handler:    _AdminService_DrainWorker_Handler,
 		},
 		{
 			MethodName: "ListPeriodicTasks",

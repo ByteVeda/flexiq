@@ -1507,6 +1507,95 @@ func (x *ListWorkersResponse) GetWorkers() []*Worker {
 	return nil
 }
 
+type DrainWorkerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DrainWorkerRequest) Reset() {
+	*x = DrainWorkerRequest{}
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DrainWorkerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DrainWorkerRequest) ProtoMessage() {}
+
+func (x *DrainWorkerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DrainWorkerRequest.ProtoReflect.Descriptor instead.
+func (*DrainWorkerRequest) Descriptor() ([]byte, []int) {
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *DrainWorkerRequest) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+type DrainWorkerResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The worker after the call: DRAINING.
+	Worker        *Worker `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DrainWorkerResponse) Reset() {
+	*x = DrainWorkerResponse{}
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DrainWorkerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DrainWorkerResponse) ProtoMessage() {}
+
+func (x *DrainWorkerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DrainWorkerResponse.ProtoReflect.Descriptor instead.
+func (*DrainWorkerResponse) Descriptor() ([]byte, []int) {
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *DrainWorkerResponse) GetWorker() *Worker {
+	if x != nil {
+		return x.Worker
+	}
+	return nil
+}
+
 // A schedule that enqueues one task on a cron expression.
 type PeriodicTask struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1532,7 +1621,7 @@ type PeriodicTask struct {
 
 func (x *PeriodicTask) Reset() {
 	*x = PeriodicTask{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[24]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1544,7 +1633,7 @@ func (x *PeriodicTask) String() string {
 func (*PeriodicTask) ProtoMessage() {}
 
 func (x *PeriodicTask) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[24]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1557,7 +1646,7 @@ func (x *PeriodicTask) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeriodicTask.ProtoReflect.Descriptor instead.
 func (*PeriodicTask) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{24}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *PeriodicTask) GetName() string {
@@ -1631,7 +1720,7 @@ type ListPeriodicTasksRequest struct {
 
 func (x *ListPeriodicTasksRequest) Reset() {
 	*x = ListPeriodicTasksRequest{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[25]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1643,7 +1732,7 @@ func (x *ListPeriodicTasksRequest) String() string {
 func (*ListPeriodicTasksRequest) ProtoMessage() {}
 
 func (x *ListPeriodicTasksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[25]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1656,7 +1745,7 @@ func (x *ListPeriodicTasksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPeriodicTasksRequest.ProtoReflect.Descriptor instead.
 func (*ListPeriodicTasksRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{25}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{27}
 }
 
 type ListPeriodicTasksResponse struct {
@@ -1669,7 +1758,7 @@ type ListPeriodicTasksResponse struct {
 
 func (x *ListPeriodicTasksResponse) Reset() {
 	*x = ListPeriodicTasksResponse{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[26]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1681,7 +1770,7 @@ func (x *ListPeriodicTasksResponse) String() string {
 func (*ListPeriodicTasksResponse) ProtoMessage() {}
 
 func (x *ListPeriodicTasksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[26]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1694,7 +1783,7 @@ func (x *ListPeriodicTasksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPeriodicTasksResponse.ProtoReflect.Descriptor instead.
 func (*ListPeriodicTasksResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{26}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ListPeriodicTasksResponse) GetPeriodicTasks() []*PeriodicTask {
@@ -1715,7 +1804,7 @@ type GetPeriodicTaskRequest struct {
 
 func (x *GetPeriodicTaskRequest) Reset() {
 	*x = GetPeriodicTaskRequest{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[27]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1727,7 +1816,7 @@ func (x *GetPeriodicTaskRequest) String() string {
 func (*GetPeriodicTaskRequest) ProtoMessage() {}
 
 func (x *GetPeriodicTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[27]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1740,7 +1829,7 @@ func (x *GetPeriodicTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPeriodicTaskRequest.ProtoReflect.Descriptor instead.
 func (*GetPeriodicTaskRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{27}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetPeriodicTaskRequest) GetName() string {
@@ -1766,7 +1855,7 @@ type GetPeriodicTaskResponse struct {
 
 func (x *GetPeriodicTaskResponse) Reset() {
 	*x = GetPeriodicTaskResponse{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[28]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1778,7 +1867,7 @@ func (x *GetPeriodicTaskResponse) String() string {
 func (*GetPeriodicTaskResponse) ProtoMessage() {}
 
 func (x *GetPeriodicTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[28]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1791,7 +1880,7 @@ func (x *GetPeriodicTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPeriodicTaskResponse.ProtoReflect.Descriptor instead.
 func (*GetPeriodicTaskResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{28}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetPeriodicTaskResponse) GetPeriodicTask() *PeriodicTask {
@@ -1828,7 +1917,7 @@ type PutPeriodicTaskRequest struct {
 
 func (x *PutPeriodicTaskRequest) Reset() {
 	*x = PutPeriodicTaskRequest{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[29]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1840,7 +1929,7 @@ func (x *PutPeriodicTaskRequest) String() string {
 func (*PutPeriodicTaskRequest) ProtoMessage() {}
 
 func (x *PutPeriodicTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[29]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1853,7 +1942,7 @@ func (x *PutPeriodicTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutPeriodicTaskRequest.ProtoReflect.Descriptor instead.
 func (*PutPeriodicTaskRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{29}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *PutPeriodicTaskRequest) GetName() string {
@@ -1949,7 +2038,7 @@ type PutPeriodicTaskResponse struct {
 
 func (x *PutPeriodicTaskResponse) Reset() {
 	*x = PutPeriodicTaskResponse{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[30]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1961,7 +2050,7 @@ func (x *PutPeriodicTaskResponse) String() string {
 func (*PutPeriodicTaskResponse) ProtoMessage() {}
 
 func (x *PutPeriodicTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[30]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1974,7 +2063,7 @@ func (x *PutPeriodicTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutPeriodicTaskResponse.ProtoReflect.Descriptor instead.
 func (*PutPeriodicTaskResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{30}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *PutPeriodicTaskResponse) GetPeriodicTask() *PeriodicTask {
@@ -1993,7 +2082,7 @@ type DeletePeriodicTaskRequest struct {
 
 func (x *DeletePeriodicTaskRequest) Reset() {
 	*x = DeletePeriodicTaskRequest{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[31]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2005,7 +2094,7 @@ func (x *DeletePeriodicTaskRequest) String() string {
 func (*DeletePeriodicTaskRequest) ProtoMessage() {}
 
 func (x *DeletePeriodicTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[31]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2018,7 +2107,7 @@ func (x *DeletePeriodicTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePeriodicTaskRequest.ProtoReflect.Descriptor instead.
 func (*DeletePeriodicTaskRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{31}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *DeletePeriodicTaskRequest) GetName() string {
@@ -2036,7 +2125,7 @@ type DeletePeriodicTaskResponse struct {
 
 func (x *DeletePeriodicTaskResponse) Reset() {
 	*x = DeletePeriodicTaskResponse{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[32]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2048,7 +2137,7 @@ func (x *DeletePeriodicTaskResponse) String() string {
 func (*DeletePeriodicTaskResponse) ProtoMessage() {}
 
 func (x *DeletePeriodicTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[32]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2061,7 +2150,7 @@ func (x *DeletePeriodicTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePeriodicTaskResponse.ProtoReflect.Descriptor instead.
 func (*DeletePeriodicTaskResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{32}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{34}
 }
 
 type PausePeriodicTaskRequest struct {
@@ -2073,7 +2162,7 @@ type PausePeriodicTaskRequest struct {
 
 func (x *PausePeriodicTaskRequest) Reset() {
 	*x = PausePeriodicTaskRequest{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[33]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2085,7 +2174,7 @@ func (x *PausePeriodicTaskRequest) String() string {
 func (*PausePeriodicTaskRequest) ProtoMessage() {}
 
 func (x *PausePeriodicTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[33]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2098,7 +2187,7 @@ func (x *PausePeriodicTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PausePeriodicTaskRequest.ProtoReflect.Descriptor instead.
 func (*PausePeriodicTaskRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{33}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *PausePeriodicTaskRequest) GetName() string {
@@ -2118,7 +2207,7 @@ type PausePeriodicTaskResponse struct {
 
 func (x *PausePeriodicTaskResponse) Reset() {
 	*x = PausePeriodicTaskResponse{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[34]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2130,7 +2219,7 @@ func (x *PausePeriodicTaskResponse) String() string {
 func (*PausePeriodicTaskResponse) ProtoMessage() {}
 
 func (x *PausePeriodicTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[34]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2143,7 +2232,7 @@ func (x *PausePeriodicTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PausePeriodicTaskResponse.ProtoReflect.Descriptor instead.
 func (*PausePeriodicTaskResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{34}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *PausePeriodicTaskResponse) GetPeriodicTask() *PeriodicTask {
@@ -2162,7 +2251,7 @@ type ResumePeriodicTaskRequest struct {
 
 func (x *ResumePeriodicTaskRequest) Reset() {
 	*x = ResumePeriodicTaskRequest{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[35]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2174,7 +2263,7 @@ func (x *ResumePeriodicTaskRequest) String() string {
 func (*ResumePeriodicTaskRequest) ProtoMessage() {}
 
 func (x *ResumePeriodicTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[35]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2187,7 +2276,7 @@ func (x *ResumePeriodicTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumePeriodicTaskRequest.ProtoReflect.Descriptor instead.
 func (*ResumePeriodicTaskRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{35}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ResumePeriodicTaskRequest) GetName() string {
@@ -2207,7 +2296,7 @@ type ResumePeriodicTaskResponse struct {
 
 func (x *ResumePeriodicTaskResponse) Reset() {
 	*x = ResumePeriodicTaskResponse{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[36]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2219,7 +2308,7 @@ func (x *ResumePeriodicTaskResponse) String() string {
 func (*ResumePeriodicTaskResponse) ProtoMessage() {}
 
 func (x *ResumePeriodicTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[36]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2232,7 +2321,7 @@ func (x *ResumePeriodicTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumePeriodicTaskResponse.ProtoReflect.Descriptor instead.
 func (*ResumePeriodicTaskResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{36}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ResumePeriodicTaskResponse) GetPeriodicTask() *PeriodicTask {
@@ -2251,7 +2340,7 @@ type TriggerPeriodicTaskRequest struct {
 
 func (x *TriggerPeriodicTaskRequest) Reset() {
 	*x = TriggerPeriodicTaskRequest{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[37]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2263,7 +2352,7 @@ func (x *TriggerPeriodicTaskRequest) String() string {
 func (*TriggerPeriodicTaskRequest) ProtoMessage() {}
 
 func (x *TriggerPeriodicTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[37]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2276,7 +2365,7 @@ func (x *TriggerPeriodicTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerPeriodicTaskRequest.ProtoReflect.Descriptor instead.
 func (*TriggerPeriodicTaskRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{37}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *TriggerPeriodicTaskRequest) GetName() string {
@@ -2296,7 +2385,7 @@ type TriggerPeriodicTaskResponse struct {
 
 func (x *TriggerPeriodicTaskResponse) Reset() {
 	*x = TriggerPeriodicTaskResponse{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[38]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2308,7 +2397,7 @@ func (x *TriggerPeriodicTaskResponse) String() string {
 func (*TriggerPeriodicTaskResponse) ProtoMessage() {}
 
 func (x *TriggerPeriodicTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[38]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2321,7 +2410,7 @@ func (x *TriggerPeriodicTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerPeriodicTaskResponse.ProtoReflect.Descriptor instead.
 func (*TriggerPeriodicTaskResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{38}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *TriggerPeriodicTaskResponse) GetJob() *v1.Job {
@@ -2357,7 +2446,7 @@ type TaskOverride struct {
 
 func (x *TaskOverride) Reset() {
 	*x = TaskOverride{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[39]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2369,7 +2458,7 @@ func (x *TaskOverride) String() string {
 func (*TaskOverride) ProtoMessage() {}
 
 func (x *TaskOverride) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[39]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2382,7 +2471,7 @@ func (x *TaskOverride) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskOverride.ProtoReflect.Descriptor instead.
 func (*TaskOverride) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{39}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *TaskOverride) GetRateLimit() string {
@@ -2457,7 +2546,7 @@ type QueueOverride struct {
 
 func (x *QueueOverride) Reset() {
 	*x = QueueOverride{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[40]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2469,7 +2558,7 @@ func (x *QueueOverride) String() string {
 func (*QueueOverride) ProtoMessage() {}
 
 func (x *QueueOverride) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[40]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2482,7 +2571,7 @@ func (x *QueueOverride) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueOverride.ProtoReflect.Descriptor instead.
 func (*QueueOverride) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{40}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *QueueOverride) GetRateLimit() string {
@@ -2514,7 +2603,7 @@ type ListOverridesRequest struct {
 
 func (x *ListOverridesRequest) Reset() {
 	*x = ListOverridesRequest{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[41]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2526,7 +2615,7 @@ func (x *ListOverridesRequest) String() string {
 func (*ListOverridesRequest) ProtoMessage() {}
 
 func (x *ListOverridesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[41]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2539,7 +2628,7 @@ func (x *ListOverridesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOverridesRequest.ProtoReflect.Descriptor instead.
 func (*ListOverridesRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{41}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{43}
 }
 
 type ListOverridesResponse struct {
@@ -2554,7 +2643,7 @@ type ListOverridesResponse struct {
 
 func (x *ListOverridesResponse) Reset() {
 	*x = ListOverridesResponse{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[42]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2566,7 +2655,7 @@ func (x *ListOverridesResponse) String() string {
 func (*ListOverridesResponse) ProtoMessage() {}
 
 func (x *ListOverridesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[42]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2579,7 +2668,7 @@ func (x *ListOverridesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOverridesResponse.ProtoReflect.Descriptor instead.
 func (*ListOverridesResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{42}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ListOverridesResponse) GetTasks() map[string]*TaskOverride {
@@ -2607,7 +2696,7 @@ type SetTaskOverrideRequest struct {
 
 func (x *SetTaskOverrideRequest) Reset() {
 	*x = SetTaskOverrideRequest{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[43]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2619,7 +2708,7 @@ func (x *SetTaskOverrideRequest) String() string {
 func (*SetTaskOverrideRequest) ProtoMessage() {}
 
 func (x *SetTaskOverrideRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[43]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2632,7 +2721,7 @@ func (x *SetTaskOverrideRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetTaskOverrideRequest.ProtoReflect.Descriptor instead.
 func (*SetTaskOverrideRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{43}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *SetTaskOverrideRequest) GetTaskName() string {
@@ -2659,7 +2748,7 @@ type SetTaskOverrideResponse struct {
 
 func (x *SetTaskOverrideResponse) Reset() {
 	*x = SetTaskOverrideResponse{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[44]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2671,7 +2760,7 @@ func (x *SetTaskOverrideResponse) String() string {
 func (*SetTaskOverrideResponse) ProtoMessage() {}
 
 func (x *SetTaskOverrideResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[44]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2684,7 +2773,7 @@ func (x *SetTaskOverrideResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetTaskOverrideResponse.ProtoReflect.Descriptor instead.
 func (*SetTaskOverrideResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{44}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *SetTaskOverrideResponse) GetTaskOverride() *TaskOverride {
@@ -2703,7 +2792,7 @@ type ClearTaskOverrideRequest struct {
 
 func (x *ClearTaskOverrideRequest) Reset() {
 	*x = ClearTaskOverrideRequest{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[45]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2715,7 +2804,7 @@ func (x *ClearTaskOverrideRequest) String() string {
 func (*ClearTaskOverrideRequest) ProtoMessage() {}
 
 func (x *ClearTaskOverrideRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[45]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2728,7 +2817,7 @@ func (x *ClearTaskOverrideRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearTaskOverrideRequest.ProtoReflect.Descriptor instead.
 func (*ClearTaskOverrideRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{45}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ClearTaskOverrideRequest) GetTaskName() string {
@@ -2746,7 +2835,7 @@ type ClearTaskOverrideResponse struct {
 
 func (x *ClearTaskOverrideResponse) Reset() {
 	*x = ClearTaskOverrideResponse{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[46]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2758,7 +2847,7 @@ func (x *ClearTaskOverrideResponse) String() string {
 func (*ClearTaskOverrideResponse) ProtoMessage() {}
 
 func (x *ClearTaskOverrideResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[46]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2771,7 +2860,7 @@ func (x *ClearTaskOverrideResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearTaskOverrideResponse.ProtoReflect.Descriptor instead.
 func (*ClearTaskOverrideResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{46}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{48}
 }
 
 type SetQueueOverrideRequest struct {
@@ -2785,7 +2874,7 @@ type SetQueueOverrideRequest struct {
 
 func (x *SetQueueOverrideRequest) Reset() {
 	*x = SetQueueOverrideRequest{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[47]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2797,7 +2886,7 @@ func (x *SetQueueOverrideRequest) String() string {
 func (*SetQueueOverrideRequest) ProtoMessage() {}
 
 func (x *SetQueueOverrideRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[47]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2810,7 +2899,7 @@ func (x *SetQueueOverrideRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetQueueOverrideRequest.ProtoReflect.Descriptor instead.
 func (*SetQueueOverrideRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{47}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *SetQueueOverrideRequest) GetQueue() string {
@@ -2837,7 +2926,7 @@ type SetQueueOverrideResponse struct {
 
 func (x *SetQueueOverrideResponse) Reset() {
 	*x = SetQueueOverrideResponse{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[48]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2849,7 +2938,7 @@ func (x *SetQueueOverrideResponse) String() string {
 func (*SetQueueOverrideResponse) ProtoMessage() {}
 
 func (x *SetQueueOverrideResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[48]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2862,7 +2951,7 @@ func (x *SetQueueOverrideResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetQueueOverrideResponse.ProtoReflect.Descriptor instead.
 func (*SetQueueOverrideResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{48}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *SetQueueOverrideResponse) GetQueueOverride() *QueueOverride {
@@ -2881,7 +2970,7 @@ type ClearQueueOverrideRequest struct {
 
 func (x *ClearQueueOverrideRequest) Reset() {
 	*x = ClearQueueOverrideRequest{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[49]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2893,7 +2982,7 @@ func (x *ClearQueueOverrideRequest) String() string {
 func (*ClearQueueOverrideRequest) ProtoMessage() {}
 
 func (x *ClearQueueOverrideRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[49]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2906,7 +2995,7 @@ func (x *ClearQueueOverrideRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearQueueOverrideRequest.ProtoReflect.Descriptor instead.
 func (*ClearQueueOverrideRequest) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{49}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *ClearQueueOverrideRequest) GetQueue() string {
@@ -2924,7 +3013,7 @@ type ClearQueueOverrideResponse struct {
 
 func (x *ClearQueueOverrideResponse) Reset() {
 	*x = ClearQueueOverrideResponse{}
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[50]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2936,7 +3025,7 @@ func (x *ClearQueueOverrideResponse) String() string {
 func (*ClearQueueOverrideResponse) ProtoMessage() {}
 
 func (x *ClearQueueOverrideResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[50]
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2949,7 +3038,7 @@ func (x *ClearQueueOverrideResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearQueueOverrideResponse.ProtoReflect.Descriptor instead.
 func (*ClearQueueOverrideResponse) Descriptor() ([]byte, []int) {
-	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{50}
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{52}
 }
 
 var File_flexiq_admin_v1_admin_service_proto protoreflect.FileDescriptor
@@ -3057,7 +3146,11 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\f_sdk_version\"\x14\n" +
 	"\x12ListWorkersRequest\"H\n" +
 	"\x13ListWorkersResponse\x121\n" +
-	"\aworkers\x18\x01 \x03(\v2\x17.flexiq.admin.v1.WorkerR\aworkers\"\xca\x02\n" +
+	"\aworkers\x18\x01 \x03(\v2\x17.flexiq.admin.v1.WorkerR\aworkers\"1\n" +
+	"\x12DrainWorkerRequest\x12\x1b\n" +
+	"\tworker_id\x18\x01 \x01(\tR\bworkerId\"F\n" +
+	"\x13DrainWorkerResponse\x12/\n" +
+	"\x06worker\x18\x01 \x01(\v2\x17.flexiq.admin.v1.WorkerR\x06worker\"\xca\x02\n" +
 	"\fPeriodicTask\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
 	"\ttask_name\x18\x02 \x01(\tR\btaskName\x12\x12\n" +
@@ -3164,7 +3257,7 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\fWorkerStatus\x12\x1d\n" +
 	"\x19WORKER_STATUS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14WORKER_STATUS_ACTIVE\x10\x01\x12\x1a\n" +
-	"\x16WORKER_STATUS_DRAINING\x10\x022\xc6\x19\n" +
+	"\x16WORKER_STATUS_DRAINING\x10\x022\xd1\x1a\n" +
 	"\fAdminService\x12r\n" +
 	"\n" +
 	"ListQueues\x12\".flexiq.admin.v1.ListQueuesRequest\x1a#.flexiq.admin.v1.ListQueuesResponse\"\x1b\x82\xd3\xe4\x93\x02\x12\x12\x10/v1/admin/queues\x90\x02\x01\x12\x80\x01\n" +
@@ -3177,7 +3270,8 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\x10ReplayDeadLetter\x12(.flexiq.admin.v1.ReplayDeadLetterRequest\x1a).flexiq.admin.v1.ReplayDeadLetterResponse\"5\x82\xd3\xe4\x93\x02/\"-/v1/admin/deadLetters/{dead_letter_id}:replay\x12\xa1\x01\n" +
 	"\x10DeleteDeadLetter\x12(.flexiq.admin.v1.DeleteDeadLetterRequest\x1a).flexiq.admin.v1.DeleteDeadLetterResponse\"8\x82\xd3\xe4\x93\x02/\"-/v1/admin/deadLetters/{dead_letter_id}:delete\x90\x02\x02\x12\x8f\x01\n" +
 	"\x10PurgeDeadLetters\x12(.flexiq.admin.v1.PurgeDeadLettersRequest\x1a).flexiq.admin.v1.PurgeDeadLettersResponse\"&\x82\xd3\xe4\x93\x02 :\x01*\"\x1b/v1/admin/deadLetters:purge\x12v\n" +
-	"\vListWorkers\x12#.flexiq.admin.v1.ListWorkersRequest\x1a$.flexiq.admin.v1.ListWorkersResponse\"\x1c\x82\xd3\xe4\x93\x02\x13\x12\x11/v1/admin/workers\x90\x02\x01\x12\x8e\x01\n" +
+	"\vListWorkers\x12#.flexiq.admin.v1.ListWorkersRequest\x1a$.flexiq.admin.v1.ListWorkersResponse\"\x1c\x82\xd3\xe4\x93\x02\x13\x12\x11/v1/admin/workers\x90\x02\x01\x12\x88\x01\n" +
+	"\vDrainWorker\x12#.flexiq.admin.v1.DrainWorkerRequest\x1a$.flexiq.admin.v1.DrainWorkerResponse\".\x82\xd3\xe4\x93\x02%\"#/v1/admin/workers/{worker_id}:drain\x90\x02\x02\x12\x8e\x01\n" +
 	"\x11ListPeriodicTasks\x12).flexiq.admin.v1.ListPeriodicTasksRequest\x1a*.flexiq.admin.v1.ListPeriodicTasksResponse\"\"\x82\xd3\xe4\x93\x02\x19\x12\x17/v1/admin/periodicTasks\x90\x02\x01\x12\x8f\x01\n" +
 	"\x0fGetPeriodicTask\x12'.flexiq.admin.v1.GetPeriodicTaskRequest\x1a(.flexiq.admin.v1.GetPeriodicTaskResponse\")\x82\xd3\xe4\x93\x02 \x12\x1e/v1/admin/periodicTasks/{name}\x90\x02\x01\x12\x8b\x01\n" +
 	"\x0fPutPeriodicTask\x12'.flexiq.admin.v1.PutPeriodicTaskRequest\x1a(.flexiq.admin.v1.PutPeriodicTaskResponse\"%\x82\xd3\xe4\x93\x02\x1c:\x01*\"\x17/v1/admin/periodicTasks\x90\x02\x02\x12\x9f\x01\n" +
@@ -3205,7 +3299,7 @@ func file_flexiq_admin_v1_admin_service_proto_rawDescGZIP() []byte {
 }
 
 var file_flexiq_admin_v1_admin_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_flexiq_admin_v1_admin_service_proto_msgTypes = make([]protoimpl.MessageInfo, 53)
+var file_flexiq_admin_v1_admin_service_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
 var file_flexiq_admin_v1_admin_service_proto_goTypes = []any{
 	(WorkerStatus)(0),                   // 0: flexiq.admin.v1.WorkerStatus
 	(*Queue)(nil),                       // 1: flexiq.admin.v1.Queue
@@ -3232,127 +3326,132 @@ var file_flexiq_admin_v1_admin_service_proto_goTypes = []any{
 	(*Worker)(nil),                      // 22: flexiq.admin.v1.Worker
 	(*ListWorkersRequest)(nil),          // 23: flexiq.admin.v1.ListWorkersRequest
 	(*ListWorkersResponse)(nil),         // 24: flexiq.admin.v1.ListWorkersResponse
-	(*PeriodicTask)(nil),                // 25: flexiq.admin.v1.PeriodicTask
-	(*ListPeriodicTasksRequest)(nil),    // 26: flexiq.admin.v1.ListPeriodicTasksRequest
-	(*ListPeriodicTasksResponse)(nil),   // 27: flexiq.admin.v1.ListPeriodicTasksResponse
-	(*GetPeriodicTaskRequest)(nil),      // 28: flexiq.admin.v1.GetPeriodicTaskRequest
-	(*GetPeriodicTaskResponse)(nil),     // 29: flexiq.admin.v1.GetPeriodicTaskResponse
-	(*PutPeriodicTaskRequest)(nil),      // 30: flexiq.admin.v1.PutPeriodicTaskRequest
-	(*PutPeriodicTaskResponse)(nil),     // 31: flexiq.admin.v1.PutPeriodicTaskResponse
-	(*DeletePeriodicTaskRequest)(nil),   // 32: flexiq.admin.v1.DeletePeriodicTaskRequest
-	(*DeletePeriodicTaskResponse)(nil),  // 33: flexiq.admin.v1.DeletePeriodicTaskResponse
-	(*PausePeriodicTaskRequest)(nil),    // 34: flexiq.admin.v1.PausePeriodicTaskRequest
-	(*PausePeriodicTaskResponse)(nil),   // 35: flexiq.admin.v1.PausePeriodicTaskResponse
-	(*ResumePeriodicTaskRequest)(nil),   // 36: flexiq.admin.v1.ResumePeriodicTaskRequest
-	(*ResumePeriodicTaskResponse)(nil),  // 37: flexiq.admin.v1.ResumePeriodicTaskResponse
-	(*TriggerPeriodicTaskRequest)(nil),  // 38: flexiq.admin.v1.TriggerPeriodicTaskRequest
-	(*TriggerPeriodicTaskResponse)(nil), // 39: flexiq.admin.v1.TriggerPeriodicTaskResponse
-	(*TaskOverride)(nil),                // 40: flexiq.admin.v1.TaskOverride
-	(*QueueOverride)(nil),               // 41: flexiq.admin.v1.QueueOverride
-	(*ListOverridesRequest)(nil),        // 42: flexiq.admin.v1.ListOverridesRequest
-	(*ListOverridesResponse)(nil),       // 43: flexiq.admin.v1.ListOverridesResponse
-	(*SetTaskOverrideRequest)(nil),      // 44: flexiq.admin.v1.SetTaskOverrideRequest
-	(*SetTaskOverrideResponse)(nil),     // 45: flexiq.admin.v1.SetTaskOverrideResponse
-	(*ClearTaskOverrideRequest)(nil),    // 46: flexiq.admin.v1.ClearTaskOverrideRequest
-	(*ClearTaskOverrideResponse)(nil),   // 47: flexiq.admin.v1.ClearTaskOverrideResponse
-	(*SetQueueOverrideRequest)(nil),     // 48: flexiq.admin.v1.SetQueueOverrideRequest
-	(*SetQueueOverrideResponse)(nil),    // 49: flexiq.admin.v1.SetQueueOverrideResponse
-	(*ClearQueueOverrideRequest)(nil),   // 50: flexiq.admin.v1.ClearQueueOverrideRequest
-	(*ClearQueueOverrideResponse)(nil),  // 51: flexiq.admin.v1.ClearQueueOverrideResponse
-	nil,                                 // 52: flexiq.admin.v1.ListOverridesResponse.TasksEntry
-	nil,                                 // 53: flexiq.admin.v1.ListOverridesResponse.QueuesEntry
-	(*durationpb.Duration)(nil),         // 54: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),       // 55: google.protobuf.Timestamp
-	(*v1.Job)(nil),                      // 56: flexiq.v1.Job
-	(*v1.StructuredArgs)(nil),           // 57: flexiq.v1.StructuredArgs
+	(*DrainWorkerRequest)(nil),          // 25: flexiq.admin.v1.DrainWorkerRequest
+	(*DrainWorkerResponse)(nil),         // 26: flexiq.admin.v1.DrainWorkerResponse
+	(*PeriodicTask)(nil),                // 27: flexiq.admin.v1.PeriodicTask
+	(*ListPeriodicTasksRequest)(nil),    // 28: flexiq.admin.v1.ListPeriodicTasksRequest
+	(*ListPeriodicTasksResponse)(nil),   // 29: flexiq.admin.v1.ListPeriodicTasksResponse
+	(*GetPeriodicTaskRequest)(nil),      // 30: flexiq.admin.v1.GetPeriodicTaskRequest
+	(*GetPeriodicTaskResponse)(nil),     // 31: flexiq.admin.v1.GetPeriodicTaskResponse
+	(*PutPeriodicTaskRequest)(nil),      // 32: flexiq.admin.v1.PutPeriodicTaskRequest
+	(*PutPeriodicTaskResponse)(nil),     // 33: flexiq.admin.v1.PutPeriodicTaskResponse
+	(*DeletePeriodicTaskRequest)(nil),   // 34: flexiq.admin.v1.DeletePeriodicTaskRequest
+	(*DeletePeriodicTaskResponse)(nil),  // 35: flexiq.admin.v1.DeletePeriodicTaskResponse
+	(*PausePeriodicTaskRequest)(nil),    // 36: flexiq.admin.v1.PausePeriodicTaskRequest
+	(*PausePeriodicTaskResponse)(nil),   // 37: flexiq.admin.v1.PausePeriodicTaskResponse
+	(*ResumePeriodicTaskRequest)(nil),   // 38: flexiq.admin.v1.ResumePeriodicTaskRequest
+	(*ResumePeriodicTaskResponse)(nil),  // 39: flexiq.admin.v1.ResumePeriodicTaskResponse
+	(*TriggerPeriodicTaskRequest)(nil),  // 40: flexiq.admin.v1.TriggerPeriodicTaskRequest
+	(*TriggerPeriodicTaskResponse)(nil), // 41: flexiq.admin.v1.TriggerPeriodicTaskResponse
+	(*TaskOverride)(nil),                // 42: flexiq.admin.v1.TaskOverride
+	(*QueueOverride)(nil),               // 43: flexiq.admin.v1.QueueOverride
+	(*ListOverridesRequest)(nil),        // 44: flexiq.admin.v1.ListOverridesRequest
+	(*ListOverridesResponse)(nil),       // 45: flexiq.admin.v1.ListOverridesResponse
+	(*SetTaskOverrideRequest)(nil),      // 46: flexiq.admin.v1.SetTaskOverrideRequest
+	(*SetTaskOverrideResponse)(nil),     // 47: flexiq.admin.v1.SetTaskOverrideResponse
+	(*ClearTaskOverrideRequest)(nil),    // 48: flexiq.admin.v1.ClearTaskOverrideRequest
+	(*ClearTaskOverrideResponse)(nil),   // 49: flexiq.admin.v1.ClearTaskOverrideResponse
+	(*SetQueueOverrideRequest)(nil),     // 50: flexiq.admin.v1.SetQueueOverrideRequest
+	(*SetQueueOverrideResponse)(nil),    // 51: flexiq.admin.v1.SetQueueOverrideResponse
+	(*ClearQueueOverrideRequest)(nil),   // 52: flexiq.admin.v1.ClearQueueOverrideRequest
+	(*ClearQueueOverrideResponse)(nil),  // 53: flexiq.admin.v1.ClearQueueOverrideResponse
+	nil,                                 // 54: flexiq.admin.v1.ListOverridesResponse.TasksEntry
+	nil,                                 // 55: flexiq.admin.v1.ListOverridesResponse.QueuesEntry
+	(*durationpb.Duration)(nil),         // 56: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),       // 57: google.protobuf.Timestamp
+	(*v1.Job)(nil),                      // 58: flexiq.v1.Job
+	(*v1.StructuredArgs)(nil),           // 59: flexiq.v1.StructuredArgs
 }
 var file_flexiq_admin_v1_admin_service_proto_depIdxs = []int32{
 	1,  // 0: flexiq.admin.v1.ListQueuesResponse.queues:type_name -> flexiq.admin.v1.Queue
 	1,  // 1: flexiq.admin.v1.PauseQueueResponse.queue:type_name -> flexiq.admin.v1.Queue
 	1,  // 2: flexiq.admin.v1.ResumeQueueResponse.queue:type_name -> flexiq.admin.v1.Queue
-	54, // 3: flexiq.admin.v1.GetThroughputRequest.window:type_name -> google.protobuf.Duration
-	54, // 4: flexiq.admin.v1.GetThroughputResponse.window:type_name -> google.protobuf.Duration
-	55, // 5: flexiq.admin.v1.GetThroughputResponse.since:type_name -> google.protobuf.Timestamp
+	56, // 3: flexiq.admin.v1.GetThroughputRequest.window:type_name -> google.protobuf.Duration
+	56, // 4: flexiq.admin.v1.GetThroughputResponse.window:type_name -> google.protobuf.Duration
+	57, // 5: flexiq.admin.v1.GetThroughputResponse.since:type_name -> google.protobuf.Timestamp
 	9,  // 6: flexiq.admin.v1.GetThroughputResponse.queues:type_name -> flexiq.admin.v1.QueueThroughput
-	55, // 7: flexiq.admin.v1.DeadLetter.failed_at:type_name -> google.protobuf.Timestamp
+	57, // 7: flexiq.admin.v1.DeadLetter.failed_at:type_name -> google.protobuf.Timestamp
 	11, // 8: flexiq.admin.v1.ListDeadLettersResponse.dead_letters:type_name -> flexiq.admin.v1.DeadLetter
 	11, // 9: flexiq.admin.v1.GetDeadLetterResponse.dead_letter:type_name -> flexiq.admin.v1.DeadLetter
-	56, // 10: flexiq.admin.v1.ReplayDeadLetterResponse.job:type_name -> flexiq.v1.Job
-	55, // 11: flexiq.admin.v1.PurgeDeadLettersRequest.failed_before:type_name -> google.protobuf.Timestamp
+	58, // 10: flexiq.admin.v1.ReplayDeadLetterResponse.job:type_name -> flexiq.v1.Job
+	57, // 11: flexiq.admin.v1.PurgeDeadLettersRequest.failed_before:type_name -> google.protobuf.Timestamp
 	0,  // 12: flexiq.admin.v1.Worker.status:type_name -> flexiq.admin.v1.WorkerStatus
-	55, // 13: flexiq.admin.v1.Worker.last_heartbeat:type_name -> google.protobuf.Timestamp
-	55, // 14: flexiq.admin.v1.Worker.started_at:type_name -> google.protobuf.Timestamp
+	57, // 13: flexiq.admin.v1.Worker.last_heartbeat:type_name -> google.protobuf.Timestamp
+	57, // 14: flexiq.admin.v1.Worker.started_at:type_name -> google.protobuf.Timestamp
 	22, // 15: flexiq.admin.v1.ListWorkersResponse.workers:type_name -> flexiq.admin.v1.Worker
-	55, // 16: flexiq.admin.v1.PeriodicTask.next_run:type_name -> google.protobuf.Timestamp
-	55, // 17: flexiq.admin.v1.PeriodicTask.last_run:type_name -> google.protobuf.Timestamp
-	25, // 18: flexiq.admin.v1.ListPeriodicTasksResponse.periodic_tasks:type_name -> flexiq.admin.v1.PeriodicTask
-	25, // 19: flexiq.admin.v1.GetPeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
-	57, // 20: flexiq.admin.v1.PutPeriodicTaskRequest.structured:type_name -> flexiq.v1.StructuredArgs
-	25, // 21: flexiq.admin.v1.PutPeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
-	25, // 22: flexiq.admin.v1.PausePeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
-	25, // 23: flexiq.admin.v1.ResumePeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
-	56, // 24: flexiq.admin.v1.TriggerPeriodicTaskResponse.job:type_name -> flexiq.v1.Job
-	54, // 25: flexiq.admin.v1.TaskOverride.retry_backoff:type_name -> google.protobuf.Duration
-	54, // 26: flexiq.admin.v1.TaskOverride.timeout:type_name -> google.protobuf.Duration
-	55, // 27: flexiq.admin.v1.TaskOverride.update_time:type_name -> google.protobuf.Timestamp
-	55, // 28: flexiq.admin.v1.QueueOverride.update_time:type_name -> google.protobuf.Timestamp
-	52, // 29: flexiq.admin.v1.ListOverridesResponse.tasks:type_name -> flexiq.admin.v1.ListOverridesResponse.TasksEntry
-	53, // 30: flexiq.admin.v1.ListOverridesResponse.queues:type_name -> flexiq.admin.v1.ListOverridesResponse.QueuesEntry
-	40, // 31: flexiq.admin.v1.SetTaskOverrideRequest.task_override:type_name -> flexiq.admin.v1.TaskOverride
-	40, // 32: flexiq.admin.v1.SetTaskOverrideResponse.task_override:type_name -> flexiq.admin.v1.TaskOverride
-	41, // 33: flexiq.admin.v1.SetQueueOverrideRequest.queue_override:type_name -> flexiq.admin.v1.QueueOverride
-	41, // 34: flexiq.admin.v1.SetQueueOverrideResponse.queue_override:type_name -> flexiq.admin.v1.QueueOverride
-	40, // 35: flexiq.admin.v1.ListOverridesResponse.TasksEntry.value:type_name -> flexiq.admin.v1.TaskOverride
-	41, // 36: flexiq.admin.v1.ListOverridesResponse.QueuesEntry.value:type_name -> flexiq.admin.v1.QueueOverride
-	2,  // 37: flexiq.admin.v1.AdminService.ListQueues:input_type -> flexiq.admin.v1.ListQueuesRequest
-	4,  // 38: flexiq.admin.v1.AdminService.PauseQueue:input_type -> flexiq.admin.v1.PauseQueueRequest
-	6,  // 39: flexiq.admin.v1.AdminService.ResumeQueue:input_type -> flexiq.admin.v1.ResumeQueueRequest
-	8,  // 40: flexiq.admin.v1.AdminService.GetThroughput:input_type -> flexiq.admin.v1.GetThroughputRequest
-	12, // 41: flexiq.admin.v1.AdminService.ListDeadLetters:input_type -> flexiq.admin.v1.ListDeadLettersRequest
-	14, // 42: flexiq.admin.v1.AdminService.GetDeadLetter:input_type -> flexiq.admin.v1.GetDeadLetterRequest
-	16, // 43: flexiq.admin.v1.AdminService.ReplayDeadLetter:input_type -> flexiq.admin.v1.ReplayDeadLetterRequest
-	18, // 44: flexiq.admin.v1.AdminService.DeleteDeadLetter:input_type -> flexiq.admin.v1.DeleteDeadLetterRequest
-	20, // 45: flexiq.admin.v1.AdminService.PurgeDeadLetters:input_type -> flexiq.admin.v1.PurgeDeadLettersRequest
-	23, // 46: flexiq.admin.v1.AdminService.ListWorkers:input_type -> flexiq.admin.v1.ListWorkersRequest
-	26, // 47: flexiq.admin.v1.AdminService.ListPeriodicTasks:input_type -> flexiq.admin.v1.ListPeriodicTasksRequest
-	28, // 48: flexiq.admin.v1.AdminService.GetPeriodicTask:input_type -> flexiq.admin.v1.GetPeriodicTaskRequest
-	30, // 49: flexiq.admin.v1.AdminService.PutPeriodicTask:input_type -> flexiq.admin.v1.PutPeriodicTaskRequest
-	32, // 50: flexiq.admin.v1.AdminService.DeletePeriodicTask:input_type -> flexiq.admin.v1.DeletePeriodicTaskRequest
-	34, // 51: flexiq.admin.v1.AdminService.PausePeriodicTask:input_type -> flexiq.admin.v1.PausePeriodicTaskRequest
-	36, // 52: flexiq.admin.v1.AdminService.ResumePeriodicTask:input_type -> flexiq.admin.v1.ResumePeriodicTaskRequest
-	38, // 53: flexiq.admin.v1.AdminService.TriggerPeriodicTask:input_type -> flexiq.admin.v1.TriggerPeriodicTaskRequest
-	42, // 54: flexiq.admin.v1.AdminService.ListOverrides:input_type -> flexiq.admin.v1.ListOverridesRequest
-	44, // 55: flexiq.admin.v1.AdminService.SetTaskOverride:input_type -> flexiq.admin.v1.SetTaskOverrideRequest
-	46, // 56: flexiq.admin.v1.AdminService.ClearTaskOverride:input_type -> flexiq.admin.v1.ClearTaskOverrideRequest
-	48, // 57: flexiq.admin.v1.AdminService.SetQueueOverride:input_type -> flexiq.admin.v1.SetQueueOverrideRequest
-	50, // 58: flexiq.admin.v1.AdminService.ClearQueueOverride:input_type -> flexiq.admin.v1.ClearQueueOverrideRequest
-	3,  // 59: flexiq.admin.v1.AdminService.ListQueues:output_type -> flexiq.admin.v1.ListQueuesResponse
-	5,  // 60: flexiq.admin.v1.AdminService.PauseQueue:output_type -> flexiq.admin.v1.PauseQueueResponse
-	7,  // 61: flexiq.admin.v1.AdminService.ResumeQueue:output_type -> flexiq.admin.v1.ResumeQueueResponse
-	10, // 62: flexiq.admin.v1.AdminService.GetThroughput:output_type -> flexiq.admin.v1.GetThroughputResponse
-	13, // 63: flexiq.admin.v1.AdminService.ListDeadLetters:output_type -> flexiq.admin.v1.ListDeadLettersResponse
-	15, // 64: flexiq.admin.v1.AdminService.GetDeadLetter:output_type -> flexiq.admin.v1.GetDeadLetterResponse
-	17, // 65: flexiq.admin.v1.AdminService.ReplayDeadLetter:output_type -> flexiq.admin.v1.ReplayDeadLetterResponse
-	19, // 66: flexiq.admin.v1.AdminService.DeleteDeadLetter:output_type -> flexiq.admin.v1.DeleteDeadLetterResponse
-	21, // 67: flexiq.admin.v1.AdminService.PurgeDeadLetters:output_type -> flexiq.admin.v1.PurgeDeadLettersResponse
-	24, // 68: flexiq.admin.v1.AdminService.ListWorkers:output_type -> flexiq.admin.v1.ListWorkersResponse
-	27, // 69: flexiq.admin.v1.AdminService.ListPeriodicTasks:output_type -> flexiq.admin.v1.ListPeriodicTasksResponse
-	29, // 70: flexiq.admin.v1.AdminService.GetPeriodicTask:output_type -> flexiq.admin.v1.GetPeriodicTaskResponse
-	31, // 71: flexiq.admin.v1.AdminService.PutPeriodicTask:output_type -> flexiq.admin.v1.PutPeriodicTaskResponse
-	33, // 72: flexiq.admin.v1.AdminService.DeletePeriodicTask:output_type -> flexiq.admin.v1.DeletePeriodicTaskResponse
-	35, // 73: flexiq.admin.v1.AdminService.PausePeriodicTask:output_type -> flexiq.admin.v1.PausePeriodicTaskResponse
-	37, // 74: flexiq.admin.v1.AdminService.ResumePeriodicTask:output_type -> flexiq.admin.v1.ResumePeriodicTaskResponse
-	39, // 75: flexiq.admin.v1.AdminService.TriggerPeriodicTask:output_type -> flexiq.admin.v1.TriggerPeriodicTaskResponse
-	43, // 76: flexiq.admin.v1.AdminService.ListOverrides:output_type -> flexiq.admin.v1.ListOverridesResponse
-	45, // 77: flexiq.admin.v1.AdminService.SetTaskOverride:output_type -> flexiq.admin.v1.SetTaskOverrideResponse
-	47, // 78: flexiq.admin.v1.AdminService.ClearTaskOverride:output_type -> flexiq.admin.v1.ClearTaskOverrideResponse
-	49, // 79: flexiq.admin.v1.AdminService.SetQueueOverride:output_type -> flexiq.admin.v1.SetQueueOverrideResponse
-	51, // 80: flexiq.admin.v1.AdminService.ClearQueueOverride:output_type -> flexiq.admin.v1.ClearQueueOverrideResponse
-	59, // [59:81] is the sub-list for method output_type
-	37, // [37:59] is the sub-list for method input_type
-	37, // [37:37] is the sub-list for extension type_name
-	37, // [37:37] is the sub-list for extension extendee
-	0,  // [0:37] is the sub-list for field type_name
+	22, // 16: flexiq.admin.v1.DrainWorkerResponse.worker:type_name -> flexiq.admin.v1.Worker
+	57, // 17: flexiq.admin.v1.PeriodicTask.next_run:type_name -> google.protobuf.Timestamp
+	57, // 18: flexiq.admin.v1.PeriodicTask.last_run:type_name -> google.protobuf.Timestamp
+	27, // 19: flexiq.admin.v1.ListPeriodicTasksResponse.periodic_tasks:type_name -> flexiq.admin.v1.PeriodicTask
+	27, // 20: flexiq.admin.v1.GetPeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
+	59, // 21: flexiq.admin.v1.PutPeriodicTaskRequest.structured:type_name -> flexiq.v1.StructuredArgs
+	27, // 22: flexiq.admin.v1.PutPeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
+	27, // 23: flexiq.admin.v1.PausePeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
+	27, // 24: flexiq.admin.v1.ResumePeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
+	58, // 25: flexiq.admin.v1.TriggerPeriodicTaskResponse.job:type_name -> flexiq.v1.Job
+	56, // 26: flexiq.admin.v1.TaskOverride.retry_backoff:type_name -> google.protobuf.Duration
+	56, // 27: flexiq.admin.v1.TaskOverride.timeout:type_name -> google.protobuf.Duration
+	57, // 28: flexiq.admin.v1.TaskOverride.update_time:type_name -> google.protobuf.Timestamp
+	57, // 29: flexiq.admin.v1.QueueOverride.update_time:type_name -> google.protobuf.Timestamp
+	54, // 30: flexiq.admin.v1.ListOverridesResponse.tasks:type_name -> flexiq.admin.v1.ListOverridesResponse.TasksEntry
+	55, // 31: flexiq.admin.v1.ListOverridesResponse.queues:type_name -> flexiq.admin.v1.ListOverridesResponse.QueuesEntry
+	42, // 32: flexiq.admin.v1.SetTaskOverrideRequest.task_override:type_name -> flexiq.admin.v1.TaskOverride
+	42, // 33: flexiq.admin.v1.SetTaskOverrideResponse.task_override:type_name -> flexiq.admin.v1.TaskOverride
+	43, // 34: flexiq.admin.v1.SetQueueOverrideRequest.queue_override:type_name -> flexiq.admin.v1.QueueOverride
+	43, // 35: flexiq.admin.v1.SetQueueOverrideResponse.queue_override:type_name -> flexiq.admin.v1.QueueOverride
+	42, // 36: flexiq.admin.v1.ListOverridesResponse.TasksEntry.value:type_name -> flexiq.admin.v1.TaskOverride
+	43, // 37: flexiq.admin.v1.ListOverridesResponse.QueuesEntry.value:type_name -> flexiq.admin.v1.QueueOverride
+	2,  // 38: flexiq.admin.v1.AdminService.ListQueues:input_type -> flexiq.admin.v1.ListQueuesRequest
+	4,  // 39: flexiq.admin.v1.AdminService.PauseQueue:input_type -> flexiq.admin.v1.PauseQueueRequest
+	6,  // 40: flexiq.admin.v1.AdminService.ResumeQueue:input_type -> flexiq.admin.v1.ResumeQueueRequest
+	8,  // 41: flexiq.admin.v1.AdminService.GetThroughput:input_type -> flexiq.admin.v1.GetThroughputRequest
+	12, // 42: flexiq.admin.v1.AdminService.ListDeadLetters:input_type -> flexiq.admin.v1.ListDeadLettersRequest
+	14, // 43: flexiq.admin.v1.AdminService.GetDeadLetter:input_type -> flexiq.admin.v1.GetDeadLetterRequest
+	16, // 44: flexiq.admin.v1.AdminService.ReplayDeadLetter:input_type -> flexiq.admin.v1.ReplayDeadLetterRequest
+	18, // 45: flexiq.admin.v1.AdminService.DeleteDeadLetter:input_type -> flexiq.admin.v1.DeleteDeadLetterRequest
+	20, // 46: flexiq.admin.v1.AdminService.PurgeDeadLetters:input_type -> flexiq.admin.v1.PurgeDeadLettersRequest
+	23, // 47: flexiq.admin.v1.AdminService.ListWorkers:input_type -> flexiq.admin.v1.ListWorkersRequest
+	25, // 48: flexiq.admin.v1.AdminService.DrainWorker:input_type -> flexiq.admin.v1.DrainWorkerRequest
+	28, // 49: flexiq.admin.v1.AdminService.ListPeriodicTasks:input_type -> flexiq.admin.v1.ListPeriodicTasksRequest
+	30, // 50: flexiq.admin.v1.AdminService.GetPeriodicTask:input_type -> flexiq.admin.v1.GetPeriodicTaskRequest
+	32, // 51: flexiq.admin.v1.AdminService.PutPeriodicTask:input_type -> flexiq.admin.v1.PutPeriodicTaskRequest
+	34, // 52: flexiq.admin.v1.AdminService.DeletePeriodicTask:input_type -> flexiq.admin.v1.DeletePeriodicTaskRequest
+	36, // 53: flexiq.admin.v1.AdminService.PausePeriodicTask:input_type -> flexiq.admin.v1.PausePeriodicTaskRequest
+	38, // 54: flexiq.admin.v1.AdminService.ResumePeriodicTask:input_type -> flexiq.admin.v1.ResumePeriodicTaskRequest
+	40, // 55: flexiq.admin.v1.AdminService.TriggerPeriodicTask:input_type -> flexiq.admin.v1.TriggerPeriodicTaskRequest
+	44, // 56: flexiq.admin.v1.AdminService.ListOverrides:input_type -> flexiq.admin.v1.ListOverridesRequest
+	46, // 57: flexiq.admin.v1.AdminService.SetTaskOverride:input_type -> flexiq.admin.v1.SetTaskOverrideRequest
+	48, // 58: flexiq.admin.v1.AdminService.ClearTaskOverride:input_type -> flexiq.admin.v1.ClearTaskOverrideRequest
+	50, // 59: flexiq.admin.v1.AdminService.SetQueueOverride:input_type -> flexiq.admin.v1.SetQueueOverrideRequest
+	52, // 60: flexiq.admin.v1.AdminService.ClearQueueOverride:input_type -> flexiq.admin.v1.ClearQueueOverrideRequest
+	3,  // 61: flexiq.admin.v1.AdminService.ListQueues:output_type -> flexiq.admin.v1.ListQueuesResponse
+	5,  // 62: flexiq.admin.v1.AdminService.PauseQueue:output_type -> flexiq.admin.v1.PauseQueueResponse
+	7,  // 63: flexiq.admin.v1.AdminService.ResumeQueue:output_type -> flexiq.admin.v1.ResumeQueueResponse
+	10, // 64: flexiq.admin.v1.AdminService.GetThroughput:output_type -> flexiq.admin.v1.GetThroughputResponse
+	13, // 65: flexiq.admin.v1.AdminService.ListDeadLetters:output_type -> flexiq.admin.v1.ListDeadLettersResponse
+	15, // 66: flexiq.admin.v1.AdminService.GetDeadLetter:output_type -> flexiq.admin.v1.GetDeadLetterResponse
+	17, // 67: flexiq.admin.v1.AdminService.ReplayDeadLetter:output_type -> flexiq.admin.v1.ReplayDeadLetterResponse
+	19, // 68: flexiq.admin.v1.AdminService.DeleteDeadLetter:output_type -> flexiq.admin.v1.DeleteDeadLetterResponse
+	21, // 69: flexiq.admin.v1.AdminService.PurgeDeadLetters:output_type -> flexiq.admin.v1.PurgeDeadLettersResponse
+	24, // 70: flexiq.admin.v1.AdminService.ListWorkers:output_type -> flexiq.admin.v1.ListWorkersResponse
+	26, // 71: flexiq.admin.v1.AdminService.DrainWorker:output_type -> flexiq.admin.v1.DrainWorkerResponse
+	29, // 72: flexiq.admin.v1.AdminService.ListPeriodicTasks:output_type -> flexiq.admin.v1.ListPeriodicTasksResponse
+	31, // 73: flexiq.admin.v1.AdminService.GetPeriodicTask:output_type -> flexiq.admin.v1.GetPeriodicTaskResponse
+	33, // 74: flexiq.admin.v1.AdminService.PutPeriodicTask:output_type -> flexiq.admin.v1.PutPeriodicTaskResponse
+	35, // 75: flexiq.admin.v1.AdminService.DeletePeriodicTask:output_type -> flexiq.admin.v1.DeletePeriodicTaskResponse
+	37, // 76: flexiq.admin.v1.AdminService.PausePeriodicTask:output_type -> flexiq.admin.v1.PausePeriodicTaskResponse
+	39, // 77: flexiq.admin.v1.AdminService.ResumePeriodicTask:output_type -> flexiq.admin.v1.ResumePeriodicTaskResponse
+	41, // 78: flexiq.admin.v1.AdminService.TriggerPeriodicTask:output_type -> flexiq.admin.v1.TriggerPeriodicTaskResponse
+	45, // 79: flexiq.admin.v1.AdminService.ListOverrides:output_type -> flexiq.admin.v1.ListOverridesResponse
+	47, // 80: flexiq.admin.v1.AdminService.SetTaskOverride:output_type -> flexiq.admin.v1.SetTaskOverrideResponse
+	49, // 81: flexiq.admin.v1.AdminService.ClearTaskOverride:output_type -> flexiq.admin.v1.ClearTaskOverrideResponse
+	51, // 82: flexiq.admin.v1.AdminService.SetQueueOverride:output_type -> flexiq.admin.v1.SetQueueOverrideResponse
+	53, // 83: flexiq.admin.v1.AdminService.ClearQueueOverride:output_type -> flexiq.admin.v1.ClearQueueOverrideResponse
+	61, // [61:84] is the sub-list for method output_type
+	38, // [38:61] is the sub-list for method input_type
+	38, // [38:38] is the sub-list for extension type_name
+	38, // [38:38] is the sub-list for extension extendee
+	0,  // [0:38] is the sub-list for field type_name
 }
 
 func init() { file_flexiq_admin_v1_admin_service_proto_init() }
@@ -3366,20 +3465,20 @@ func file_flexiq_admin_v1_admin_service_proto_init() {
 		(*PurgeDeadLettersRequest_TaskName)(nil),
 	}
 	file_flexiq_admin_v1_admin_service_proto_msgTypes[21].OneofWrappers = []any{}
-	file_flexiq_admin_v1_admin_service_proto_msgTypes[24].OneofWrappers = []any{}
-	file_flexiq_admin_v1_admin_service_proto_msgTypes[29].OneofWrappers = []any{
+	file_flexiq_admin_v1_admin_service_proto_msgTypes[26].OneofWrappers = []any{}
+	file_flexiq_admin_v1_admin_service_proto_msgTypes[31].OneofWrappers = []any{
 		(*PutPeriodicTaskRequest_Raw)(nil),
 		(*PutPeriodicTaskRequest_Structured)(nil),
 	}
-	file_flexiq_admin_v1_admin_service_proto_msgTypes[39].OneofWrappers = []any{}
-	file_flexiq_admin_v1_admin_service_proto_msgTypes[40].OneofWrappers = []any{}
+	file_flexiq_admin_v1_admin_service_proto_msgTypes[41].OneofWrappers = []any{}
+	file_flexiq_admin_v1_admin_service_proto_msgTypes[42].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flexiq_admin_v1_admin_service_proto_rawDesc), len(file_flexiq_admin_v1_admin_service_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   53,
+			NumMessages:   55,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
