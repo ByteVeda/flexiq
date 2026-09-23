@@ -44,7 +44,16 @@ Approved 2026-09-23.
       affected suites 758 passed; Node 790; Java 654; Go vet + test; docs
       typecheck, lint, build (`NODE_OPTIONS=--max-old-space-size=8192`, as CI).
       PG/Redis contract suites compile-only locally — first run is CI.
-- [ ] 15. Memory + follow-up issues (ask first).
+- [x] 15. The three follow-ups, folded into this branch on request:
+      - `DrainWorker`: `Storage::request_worker_drain` + `heartbeat` returns
+        the row's status; every shell stops as on SIGTERM when it reads
+        `Draining` (Python per run, Java via a `WorkerBridge` callback off the
+        JNI thread); `fq drain`.
+      - Java worker applies task and queue overrides at start (the binding now
+        registers queue rate limits / concurrency caps).
+      - Python worker start declares periodics instead of re-enabling them.
+      Verified: clippy clean; core 677, server 786, cli 102, flexiq 82;
+      Python 1054; Node 793; Java 665; Go; docs build.
 
 ## Deviations from the reviewed proto
 
