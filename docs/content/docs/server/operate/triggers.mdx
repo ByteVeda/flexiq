@@ -83,7 +83,7 @@ it owns the file.
 | `timeout_secs` | `300` | Execution timeout of its jobs |
 | `max_body_bytes` | `262144` | Largest body accepted; at most 10 MiB |
 | `kind` | `http` | `http`, or `object_store` for the [adapters](#object-store-events) |
-| `provider` | — | With `kind: object_store`: `s3`, `gcs` or `azure` |
+| `provider` | — | With `kind: object_store`: `s3`, `s3_sns`, `gcs` or `azure` |
 
 **A request can choose what the task receives, never which task receives it.**
 Task, queue, namespace, priority and retry budget come from the definition and
@@ -106,8 +106,27 @@ while the secret lives in a Secret.
 | `twilio` | `X-Twilio-Signature` over the public URL and the form parameters | `secret_env` (the auth token), `public_url` |
 | `hmac_sha256` | HMAC-SHA256 of the body in any header | `secret_env`, `header`, `prefix`, `encoding` (`hex` or `base64`) |
 | `shared_secret` | A secret sent verbatim in a header or the query | `secret_env`, and `header` (with an optional `prefix`) **or** `query` |
+| `google_oidc` | A Pub/Sub push subscription's Google-signed `Authorization: Bearer` token | `audience`, `service_account` |
+| `sns` | An SNS message's RSA signature, against the certificate SNS publishes | `topic_arns`, `require_signature_v2` (false), `tolerance_secs` (3600) |
 
-Signatures are checked against the **raw body**, the bytes as they arrived —
+The last two hold no secret, and so name no `secret_env`. They check against
+keys the provider publishes, fetched over HTTPS with no redirects and cached —
+Google's signing keys for an hour, an SNS certificate for a day. A token naming
+a key the cache lacks refetches Google's set at most once a minute.
+
+- **`google_oidc`** checks an RS256 signature by one of Google's keys, the
+  issuer, the expiry, an audience that is exactly `audience` — by default the
+  push endpoint URL you gave the subscription — and a verified `email` that is
+  exactly `service_account`, the account the subscription authenticates as.
+- **`sns`** fetches the certificate only from an
+  `https://sns.<region>.amazonaws.com` URL, refuses a topic not in
+  `topic_arns` before fetching anything, and refuses a message whose
+  `Timestamp` is further than `tolerance_secs` from now. SNS signs with
+  SHA1withRSA (version 1) unless the topic sets `SignatureVersion` to 2; set
+  that on the topic and `require_signature_v2: true` here to refuse SHA-1. It
+  applies only to the `s3_sns` provider, and that provider only to it.
+
+Body signatures are checked against the **raw body**, the bytes as they arrived —
 never a re-encoding of the parsed JSON, which is not a byte-for-byte round
 trip. A request that fails is answered `401` with no detail; the reason goes to
 the log. `hmac_sha256` and `shared_secret` secrets must be at least 16
@@ -118,11 +137,11 @@ without its query string. Behind an ingress, the host and scheme this process
 sees are not the ones Twilio signed.
 
 <Callout type="warn" title="A query-string secret is in every access log">
-  `shared_secret` with `query` exists because Pub/Sub push and Event Grid offer
-  no other built-in way to authenticate an endpoint. The URL, secret included,
+  `shared_secret` with `query` exists because Event Grid offers no other
+  built-in way to authenticate a webhook endpoint. The URL, secret included,
   lands in the logs of every proxy and load balancer in front of the listener.
-  Prefer a header wherever the sender supports one, and treat any log that
-  records full URLs as holding the credential.
+  Prefer a header wherever the sender supports one — and for Pub/Sub, prefer
+  `google_oidc`, which puts no credential in the URL at all.
 </Callout>
 
 ## Payload mapping
@@ -199,11 +218,20 @@ platforms redelivers.
 | `provider` | Delivered by | Authenticate with |
 | --- | --- | --- |
 | `s3` | An EventBridge rule targeting an API destination | `shared_secret` with `header`, set on the API destination's connection |
-| `gcs` | A Pub/Sub push subscription, default (wrapped) format | `shared_secret` with `query`, in the push endpoint URL |
+| `s3_sns` | S3 event notifications to an SNS topic, with an HTTPS subscription | `sns` — required |
+| `gcs` | A Pub/Sub push subscription, default (wrapped) format | `google_oidc`, or `shared_secret` with `query` in the push endpoint URL |
 | `azure` | An Event Grid webhook subscription, Event Grid schema | `shared_secret` with `query`, in the endpoint URL |
 
 - **S3.** One event per request. Anything whose `source` is not `aws.s3` is
   refused.
+- **S3 through SNS.** Each record in S3's notification becomes its own job,
+  keyed on the SNS message id and the record's position; object keys are
+  URL-decoded, as S3 encodes them. SNS posts its JSON as `text/plain`, and it
+  is read as JSON regardless. A `SubscriptionConfirmation` is confirmed by
+  fetching its `SubscribeURL` — only once its signature and topic check out,
+  and only from an SNS host. The `s3:TestEvent` S3 sends when a notification is
+  configured is acknowledged and enqueues nothing. Raw message delivery must be
+  off: it drops the envelope the signature covers.
 - **GCS.** The object is named by the message attributes; `size` and `etag`
   come from the message data, and are `null` for a notification created with
   no payload. An unwrapped push subscription is refused: it drops the
@@ -213,9 +241,6 @@ platforms redelivers.
   subscription-validation handshake is answered with its `validationCode` and
   enqueues nothing. The CloudEvents schema is not accepted, because it
   validates with an `OPTIONS` request this listener does not answer.
-
-A trigger here verifies each platform's shared-secret mechanism. Pub/Sub's OIDC
-push tokens and SNS message signatures are not verified yet.
 
 ## Metrics
 

@@ -21,8 +21,9 @@ their entries below keep that name.
   generic HMAC-SHA256 header, or a shared secret) against the raw body before anything else, then
   draws from a storage-backed rate-limit bucket that holds across replicas, so forged requests
   cannot spend a real sender's budget. A delivery id deduplicates redeliveries. `kind:
-  object_store` unwraps S3 (EventBridge), GCS (Pub/Sub push) and Azure (Event Grid, handshake
-  included) events into one common shape. The listener is plain HTTP on its own port, and the
+  object_store` unwraps S3 (EventBridge, or SNS with its RSA signature verified and the
+  subscription confirmed), GCS (Pub/Sub push, optionally proven by its Google-signed OIDC token)
+  and Azure (Event Grid, handshake included) events into one common shape. The listener is plain HTTP on its own port, and the
   Helm chart gains `triggers.*` with its own Service and Ingress. Cron over the network is left to
   the admin service (#836).
 - **Push dispatch** (#843, #844). `FLEXIQ_PUSH_TARGET_URL` adds a second way for the scheduler to
