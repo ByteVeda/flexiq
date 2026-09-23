@@ -25,6 +25,13 @@ use crate::storage::StorageBackend;
 
 pub use crate::job::Job;
 
+/// Dispatch batch size Redis gets when `SchedulerConfig::batch_size` is `None`.
+/// One selection-and-claim script already pays a network round trip; serving
+/// several claims out of it is free. SQLite/Postgres gain nothing from this —
+/// a bigger batch there only widens the claim-to-dispatch window — so they
+/// keep the historical default of 1.
+pub const REDIS_DEFAULT_BATCH_SIZE: usize = 8;
+
 /// Configuration for the scheduler's timing and behavior.
 #[derive(Debug, Clone)]
 pub struct SchedulerConfig {
@@ -46,10 +53,11 @@ pub struct SchedulerConfig {
     /// Per-table retention windows. When set, wins over `result_ttl_ms`. `None`
     /// falls back to the legacy `result_ttl_ms` mapping.
     pub retention: Option<retention::RetentionConfig>,
-    /// Maximum number of jobs claimed per dispatch round. `1` (the default)
-    /// preserves the original one-job-per-round-trip behavior; values above
-    /// `1` enable batch claiming for higher throughput.
-    pub batch_size: usize,
+    /// Maximum number of jobs claimed per dispatch round. `None` (the
+    /// default) lets the backend pick: [`REDIS_DEFAULT_BATCH_SIZE`] on Redis,
+    /// `1` (unchanged behavior) on SQLite/Postgres. `Some(n)` is always
+    /// honoured, clamped to at least 1. Resolve via [`Scheduler::batch_size`].
+    pub batch_size: Option<usize>,
     /// Upper bound on jobs this scheduler keeps in flight (dispatched to the
     /// worker channel but not yet finished). Set it to the worker pool's
     /// execution parallelism so a single scheduler never claims more work than
@@ -75,7 +83,7 @@ impl Default for SchedulerConfig {
             cleanup_interval: 1200,
             result_ttl_ms: None,
             retention: None,
-            batch_size: 1,
+            batch_size: None,
             max_in_flight: None,
             dlq_auto_retry_delay_ms: None,
             dlq_auto_retry_max: 1,
@@ -584,6 +592,21 @@ impl Scheduler {
         &self.storage
     }
 
+    /// Resolve `config.batch_size`: an explicit value wins (clamped to at
+    /// least 1), otherwise the backend picks — [`REDIS_DEFAULT_BATCH_SIZE`] on
+    /// Redis, `1` (no behavior change) elsewhere. Cheap enough to call per
+    /// dispatch round rather than caching at construction.
+    fn batch_size(&self) -> usize {
+        match self.config.batch_size {
+            Some(n) => n.max(1),
+            None => match &self.storage {
+                #[cfg(feature = "redis")]
+                StorageBackend::Redis(_) => REDIS_DEFAULT_BATCH_SIZE,
+                _ => 1,
+            },
+        }
+    }
+
     /// Set the execution-claim owner to this process's `worker_id`. Bindings
     /// call this right after construction so dead-worker recovery can identify
     /// which worker owns each in-flight job. Must match the id passed to
@@ -867,7 +890,7 @@ impl Scheduler {
     /// drain loops and the poll backoff key off. Pulled out so the push loop can
     /// run dispatch independently of the maintenance cadence.
     fn tick_dispatch(&self, job_tx: &tokio::sync::mpsc::Sender<Job>) -> bool {
-        let dispatch_result = if self.config.batch_size > 1 {
+        let dispatch_result = if self.batch_size() > 1 {
             self.try_dispatch_batch(job_tx)
         } else {
             self.try_dispatch(job_tx)
@@ -1090,6 +1113,70 @@ mod tests {
             SchedulerConfig::default(),
             None,
         )
+    }
+
+    /// #959: an unset `batch_size` keeps SQLite's historical single-claim
+    /// default — and since `tick_dispatch` branches on `batch_size() > 1`,
+    /// resolving to 1 here is exactly what sends it down the `try_dispatch`
+    /// (not `try_dispatch_batch`) path.
+    #[test]
+    fn batch_size_resolves_to_one_on_sqlite_when_unset() {
+        let scheduler = test_scheduler();
+        assert_eq!(scheduler.batch_size(), 1);
+    }
+
+    #[test]
+    fn batch_size_honours_an_explicit_value() {
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let config = SchedulerConfig {
+            batch_size: Some(8),
+            ..SchedulerConfig::default()
+        };
+        let scheduler = Scheduler::new(storage, vec!["default".to_string()], config, None);
+        assert_eq!(scheduler.batch_size(), 8);
+    }
+
+    /// `Some(0)` clamps to 1 rather than disabling dispatch.
+    #[test]
+    fn batch_size_clamps_zero_to_one() {
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let config = SchedulerConfig {
+            batch_size: Some(0),
+            ..SchedulerConfig::default()
+        };
+        let scheduler = Scheduler::new(storage, vec!["default".to_string()], config, None);
+        assert_eq!(scheduler.batch_size(), 1);
+    }
+
+    /// #959: an unset `batch_size` widens to [`REDIS_DEFAULT_BATCH_SIZE`] on
+    /// Redis — resolution reads only the storage variant, so this needs a
+    /// live connection just to construct `RedisStorage`, not to exercise
+    /// dispatch. Skips gracefully (like `redis_storage_tests`) when no hosted
+    /// Redis is configured.
+    #[cfg(feature = "redis")]
+    #[test]
+    fn batch_size_resolves_to_redis_default_when_unset() {
+        let Ok(url) = std::env::var("FLEXIQ_REDIS_TEST_URL") else {
+            eprintln!("Skipping (FLEXIQ_REDIS_TEST_URL not set): batch_size_resolves_to_redis_default_when_unset");
+            return;
+        };
+        let prefix = format!("sched_batch_test_{}:", uuid::Uuid::now_v7().simple());
+        let storage = match crate::RedisStorage::with_prefix(&url, &prefix) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Skipping Redis test (cannot connect): {e}");
+                return;
+            }
+        };
+        let scheduler = Scheduler::new(
+            StorageBackend::Redis(storage),
+            vec!["default".to_string()],
+            SchedulerConfig::default(),
+            None,
+        );
+        assert_eq!(scheduler.batch_size(), REDIS_DEFAULT_BATCH_SIZE);
     }
 
     /// #836: a scheduler honours its own namespace's pauses and no other's.
@@ -1839,7 +1926,7 @@ mod tests {
         let storage =
             StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
         let config = SchedulerConfig {
-            batch_size,
+            batch_size: Some(batch_size),
             ..SchedulerConfig::default()
         };
         let mut scheduler = Scheduler::new(storage, vec!["default".to_string()], config, None);
@@ -2331,7 +2418,7 @@ mod tests {
         let storage =
             StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
         let config = SchedulerConfig {
-            batch_size: 8,
+            batch_size: Some(8),
             ..SchedulerConfig::default()
         };
         let mut scheduler = Scheduler::new(storage, vec!["default".to_string()], config, None);

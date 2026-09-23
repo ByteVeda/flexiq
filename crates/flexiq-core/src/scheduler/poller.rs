@@ -170,7 +170,7 @@ impl Scheduler {
         if capacity == 0 {
             return Ok(false);
         }
-        let mut budget = self.config.batch_size.min(capacity);
+        let mut budget = self.batch_size().min(capacity);
 
         // Never claim past the in-flight cap: a drained batch that outran the
         // workers would mark the surplus `Running` and starve peer schedulers.

@@ -98,10 +98,12 @@ pub fn start_worker(
     // where the two are distinct options.
     let concurrency = options.concurrency.map(|c| (c as usize).max(1));
 
-    let mut config = SchedulerConfig::default();
-    if let Some(batch) = options.batch_size {
-        config.batch_size = batch.max(1) as usize;
-    }
+    // Unset stays `None`, so the core resolves the backend-appropriate
+    // default (8 on Redis, 1 elsewhere) instead of this shell forcing 1.
+    let mut config = SchedulerConfig {
+        batch_size: options.batch_size.map(|batch| batch.max(1) as usize),
+        ..SchedulerConfig::default()
+    };
     // Present (even empty) → an explicit config: an empty one disables retention.
     // Absent → leave `None`, so the core applies the recommended defaults.
     if let Some(retention) = &options.retention {
