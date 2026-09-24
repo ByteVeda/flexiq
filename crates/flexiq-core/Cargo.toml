@@ -34,6 +34,10 @@ push-dispatch = []
 # Unrelated to `push-dispatch` above, which is event-driven scheduler wakeups.
 # The two names are close; the features share nothing.
 http-target = ["dep:url", "dep:reqwest", "dep:hmac", "dep:sha2", "dep:percent-encoding"]
+# HTTP event sink (#848): CloudEvents POSTed through push dispatch's egress
+# guard and client, so enabling it compiles those. Every shipped SDK artifact
+# carries it; the Redis Streams sink rides the existing `redis` feature.
+events-http = ["http-target"]
 
 [dependencies]
 diesel = { workspace = true }

@@ -8,6 +8,8 @@
 pub mod contract;
 /// Error types: [`QueueError`] and the crate-wide [`Result`] alias.
 pub mod error;
+/// Job lifecycle events sent out as CloudEvents: [`EventHub`] and its sinks.
+pub mod events;
 /// Outbound HTTP: the egress guard and the client every dialled URL goes through.
 #[cfg(feature = "http-target")]
 pub mod http;
@@ -53,6 +55,7 @@ pub use contract::{
     MIN_CONTRACT_VERSION,
 };
 pub use error::{QueueError, Result, StepDivergence};
+pub use events::{EventHub, EventType, EventsConfig, EventsConfigError, JobEvent, SinkStats};
 #[cfg(feature = "http-target")]
 pub use http::auth::{AuthError, OutboundAuth, Signer, SigningRequest};
 #[cfg(feature = "http-target")]
