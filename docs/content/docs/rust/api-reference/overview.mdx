@@ -111,6 +111,7 @@ flexiq = { version = "2", features = ["postgres"] }
 | `postgres` | PostgreSQL storage. Forwards to the same feature on `flexiq-core`. |
 | `redis` | Redis storage. Forwards likewise. |
 | `push-dispatch` | Event-driven scheduler wakeups instead of polling — on by default for a Redis worker, opt-in elsewhere. |
+| `events-http` | The HTTP job event sink. The Redis Streams sink comes with `redis`. |
 | `workflows` | DAG workflows at `flexiq::workflows`. |
 | `mesh` | Decentralized mesh scheduling at `flexiq::mesh`. |
 

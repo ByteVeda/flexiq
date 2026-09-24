@@ -178,13 +178,11 @@ is unset. A sink kind this build was compiled without is
 `EventsConfigError::NotCompiled`, which names the missing feature.
 
 The Redis Streams sink compiles under the `redis` feature. The HTTP sink needs
-`flexiq-core`'s `events-http` feature, which `flexiq` does not forward, so
-name `flexiq-core` beside it:
+the `events-http` feature:
 
 ```toml
 [dependencies]
-flexiq = "2"
-flexiq-core = { version = "2", features = ["events-http"] }
+flexiq = { version = "2", features = ["events-http"] }
 ```
 
 </SdkOnly>
