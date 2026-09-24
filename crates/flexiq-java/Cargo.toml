@@ -17,8 +17,8 @@ postgres = ["flexiq-core/postgres", "flexiq-workflows?/postgres"]
 redis = ["flexiq-core/redis", "flexiq-workflows?/redis"]
 workflows = ["dep:flexiq-workflows"]
 mesh = ["dep:flexiq-mesh"]
-# Event-driven scheduler wakeups. OFF by default (not in the shipped library's
-# feature list); `pushDispatch` is accepted and ignored without it.
+# Event-driven scheduler wakeups. In the shipped library's feature list; without
+# it the scheduler always polls and `pushDispatch` is ignored.
 push-dispatch = ["flexiq-core/push-dispatch"]
 
 [dependencies]

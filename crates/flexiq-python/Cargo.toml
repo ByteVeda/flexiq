@@ -15,7 +15,8 @@ postgres = ["flexiq-core/postgres", "flexiq-workflows?/postgres"]
 redis = ["flexiq-core/redis", "flexiq-workflows?/redis"]
 native-async = []
 workflows = ["dep:flexiq-workflows"]
-# Event-driven scheduler wakeups. OFF by default (not in maturin defaults).
+# Event-driven scheduler wakeups. In the shipped wheel's feature list; without
+# it the scheduler always polls.
 push-dispatch = ["flexiq-core/push-dispatch"]
 mesh = ["dep:flexiq-mesh"]
 

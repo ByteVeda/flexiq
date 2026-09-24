@@ -45,6 +45,9 @@ grpc = [
 # outbound-auth signers; FLEXIQ_PUSH_TARGET_URL is refused outright by a
 # binary built without it, rather than silently ignored.
 http-target = ["flexiq-core/http-target"]
+# Event-driven scheduler wakeups — unrelated to `http-target` above. With it the
+# scheduler wakes on enqueue on Redis instead of polling (#961).
+push-dispatch = ["flexiq-core/push-dispatch"]
 
 [dependencies]
 flexiq-core = { workspace = true }
