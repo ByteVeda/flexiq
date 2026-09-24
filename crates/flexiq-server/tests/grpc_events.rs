@@ -15,7 +15,9 @@ use flexiq_core::EventHub;
 use flexiq_server::config::grpc::GrpcConfig;
 use flexiq_server::config::listen::ListenAddress;
 use flexiq_server::grpc::pb::producer_service_client::ProducerServiceClient;
-use flexiq_server::grpc::pb::{enqueue_request, CancelJobRequest, EnqueueOptions, EnqueueRequest};
+use flexiq_server::grpc::pb::{
+    enqueue_request, CancelJobRequest, Debounce, EnqueueOptions, EnqueueRequest,
+};
 use flexiq_server::grpc::Listener;
 use flexiq_server::runtime::shutdown::Shutdown;
 use flexiq_server::tokens::ScopeSet;
@@ -173,6 +175,28 @@ fn keyed(key: &str) -> EnqueueOptions {
     }
 }
 
+/// A debounce window long enough that no scheduler could claim the job
+/// between two enqueues, so the second always slides the first.
+fn debounced(key: &str) -> EnqueueOptions {
+    EnqueueOptions {
+        queue: "emails".to_string(),
+        debounce: Some(Debounce {
+            key: key.to_string(),
+            window: Some(prost_types::Duration {
+                seconds: 60,
+                nanos: 0,
+            }),
+            max_wait: Some(prost_types::Duration {
+                seconds: 120,
+                nanos: 0,
+            }),
+            replace_payload: false,
+            max_pending: None,
+        }),
+        ..Default::default()
+    }
+}
+
 #[tokio::test]
 async fn an_enqueue_arrives_as_a_cloudevent() {
     let mut harness = Harness::start("events-enqueued").await;
@@ -224,6 +248,28 @@ async fn a_deduplicated_enqueue_emits_nothing() {
     let (marker, _) = harness.enqueue("marker", keyed("marker")).await;
     let events = harness.events(2).await;
     assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(events[0]["subject"], first.as_str());
+    assert_eq!(events[1]["subject"], marker.as_str());
+
+    harness.stop().await;
+}
+
+/// The door cannot ask storage which debounce branch it took, so it infers it
+/// from `created_at`. A slide must not re-announce the job it slid.
+#[tokio::test]
+async fn a_debounced_enqueue_that_slides_emits_nothing() {
+    let mut harness = Harness::start("events-debounce").await;
+    let (first, _) = harness.enqueue("send_email", debounced("burst")).await;
+    // Past the millisecond the job was created in. Within it, a slide reads
+    // as an insert and re-emits the same event id, which consumers dedupe.
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let (second, _) = harness.enqueue("send_email", debounced("burst")).await;
+    assert_eq!(first, second, "the second enqueue slid the first job");
+
+    let (marker, _) = harness.enqueue("marker", keyed("marker")).await;
+    let events = harness.events(2).await;
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(events[0]["type"], "org.byteveda.flexiq.job.enqueued");
     assert_eq!(events[0]["subject"], first.as_str());
     assert_eq!(events[1]["subject"], marker.as_str());
 
