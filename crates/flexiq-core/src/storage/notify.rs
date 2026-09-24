@@ -12,7 +12,8 @@
 //!
 //! Signals carry the job's queue. Redis publishes on that queue's pub/sub
 //! channel, reaching every scheduler serving it; SQLite (one in-process
-//! handle) and Postgres (one `NOTIFY` channel) wake regardless of queue.
+//! handle) wakes regardless of queue. Postgres implements no notifier: its
+//! listener is a stub that ticks on a timer and never reads a `NOTIFY`.
 
 #![cfg(feature = "push-dispatch")]
 

@@ -11,9 +11,9 @@
 //! alone here. Rather than ship a broken or `unsafe` FFI path, this listener
 //! forwards a periodic tick: push-dispatch on Postgres therefore degrades to a
 //! faster, bounded fallback poll (driven by [`LISTEN_POLL_INTERVAL`]) instead
-//! of instantaneous wakeups. The enqueue side still issues `pg_notify` (see
-//! [`super::JOB_READY_CHANNEL`]) so a future libpq-backed listener can become
-//! fully event-driven without any enqueue-path change.
+//! of instantaneous wakeups. The enqueue side issues no `pg_notify` while this
+//! stub stands — nothing would read it. A libpq-backed listener must restore
+//! the enqueue-side notify on [`super::JOB_READY_CHANNEL`].
 //!
 //! The default (feature-off) build never compiles this module.
 

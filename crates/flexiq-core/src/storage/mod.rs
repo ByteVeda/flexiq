@@ -1588,6 +1588,10 @@ impl StorageBackend {
     /// publish and pay the extra connection + round trip folding exists to
     /// avoid. Retry / `step.sleep` reschedule outside any enqueue write, so
     /// they call [`notify_rescheduled`](Self::notify_rescheduled) instead.
+    ///
+    /// Postgres is a no-op too: its listener is a stub that never reads
+    /// notifications (`postgres::listener`), so a `pg_notify` would be a wasted
+    /// pool checkout + round trip on every enqueue.
     #[cfg(feature = "push-dispatch")]
     pub(crate) fn notify_if_ready(&self, queue: &str, scheduled_at: i64) {
         use crate::storage::notify::StorageNotifier;
@@ -1596,8 +1600,9 @@ impl StorageBackend {
         }
         match self {
             StorageBackend::Sqlite(s) => s.notify_job_ready(queue, scheduled_at),
+            // Stub listener never reads a NOTIFY (`postgres::listener`).
             #[cfg(feature = "postgres")]
-            StorageBackend::Postgres(s) => s.notify_job_ready(queue, scheduled_at),
+            StorageBackend::Postgres(_) => {}
             #[cfg(feature = "redis")]
             StorageBackend::Redis(_) => {}
         }
@@ -1605,10 +1610,10 @@ impl StorageBackend {
 
     /// Signal a (re)scheduled job outside any enqueue write — retry backoff,
     /// `step.sleep` wake (`Scheduler::signal_scheduled`). Unlike
-    /// [`notify_if_ready`](Self::notify_if_ready), every backend's own
-    /// `notify_job_ready` runs here, Redis included: there is no pipeline for
-    /// this notify to ride, so it pays its own connection + round trip same
-    /// as before folding existed on the enqueue paths.
+    /// [`notify_if_ready`](Self::notify_if_ready), Redis's own
+    /// `notify_job_ready` runs here: there is no pipeline for this notify to
+    /// ride, so it pays its own connection + round trip same as before folding
+    /// existed on the enqueue paths. Postgres stays a no-op (stub listener).
     #[cfg(feature = "push-dispatch")]
     pub(crate) fn notify_rescheduled(&self, queue: &str, scheduled_at: i64) {
         use crate::storage::notify::StorageNotifier;
@@ -1617,8 +1622,9 @@ impl StorageBackend {
         }
         match self {
             StorageBackend::Sqlite(s) => s.notify_job_ready(queue, scheduled_at),
+            // Stub listener never reads a NOTIFY (`postgres::listener`).
             #[cfg(feature = "postgres")]
-            StorageBackend::Postgres(s) => s.notify_job_ready(queue, scheduled_at),
+            StorageBackend::Postgres(_) => {}
             #[cfg(feature = "redis")]
             StorageBackend::Redis(s) => s.notify_job_ready(queue, scheduled_at),
         }
