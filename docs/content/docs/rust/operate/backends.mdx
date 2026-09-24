@@ -84,6 +84,13 @@ is a config error rather than a query that fails later. `RedisStorage` pings on
 construction, so a bad URL or a dead server fails here and not on the first
 enqueue.
 
+<Callout type="info">
+  Push-dispatch's wake channel is scoped by key prefix, not by Redis database
+  number. Two deployments on the same server and the same prefix but
+  different `SELECT`ed databases will cross-wake each other — harmless (a
+  spurious empty dequeue), but worth a distinct `with_prefix` per deployment.
+</Callout>
+
 ## Choosing one
 
 | Backend | Use when | How it dispatches |

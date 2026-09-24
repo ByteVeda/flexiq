@@ -36,3 +36,10 @@ native library — no extra build step.
   (shared file); Postgres/Redis let producers and workers run on different
   machines against one shared store.
 </Callout>
+
+<Callout type="info">
+  Push-dispatch's wake channel is scoped by `prefix`, not by Redis database
+  number. Two deployments on the same server and the same prefix but
+  different `SELECT`ed databases will cross-wake each other — harmless (a
+  spurious empty dequeue), but worth a distinct `.prefix(...)` per deployment.
+</Callout>

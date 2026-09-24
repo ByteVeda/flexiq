@@ -113,11 +113,21 @@ Backend support:
 | Backend | Dispatch mode |
 |---------|--------------|
 | SQLite (in-process) | Fully event-driven |
-| Redis | Fully event-driven via `BLPOP` |
+| Redis | Fully event-driven via pub/sub `SUBSCRIBE` |
 | Postgres | Falls back to a faster poll — native `LISTEN` listener pending |
 
 Polling remains the default on SQLite/Postgres, and the safety-net fallback
-everywhere. There is no correctness difference between the two modes.
+everywhere. There is no correctness difference between the two modes: a missed
+wake is only ever caught by a 2s fallback timer rather than an immediate one,
+never lost.
+
+<Callout type="info">
+  Redis's wake channel is scoped by key prefix, not by database number. Two
+  deployments on the same server and the same prefix but different
+  `SELECT`ed databases will cross-wake each other — harmless (a spurious
+  empty dequeue), but this SDK has no prefix override today, so isolating two
+  deployments means separate Redis servers, not just separate databases.
+</Callout>
 
 **Breaking:** no.
 
