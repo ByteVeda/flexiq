@@ -910,11 +910,12 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
        print(job.to_dict()["scheduled_at"])
    ```
 
-4. **Redis push-dispatch fallback window**: with `push_dispatch=True` on
-   Redis, work nothing announces over the wake channel — a delayed job coming
-   due that another process enqueued, a resumed queue, a freed rate/concurrency
-   slot — waits on a 2s fallback timer rather than an immediate wake, longer
-   than the ≤200ms polling ceiling it replaced.
+4. **Redis push-dispatch fallback window**: on Redis, push-dispatch is on by
+   default, and work nothing announces over the wake channel — a delayed job
+   coming due that another process enqueued, a resumed queue, a freed
+   rate/concurrency slot — waits on a 2s fallback timer rather than an
+   immediate wake, longer than the ≤200ms polling ceiling it replaced.
+   `push_dispatch=False` restores polling.
 
 5. **Database performance**: slow dequeue queries. Check SQLite WAL size or
    Postgres query plans.
@@ -939,11 +940,12 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
 3. **Capped by a limit**: check you aren't capped by a per-task
    `maxConcurrent` or [rate limit](/node/guides/reliability/rate-limiting).
 
-4. **Redis push-dispatch fallback window**: with `pushDispatch: true` on
-   Redis, work nothing announces over the wake channel — a delayed job coming
-   due that another process enqueued, a resumed queue, a freed rate/concurrency
-   slot — waits on a 2s fallback timer rather than an immediate wake, longer
-   than the ≤200ms polling ceiling it replaced.
+4. **Redis push-dispatch fallback window**: on Redis, push-dispatch is on by
+   default, and work nothing announces over the wake channel — a delayed job
+   coming due that another process enqueued, a resumed queue, a freed
+   rate/concurrency slot — waits on a 2s fallback timer rather than an
+   immediate wake, longer than the ≤200ms polling ceiling it replaced.
+   `pushDispatch: false` restores polling.
 
 5. **Database performance**: slow dequeue queries. Check SQLite WAL size or
    Postgres query plans.
@@ -970,11 +972,12 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
    latency but is actually delayed enqueue. Check for an active gate on the
    task; see [Rate Limiting](/java/guides/reliability/rate-limiting).
 
-5. **Redis push-dispatch fallback window**: with `pushDispatch(true)` on
-   Redis, work nothing announces over the wake channel — a delayed job coming
-   due that another process enqueued, a resumed queue, a freed rate/concurrency
-   slot — waits on a 2s fallback timer rather than an immediate wake, longer
-   than the ≤200ms polling ceiling it replaced.
+5. **Redis push-dispatch fallback window**: on Redis, push-dispatch is on by
+   default, and work nothing announces over the wake channel — a delayed job
+   coming due that another process enqueued, a resumed queue, a freed
+   rate/concurrency slot — waits on a 2s fallback timer rather than an
+   immediate wake, longer than the ≤200ms polling ceiling it replaced.
+   `pushDispatch(false)` restores polling.
 
 6. **Database performance**: slow dequeue queries. Check SQLite WAL size or
    Postgres query plans.

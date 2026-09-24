@@ -122,11 +122,12 @@ wake is only ever caught by a 2s fallback timer rather than an immediate one,
 never lost.
 
 <Callout type="info">
-  Redis's wake channel is scoped by key prefix, not by database number. Two
-  deployments on the same server and the same prefix but different
-  `SELECT`ed databases will cross-wake each other — harmless (a spurious
-  empty dequeue), but this SDK has no prefix override today, so isolating two
-  deployments means separate Redis servers, not just separate databases.
+  Redis's wake channel is scoped by key prefix, namespace and queue, not by
+  database number. Two deployments on the same server with the same namespace
+  but different `SELECT`ed databases wake each other's schedulers. Nothing
+  crosses over — a woken scheduler reads only its own database and finds
+  nothing to claim — so the cost is a spurious empty dequeue. A distinct
+  `namespace=` per deployment avoids it; this SDK has no prefix override.
 </Callout>
 
 **Breaking:** no.
