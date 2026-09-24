@@ -1,7 +1,7 @@
 use redis::Commands;
 use serde::{Deserialize, Serialize};
 
-use super::{map_err, strip_dead_blob, RedisStorage, SCAN_BATCH};
+use super::{map_err, strip_dead_blob, watched_transaction, RedisStorage, SCAN_BATCH};
 use crate::error::{QueueError, Result};
 use crate::job::{now_millis, Job, JobStatus, NewJob};
 use crate::storage::DeadJob;
@@ -154,7 +154,7 @@ impl RedisStorage {
         // create a duplicate DLQ entry or overwrite a terminal archive.
         let job_live_key = self.key(&["job", &job.id]);
         let dead_lettered: bool =
-            redis::transaction(&mut conn, &[job_live_key.as_str()], |conn, pipe| {
+            watched_transaction(&mut conn, &[job_live_key.as_str()], |conn, pipe| {
                 if !conn.exists::<_, bool>(&job_live_key)? {
                     return Ok(Some(false));
                 }

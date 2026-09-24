@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use redis::{Commands, FromRedisValue, Value};
 
 use flexiq_core::error::{QueueError, Result};
-use flexiq_core::storage::redis_backend::RedisStorage;
+use flexiq_core::storage::redis_backend::{RedisConnection, RedisStorage};
 
 use crate::common::compute_ready_nodes;
 use crate::storage::WorkflowStorage;
@@ -144,7 +144,7 @@ impl WorkflowRedisStorage {
         &self.inner
     }
 
-    fn conn(&self) -> Result<redis::Connection> {
+    fn conn(&self) -> Result<RedisConnection> {
         self.inner
             .conn()
             .map_err(|e| QueueError::Other(format!("redis conn: {e}")))

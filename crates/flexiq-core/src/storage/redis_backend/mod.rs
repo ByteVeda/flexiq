@@ -7,6 +7,7 @@ mod locks;
 mod logs;
 mod metrics;
 mod periodic;
+mod pool;
 mod pubsub;
 mod queue_state;
 mod rate_limits;
@@ -18,12 +19,16 @@ mod workers;
 #[doc(hidden)]
 pub mod listener;
 
+use std::sync::Arc;
+
 use crate::error::{QueueError, Result};
+
+pub use pool::RedisConnection;
 
 /// Redis-backed storage for the task queue.
 #[derive(Clone)]
 pub struct RedisStorage {
-    client: redis::Client,
+    pool: Arc<pool::ConnectionPool>,
     prefix: String,
 }
 
@@ -38,7 +43,7 @@ impl RedisStorage {
         let client = redis::Client::open(redis_url)
             .map_err(|e| QueueError::Config(format!("Redis connection error: {e}")))?;
 
-        // Validate the connection works
+        // Validate the connection works; it then seeds the pool.
         let mut conn = client
             .get_connection()
             .map_err(|e| QueueError::Config(format!("Redis connection error: {e}")))?;
@@ -47,7 +52,7 @@ impl RedisStorage {
             .map_err(|e| QueueError::Config(format!("Redis ping failed: {e}")))?;
 
         Ok(Self {
-            client,
+            pool: pool::ConnectionPool::new(client, conn),
             prefix: prefix.to_string(),
         })
     }
@@ -79,10 +84,15 @@ impl RedisStorage {
         k
     }
 
-    /// Get a Redis connection.
-    pub fn conn(&self) -> Result<redis::Connection> {
-        self.client
-            .get_connection()
+    /// Reuse an idle connection, or dial one; it returns to the pool when
+    /// dropped. No `PING` on checkout — that would put back the round trip
+    /// reuse removes; a dead socket fails its command and is not returned.
+    ///
+    /// Hold it only for the commands at hand, and never check out a second
+    /// while holding one: each would be a connection of its own.
+    pub fn conn(&self) -> Result<RedisConnection> {
+        self.pool
+            .get()
             .map_err(|e| QueueError::Other(format!("Redis connection error: {e}")))
     }
 
@@ -103,10 +113,11 @@ impl RedisStorage {
         self.key(&["notify", &Self::namespace_segment(namespace), queue])
     }
 
-    /// A raw client clone, for the listener's dedicated blocking connection.
+    /// The client, for the listener's dedicated blocking connection — a
+    /// `SUBSCRIBE`d connection must never return to the pool.
     #[cfg(feature = "push-dispatch")]
     pub fn client(&self) -> &redis::Client {
-        &self.client
+        self.pool.client()
     }
 
     /// Append `PUBLISH <notify-channel>` for `(namespace, queue)` onto `pipe`, `.ignore()`d
@@ -152,6 +163,28 @@ impl crate::storage::notify::StorageNotifier for RedisStorage {
 
 fn map_err(e: redis::RedisError) -> QueueError {
     QueueError::Redis(e)
+}
+
+/// [`redis::transaction`] that never hands a connection back to the pool
+/// still `WATCH`ing: the helper `UNWATCH`es only on success, and a stale watch
+/// would make the next borrower's `MULTI`/`EXEC` abort for a key it never read.
+fn watched_transaction<T, F>(
+    conn: &mut redis::Connection,
+    keys: &[&str],
+    func: F,
+) -> redis::RedisResult<T>
+where
+    F: FnMut(&mut redis::Connection, &mut redis::Pipeline) -> redis::RedisResult<Option<T>>,
+{
+    let result = redis::transaction(conn, keys, func);
+    if result.is_err() {
+        // Best-effort: a failure here means the socket is gone, and a closed
+        // connection is dropped by the pool rather than reused.
+        if let Err(e) = redis::cmd("UNWATCH").exec(conn) {
+            log::debug!("redis UNWATCH after a failed transaction: {e}");
+        }
+    }
+    result
 }
 
 /// Batch size for the bounded history scans (SSCAN/ZSCAN COUNT hint and the

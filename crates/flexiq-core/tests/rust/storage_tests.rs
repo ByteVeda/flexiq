@@ -4255,6 +4255,8 @@ fn redis_storage_tests() {
     redis_claim_waits_for_dependencies(&storage);
     redis_claim_does_not_starve_ready_dependents(&storage);
     redis_select_and_claim_is_one_round_trip(&storage);
+    redis_storage_reuses_pooled_connections(&storage);
+    redis_failed_transaction_returns_a_clean_connection(&storage);
 
     // The ready-notify fold only exists on a `push-dispatch` build (#4).
     #[cfg(feature = "push-dispatch")]
@@ -4264,6 +4266,62 @@ fn redis_storage_tests() {
         redis_enqueue_batch_publishes_once_per_ready_queue(&storage);
         redis_enqueue_unique_publishes_ready_job_once(&storage);
     }
+}
+
+/// Storage calls borrow pooled connections instead of dialling one each: 40
+/// rounds of enqueue + read + checkout see only the few connections a warm
+/// pool holds. Before pooling, every checkout was a new `CLIENT ID`.
+#[cfg(feature = "redis")]
+fn redis_storage_reuses_pooled_connections(s: &flexiq_core::RedisStorage) {
+    let mut ids = std::collections::HashSet::new();
+    for _ in 0..40 {
+        let job = s.enqueue(make_job("q-pool-reuse", "pool_reuse")).unwrap();
+        assert!(s.get_job(&job.id, None).unwrap().is_some());
+        let mut conn = s.conn().unwrap();
+        let id: i64 = redis::cmd("CLIENT").arg("ID").query(&mut conn).unwrap();
+        ids.insert(id);
+    }
+    // The pool hands back its most recently returned connection, so a
+    // sequential caller keeps meeting the same one (two if the server closed it).
+    assert!(
+        ids.len() <= 2,
+        "40 rounds dialled {} connections",
+        ids.len()
+    );
+}
+
+/// A transaction whose closure fails must not hand its connection back still
+/// `WATCH`ing: the next borrower's `MULTI`/`EXEC` would abort for a key it
+/// never read. A corrupt schedule document fails the periodic rewrite mid-watch.
+#[cfg(feature = "redis")]
+fn redis_failed_transaction_returns_a_clean_connection(s: &flexiq_core::RedisStorage) {
+    let key = format!("{}periodic:-:corrupt", s.prefix());
+    let mut conn = s.conn().unwrap();
+    let _: () = redis::cmd("SET")
+        .arg(&key)
+        .arg("not json")
+        .query(&mut conn)
+        .unwrap();
+    drop(conn);
+
+    assert!(s.register_periodic(&periodic_row("corrupt", None)).is_err());
+
+    // Hold several at once so the failed call's connection is among them,
+    // whichever the pool hands out first.
+    let mut held: Vec<_> = (0..3).map(|_| s.conn().unwrap()).collect();
+    for conn in &mut held {
+        // Mid-transaction a proxied Redis refuses `CLIENT INFO` ("inside
+        // MULTI") and a plain one answers `QUEUED`; only a clean one says `watch=0`.
+        let line: String = redis::cmd("CLIENT")
+            .arg("INFO")
+            .query(conn)
+            .unwrap_or_else(|e| panic!("connection left mid-transaction: {e}"));
+        assert!(
+            line.split_whitespace().any(|field| field == "watch=0"),
+            "connection left WATCHing or in MULTI: {line}"
+        );
+    }
+    let _: () = redis::cmd("DEL").arg(&key).query(&mut held[0]).unwrap();
 }
 
 /// A schedule registered before #918 lives at `periodic:<name>` and is a bare
