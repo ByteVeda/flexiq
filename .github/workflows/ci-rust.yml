@@ -125,10 +125,15 @@ jobs:
       - name: Run the gRPC role's tests
         run: cargo test -p flexiq-server --features grpc
 
-      # Off in every shipped artifact, so only CI keeps the three binding
-      # shells' push-dispatch wiring compiling.
-      - name: Run push-dispatch tests
-        run: LD_LIBRARY_PATH="$pythonLocation/lib" cargo test --workspace --features push-dispatch
+      # `crates/flexiq` turns push-dispatch on by default, and a --workspace
+      # build unifies it into every crate — so the runs above never compile it
+      # off. Package-scoped builds do not unify: this keeps the feature-off
+      # core (poll-only run, no-op push stubs) and the shells' calls into it
+      # compiling and tested.
+      - name: Run core and check the shells with push-dispatch off
+        run: |
+          LD_LIBRARY_PATH="$pythonLocation/lib" cargo test -p flexiq-core --lib
+          cargo check -p flexiq-python -p flexiq-node -p flexiq-java
 
       - name: Check push-dispatch build with the listener-backed backends
         run: cargo check --workspace --features push-dispatch,postgres,redis
