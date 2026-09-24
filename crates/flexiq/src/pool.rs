@@ -51,6 +51,7 @@ pub struct WorkerBuilder {
     num_workers: usize,
     worker_id: Option<String>,
     scheduler_config: Option<SchedulerConfig>,
+    push_dispatch: Option<bool>,
     duplicate: Option<String>,
 }
 
@@ -67,6 +68,7 @@ impl WorkerBuilder {
             num_workers: 4,
             worker_id: None,
             scheduler_config: None,
+            push_dispatch: None,
             duplicate: None,
         }
     }
@@ -116,6 +118,14 @@ impl WorkerBuilder {
         self
     }
 
+    /// Wake on enqueue (`true`) or poll (`false`); unset keeps the backend
+    /// default, push on Redis. Pass `false` for a Redis that cannot
+    /// `SUBSCRIBE` (an ACL without `@pubsub`, a pub/sub-less proxy).
+    pub fn push_dispatch(mut self, enabled: bool) -> Self {
+        self.push_dispatch = Some(enabled);
+        self
+    }
+
     /// Register this process, start the scheduler and the pool, and return a
     /// handle whose `shutdown` drains and unregisters.
     pub fn spawn(self) -> Result<WorkerHandle> {
@@ -154,6 +164,9 @@ impl WorkerBuilder {
         }
         if let Some(config) = self.scheduler_config {
             worker = worker.scheduler_config(config);
+        }
+        if let Some(enabled) = self.push_dispatch {
+            worker = worker.push_dispatch(enabled);
         }
         for (name, config) in self.configs {
             worker = worker.task_config(name, config);

@@ -1006,8 +1006,9 @@ impl Scheduler {
 
     /// The wake source `run` should use: an explicitly installed one, else the
     /// backend default — push on Redis (#961), where each poll is a network
-    /// round trip, and polling on SQLite/Postgres.
-    fn resolve_wake_source(&self) -> Option<wake::WakeSource> {
+    /// round trip, and polling on SQLite/Postgres. Crate-visible so the
+    /// turnkey `Worker`'s push knob can be tested against it.
+    pub(crate) fn resolve_wake_source(&self) -> Option<wake::WakeSource> {
         if let Some(wake) = self.take_wake_source() {
             return Some(wake);
         }

@@ -46,6 +46,7 @@ pub struct Worker {
     worker_id: Option<String>,
     on_outcome: Option<OutcomeCallback>,
     dispatcher: Option<(String, Arc<dyn WorkerDispatcher>)>,
+    push_dispatch: Option<bool>,
 }
 
 impl Worker {
@@ -63,6 +64,7 @@ impl Worker {
             worker_id: None,
             on_outcome: None,
             dispatcher: None,
+            push_dispatch: None,
         }
     }
 
@@ -132,6 +134,15 @@ impl Worker {
         self
     }
 
+    /// Wake on enqueue (`true`) or poll (`false`). Unset keeps the backend
+    /// default: push on Redis, polling on SQLite/Postgres. Pass `false` for a
+    /// Redis that cannot `SUBSCRIBE` (ACL without `@pubsub`, a pub/sub-less
+    /// proxy). Without the `push-dispatch` feature the worker always polls.
+    pub fn push_dispatch(mut self, enabled: bool) -> Self {
+        self.push_dispatch = Some(enabled);
+        self
+    }
+
     /// Register a blocking handler. See [`TaskRegistry::register`].
     pub fn register(
         mut self,
@@ -168,6 +179,7 @@ impl Worker {
             worker_id,
             on_outcome,
             dispatcher,
+            push_dispatch,
         } = self;
 
         let worker_id =
@@ -253,6 +265,8 @@ impl Worker {
                         .build()
                         .expect("tokio runtime construction cannot fail with these settings");
                     runtime.block_on(async move {
+                        // Inside the runtime: enabling spawns the listener.
+                        apply_push_dispatch(&scheduler, push_dispatch);
                         let scheduler_task = tokio::spawn({
                             let scheduler = scheduler.clone();
                             async move { scheduler.run(job_tx).await }
@@ -396,6 +410,16 @@ fn spawn_error(io_error: std::io::Error) -> crate::error::QueueError {
     crate::error::QueueError::Worker(format!("failed to spawn worker thread: {io_error}"))
 }
 
+/// Apply [`Worker::push_dispatch`]; `None` keeps the backend default. Call
+/// inside the runtime, before `run`: enabling spawns the backend's listener.
+fn apply_push_dispatch(scheduler: &Scheduler, push: Option<bool>) {
+    match push {
+        Some(true) => scheduler.enable_push_dispatch(),
+        Some(false) => scheduler.disable_push_dispatch(),
+        None => {}
+    }
+}
+
 /// Handle to a running [`Worker`]. Dropping it without calling
 /// [`WorkerHandle::shutdown`] leaves the worker running detached.
 pub struct WorkerHandle {
@@ -444,5 +468,65 @@ impl WorkerHandle {
             log::warn!("shutdown subscription sweep failed: {sweep_error}");
         }
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "push-dispatch"))]
+mod tests {
+    use super::*;
+    use crate::storage::sqlite::SqliteStorage;
+
+    fn scheduler_over(storage: StorageBackend) -> Scheduler {
+        Scheduler::new(
+            storage,
+            vec!["default".to_string()],
+            SchedulerConfig::default(),
+            None,
+        )
+    }
+
+    fn sqlite() -> StorageBackend {
+        StorageBackend::Sqlite(SqliteStorage::in_memory().unwrap())
+    }
+
+    #[test]
+    fn push_dispatch_builder_records_the_choice() {
+        assert_eq!(Worker::new(sqlite()).push_dispatch, None);
+        let worker = Worker::new(sqlite()).push_dispatch(false);
+        assert_eq!(worker.push_dispatch, Some(false));
+        assert_eq!(worker.push_dispatch(true).push_dispatch, Some(true));
+    }
+
+    #[tokio::test]
+    async fn push_dispatch_true_opts_sqlite_into_push() {
+        let scheduler = scheduler_over(sqlite());
+        apply_push_dispatch(&scheduler, None);
+        assert!(
+            scheduler.resolve_wake_source().is_none(),
+            "SQLite polls by default"
+        );
+        apply_push_dispatch(&scheduler, Some(true));
+        assert!(scheduler.resolve_wake_source().is_some());
+    }
+
+    /// The opt-out a Redis that cannot `SUBSCRIBE` needs.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn push_dispatch_false_opts_redis_out() {
+        let Ok(url) = std::env::var("FLEXIQ_REDIS_TEST_URL") else {
+            eprintln!("Skipping (FLEXIQ_REDIS_TEST_URL not set)");
+            return;
+        };
+        let prefix = format!("runner_push_{}:", uuid::Uuid::now_v7().simple());
+        let storage = match crate::RedisStorage::with_prefix(&url, &prefix) {
+            Ok(s) => StorageBackend::Redis(s),
+            Err(e) => {
+                eprintln!("Skipping Redis test (cannot connect): {e}");
+                return;
+            }
+        };
+        let scheduler = scheduler_over(storage);
+        apply_push_dispatch(&scheduler, Some(false));
+        assert!(scheduler.resolve_wake_source().is_none());
     }
 }
