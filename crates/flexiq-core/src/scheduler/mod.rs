@@ -991,6 +991,12 @@ impl Scheduler {
     /// periodic, DLQ-retry and cleanup intervals keep their idle-poll timing.
     const PUSH_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(200);
 
+    /// Least time between two drains a delayed deadline triggers. Jittered
+    /// deferrals and superseded debounce deadlines land a few ms apart; each
+    /// drain is Redis round trips, so without a floor they run back to back.
+    /// Wakes for ready jobs, freed slots and the fallback are not held back.
+    const MIN_DELAYED_GAP: Duration = Duration::from_millis(100);
+
     /// Switch this scheduler from polling to event-driven dispatch, using the
     /// wake source that matches its storage backend. Call before [`Self::run`],
     /// from inside a Tokio runtime context (the Postgres and Redis sources
@@ -1122,6 +1128,18 @@ impl Scheduler {
         }
     }
 
+    /// When the loop should drain next without a wake: the fallback after
+    /// `last_drain`, or the next tracked deadline — but a deadline never
+    /// earlier than [`Self::MIN_DELAYED_GAP`] after `last_drain`.
+    fn next_drain_at(
+        last_drain: tokio::time::Instant,
+        now: tokio::time::Instant,
+        delayed: Duration,
+    ) -> tokio::time::Instant {
+        let delayed_at = (now + delayed).max(last_drain + Self::MIN_DELAYED_GAP);
+        (last_drain + Self::PUSH_FALLBACK_INTERVAL).min(delayed_at)
+    }
+
     /// Arm a timer for each deadline `heard` announced; true when it asks
     /// for a drain.
     fn absorb_wake(&self, heard: wake::Wake) -> bool {
@@ -1147,8 +1165,11 @@ impl Scheduler {
         let mut last_drain = tokio::time::Instant::now();
 
         loop {
-            let fallback_at = (last_drain + Self::PUSH_FALLBACK_INTERVAL)
-                .min(tokio::time::Instant::now() + self.next_delayed_timer());
+            let fallback_at = Self::next_drain_at(
+                last_drain,
+                tokio::time::Instant::now(),
+                self.next_delayed_timer(),
+            );
             let drain = tokio::select! {
                 _ = self.shutdown.notified() => break,
                 // A delayed job's announcement only re-arms the timer above.
@@ -2113,6 +2134,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![earliest],
             "only the pass's earliest deferral is armed"
+        );
+    }
+
+    /// A due deadline cannot drain sooner than the gap after the last drain;
+    /// with none tracked, the fallback governs as before.
+    #[cfg(feature = "push-dispatch")]
+    #[test]
+    fn test_delayed_drains_keep_the_minimum_gap() {
+        let last = tokio::time::Instant::now();
+        let gap = Scheduler::MIN_DELAYED_GAP;
+        assert_eq!(
+            Scheduler::next_drain_at(last, last, Duration::ZERO),
+            last + gap
+        );
+        let later = last + Duration::from_millis(30);
+        assert_eq!(
+            Scheduler::next_drain_at(last, later, Duration::ZERO),
+            last + gap
+        );
+        assert_eq!(
+            Scheduler::next_drain_at(last, last, Duration::from_millis(700)),
+            last + Duration::from_millis(700)
+        );
+        assert_eq!(
+            Scheduler::next_drain_at(last, last, Scheduler::PUSH_FALLBACK_INTERVAL),
+            last + Scheduler::PUSH_FALLBACK_INTERVAL
         );
     }
 
