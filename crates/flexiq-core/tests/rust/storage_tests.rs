@@ -4266,6 +4266,7 @@ fn redis_storage_tests() {
         redis_enqueue_future_job_announces_its_deadline(&storage);
         redis_enqueue_batch_publishes_once_per_queue_and_deadline(&storage);
         redis_enqueue_unique_publishes_ready_job_once(&storage);
+        redis_enqueue_survives_a_denied_wake(&storage, &url);
     }
 }
 
@@ -5427,6 +5428,128 @@ fn redis_enqueue_unique_publishes_ready_job_once(s: &flexiq_core::RedisStorage) 
         payloads,
         vec![scheduled_at.to_string()],
         "a ready enqueue_unique insert must publish exactly once"
+    );
+}
+
+/// `url` with its userinfo replaced by `user:password`.
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_url_as(url: &str, user: &str, password: &str) -> String {
+    let (scheme, rest) = url.split_once("://").expect("redis URL has a scheme");
+    let host = rest.rsplit_once('@').map_or(rest, |(_, host)| host);
+    format!("{scheme}://{user}:{password}@{host}")
+}
+
+/// Drops the ACL user and every key under the prefix, even when the test fails.
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+struct DeniedWakeCleanup<'a> {
+    admin: &'a flexiq_core::RedisStorage,
+    user: String,
+    prefix: String,
+}
+
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+impl Drop for DeniedWakeCleanup<'_> {
+    fn drop(&mut self) {
+        let Ok(mut conn) = self.admin.conn() else {
+            eprintln!("cleanup: no connection to drop ACL user {}", self.user);
+            return;
+        };
+        if let Err(e) = redis::cmd("ACL")
+            .arg("DELUSER")
+            .arg(&self.user)
+            .query::<i64>(&mut conn)
+        {
+            eprintln!("cleanup: ACL DELUSER {} failed: {e}", self.user);
+        }
+        let keys: Vec<String> = redis::cmd("KEYS")
+            .arg(format!("{}*", self.prefix))
+            .query(&mut conn)
+            .unwrap_or_default();
+        if !keys.is_empty() {
+            let _ = redis::cmd("DEL").arg(&keys).query::<i64>(&mut conn);
+        }
+    }
+}
+
+/// An ACL user that may write but not publish — Redis 7's default for a user
+/// created without channel rules — still enqueues on every path: the wake is
+/// best-effort and a committed write must never report failure.
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_enqueue_survives_a_denied_wake(admin: &flexiq_core::RedisStorage, url: &str) {
+    let tag = uuid::Uuid::now_v7().simple().to_string();
+    let user = format!("flexiq-nowake-{tag}");
+    let password = format!("pw-{tag}");
+    let mut conn = admin.conn().unwrap();
+    let created = redis::cmd("ACL")
+        .arg("SETUSER")
+        .arg(&user)
+        .arg("on")
+        .arg(format!(">{password}"))
+        .arg("~*")
+        .arg("resetchannels")
+        .arg("+@all")
+        .query::<()>(&mut conn);
+    drop(conn);
+    if let Err(e) = created {
+        eprintln!("Skipping denied-wake test: ACL SETUSER refused: {e}");
+        return;
+    }
+    let prefix = format!("flexiq-nowake-{tag}:");
+    let _cleanup = DeniedWakeCleanup {
+        admin,
+        user: user.clone(),
+        prefix: prefix.clone(),
+    };
+    let s = flexiq_core::RedisStorage::with_prefix(&redis_url_as(url, &user, &password), &prefix)
+        .unwrap();
+
+    // Prove the premise: this user really cannot publish on a notify channel.
+    let mut conn = s.conn().unwrap();
+    let denied = redis::cmd("PUBLISH")
+        .arg(redis_notify_channel(&s, "q-nowake"))
+        .arg("0")
+        .query::<i64>(&mut conn);
+    drop(conn);
+    assert!(denied.is_err(), "the ACL user must be denied PUBLISH");
+
+    let q = "q-nowake";
+    let exists = |id: &str| s.get_job(id, None).unwrap().is_some();
+
+    let job = s.enqueue(make_job(q, "nowake_plain")).unwrap();
+    assert!(exists(&job.id), "enqueue must commit");
+
+    let batch = s
+        .enqueue_batch(vec![
+            make_job(q, "nowake_batch"),
+            make_job(q, "nowake_batch"),
+        ])
+        .unwrap();
+    assert!(
+        batch.iter().all(|j| exists(&j.id)),
+        "enqueue_batch must commit"
+    );
+
+    let mut unique = make_job(q, "nowake_unique");
+    unique.unique_key = Some(format!("nowake-{tag}"));
+    let (inserted, deduped) = s.enqueue_unique_reporting(unique).unwrap();
+    assert!(
+        !deduped && exists(&inserted.id),
+        "enqueue_unique must insert"
+    );
+
+    let opened = s
+        .enqueue_debounced(debounced(q, "nowake:user-1"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert!(exists(&opened.id), "a debounced insert must commit");
+    let slid = s
+        .enqueue_debounced(debounced(q, "nowake:user-1"), debounce_opts(10_000, 60_000))
+        .unwrap();
+    assert_eq!(slid.id, opened.id, "the second call slides the open window");
+    assert!(slid.scheduled_at > opened.scheduled_at);
+    let stored = s.get_job(&slid.id, None).unwrap().expect("slid job exists");
+    assert_eq!(
+        stored.scheduled_at, slid.scheduled_at,
+        "the slide must commit"
     );
 }
 
