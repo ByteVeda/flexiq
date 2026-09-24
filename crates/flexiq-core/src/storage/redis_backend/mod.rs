@@ -106,6 +106,17 @@ impl RedisStorage {
     pub fn client(&self) -> &redis::Client {
         &self.client
     }
+
+    /// Append `PUBLISH <notify-channel>` for `queue` onto `pipe`, `.ignore()`d
+    /// so it never changes the pipe's reply shape. Every enqueue write path
+    /// folds its ready-notify in here instead of paying `notify_job_ready`'s
+    /// own connection checkout + round trip (see `jobs/enqueue.rs`).
+    /// `PUBLISH` cannot fail for type reasons, so this is safe to fold into an
+    /// atomic (`MULTI`/`EXEC`) pipe too — no current caller uses one.
+    #[cfg(feature = "push-dispatch")]
+    pub(crate) fn fold_ready_notify(&self, pipe: &mut redis::Pipeline, queue: &str) {
+        pipe.publish(self.notify_channel(queue), 1).ignore();
+    }
 }
 
 #[cfg(feature = "push-dispatch")]

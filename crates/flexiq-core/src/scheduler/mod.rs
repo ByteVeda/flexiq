@@ -1049,7 +1049,9 @@ impl Scheduler {
     /// enqueue and so bypass the storage-side notify.
     pub(crate) fn signal_scheduled(&self, queue: &str, scheduled_at: i64) {
         if scheduled_at <= crate::job::now_millis() {
-            self.storage.notify_if_ready(queue, scheduled_at);
+            // Not an enqueue write, so nothing already published — always
+            // call the backend's own notify (see `notify_rescheduled`).
+            self.storage.notify_rescheduled(queue, scheduled_at);
         } else {
             self.note_scheduled_at(scheduled_at);
         }

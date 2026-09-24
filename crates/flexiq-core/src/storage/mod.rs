@@ -1580,8 +1580,37 @@ impl StorageBackend {
     /// jobs (`scheduled_at > now`) — those rely on the fallback timer — and a
     /// no-op entirely when `push-dispatch` is off. `queue` routes the signal:
     /// Redis wakes only the schedulers serving it.
+    ///
+    /// Redis is a deliberate no-op here: every Redis enqueue path folds its
+    /// own `PUBLISH` into the write's pipeline/script (see
+    /// `redis_backend::jobs::enqueue`), so the write already notified by the
+    /// time this runs. Calling `notify_job_ready` too would both double-
+    /// publish and pay the extra connection + round trip folding exists to
+    /// avoid. Retry / `step.sleep` reschedule outside any enqueue write, so
+    /// they call [`notify_rescheduled`](Self::notify_rescheduled) instead.
     #[cfg(feature = "push-dispatch")]
     pub(crate) fn notify_if_ready(&self, queue: &str, scheduled_at: i64) {
+        use crate::storage::notify::StorageNotifier;
+        if scheduled_at > crate::job::now_millis() {
+            return;
+        }
+        match self {
+            StorageBackend::Sqlite(s) => s.notify_job_ready(queue, scheduled_at),
+            #[cfg(feature = "postgres")]
+            StorageBackend::Postgres(s) => s.notify_job_ready(queue, scheduled_at),
+            #[cfg(feature = "redis")]
+            StorageBackend::Redis(_) => {}
+        }
+    }
+
+    /// Signal a (re)scheduled job outside any enqueue write — retry backoff,
+    /// `step.sleep` wake (`Scheduler::signal_scheduled`). Unlike
+    /// [`notify_if_ready`](Self::notify_if_ready), every backend's own
+    /// `notify_job_ready` runs here, Redis included: there is no pipeline for
+    /// this notify to ride, so it pays its own connection + round trip same
+    /// as before folding existed on the enqueue paths.
+    #[cfg(feature = "push-dispatch")]
+    pub(crate) fn notify_rescheduled(&self, queue: &str, scheduled_at: i64) {
         use crate::storage::notify::StorageNotifier;
         if scheduled_at > crate::job::now_millis() {
             return;

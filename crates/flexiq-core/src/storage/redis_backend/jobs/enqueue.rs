@@ -79,7 +79,8 @@ static DEBOUNCE_RESOLVE: LazyLock<redis::Script> =
 /// and — only for a pub/sub delivery — its subscription's pending backlog.
 /// ARGV (after the scan's four): job id, job JSON, queue score, `created_at`,
 /// dependency count, the admission cap (negative = uncapped), then one
-/// `(depends_on_key, dep_id, dependents_key)` triple per dependency.
+/// `(depends_on_key, dep_id, dependents_key)` triple per dependency, then —
+/// `push-dispatch` builds only — the notify channel and a '1'/'0' ready flag.
 static DEBOUNCE_INSERT: LazyLock<redis::Script> =
     LazyLock::new(|| redis::Script::new(&format!("{DEBOUNCE_SCAN}{DEBOUNCE_INSERT_BODY}")));
 
@@ -120,6 +121,16 @@ const DEBOUNCE_INSERT_BODY: &str = r#"
         redis.call('SADD', ARGV[offset + 2], job_id)
     end
 
+    -- push-dispatch (optional): trailing ARGV past the last dependency
+    -- triple — notify channel, then a '1'/'0' ready flag — present only when
+    -- this build folds the ready-notify into the write (see
+    -- insert_debounced). Absent on a feature-off build, so the ready-flag
+    -- read below is nil and this never fires there.
+    local notify_argv = dep_args_base + num_deps * 3
+    if ARGV[notify_argv + 1] == '1' then
+        redis.call('PUBLISH', ARGV[notify_argv], 1)
+    end
+
     return nil
 "#;
 
@@ -133,12 +144,19 @@ const DEBOUNCE_INSERT_BODY: &str = r#"
 /// retry from the scan.
 ///
 /// KEYS: job, queue zset, execution claim. ARGV: job id, document as read,
-/// document to write, new queue score.
+/// document to write, new queue score, then — `push-dispatch` builds only —
+/// the notify channel and a '1'/'0' ready flag.
 const DEBOUNCE_SLIDE: &str = r#"
     if redis.call('GET', KEYS[1]) ~= ARGV[2] then return 0 end
     if redis.call('EXISTS', KEYS[3]) == 1 then return 0 end
     redis.call('SET', KEYS[1], ARGV[3])
     redis.call('ZADD', KEYS[2], ARGV[4], ARGV[1])
+    -- push-dispatch (optional): ARGV[5]/[6] are present only on a build that
+    -- folds the ready-notify into the write (see slide_debounce_target); nil
+    -- otherwise, so this never fires there.
+    if ARGV[6] == '1' then
+        redis.call('PUBLISH', ARGV[5], 1)
+    end
     return 1
 "#;
 
@@ -261,6 +279,13 @@ impl RedisStorage {
         // (no-op for ordinary jobs). Same pipe as the job's own indices.
         self.push_pubsub_transition(pipe, &job, JobStatus::Pending);
 
+        // Wake this queue's schedulers in the same round trip as the write —
+        // `StorageBackend::notify_if_ready` skips Redis for this reason.
+        #[cfg(feature = "push-dispatch")]
+        if job.scheduled_at <= now_millis() {
+            self.fold_ready_notify(pipe, &job.queue);
+        }
+
         pipe.query::<()>(&mut conn).map_err(map_err)?;
 
         Ok(job)
@@ -322,6 +347,21 @@ impl RedisStorage {
             // Pub/sub deliveries enter their subscription's pending backlog
             // index (no-op for ordinary jobs), atomically with the batch insert.
             self.push_pubsub_transition(pipe, job, JobStatus::Pending);
+        }
+
+        // One publish per distinct ready queue, not per job — a burst onto
+        // the same queue wakes its schedulers once, still in this round trip.
+        #[cfg(feature = "push-dispatch")]
+        {
+            let now = now_millis();
+            let ready_queues: std::collections::BTreeSet<&str> = jobs
+                .iter()
+                .filter(|j| j.scheduled_at <= now)
+                .map(|j| j.queue.as_str())
+                .collect();
+            for queue in ready_queues {
+                self.fold_ready_notify(pipe, queue);
+            }
         }
 
         pipe.query::<()>(&mut conn).map_err(map_err)?;
@@ -405,16 +445,27 @@ impl RedisStorage {
         }
 
         let new_json = serde_json::to_string(&target)?;
-        let applied: i32 = redis::Script::new(DEBOUNCE_SLIDE)
+        let script = redis::Script::new(DEBOUNCE_SLIDE);
+        let mut invocation = script.prepare_invoke();
+        invocation
             .key(self.key(&["job", &target.id]))
             .key(self.key(&["queue", &target.queue, "pending"]))
             .key(self.key(&["exec_claim", &target.id]))
             .arg(&target.id)
             .arg(target_json)
             .arg(&new_json)
-            .arg(dequeue_score(target.priority, target.scheduled_at))
-            .invoke(conn)
-            .map_err(map_err)?;
+            .arg(dequeue_score(target.priority, target.scheduled_at));
+        // Wake this queue's schedulers in the same round trip when the slide
+        // lands the job in the ready window — see DEBOUNCE_SLIDE.
+        #[cfg(feature = "push-dispatch")]
+        invocation.arg(self.notify_channel(&target.queue)).arg(
+            if target.scheduled_at <= now_millis() {
+                "1"
+            } else {
+                "0"
+            },
+        );
+        let applied: i32 = invocation.invoke(conn).map_err(map_err)?;
 
         Ok((applied == 1).then_some(target))
     }
@@ -462,6 +513,17 @@ impl RedisStorage {
                 .arg(dep_id)
                 .arg(self.key(&["job", dep_id, "dependents"]));
         }
+        // Wake this queue's schedulers in the same round trip when the fresh
+        // window opens ready (rare — usually `window_ms` pushes it into the
+        // future) — see DEBOUNCE_INSERT_BODY.
+        #[cfg(feature = "push-dispatch")]
+        invocation
+            .arg(self.notify_channel(&job.queue))
+            .arg(if job.scheduled_at <= now_millis() {
+                "1"
+            } else {
+                "0"
+            });
 
         match (max_pending, invocation.invoke(conn).map_err(map_err)?) {
             (_, redis::Value::Nil) => Ok(DebounceInsert::Opened),
@@ -620,7 +682,8 @@ impl RedisStorage {
             // passed via ARGV (positions 7-8) for the same reason as above —
             // single-sourced in `JobStatus::wire_name()`. ARGV[9] names the
             // KEYS slot holding the debounce index, and dependency triples
-            // start at ARGV[10].
+            // start at ARGV[10]. `push-dispatch` builds append the notify
+            // channel and a '1'/'0' ready flag after the last triple.
             let store_script = redis::Script::new(
                 r#"
                 local unique_key = KEYS[1]
@@ -689,6 +752,15 @@ impl RedisStorage {
                     redis.call('SADD', dependents_key, job_id)
                 end
 
+                -- push-dispatch (optional): trailing ARGV past the last
+                -- dependency triple, present only on a build that folds the
+                -- ready-notify into this write. Absent otherwise, so the
+                -- ready-flag read below is nil and this never fires there.
+                local notify_argv = dep_args_base + num_deps * 3
+                if ARGV[notify_argv + 1] == '1' then
+                    redis.call('PUBLISH', ARGV[notify_argv], 1)
+                end
+
                 return nil
                 "#,
             );
@@ -746,6 +818,20 @@ impl RedisStorage {
                 args.push(self.key(&["job", &job.id, "depends_on"]));
                 args.push(dep_id.clone());
                 args.push(self.key(&["job", dep_id, "dependents"]));
+            }
+            // Wake this queue's schedulers in the same round trip as the
+            // write — see the trailing ARGV read in store_script above.
+            #[cfg(feature = "push-dispatch")]
+            {
+                args.push(self.notify_channel(&job.queue));
+                args.push(
+                    if job.scheduled_at <= now_millis() {
+                        "1"
+                    } else {
+                        "0"
+                    }
+                    .to_string(),
+                );
             }
 
             let mut invocation = store_script.prepare_invoke();
