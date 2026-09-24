@@ -3,7 +3,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use flexiq_server::config::{
-    dashboard::scrub_bootstrap_password, listen::scrub_attach_token,
+    dashboard::scrub_bootstrap_password, events::scrub_event_secrets, listen::scrub_attach_token,
     push::scrub_push_target_secrets, trigger::scrub_trigger_secrets, Config,
 };
 use flexiq_server::runtime;
@@ -175,11 +175,21 @@ fn main() -> Result<()> {
     }
 
     let config = Config::from_env()?;
+    // Before the scrub: the sinks read their secret variables as they are
+    // built, and a sink that cannot be built stops the boot here.
+    let events = config
+        .events
+        .as_ref()
+        .map(runtime::start_events)
+        .transpose()?;
     scrub_bootstrap_password();
     scrub_attach_token();
     scrub_push_target_secrets();
     if let Some(triggers) = &config.triggers {
         scrub_trigger_secrets(triggers);
     }
-    runtime::run(config)
+    if let Some(settings) = &config.events {
+        scrub_event_secrets(settings);
+    }
+    runtime::run(config, events)
 }

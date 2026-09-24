@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use flexiq_core::events::SinkConfig;
 use flexiq_core::EventsConfig;
 
 use crate::config::push::seconds;
@@ -57,6 +58,36 @@ pub fn from_env(env: &Env) -> Result<Option<EventsSettings>> {
         config,
         drain,
     }))
+}
+
+/// Every variable the document names a sink secret by: bearer tokens, HMAC
+/// secrets, and Redis URLs, which can carry a password.
+pub fn secret_vars(settings: &EventsSettings) -> Vec<&str> {
+    settings
+        .config
+        .sinks
+        .iter()
+        .flat_map(|sink| match sink {
+            SinkConfig::Http(http) => vec![
+                http.bearer_token_env.as_deref(),
+                http.hmac_secret_env.as_deref(),
+            ],
+            SinkConfig::RedisStreams(redis) => vec![Some(redis.url_env.as_str())],
+        })
+        .flatten()
+        .collect()
+}
+
+/// Remove every sink secret from the process environment once the hub has
+/// read it, so none survives into `/proc/<pid>/environ` or a crash dump.
+pub fn scrub_event_secrets(settings: &EventsSettings) {
+    // Called once from `main`, after the hub has built its sinks and before
+    // any role is spawned. The sink threads already exist, but they read the
+    // environment only while building (on this thread) and are parked on an
+    // empty channel until the first event, which no role has emitted yet.
+    for var in secret_vars(settings) {
+        std::env::remove_var(var);
+    }
 }
 
 #[cfg(test)]
@@ -169,5 +200,35 @@ mod tests {
         ]))
         .expect("events beside a role");
         assert!(config.events.is_some());
+    }
+
+    /// The only test here that touches the real process environment, as
+    /// scrubbing acts on `std::env` directly. The names are unique to it so no
+    /// other test can observe them.
+    #[test]
+    fn every_sink_secret_is_scrubbed_from_the_environment() {
+        const BEARER: &str = "FLEXIQ_TEST_EVENTS_SCRUB_BEARER";
+        const HMAC: &str = "FLEXIQ_TEST_EVENTS_SCRUB_HMAC";
+        const REDIS: &str = "FLEXIQ_TEST_EVENTS_SCRUB_REDIS_URL";
+        let document = file(&format!(
+            r#"{{"sinks": [
+                {{"kind": "http", "name": "w", "url": "https://events.example.com/in",
+                  "allow": ["events.example.com"],
+                  "bearer_token_env": "{BEARER}", "hmac_secret_env": "{HMAC}"}},
+                {{"kind": "redis_streams", "name": "s", "url_env": "{REDIS}", "stream": "flexiq:events"}}
+            ]}}"#
+        ));
+        let settings = from_env(&env(&[(FILE_VAR, &document.path())]))
+            .expect("valid")
+            .expect("enabled");
+        assert_eq!(secret_vars(&settings), vec![BEARER, HMAC, REDIS]);
+
+        for var in [BEARER, HMAC, REDIS] {
+            std::env::set_var(var, "redis://:hunter2@cache:6379");
+        }
+        scrub_event_secrets(&settings);
+        for var in [BEARER, HMAC, REDIS] {
+            assert!(std::env::var(var).is_err(), "{var} survived the scrub");
+        }
     }
 }

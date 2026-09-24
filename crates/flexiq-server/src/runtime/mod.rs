@@ -141,11 +141,12 @@ async fn drain(mut roles: tokio::task::JoinSet<Result<()>>, shutdown: &Shutdown)
 }
 
 /// Run until SIGINT/SIGTERM, then drain and exit.
-pub fn run(config: Config) -> Result<()> {
-    // First, so a sink that cannot be built stops the boot before storage is
-    // opened or migrated, let alone a role spawned.
-    let events = config.events.as_ref().map(start_events).transpose()?;
-
+///
+/// `events` is the hub [`start_events`] built from `config.events`. It is
+/// started by the caller, before storage is opened or any role spawned, so
+/// its sinks read their secrets before `main` scrubs them from the
+/// environment. `run` hands it to every emitter and shuts it down last.
+pub fn run(config: Config, events: Option<Arc<EventHub>>) -> Result<()> {
     // A webhook-only deployment rewrites pod specs and reads no jobs, so it
     // opens no storage. Config validation has already established that every
     // other role came with a DSN.
