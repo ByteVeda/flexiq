@@ -183,7 +183,7 @@ impl WorkflowRedisStorage {
     /// held cannot reuse it, so it would cost a second connection.
     fn load_definition(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         id: &str,
     ) -> Result<Option<WorkflowDefinition>> {
         let raw: Value = conn.hgetall(k_def(&self.prefix, id)).map_err(into_other)?;
@@ -196,7 +196,7 @@ impl WorkflowRedisStorage {
 
     /// Read a run on the caller's connection, filtered to this store's
     /// namespace; same reason as [`Self::load_definition`].
-    fn load_run(&self, conn: &mut redis::Connection, run_id: &str) -> Result<Option<WorkflowRun>> {
+    fn load_run(&self, conn: &mut RedisConnection, run_id: &str) -> Result<Option<WorkflowRun>> {
         let raw: Value = conn
             .hgetall(k_run(&self.prefix, run_id))
             .map_err(into_other)?;
@@ -1055,7 +1055,7 @@ impl WorkflowStorage for WorkflowRedisStorage {
 fn write_node_pipeline(
     prefix: &str,
     node: &WorkflowNode,
-    conn: &mut redis::Connection,
+    conn: &mut RedisConnection,
 ) -> Result<()> {
     let key = k_node(prefix, &node.run_id, &node.node_name);
     let mut pipe = redis::pipe();

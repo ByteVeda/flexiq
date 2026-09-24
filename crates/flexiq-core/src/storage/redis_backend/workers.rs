@@ -1,6 +1,6 @@
 use redis::Commands;
 
-use super::{map_err, watched_transaction, RedisStorage};
+use super::{map_err, watched_transaction, RedisConnection, RedisStorage};
 use crate::error::Result;
 use crate::job::now_millis;
 use crate::storage::records::{WorkerInfo, WorkerRegistration};
@@ -249,7 +249,7 @@ impl RedisStorage {
     /// order so callers can zip the result back onto the id list.
     fn heartbeats_pipelined(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         worker_ids: &[String],
     ) -> Result<Vec<Option<i64>>> {
         let mut pipe = redis::pipe();

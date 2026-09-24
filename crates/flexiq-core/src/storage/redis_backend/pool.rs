@@ -9,11 +9,10 @@
 //! `multiprocessing` child) with a wedged copy of that machinery. Here the
 //! caller dials on its own thread, and nothing runs between calls.
 
-use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use redis::ConnectionLike;
+use redis::{Cmd, ConnectionLike, ErrorKind, RedisError, RedisResult, Value};
 
 /// Most idle connections kept per storage — sized for a scheduler, a worker
 /// pool's threads and result handling issuing commands at once. A connection
@@ -51,7 +50,7 @@ impl ConnectionPool {
             idle: Mutex::new(Vec::with_capacity(MAX_IDLE)),
             owner_pid,
         });
-        pool.put_back(warm);
+        pool.put_back(warm, false);
         pool
     }
 
@@ -69,6 +68,7 @@ impl ConnectionPool {
             return Ok(RedisConnection {
                 conn: Some(self.client.get_connection()?),
                 pool: None,
+                poisoned: false,
             });
         }
         loop {
@@ -86,19 +86,21 @@ impl ConnectionPool {
         RedisConnection {
             conn: Some(conn),
             pool: Some(Arc::clone(self)),
+            poisoned: false,
         }
     }
 
-    /// Keep `conn` for reuse unless it is broken or the pool is full.
+    /// Keep `conn` for reuse unless it is broken (`poisoned`, or closed) or the
+    /// pool is full.
     ///
     /// A broken connection empties the whole idle stack: whatever killed it (a
     /// server restart, a failover, a proxy dropping idle clients) most likely
     /// killed its siblings too, and each would otherwise fail one caller's
     /// command before being found out. Not retried — the dead socket may have
     /// accepted the write, and an enqueue is not idempotent.
-    fn put_back(&self, conn: redis::Connection) {
+    fn put_back(&self, conn: redis::Connection, poisoned: bool) {
         let mut idle = self.lock_idle();
-        if !conn.is_open() {
+        if poisoned || !conn.is_open() {
             idle.clear();
             return;
         }
@@ -120,39 +122,94 @@ impl ConnectionPool {
     }
 }
 
-/// A connection checked out of a [`RedisStorage`](super::RedisStorage).
-/// Derefs to [`redis::Connection`] and returns to the pool on drop.
+/// A connection checked out of a [`RedisStorage`](super::RedisStorage),
+/// returned to the pool on drop — unless a command on it failed in a way that
+/// can leave it out of step with the server.
+///
+/// It is a [`ConnectionLike`] itself rather than a `Deref` to
+/// [`redis::Connection`], so every command passes through it and no failure
+/// goes unseen.
 pub struct RedisConnection {
     /// `Some` until drop.
     conn: Option<redis::Connection>,
     /// `None` for a connection dialled in a forked child, which is not pooled.
     pool: Option<Arc<ConnectionPool>>,
+    /// A failed read may have left part of a reply unread; the next borrower
+    /// would take it for its own. redis-rs only marks the connection closed on
+    /// EOF, so the guard remembers any such failure itself.
+    poisoned: bool,
 }
 
-impl Deref for RedisConnection {
-    type Target = redis::Connection;
+/// Whether `err` can leave the connection's reply stream out of step: any I/O
+/// or protocol failure, as opposed to a server error reply, which is read in
+/// full.
+fn desyncs(err: &RedisError) -> bool {
+    matches!(err.kind(), ErrorKind::Io | ErrorKind::Parse)
+        || err.is_unrecoverable_error()
+        || err.is_connection_dropped()
+}
 
-    fn deref(&self) -> &redis::Connection {
+impl RedisConnection {
+    fn inner(&mut self) -> &mut redis::Connection {
+        match &mut self.conn {
+            Some(conn) => conn,
+            None => unreachable!("a RedisConnection holds its connection until drop"),
+        }
+    }
+
+    fn inner_ref(&self) -> &redis::Connection {
         match &self.conn {
             Some(conn) => conn,
             None => unreachable!("a RedisConnection holds its connection until drop"),
         }
     }
+
+    fn track<T>(&mut self, result: RedisResult<T>) -> RedisResult<T> {
+        if let Err(err) = &result {
+            self.poisoned |= desyncs(err);
+        }
+        result
+    }
 }
 
-impl DerefMut for RedisConnection {
-    fn deref_mut(&mut self) -> &mut redis::Connection {
-        match &mut self.conn {
-            Some(conn) => conn,
-            None => unreachable!("a RedisConnection holds its connection until drop"),
-        }
+impl ConnectionLike for RedisConnection {
+    fn req_packed_command(&mut self, cmd: &[u8]) -> RedisResult<Value> {
+        let result = self.inner().req_packed_command(cmd);
+        self.track(result)
+    }
+
+    fn req_packed_commands(
+        &mut self,
+        cmd: &[u8],
+        offset: usize,
+        count: usize,
+    ) -> RedisResult<Vec<Value>> {
+        let result = self.inner().req_packed_commands(cmd, offset, count);
+        self.track(result)
+    }
+
+    fn req_command(&mut self, cmd: &Cmd) -> RedisResult<Value> {
+        let result = self.inner().req_command(cmd);
+        self.track(result)
+    }
+
+    fn get_db(&self) -> i64 {
+        self.inner_ref().get_db()
+    }
+
+    fn check_connection(&mut self) -> bool {
+        self.inner().check_connection()
+    }
+
+    fn is_open(&self) -> bool {
+        self.inner_ref().is_open()
     }
 }
 
 impl Drop for RedisConnection {
     fn drop(&mut self) {
         if let (Some(conn), Some(pool)) = (self.conn.take(), self.pool.as_ref()) {
-            pool.put_back(conn);
+            pool.put_back(conn, self.poisoned);
         }
     }
 }
@@ -173,7 +230,7 @@ mod tests {
         Some(ConnectionPool::owned_by(client, warm, owner_pid))
     }
 
-    fn client_id(conn: &mut redis::Connection) -> i64 {
+    fn client_id(conn: &mut impl ConnectionLike) -> i64 {
         redis::cmd("CLIENT").arg("ID").query(conn).unwrap()
     }
 
@@ -242,7 +299,7 @@ mod tests {
             return;
         };
         let mut held: Vec<_> = (0..4).map(|_| pool.get().unwrap()).collect();
-        let ids: Vec<i64> = held.iter_mut().map(|conn| client_id(conn)).collect();
+        let ids: Vec<i64> = held.iter_mut().map(client_id).collect();
         drop(held);
         assert_eq!(pool.lock_idle().len(), 4);
 
@@ -267,6 +324,34 @@ mod tests {
         assert!(failures <= 1, "{failures} callers met a killed connection");
         let mut conn = pool.get().unwrap();
         assert!(!ids.contains(&client_id(&mut conn)));
+    }
+
+    /// A read that times out leaves the reply in flight; redis-rs still calls
+    /// the connection open, so only the guard's own bookkeeping keeps the next
+    /// borrower from reading that stale reply as its own.
+    #[test]
+    fn a_connection_whose_read_failed_is_not_pooled() {
+        let Some(pool) = test_pool(std::process::id()) else {
+            return;
+        };
+        let mut conn = pool.get().unwrap();
+        let first = client_id(&mut conn);
+        conn.inner()
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let key = format!("pool_poison_{}", std::process::id());
+        let popped: RedisResult<Option<(String, String)>> =
+            redis::cmd("BLPOP").arg(&key).arg(2).query(&mut conn);
+        assert!(popped.is_err(), "BLPOP returned before the read timeout");
+        assert!(conn.is_open(), "redis-rs now closes on a read timeout");
+        assert!(conn.poisoned);
+        drop(conn);
+
+        assert!(pool.lock_idle().is_empty());
+        let mut next = pool.get().unwrap();
+        assert_ne!(client_id(&mut next), first);
+        let pong: String = redis::cmd("PING").query(&mut next).unwrap();
+        assert_eq!(pong, "PONG");
     }
 
     #[test]

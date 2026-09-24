@@ -169,17 +169,17 @@ fn map_err(e: redis::RedisError) -> QueueError {
 /// still `WATCH`ing: the helper `UNWATCH`es only on success, and a stale watch
 /// would make the next borrower's `MULTI`/`EXEC` abort for a key it never read.
 fn watched_transaction<T, F>(
-    conn: &mut redis::Connection,
+    conn: &mut RedisConnection,
     keys: &[&str],
     func: F,
 ) -> redis::RedisResult<T>
 where
-    F: FnMut(&mut redis::Connection, &mut redis::Pipeline) -> redis::RedisResult<Option<T>>,
+    F: FnMut(&mut RedisConnection, &mut redis::Pipeline) -> redis::RedisResult<Option<T>>,
 {
     let result = redis::transaction(conn, keys, func);
     if result.is_err() {
-        // Best-effort: a failure here means the socket is gone, and a closed
-        // connection is dropped by the pool rather than reused.
+        // Best-effort: a failure here means the socket is gone or out of step,
+        // and such a connection is dropped by the pool rather than reused.
         if let Err(e) = redis::cmd("UNWATCH").exec(conn) {
             log::debug!("redis UNWATCH after a failed transaction: {e}");
         }
@@ -214,7 +214,7 @@ fn strip_dead_blob(dead: &mut crate::storage::DeadJob) {
 /// keyset: Redis orders equal-score members by reverse-lexicographic id under
 /// `ZREVRANGEBYSCORE`, which is exactly `id DESC`.
 fn zset_keyset_page(
-    conn: &mut redis::Connection,
+    conn: &mut RedisConnection,
     zkey: &str,
     after: Option<(i64, &str)>,
     limit: i64,

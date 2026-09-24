@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 
 use crate::error::Result;
 use crate::job::{Job, JobStatus};
-use crate::storage::redis_backend::{map_err, RedisStorage};
+use crate::storage::redis_backend::{map_err, RedisConnection, RedisStorage};
 
 /// Lua: select and claim up to `max` ready jobs from one queue in a single
 /// round trip. Candidates are read in score order; a ready one is flipped
@@ -155,7 +155,7 @@ impl RedisStorage {
     /// the dequeue scan should skip it.
     fn claim_pending(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         job: &Job,
         queue_key: &str,
     ) -> Result<bool> {
@@ -190,7 +190,7 @@ impl RedisStorage {
     /// Archive a job the claim script found expired as cancelled, exactly as
     /// both Diesel paths do. A job that left `Pending` since the script ran is
     /// someone else's to settle.
-    fn archive_expired(&self, conn: &mut redis::Connection, job_id: &str, now: i64) -> Result<()> {
+    fn archive_expired(&self, conn: &mut RedisConnection, job_id: &str, now: i64) -> Result<()> {
         let Some(mut job) = self.load_job(conn, job_id)? else {
             return Ok(());
         };

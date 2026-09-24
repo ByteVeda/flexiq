@@ -8,7 +8,7 @@ use super::dequeue_score;
 use crate::error::{QueueError, Result};
 use crate::job::{now_millis, Job, JobStatus, NewJob};
 use crate::storage::records::DebounceOptions;
-use crate::storage::redis_backend::{map_err, RedisStorage};
+use crate::storage::redis_backend::{map_err, RedisConnection, RedisStorage};
 use crate::storage::DEBOUNCE_CANDIDATE_SCAN;
 
 /// Lua: find the pending, unclaimed job a debounce write may slide, pruning the
@@ -199,7 +199,7 @@ impl RedisStorage {
     /// not-yet-written row must not also skip the boundary check.
     fn validate_dep_ids(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         dep_ids: &[String],
         namespace: Option<&str>,
         batch: Option<&std::collections::HashMap<&str, Option<&str>>>,
@@ -403,7 +403,7 @@ impl RedisStorage {
     /// when its window is closed. Prunes stale index entries as it scans.
     fn resolve_debounce_target(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         index_key: &str,
     ) -> Result<Option<String>> {
         let mut invocation = DEBOUNCE_RESOLVE.prepare_invoke();
@@ -432,7 +432,7 @@ impl RedisStorage {
     /// on the slide and none on the insert.
     fn slide_debounce_target(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         target_json: &str,
         job: &Job,
         options: &DebounceOptions,
@@ -480,7 +480,7 @@ impl RedisStorage {
     /// caller opened it first and that job is the one to slide.
     fn insert_debounced(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         index_key: &str,
         job: &Job,
         depends_on: &[String],

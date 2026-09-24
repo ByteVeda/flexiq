@@ -5136,8 +5136,10 @@ fn redis_command_calls(info: &str, command: &str) -> u64 {
 /// may serve a snapshot refreshed only every few seconds, so send an `ECHO`
 /// marker and wait for a snapshot that counts it.
 #[cfg(feature = "redis")]
-fn redis_fresh_commandstats(conn: &mut redis::Connection) -> String {
-    let read = |conn: &mut redis::Connection| -> String {
+fn redis_fresh_commandstats(
+    conn: &mut flexiq_core::storage::redis_backend::RedisConnection,
+) -> String {
+    let read = |conn: &mut flexiq_core::storage::redis_backend::RedisConnection| -> String {
         redis::cmd("INFO").arg("commandstats").query(conn).unwrap()
     };
     let marked = redis_command_calls(&read(conn), "echo") + 1;

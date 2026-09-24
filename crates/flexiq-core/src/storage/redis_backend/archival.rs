@@ -1,6 +1,6 @@
 use redis::Commands;
 
-use super::{map_err, strip_list_blobs, RedisStorage};
+use super::{map_err, strip_list_blobs, RedisConnection, RedisStorage};
 use crate::error::Result;
 use crate::job::{Job, JobStatus};
 
@@ -170,11 +170,7 @@ impl RedisStorage {
     }
 
     /// Load the given archived-job ids into blob-free [`Job`]s, preserving order.
-    fn load_archived_by_ids(
-        &self,
-        conn: &mut redis::Connection,
-        ids: &[String],
-    ) -> Result<Vec<Job>> {
+    fn load_archived_by_ids(&self, conn: &mut RedisConnection, ids: &[String]) -> Result<Vec<Job>> {
         let mut jobs = Vec::with_capacity(ids.len());
         for id in ids {
             let archived_key = self.key(&["archived", id]);
