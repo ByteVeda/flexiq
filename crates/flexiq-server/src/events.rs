@@ -5,6 +5,10 @@
 //! the job ever ran. A running job's cancel is the scheduler's to report, once
 //! the attempt actually ends.
 //!
+//! Workflow node jobs (`SubmitWorkflow`) get no door `job.enqueued`:
+//! `submit_workflow` writes them and returns only ids. The scheduler still
+//! emits from `job.started` on.
+//!
 //! Every helper here takes the hub as an `Option` so a door calls it
 //! unconditionally; with no `FLEXIQ_EVENTS_FILE` it does nothing.
 
