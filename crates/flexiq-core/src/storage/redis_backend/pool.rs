@@ -90,11 +90,21 @@ impl ConnectionPool {
     }
 
     /// Keep `conn` for reuse unless it is broken or the pool is full.
+    ///
+    /// A broken connection empties the whole idle stack: whatever killed it (a
+    /// server restart, a failover, a proxy dropping idle clients) most likely
+    /// killed its siblings too, and each would otherwise fail one caller's
+    /// command before being found out. Not retried — the dead socket may have
+    /// accepted the write, and an enqueue is not idempotent.
     fn put_back(&self, conn: redis::Connection) {
+        let mut idle = self.lock_idle();
         if !conn.is_open() {
+            idle.clear();
             return;
         }
-        let mut idle = self.lock_idle();
+        // Aged entries sit at the bottom of the stack, where a busy pool never
+        // reaches them; close them here rather than leave the sockets open.
+        idle.retain(|entry| entry.since.elapsed() < MAX_IDLE_AGE);
         if idle.len() < MAX_IDLE {
             idle.push(IdleConnection {
                 conn,
@@ -206,6 +216,57 @@ mod tests {
         let fresh = client_id(&mut pool.get().unwrap());
         assert_ne!(stale, fresh);
         assert_eq!(pool.lock_idle().len(), 1);
+    }
+
+    #[test]
+    fn aged_idle_connections_are_pruned_on_return() {
+        let Some(pool) = test_pool(std::process::id()) else {
+            return;
+        };
+        let held: Vec<_> = (0..3).map(|_| pool.get().unwrap()).collect();
+        drop(held);
+        pool.lock_idle()
+            .iter_mut()
+            .for_each(|entry| entry.since -= MAX_IDLE_AGE);
+        drop(pool.lock_idle().pop());
+        let fresh = pool.get().unwrap();
+        drop(fresh);
+        assert_eq!(pool.lock_idle().len(), 1);
+    }
+
+    /// One server-side event kills every idle connection; only the first
+    /// caller to meet a dead one fails, and the rest dial fresh.
+    #[test]
+    fn a_dead_connection_empties_the_idle_stack() {
+        let Some(pool) = test_pool(std::process::id()) else {
+            return;
+        };
+        let mut held: Vec<_> = (0..4).map(|_| pool.get().unwrap()).collect();
+        let ids: Vec<i64> = held.iter_mut().map(|conn| client_id(conn)).collect();
+        drop(held);
+        assert_eq!(pool.lock_idle().len(), 4);
+
+        let mut killer = pool.client.get_connection().unwrap();
+        for id in &ids {
+            let _: i64 = redis::cmd("CLIENT")
+                .arg("KILL")
+                .arg("ID")
+                .arg(id)
+                .query(&mut killer)
+                .unwrap();
+        }
+
+        let mut failures = 0;
+        for _ in 0..ids.len() {
+            let mut conn = pool.get().unwrap();
+            let pong: redis::RedisResult<String> = redis::cmd("PING").query(&mut conn);
+            if pong.is_err() {
+                failures += 1;
+            }
+        }
+        assert!(failures <= 1, "{failures} callers met a killed connection");
+        let mut conn = pool.get().unwrap();
+        assert!(!ids.contains(&client_id(&mut conn)));
     }
 
     #[test]
