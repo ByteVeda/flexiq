@@ -4116,14 +4116,20 @@ mod push_tests {
     use std::time::Duration;
 
     fn push_scheduler() -> Scheduler {
-        let storage =
-            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
-        Scheduler::new(
-            storage,
+        push_scheduler_with_sqlite().0
+    }
+
+    /// A push scheduler plus a handle on its SQLite storage (a clone sharing
+    /// the pool and notify handle), for tests that bypass the backend enum.
+    fn push_scheduler_with_sqlite() -> (Scheduler, crate::storage::sqlite::SqliteStorage) {
+        let sqlite = crate::storage::sqlite::SqliteStorage::in_memory().unwrap();
+        let scheduler = Scheduler::new(
+            StorageBackend::Sqlite(sqlite.clone()),
             vec!["default".to_string()],
             SchedulerConfig::default(),
             None,
-        )
+        );
+        (scheduler, sqlite)
     }
 
     fn ready_job(task_name: &str) -> NewJob {
@@ -4151,11 +4157,8 @@ mod push_tests {
     fn test_wake_fires_on_immediate_enqueue() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let scheduler = push_scheduler();
-            let notify = match scheduler.storage() {
-                StorageBackend::Sqlite(s) => s.notify_handle().clone(),
-                _ => unreachable!("test uses sqlite"),
-            };
+            let (scheduler, sqlite) = push_scheduler_with_sqlite();
+            let notify = sqlite.notify_handle().clone();
 
             // Enqueue goes through the StorageBackend chokepoint, which calls
             // notify_one() for ready jobs.
@@ -4176,11 +4179,8 @@ mod push_tests {
     fn test_delayed_job_does_not_wake() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let scheduler = push_scheduler();
-            let notify = match scheduler.storage() {
-                StorageBackend::Sqlite(s) => s.notify_handle().clone(),
-                _ => unreachable!("test uses sqlite"),
-            };
+            let (scheduler, sqlite) = push_scheduler_with_sqlite();
+            let notify = sqlite.notify_handle().clone();
 
             let mut delayed = ready_job("later_task");
             delayed.scheduled_at = now_millis() + 60_000; // 1 minute out
@@ -4200,17 +4200,12 @@ mod push_tests {
     fn test_fallback_poll_dispatches_without_wake() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let scheduler = push_scheduler();
+            let (scheduler, sqlite) = push_scheduler_with_sqlite();
 
             // Insert a ready job directly via the inherent SQLite method so the
             // StorageBackend notify chokepoint is bypassed — simulating a
             // missed wake. The fallback dispatch path must still pick it up.
-            match scheduler.storage() {
-                StorageBackend::Sqlite(s) => {
-                    s.enqueue(ready_job("fallback_task")).unwrap();
-                }
-                _ => unreachable!("test uses sqlite"),
-            }
+            sqlite.enqueue(ready_job("fallback_task")).unwrap();
 
             let (tx, mut rx) = tokio::sync::mpsc::channel(16);
             // Drive a single fallback dispatch round directly.
