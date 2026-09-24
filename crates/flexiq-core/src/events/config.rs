@@ -193,6 +193,9 @@ pub enum EventsConfigError {
     /// Not JSON, or not this shape.
     #[error("events config is not valid: {0}")]
     Parse(String),
+    /// `source` is empty; CloudEvents requires a non-empty one.
+    #[error("events config source must not be empty")]
+    EmptySource,
     /// No sinks.
     #[error("events config names no sinks")]
     NoSinks,
@@ -247,6 +250,9 @@ impl EventsConfig {
     /// The rules `parse` enforces, re-run by hub start because the fields are
     /// public and a document can be built without parsing.
     pub(crate) fn validate(&self) -> Result<(), EventsConfigError> {
+        if self.source.trim().is_empty() {
+            return Err(EventsConfigError::EmptySource);
+        }
         if self.sinks.is_empty() {
             return Err(EventsConfigError::NoSinks);
         }
@@ -388,6 +394,10 @@ mod tests {
     fn validation_refuses_what_would_fail_open() {
         let cases = [
             (r#"{"sinks":[]}"#, "no sinks"),
+            (
+                r#"{"source":" ","sinks":[{"kind":"http","name":"a","url":"u","allow":["h"]}]}"#,
+                "source must not be empty",
+            ),
             (
                 r#"{"sinks":[{"kind":"http","name":"a","url":"u","allow":[]}]}"#,
                 "allow",
