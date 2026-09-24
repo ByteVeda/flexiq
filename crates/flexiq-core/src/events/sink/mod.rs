@@ -10,11 +10,13 @@ use super::event::JobEvent;
 
 #[cfg(feature = "events-http")]
 mod http;
+#[cfg(feature = "redis")]
+mod redis_streams;
 
 /// How one delivery attempt of one batch went.
 // Only feature-gated backends construct the first two; the hub matches on
 // them in every build, including one compiled with no sink kind at all.
-#[cfg_attr(not(feature = "events-http"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "events-http", feature = "redis")), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DeliveryResult {
     /// The destination accepted the whole batch.
@@ -49,10 +51,17 @@ pub(crate) fn build_backend(
         SinkConfig::Http(config) => Ok(Box::new(http::HttpSink::new(config, source)?)),
         #[cfg(not(feature = "events-http"))]
         SinkConfig::Http(_) => Err(not_compiled(sink, "events-http")),
+        #[cfg(feature = "redis")]
+        SinkConfig::RedisStreams(config) => Ok(Box::new(redis_streams::RedisStreamsSink::new(
+            config, source,
+        )?)),
+        #[cfg(not(feature = "redis"))]
         SinkConfig::RedisStreams(_) => Err(not_compiled(sink, "redis")),
     }
 }
 
+// Unused only when every sink kind is compiled in, and so never refused.
+#[cfg_attr(all(feature = "events-http", feature = "redis"), allow(dead_code))]
 fn not_compiled(sink: &SinkConfig, feature: &'static str) -> EventsConfigError {
     EventsConfigError::NotCompiled {
         sink: sink.name().to_string(),

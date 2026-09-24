@@ -299,6 +299,9 @@ impl EventsConfig {
                     }
                 }
                 SinkConfig::RedisStreams(redis) => {
+                    if redis.url_env.trim().is_empty() {
+                        return Err(invalid("url_env must not be empty"));
+                    }
                     if redis.stream.trim().is_empty() {
                         return Err(invalid("stream must not be empty"));
                     }
@@ -417,6 +420,10 @@ mod tests {
             (
                 r#"{"sinks":[{"kind":"redis_streams","name":"r","url_env":"R","stream":"s","max_len":0}]}"#,
                 "max_len",
+            ),
+            (
+                r#"{"sinks":[{"kind":"redis_streams","name":"r","url_env":" ","stream":"s"}]}"#,
+                "url_env",
             ),
         ];
         for (doc, needle) in cases {
