@@ -1,5 +1,5 @@
 {
   "title": "Operate",
   "root": true,
-  "pages": ["index", "tokens", "grpc", "admin", "push", "triggers", "cli", "scaling"]
+  "pages": ["index", "tokens", "grpc", "admin", "push", "triggers", "events", "cli", "scaling"]
 }

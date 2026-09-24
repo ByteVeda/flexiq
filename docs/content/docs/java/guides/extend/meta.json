@@ -5,6 +5,7 @@
     "events",
     "middleware",
     "webhooks",
+    "event-sinks",
     "serializers",
     "monitoring",
     "logging",

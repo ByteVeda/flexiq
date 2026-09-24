@@ -59,6 +59,10 @@ still schedules, as soon as something opens an executor stream. **Under push it
 starts eagerly at boot instead** — a push target is a URL, not a connection, so
 there is no first attach to wait for and nothing that would ever start it.
 
+**Nor are events.** `FLEXIQ_EVENTS_FILE` sends each job transition the roles
+observe out as a CloudEvent, to an HTTP endpoint or a Redis stream, and opens
+no port of its own — see [Event egress](/server/operate/events).
+
 ## Configuration
 
 Environment only. The binary takes no flags beyond `--help` and `--version`, so
@@ -221,6 +225,10 @@ A binary you built yourself without `--features grpc` **rejects
 deployment that looks configured and serves — or dials — nothing is the worse
 failure.
 
+The HTTP event sink is behind `events-http` in the same way, and the published
+image carries it too: a binary built without it refuses, at boot, an events
+document that names an `http` sink.
+
 ## The image
 
 Releases publish a distroless multiarch image at
@@ -258,6 +266,11 @@ choosing roles, assigning maintenance, probes and secret rotation.
     href="/server/operate/grpc"
     title="The gRPC door"
     description="The producer and executor doors, the JSON facade, reflection, and the TLS gap"
+  />
+  <Card
+    href="/server/operate/events"
+    title="Event egress"
+    description="Job lifecycle events out as CloudEvents, to HTTP or a Redis stream"
   />
   <Card
     href="/server/operate/scaling"

@@ -13,7 +13,7 @@ The Rust SDK has **no extension points**. Not "limited ones" — none.
 | Absent | The nearest real thing |
 | --- | --- |
 | Middleware | No hook surface at all. `flexiq_core::Worker::on_outcome` is the closest seam, and `WorkerBuilder` does not expose it — build the worker through `flexiq_core::Worker` directly if you need it. |
-| Lifecycle events | Not wrapped. The same `on_outcome` callback is the only place a completed dispatch is observable in-process. |
+| Lifecycle events | Not wrapped. The same `on_outcome` callback is the only place a completed dispatch is observable in-process; [event sinks](/rust/guides/extend/event-sinks) send them out of the process instead. |
 | Webhooks | Not wrapped. |
 | Pluggable serializers | The payload codec is the wire CBOR, and it is fixed. A task's arguments are `Serialize` values encoded by the shared writer, so a cross-language producer decodes them. |
 | Dependency injection | A task takes its declared arguments and nothing else — no context object, no resource map. |
@@ -24,10 +24,15 @@ nothing between the decoded arguments and the body.
 
 ## What is here
 
-Three things, and they are all about seeing and annotating a run rather than
+Four things, and they are all about seeing and annotating a run rather than
 changing it.
 
 <Cards>
+  <Card
+    title="Event sinks"
+    to="guides/extend/event-sinks"
+    description="Send job lifecycle events out as CloudEvents, to HTTP or a Redis stream"
+  />
   <Card
     title="Logging"
     to="guides/extend/logging"
