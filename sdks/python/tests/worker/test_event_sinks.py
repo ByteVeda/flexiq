@@ -136,5 +136,8 @@ def test_worker_sends_started_and_completed(
         queue.shutdown()
         join_worker(worker)
 
-    # The hub is withdrawn with the run that started it.
-    assert queue.event_sink_stats() == []
+    # The drained hub stays readable, so the final counts survive the run.
+    (final,) = queue.event_sink_stats()
+    assert final["name"] == SINK
+    assert final["delivered"] >= 2
+    assert final["queued"] == 0

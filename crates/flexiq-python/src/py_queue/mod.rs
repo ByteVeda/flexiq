@@ -90,7 +90,8 @@ pub struct PyQueue {
     /// Where workers send job events, if anywhere. Each `run_worker` starts
     /// its own hub from it.
     pub(crate) event_sinks: Option<EventSinks>,
-    /// The hub of the worker running on this queue, read by `event_sink_stats`.
+    /// The hub of the latest worker started on this queue, kept after it
+    /// drains so `event_sink_stats` can report the final counts.
     pub(crate) event_hub: Mutex<Option<Arc<flexiq_core::EventHub>>>,
     /// Whether opening applies schema changes. When false the workflow store is
     /// built unmigrated too, so *no* path applies DDL until `migrate()` runs.

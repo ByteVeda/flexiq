@@ -38,45 +38,42 @@ impl EventSinks {
     }
 }
 
-/// One `run_worker` call's hub. Published for `event_sink_stats` while the run
-/// lives; dropping it drains the hub and withdraws it, on every exit path.
-pub(crate) struct EventsRun<'q> {
-    slot: &'q Mutex<Option<Arc<EventHub>>>,
+/// One `run_worker` call's hub; dropping it drains the hub, on every exit path.
+///
+/// The queue's slot keeps the hub after the drain, so `event_sink_stats`
+/// reports the final counts once the run returns. Only a newer run's
+/// `start_event_hub` replaces it; this drop never writes the slot, so it
+/// cannot clobber a concurrent run's hub.
+pub(crate) struct EventsRun {
     hub: Arc<EventHub>,
     drain: Duration,
 }
 
-impl EventsRun<'_> {
+impl EventsRun {
     /// The hub, for `Scheduler::set_events`.
     pub(crate) fn hub(&self) -> Arc<EventHub> {
         Arc::clone(&self.hub)
     }
 }
 
-impl Drop for EventsRun<'_> {
+impl Drop for EventsRun {
     fn drop(&mut self) {
         let (hub, drain) = (&self.hub, self.drain);
         // The drain blocks for up to `drain`; other Python threads keep running.
         Python::attach(|py| py.detach(|| hub.shutdown(drain)));
-        let mut slot = lock(self.slot);
-        // A sibling run on the same queue may have published its own hub since.
-        if slot.as_ref().is_some_and(|live| Arc::ptr_eq(live, hub)) {
-            *slot = None;
-        }
     }
 }
 
 impl PyQueue {
     /// Start this run's hub, if the queue has sinks. A sink kind this build
     /// lacks is refused here, since only a started hub builds its backends.
-    pub(crate) fn start_event_hub(&self) -> PyResult<Option<EventsRun<'_>>> {
+    pub(crate) fn start_event_hub(&self) -> PyResult<Option<EventsRun>> {
         let Some(sinks) = &self.event_sinks else {
             return Ok(None);
         };
         let hub = Arc::new(EventHub::from_json(&sinks.document).map_err(config_error)?);
         *lock(&self.event_hub) = Some(Arc::clone(&hub));
         Ok(Some(EventsRun {
-            slot: &self.event_hub,
             hub,
             drain: sinks.drain,
         }))
@@ -85,8 +82,9 @@ impl PyQueue {
 
 #[pymethods]
 impl PyQueue {
-    /// Each event sink's counters for the worker running on this queue, in
-    /// configuration order. Empty when no worker with sinks is running.
+    /// Each event sink's counters for the latest worker started on this
+    /// queue, in configuration order: live while it runs, final once it has
+    /// returned. Empty until a worker with sinks has started.
     pub fn event_sink_stats<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let hub = lock(&self.event_hub).clone();
         let Some(hub) = hub else {

@@ -260,8 +260,9 @@ for sink in queue.event_sink_stats():
 
 Each entry is a `dict` with `name`, `kind`, `delivered`,
 `dropped_buffer_full`, `dropped_rejected`, `dropped_failed`,
-`dropped_shutdown` and `queued`. The list is empty when no worker with sinks is
-running on the queue.
+`dropped_shutdown` and `queued`. After `run_worker` returns they are the final
+counts, until another worker starts on the queue; before any worker with sinks
+has started, the list is empty.
 
   </Tab>
   <Tab sdk="node">
