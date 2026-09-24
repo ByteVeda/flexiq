@@ -205,6 +205,8 @@ impl crate::storage::notify::StorageNotifier for SqliteStorage {
         // delayed job's deadline rides along so the loop arms a timer for it.
         if scheduled_at > crate::job::now_millis() {
             self.delayed.push(scheduled_at);
+        } else {
+            self.delayed.mark_ready();
         }
         self.notify.notify_one();
     }

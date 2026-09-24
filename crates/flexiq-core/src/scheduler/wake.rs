@@ -57,23 +57,37 @@ impl Wake {
 /// fall back to the timer rather than growing without bound.
 const MAX_PENDING_HINTS: usize = 1024;
 
-/// Delayed-job deadlines an in-process (SQLite) enqueue announced, handed to
-/// the push loop with the next wake. Cloning shares the buffer.
+/// What in-process (SQLite) enqueues announced since the push loop's last
+/// wake: delayed-job deadlines, and whether any job was ready. A `Notify` only
+/// says "something happened", so this is what lets a delayed-only wake skip
+/// the drain. Cloning shares the buffer.
 #[derive(Clone, Default)]
-pub struct DelayedHints(Arc<Mutex<Vec<i64>>>);
+pub struct DelayedHints(Arc<Mutex<Wake>>);
 
 impl DelayedHints {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Wake> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// Record a delayed job's `scheduled_at` (ms) for the next wake.
     pub(crate) fn push(&self, scheduled_at: i64) {
-        let mut hints = self.0.lock().unwrap_or_else(|p| p.into_inner());
-        if hints.len() < MAX_PENDING_HINTS {
-            hints.push(scheduled_at);
+        let mut pending = self.lock();
+        if pending.delayed.len() < MAX_PENDING_HINTS {
+            pending.delayed.push(scheduled_at);
         }
     }
 
-    /// Everything recorded since the last take.
-    fn take(&self) -> Vec<i64> {
-        std::mem::take(&mut *self.0.lock().unwrap_or_else(|p| p.into_inner()))
+    /// Record that a ready job was enqueued, so the next wake drains.
+    pub(crate) fn mark_ready(&self) {
+        self.lock().ready = true;
+    }
+
+    /// Everything recorded since the last take. A wake that recorded nothing
+    /// (a dropped deadline, a foreign `notify_one`) drains, as before hints.
+    fn take(&self) -> Wake {
+        let mut heard = std::mem::take(&mut *self.lock());
+        heard.ready |= heard.delayed.is_empty();
+        heard
     }
 }
 
@@ -122,12 +136,7 @@ impl WakeSource {
         match self {
             WakeSource::InProcess(notify, hints) => {
                 notify.notified().await;
-                // One `Notify` cannot say whether a ready job came too, so
-                // always drain — a local SQLite scan is cheap.
-                Wake {
-                    ready: true,
-                    delayed: hints.take(),
-                }
+                hints.take()
             }
             WakeSource::Channel(rx) => {
                 // A closed channel (listener gone) must not busy-loop the

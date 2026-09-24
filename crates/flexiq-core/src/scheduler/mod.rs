@@ -4342,7 +4342,18 @@ mod push_tests {
             .await
             .expect("a delayed enqueue must announce its deadline");
         assert_eq!(heard.delayed, vec![due]);
+        assert!(
+            !heard.ready,
+            "a delayed-only wake arms the timer without a drain"
+        );
         scheduler.absorb_wake(heard);
+
+        // A ready enqueue alongside one still drains.
+        scheduler.storage().enqueue(ready_job("now_task")).unwrap();
+        let heard = tokio::time::timeout(Duration::from_millis(50), wake.wait())
+            .await
+            .expect("a ready enqueue must wake");
+        assert!(heard.ready && heard.delayed.is_empty());
 
         let timer = scheduler.next_delayed_timer();
         assert!(
@@ -4352,8 +4363,9 @@ mod push_tests {
     }
 
     /// End to end on the run loop: a job enqueued 1 s out dispatches at its
-    /// deadline. The enqueue's wake re-anchors the 2 s fallback, so without
-    /// the announced deadline it could not dispatch before ~2 s.
+    /// deadline. The loop's startup drain, just before the enqueue, anchors
+    /// the 2 s fallback, so without the announced deadline it could not
+    /// dispatch before ~2 s.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn push_dispatches_a_delayed_job_at_its_deadline() {
         let scheduler = Arc::new(push_scheduler());
