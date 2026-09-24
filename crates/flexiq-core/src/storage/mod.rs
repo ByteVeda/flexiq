@@ -1636,6 +1636,21 @@ impl StorageBackend {
         }
     }
 
+    /// Wake the push loop for dependents the completion of `ids` may have
+    /// unblocked. Redis publishes from inside its own completion write
+    /// (`redis_backend::jobs::dependents_wake`), and Postgres's listener is a
+    /// stub, so only SQLite acts here.
+    #[cfg(feature = "push-dispatch")]
+    fn notify_completed(&self, ids: &[&str]) {
+        match self {
+            StorageBackend::Sqlite(s) => s.wake_if_dependents(ids),
+            #[cfg(feature = "postgres")]
+            StorageBackend::Postgres(_) => {}
+            #[cfg(feature = "redis")]
+            StorageBackend::Redis(_) => {}
+        }
+    }
+
     /// Announce a batch: once per distinct `(namespace, queue)` holding a ready
     /// job, so each pair's schedulers hear about it without one signal per
     /// job, and once per distinct delayed deadline, so each arms a timer.
@@ -1752,14 +1767,23 @@ impl Storage for StorageBackend {
         result_bytes: Option<Vec<u8>>,
         namespace: Option<&str>,
     ) -> Result<()> {
-        delegate!(self, complete, id, result_bytes, namespace)
+        delegate!(self, complete, id, result_bytes, namespace)?;
+        #[cfg(feature = "push-dispatch")]
+        self.notify_completed(&[id]);
+        Ok(())
     }
     fn complete_batch(
         &self,
         completions: &[crate::job::JobCompletion],
         namespace: Option<&str>,
     ) -> Result<()> {
-        delegate!(self, complete_batch, completions, namespace)
+        delegate!(self, complete_batch, completions, namespace)?;
+        #[cfg(feature = "push-dispatch")]
+        {
+            let ids: Vec<&str> = completions.iter().map(|c| c.job_id.as_str()).collect();
+            self.notify_completed(&ids);
+        }
+        Ok(())
     }
     fn fail(&self, id: &str, error: &str) -> Result<()> {
         delegate!(self, fail, id, error)

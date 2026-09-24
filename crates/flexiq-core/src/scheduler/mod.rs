@@ -4555,6 +4555,45 @@ mod push_tests {
         run.await.unwrap();
     }
 
+    /// A dependent skipped while its parent ran dispatches as soon as the
+    /// parent completes, not on the fallback: no enqueue announces it again.
+    #[tokio::test]
+    async fn push_completion_wakes_a_blocked_dependent() {
+        let scheduler = Arc::new(push_scheduler());
+        scheduler.enable_push_dispatch();
+        let (run, mut rx) = spawn_run(&scheduler);
+        let parent = scheduler.storage().enqueue(ready_job("parent")).unwrap();
+        let running = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the parent dispatches")
+            .expect("run loop alive");
+        assert_eq!(running.id, parent.id);
+
+        let dependent = scheduler
+            .storage()
+            .enqueue(NewJob {
+                depends_on: vec![parent.id.clone()],
+                ..ready_job("dependent")
+            })
+            .unwrap();
+        // Let the enqueue-wake drain skip it; that also re-anchors the fallback.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(rx.try_recv().is_err(), "blocked while the parent runs");
+
+        let completed_at = tokio::time::Instant::now();
+        scheduler
+            .storage()
+            .complete(&parent.id, None, None)
+            .unwrap();
+        let job = tokio::time::timeout_at(completed_at + Duration::from_millis(1000), rx.recv())
+            .await
+            .expect("the parent's completion must wake the push loop")
+            .expect("run loop alive");
+        assert_eq!(job.id, dependent.id);
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
     /// #961: SQLite keeps polling unless a shell opts in — no source after
     /// construction, and none resolved by default.
     #[test]

@@ -110,6 +110,7 @@ impl WakeSource {
     ) -> Self {
         match storage {
             StorageBackend::Sqlite(s) => {
+                s.mark_push_listening();
                 WakeSource::InProcess(s.notify_handle().clone(), s.delayed_hints().clone())
             }
             #[cfg(feature = "postgres")]

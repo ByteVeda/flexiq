@@ -70,6 +70,10 @@ pub struct SqliteStorage {
     /// it arms a timer for each instead of waiting out its fallback.
     #[cfg(feature = "push-dispatch")]
     delayed: crate::scheduler::wake::DelayedHints,
+    /// Set once a push loop takes this handle's wakes, so a polling-only
+    /// deployment never pays the completion's dependents lookup.
+    #[cfg(feature = "push-dispatch")]
+    push_listening: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SqliteStorage {
@@ -96,6 +100,8 @@ impl SqliteStorage {
             notify: std::sync::Arc::new(tokio::sync::Notify::new()),
             #[cfg(feature = "push-dispatch")]
             delayed: Default::default(),
+            #[cfg(feature = "push-dispatch")]
+            push_listening: Default::default(),
         };
         if auto_migrate {
             storage.migrate()?;
@@ -165,6 +171,8 @@ impl SqliteStorage {
             notify: std::sync::Arc::new(tokio::sync::Notify::new()),
             #[cfg(feature = "push-dispatch")]
             delayed: Default::default(),
+            #[cfg(feature = "push-dispatch")]
+            push_listening: Default::default(),
         };
         storage.migrate()?;
         Ok(storage)
@@ -188,6 +196,35 @@ impl SqliteStorage {
     #[cfg(feature = "push-dispatch")]
     pub(crate) fn delayed_hints(&self) -> &crate::scheduler::wake::DelayedHints {
         &self.delayed
+    }
+
+    /// Record that a push loop now consumes this handle's wakes.
+    #[cfg(feature = "push-dispatch")]
+    pub(crate) fn mark_push_listening(&self) {
+        self.push_listening
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Wake the push loop when any of the just-completed `ids` has dependents:
+    /// a drain skipped them while the parent ran, and no enqueue will announce
+    /// them again. Best-effort — the completion has committed, so a failed
+    /// lookup only costs latency.
+    #[cfg(feature = "push-dispatch")]
+    pub(crate) fn wake_if_dependents(&self, ids: &[&str]) {
+        if !self
+            .push_listening
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return;
+        }
+        match self.has_dependents(ids) {
+            Ok(true) => {
+                self.delayed.mark_ready();
+                self.notify.notify_one();
+            }
+            Ok(false) => {}
+            Err(e) => log::warn!("push-dispatch: dependents lookup after completion failed: {e}"),
+        }
     }
 
     /// Check a pooled SQLite connection out of the r2d2 pool.
