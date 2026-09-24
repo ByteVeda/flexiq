@@ -153,6 +153,7 @@ impl Harness {
                 namespace: Some(NAMESPACE.to_string()),
                 workers: Some(2),
                 maintenance: false,
+                push_dispatch: None,
             },
         ));
         let shutdown = Shutdown::default();

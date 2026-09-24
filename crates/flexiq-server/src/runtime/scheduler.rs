@@ -113,6 +113,8 @@ pub struct SchedulerSettings {
     pub workers: Option<usize>,
     /// Whether this process runs retention and cleanup.
     pub maintenance: bool,
+    /// Wake-on-enqueue choice; `None` keeps the backend default.
+    pub push_dispatch: Option<bool>,
 }
 
 /// Owns the scheduler's lifecycle: start-once, shutdown-once.
@@ -206,6 +208,9 @@ impl SchedulerSupervisor {
             .dispatcher(self.path.pool_type(), self.path.as_worker_dispatcher());
         if let Some(namespace) = &self.settings.namespace {
             worker = worker.namespace(namespace.clone());
+        }
+        if let Some(enabled) = self.settings.push_dispatch {
+            worker = worker.push_dispatch(enabled);
         }
         worker
     }

@@ -23,6 +23,11 @@ Configuration (environment only):
                                  path's slots — what executors advertise, or
                                  FLEXIQ_PUSH_TARGET_CAPACITY under push)
   FLEXIQ_MAINTENANCE            on | off — run retention and cleanup (default: on)
+  FLEXIQ_PUSH_DISPATCH          on | off — wake the scheduler on enqueue instead
+                                 of polling (default: on for Redis, off
+                                 elsewhere; needs the `push-dispatch` cargo
+                                 feature). Set off for a Redis that refuses
+                                 SUBSCRIBE. Unrelated to FLEXIQ_PUSH_TARGET_URL
   FLEXIQ_LISTEN                 executor attach address, e.g. 127.0.0.1:7777
                                  or unix:/run/flexiq.sock (default: off)
   FLEXIQ_ATTACH_TOKEN           shared secret executors present when attaching;

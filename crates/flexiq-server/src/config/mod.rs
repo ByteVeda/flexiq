@@ -44,6 +44,9 @@ pub struct Config {
     pub workers: Option<usize>,
     /// Whether this process runs retention and cleanup.
     pub maintenance: bool,
+    /// Whether the scheduler wakes on enqueue instead of polling. `None` keeps
+    /// the backend default (push on Redis, polling elsewhere).
+    pub push_dispatch: Option<bool>,
     /// Where executors attach, and what they must present. `None` disables the
     /// listener.
     pub attach: Option<AttachConfig>,
@@ -85,6 +88,7 @@ impl Config {
             queues: queues(env),
             workers: usize_value(env, "FLEXIQ_WORKERS")?,
             maintenance: flag(env, "FLEXIQ_MAINTENANCE", true),
+            push_dispatch: optional_flag(env, "FLEXIQ_PUSH_DISPATCH")?,
             auto_migrate: flag(env, "FLEXIQ_AUTO_MIGRATE", true),
             attach: listen::from_env(env)?,
             dashboard: dashboard::from_env(env, allow_insecure)?,
@@ -175,13 +179,28 @@ pub fn value(env: &Env, key: &str) -> Option<String> {
 /// A boolean variable. `1`/`true`/`on`/`yes` enable, `0`/`false`/`off`/`no`
 /// disable, anything else falls back to `default`.
 pub fn flag(env: &Env, key: &str, default: bool) -> bool {
+    value(env, key)
+        .and_then(|raw| parse_bool(&raw))
+        .unwrap_or(default)
+}
+
+/// A tri-state boolean: unset leaves the choice to the code's default. Unlike
+/// [`flag`], an unrecognised value is refused rather than read as unset.
+fn optional_flag(env: &Env, key: &str) -> Result<Option<bool>> {
     match value(env, key) {
-        None => default,
-        Some(raw) => match raw.to_ascii_lowercase().as_str() {
-            "1" | "true" | "on" | "yes" => true,
-            "0" | "false" | "off" | "no" => false,
-            _ => default,
+        None => Ok(None),
+        Some(raw) => match parse_bool(&raw) {
+            Some(parsed) => Ok(Some(parsed)),
+            None => bail!("{key} must be on or off, got '{raw}'"),
         },
+    }
+}
+
+fn parse_bool(raw: &str) -> Option<bool> {
+    match raw.to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" => Some(true),
+        "0" | "false" | "off" | "no" => Some(false),
+        _ => None,
     }
 }
 
@@ -255,6 +274,34 @@ mod tests {
         assert!(config.maintenance);
         assert!(config.workers.is_none());
         assert!(config.attach.is_none());
+        assert!(
+            config.push_dispatch.is_none(),
+            "unset keeps the backend default"
+        );
+    }
+
+    #[test]
+    fn push_dispatch_reads_on_and_off() {
+        for (raw, expected) in [("off", false), ("false", false), ("0", false), ("on", true)] {
+            let config = Config::from_map(&env(&[
+                ("FLEXIQ_DSN", ":memory:"),
+                ("FLEXIQ_DASHBOARD", "127.0.0.1:8080"),
+                ("FLEXIQ_PUSH_DISPATCH", raw),
+            ]))
+            .expect("valid config");
+            assert_eq!(config.push_dispatch, Some(expected), "{raw}");
+        }
+    }
+
+    #[test]
+    fn push_dispatch_refuses_an_unknown_value() {
+        let error = Config::from_map(&env(&[
+            ("FLEXIQ_DSN", ":memory:"),
+            ("FLEXIQ_DASHBOARD", "127.0.0.1:8080"),
+            ("FLEXIQ_PUSH_DISPATCH", "sometimes"),
+        ]))
+        .expect_err("must reject");
+        assert!(error.to_string().contains("FLEXIQ_PUSH_DISPATCH"));
     }
 
     #[test]
