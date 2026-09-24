@@ -296,6 +296,54 @@ Commit: `perf(redis): notify workers inside the enqueue pipeline`.
 
 ---
 
+## Task 6: Pool Redis connections (added after the local bench run)
+
+**Why:** a local bench (released 2.0.0 vs this branch, hosted Redis ~33 ms) showed drain
+throughput unchanged (~0.8-0.9 jobs/s) though idle CPU fell 0.9 % → 0.33 %. A commandstats probe
+(`/tmp/rt_probe.py`, 40 jobs) found **`HELLO` 3.2×/job**: `RedisStorage::conn()`
+(`redis_backend/mod.rs:83`) calls `client.get_connection()` — a fresh TCP connection plus
+handshake — on every one of ~136 call sites. Each connect is ≥ 2 round trips before the command
+runs, so connection setup, not command count, dominates the per-job cost on a remote Redis.
+
+**Files:** root `Cargo.toml` (`redis` features), `crates/flexiq-core/Cargo.toml`,
+`crates/flexiq-core/src/storage/redis_backend/mod.rs` (+ call sites that need `&mut *conn`),
+`crates/flexiq-workflows/src/redis_store.rs` (`conn()` at ~147 — route through the same pool if
+it wraps a `RedisStorage`).
+
+### Behaviour
+
+- `RedisStorage` holds an `r2d2::Pool<redis::Client>` (redis crate feature `r2d2`; `r2d2` 0.8 is
+  already in the tree via diesel). `conn()` checks out a pooled connection. Keep the type change
+  minimal: return the pooled connection and let deref coercion handle `&mut Connection`
+  parameters; use `&mut *conn` where a generic `ConnectionLike` is required.
+- **No per-checkout PING:** `test_on_check_out(false)` — a checkout-time PING would add back the
+  very round trip being removed. Broken connections are discarded by r2d2's `has_broken`; a
+  command error on a dead socket surfaces as today.
+- Pool size: a named constant with a why-comment, sized for one process's scheduler + worker
+  threads + result handling (e.g. 16), `min_idle` small, connection timeout bounded (e.g. 5 s)
+  and mapped to a `QueueError` variant consistent with today's "Redis connection error".
+  Construction (`with_prefix`) keeps validating reachability once.
+- The push listener keeps its dedicated non-pooled connection (a SUBSCRIBE connection must never
+  return to a pool).
+- A pooled connection must never be returned in a dirty state: check for `MULTI` without
+  `EXEC`, `WATCH`, and `SELECT` usage in the backend; if a path can leave one open on error,
+  either discard that connection or restructure so it cannot.
+
+### Tests
+
+- Redis (hosted URL, unique prefix): a connection-reuse test — N sequential storage operations
+  open ≤ pool-size connections (e.g. `CLIENT LIST`/`CLIENT ID` observation or `INFO clients`
+  `total_connections_received` delta on a warmed storage — pick the observable that works on the
+  hosted Redis and note it).
+- Full `redis_storage_tests`, push tests, and `cargo test -j1 -p flexiq-workflows --features redis`
+  (workflow Redis contract) with the hosted URL. Clippy + rustdoc gate.
+- Re-run `/tmp/rt_probe.py` with a freshly built release wheel and report the per-job command table
+  and jobs/s before vs after (numbers go in the report, not in committed files).
+
+Commit(s): `perf(redis): pool connections instead of dialling per call` (+ test commit if separate).
+
+---
+
 ## Task 5: Docs
 
 **Files:** docs pages listed in `/tmp/redis-perf-facts.md` §1 "Docs mentioning default 1"
