@@ -910,7 +910,16 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
        print(job.to_dict()["scheduled_at"])
    ```
 
-4. **Database performance**: slow dequeue queries. Check SQLite WAL size or
+4. **Redis push-dispatch fallback window**: on Redis, push-dispatch is on by
+   default. Enqueues are announced, delayed ones included, and the worker's
+   own retries and deferrals (rate limit, concurrency, circuit breaker) arm
+   a local timer, so jobs usually dispatch on time. The rest — a resumed
+   queue, a delayed job enqueued before the worker started, a deadline past
+   what one large batch announces or the listener can buffer — falls back to
+   a 2s timer rather than an immediate wake, longer than the ≤200ms polling
+   ceiling it replaced. `push_dispatch=False` restores polling.
+
+5. **Database performance**: slow dequeue queries. Check SQLite WAL size or
    Postgres query plans.
 
 </SdkOnly>
@@ -933,7 +942,16 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
 3. **Capped by a limit**: check you aren't capped by a per-task
    `maxConcurrent` or [rate limit](/node/guides/reliability/rate-limiting).
 
-4. **Database performance**: slow dequeue queries. Check SQLite WAL size or
+4. **Redis push-dispatch fallback window**: on Redis, push-dispatch is on by
+   default. Enqueues are announced, delayed ones included, and the worker's
+   own retries and deferrals (rate limit, concurrency, circuit breaker) arm
+   a local timer, so jobs usually dispatch on time. The rest — a resumed
+   queue, a delayed job enqueued before the worker started, a deadline past
+   what one large batch announces or the listener can buffer — falls back to
+   a 2s timer rather than an immediate wake, longer than the ≤200ms polling
+   ceiling it replaced. `pushDispatch: false` restores polling.
+
+5. **Database performance**: slow dequeue queries. Check SQLite WAL size or
    Postgres query plans.
 
 </SdkOnly>
@@ -958,7 +976,16 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
    latency but is actually delayed enqueue. Check for an active gate on the
    task; see [Rate Limiting](/java/guides/reliability/rate-limiting).
 
-5. **Database performance**: slow dequeue queries. Check SQLite WAL size or
+5. **Redis push-dispatch fallback window**: on Redis, push-dispatch is on by
+   default. Enqueues are announced, delayed ones included, and the worker's
+   own retries and deferrals (rate limit, concurrency, circuit breaker) arm
+   a local timer, so jobs usually dispatch on time. The rest — a resumed
+   queue, a delayed job enqueued before the worker started, a deadline past
+   what one large batch announces or the listener can buffer — falls back to
+   a 2s timer rather than an immediate wake, longer than the ≤200ms polling
+   ceiling it replaced. `pushDispatch(false)` restores polling.
+
+6. **Database performance**: slow dequeue queries. Check SQLite WAL size or
    Postgres query plans.
 
 </SdkOnly>
@@ -967,10 +994,10 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
 
 **Possible causes and fixes**:
 
-1. **Batch size too small**: `SchedulerConfig::batch_size` defaults to `1` —
-   one job per round trip. Raise it, and set `max_in_flight` to the worker's
-   own parallelism so a deep backlog isn't claimed by one process and starved
-   from its peers.
+1. **Batch size too small**: unset, `SchedulerConfig::batch_size` defaults to
+   `8` on Redis and `1` — one job per round trip — on SQLite/Postgres. Set it
+   explicitly, and set `max_in_flight` to the worker's own parallelism so a
+   deep backlog isn't claimed by one process and starved from its peers.
 
    ```rust
    use flexiq::SchedulerConfig;
@@ -980,7 +1007,7 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
        .register::<process_data>()
        .num_workers(8)
        .scheduler_config(SchedulerConfig {
-           batch_size: 16,
+           batch_size: Some(16),
            max_in_flight: Some(8),
            ..SchedulerConfig::default()
        })
@@ -999,7 +1026,17 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
    attribute — a rate-limited job is rescheduled into the future rather than
    run.
 
-5. **Database performance**: slow dequeue queries. Check SQLite WAL size or
+5. **Redis push-dispatch fallback window**: on Redis, push-dispatch is on by
+   default. Enqueues are announced, delayed ones included, and the worker's
+   own retries and deferrals (rate limit, concurrency, circuit breaker) arm
+   a local timer, so jobs usually dispatch on time. The rest — a resumed
+   queue, a delayed job enqueued before the worker started, a deadline past
+   what one large batch announces or the listener can buffer — falls back to
+   a 2s timer rather than an immediate wake, longer than the ≤200ms polling
+   ceiling it replaced. `.push_dispatch(false)` on the worker builder
+   restores polling.
+
+6. **Database performance**: slow dequeue queries. Check SQLite WAL size or
    Postgres query plans.
 
 </SdkOnly>

@@ -4,7 +4,7 @@ use redis::streams::{StreamId, StreamRangeReply};
 use redis::Commands;
 use serde::{Deserialize, Serialize};
 
-use super::{map_err, RedisStorage};
+use super::{map_err, RedisConnection, RedisStorage};
 use crate::error::{QueueError, Result};
 use crate::job::{Job, JobStatus};
 use crate::storage::records::{
@@ -95,7 +95,7 @@ impl RedisStorage {
     /// how [`Self::sub_composite`] builds it.
     fn load_sub_by_composite(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         composite: &str,
     ) -> Result<Option<SubEntry>> {
         let Some((topic, name)) = composite.split_once('|') else {
@@ -118,7 +118,7 @@ impl RedisStorage {
     /// list/reap/stats call O(N) round trips against Redis.
     fn load_subs_pipelined(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         pairs: &[(String, String)],
     ) -> Result<Vec<SubEntry>> {
         if pairs.is_empty() {
@@ -461,7 +461,7 @@ impl RedisStorage {
     /// succeeded. No-op (and no round trip) for ordinary jobs.
     pub(in crate::storage::redis_backend) fn reindex_pubsub_best_effort(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         job: &Job,
         to: JobStatus,
     ) {
@@ -790,7 +790,7 @@ impl RedisStorage {
     /// the cursor/expiry paths, matching the Diesel backend.
     fn xdel_per_message_acked(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         topic: &str,
         subs: &[Subscription],
         limit: i64,
@@ -845,7 +845,7 @@ impl RedisStorage {
     /// at or before `now`, regardless of any subscription cursor.
     fn xdel_expired(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         stream_key: &str,
         now: i64,
         limit: i64,

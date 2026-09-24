@@ -11,9 +11,9 @@
 //! alone here. Rather than ship a broken or `unsafe` FFI path, this listener
 //! forwards a periodic tick: push-dispatch on Postgres therefore degrades to a
 //! faster, bounded fallback poll (driven by [`LISTEN_POLL_INTERVAL`]) instead
-//! of instantaneous wakeups. The enqueue side still issues `pg_notify` (see
-//! [`super::JOB_READY_CHANNEL`]) so a future libpq-backed listener can become
-//! fully event-driven without any enqueue-path change.
+//! of instantaneous wakeups. The enqueue side issues no `pg_notify` while this
+//! stub stands — nothing would read it. A libpq-backed listener must restore
+//! the enqueue-side notify on [`super::JOB_READY_CHANNEL`].
 //!
 //! The default (feature-off) build never compiles this module.
 
@@ -33,13 +33,13 @@ pub const LISTEN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// The `_storage` handle is retained for the eventual libpq-backed
 /// implementation (it carries [`PostgresStorage::database_url`]); the current
 /// stub does not open a dedicated connection.
-pub fn spawn(_storage: PostgresStorage) -> mpsc::Receiver<()> {
+pub fn spawn(_storage: PostgresStorage) -> mpsc::Receiver<Option<i64>> {
     let (tx, rx) = mpsc::channel(1);
     tokio::task::spawn_blocking(move || loop {
         std::thread::sleep(LISTEN_POLL_INTERVAL);
         // A full channel already has a pending wake — dropping this one is
         // fine. A closed channel means the scheduler is gone; stop.
-        match tx.try_send(()) {
+        match tx.try_send(None) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {}
             Err(mpsc::error::TrySendError::Closed(_)) => break,

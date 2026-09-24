@@ -77,13 +77,14 @@ pub struct PyQueue {
     pub(crate) scheduler_poll_interval_ms: u64,
     pub(crate) scheduler_reap_interval: u32,
     pub(crate) scheduler_cleanup_interval: u32,
-    pub(crate) scheduler_batch_size: usize,
+    pub(crate) scheduler_batch_size: Option<usize>,
     pub(crate) dlq_auto_retry_delay_ms: Option<i64>,
     pub(crate) dlq_auto_retry_max: i32,
     pub(crate) namespace: Option<String>,
-    /// Opt-in event-driven dispatch. Honored only when the crate is built with
-    /// the `push-dispatch` cargo feature; otherwise accepted and ignored.
-    pub(crate) push_dispatch: bool,
+    /// Event-driven dispatch: `Some(true)` opts in, `Some(false)` opts out,
+    /// `None` keeps the backend default (on for Redis). Honored only when the
+    /// crate is built with the `push-dispatch` cargo feature.
+    pub(crate) push_dispatch: Option<bool>,
     /// Whether opening applies schema changes. When false the workflow store is
     /// built unmigrated too, so *no* path applies DDL until `migrate()` runs.
     /// Only the workflow path reads it, hence the cfg.
@@ -155,7 +156,7 @@ fn build_retention_config(
 )]
 impl PyQueue {
     #[new]
-    #[pyo3(signature = (db_path=".flexiq/flexiq.db", workers=0, default_retry=3, default_timeout=300, default_priority=0, result_ttl=None, backend="sqlite", db_url=None, schema="flexiq", pool_size=None, scheduler_poll_interval_ms=50, scheduler_reap_interval=100, scheduler_cleanup_interval=1200, scheduler_batch_size=1, namespace=None, push_dispatch=false, dlq_auto_retry_delay=None, dlq_auto_retry_max=1, retention=None, auto_migrate=true))]
+    #[pyo3(signature = (db_path=".flexiq/flexiq.db", workers=0, default_retry=3, default_timeout=300, default_priority=0, result_ttl=None, backend="sqlite", db_url=None, schema="flexiq", pool_size=None, scheduler_poll_interval_ms=50, scheduler_reap_interval=100, scheduler_cleanup_interval=1200, scheduler_batch_size=None, namespace=None, push_dispatch=None, dlq_auto_retry_delay=None, dlq_auto_retry_max=1, retention=None, auto_migrate=true))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         py: Python<'_>,
@@ -172,9 +173,9 @@ impl PyQueue {
         scheduler_poll_interval_ms: u64,
         scheduler_reap_interval: u32,
         scheduler_cleanup_interval: u32,
-        scheduler_batch_size: usize,
+        scheduler_batch_size: Option<usize>,
         namespace: Option<String>,
-        push_dispatch: bool,
+        push_dispatch: Option<bool>,
         dlq_auto_retry_delay: Option<i64>,
         dlq_auto_retry_max: i32,
         retention: Option<std::collections::HashMap<String, i64>>,
@@ -317,7 +318,7 @@ impl PyQueue {
             scheduler_poll_interval_ms,
             scheduler_reap_interval,
             scheduler_cleanup_interval,
-            scheduler_batch_size: scheduler_batch_size.max(1),
+            scheduler_batch_size: scheduler_batch_size.map(|n| n.max(1)),
             dlq_auto_retry_delay_ms,
             dlq_auto_retry_max,
             namespace,

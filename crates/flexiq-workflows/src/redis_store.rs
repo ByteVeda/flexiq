@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use redis::{Commands, FromRedisValue, Value};
 
 use flexiq_core::error::{QueueError, Result};
-use flexiq_core::storage::redis_backend::RedisStorage;
+use flexiq_core::storage::redis_backend::{RedisConnection, RedisStorage};
 
 use crate::common::compute_ready_nodes;
 use crate::storage::WorkflowStorage;
@@ -144,7 +144,7 @@ impl WorkflowRedisStorage {
         &self.inner
     }
 
-    fn conn(&self) -> Result<redis::Connection> {
+    fn conn(&self) -> Result<RedisConnection> {
         self.inner
             .conn()
             .map_err(|e| QueueError::Other(format!("redis conn: {e}")))
@@ -177,6 +177,42 @@ impl WorkflowRedisStorage {
         } else {
             Err(node_not_found(run_id, node_name))
         }
+    }
+
+    /// Read a definition on the caller's connection: a checkout while one is
+    /// held cannot reuse it, so it would cost a second connection.
+    fn load_definition(
+        &self,
+        conn: &mut RedisConnection,
+        id: &str,
+    ) -> Result<Option<WorkflowDefinition>> {
+        let raw: Value = conn.hgetall(k_def(&self.prefix, id)).map_err(into_other)?;
+        let map = hash_to_map(raw)?;
+        if map.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(map_to_definition(map)?))
+    }
+
+    /// Read a run on the caller's connection, filtered to this store's
+    /// namespace; same reason as [`Self::load_definition`].
+    fn load_run(&self, conn: &mut RedisConnection, run_id: &str) -> Result<Option<WorkflowRun>> {
+        let raw: Value = conn
+            .hgetall(k_run(&self.prefix, run_id))
+            .map_err(into_other)?;
+        let map = hash_to_map(raw)?;
+        if map.is_empty() {
+            return Ok(None);
+        }
+        // Filtered off the hash already in hand rather than via
+        // `run_out_of_scope`, which would repeat the read.
+        if let Some(ns) = self.namespace.as_deref() {
+            let stored = val_to_opt_string(map.get("namespace").unwrap_or(&Value::Nil))?;
+            if stored.as_deref() != Some(ns) {
+                return Ok(None);
+            }
+        }
+        Ok(Some(map_to_run(map)?))
     }
 
     /// Whether `run_id` is outside this store's namespace, in which case the
@@ -429,20 +465,14 @@ impl WorkflowStorage for WorkflowRedisStorage {
         };
 
         match id {
-            Some(id) => self.get_workflow_definition_by_id(&id),
+            Some(id) => self.load_definition(&mut conn, &id),
             None => Ok(None),
         }
     }
 
     fn get_workflow_definition_by_id(&self, id: &str) -> Result<Option<WorkflowDefinition>> {
         let mut conn = self.conn()?;
-        let key = k_def(&self.prefix, id);
-        let raw: Value = conn.hgetall(&key).map_err(into_other)?;
-        let map = hash_to_map(raw)?;
-        if map.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(map_to_definition(map)?))
+        self.load_definition(&mut conn, id)
     }
 
     fn create_workflow_run(&self, run: &WorkflowRun) -> Result<()> {
@@ -515,21 +545,7 @@ impl WorkflowStorage for WorkflowRedisStorage {
 
     fn get_workflow_run(&self, run_id: &str) -> Result<Option<WorkflowRun>> {
         let mut conn = self.conn()?;
-        let key = k_run(&self.prefix, run_id);
-        let raw: Value = conn.hgetall(&key).map_err(into_other)?;
-        let map = hash_to_map(raw)?;
-        if map.is_empty() {
-            return Ok(None);
-        }
-        // Filtered off the hash already in hand rather than via
-        // `run_out_of_scope`, which would repeat the read.
-        if let Some(ns) = self.namespace.as_deref() {
-            let stored = val_to_opt_string(map.get("namespace").unwrap_or(&Value::Nil))?;
-            if stored.as_deref() != Some(ns) {
-                return Ok(None);
-            }
-        }
-        Ok(Some(map_to_run(map)?))
+        self.load_run(&mut conn, run_id)
     }
 
     fn update_workflow_run_state(
@@ -651,7 +667,7 @@ impl WorkflowStorage for WorkflowRedisStorage {
         for id in candidate_ids {
             // `get_workflow_run` is namespace-filtered, so a foreign run drops
             // out here as if the id were unknown.
-            if let Some(run) = self.get_workflow_run(&id)? {
+            if let Some(run) = self.load_run(&mut conn, &id)? {
                 // If both filters set, the definition index already constrained
                 // the candidates; apply state filter in-memory.
                 if let Some(st) = state {
@@ -711,7 +727,7 @@ impl WorkflowStorage for WorkflowRedisStorage {
 
         let mut runs = Vec::new();
         for id in candidate_ids {
-            if let Some(run) = self.get_workflow_run(&id)? {
+            if let Some(run) = self.load_run(&mut conn, &id)? {
                 if let Some(st) = state {
                     if run.state != st {
                         continue;
@@ -976,7 +992,7 @@ impl WorkflowStorage for WorkflowRedisStorage {
             .map_err(into_other)?;
         let mut runs = Vec::with_capacity(child_ids.len());
         for id in child_ids {
-            if let Some(run) = self.get_workflow_run(&id)? {
+            if let Some(run) = self.load_run(&mut conn, &id)? {
                 runs.push(run);
             }
         }
@@ -1039,7 +1055,7 @@ impl WorkflowStorage for WorkflowRedisStorage {
 fn write_node_pipeline(
     prefix: &str,
     node: &WorkflowNode,
-    conn: &mut redis::Connection,
+    conn: &mut RedisConnection,
 ) -> Result<()> {
     let key = k_node(prefix, &node.run_id, &node.node_name);
     let mut pipe = redis::pipe();

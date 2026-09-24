@@ -26,7 +26,7 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Build the JNI cdylib
-        run: cargo build --release --features postgres,redis,workflows,mesh -p flexiq-java
+        run: cargo build --release --features postgres,redis,workflows,mesh,push-dispatch -p flexiq-java
 
       - name: Upload the cdylib
         uses: actions/upload-artifact@v7

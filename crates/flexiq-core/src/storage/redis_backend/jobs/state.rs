@@ -64,7 +64,7 @@ impl RedisStorage {
         namespace: Option<&str>,
     ) -> Result<()> {
         let mut conn = self.conn()?;
-        let mut job = self.get_job_required_in(id, namespace)?;
+        let mut job = self.get_job_required_in(&mut conn, id, namespace)?;
 
         if job.status != JobStatus::Running {
             return Err(QueueError::JobNotFound(id.to_string()));
@@ -74,6 +74,9 @@ impl RedisStorage {
         job.status = JobStatus::Complete;
         job.completed_at = Some(now_millis());
         job.result = result_bytes;
+        #[cfg(feature = "push-dispatch")]
+        let dependents = self.archive_reading_dependents(&mut conn, &job, old_status)?;
+        #[cfg(not(feature = "push-dispatch"))]
         self.archive_job_immediately(&mut conn, &job, old_status)?;
 
         // Release the unique-key pointer only if it still points at THIS job —
@@ -83,6 +86,9 @@ impl RedisStorage {
         if let Some(ref uk) = job.unique_key {
             self.release_unique_key(&mut conn, job.namespace.as_deref(), uk, id)?;
         }
+
+        #[cfg(feature = "push-dispatch")]
+        self.wake_dependents(&mut conn, &dependents);
 
         Ok(())
     }
@@ -120,7 +126,7 @@ impl RedisStorage {
     /// Mark a job terminally failed, moving it into the archive.
     pub fn fail(&self, id: &str, error: &str) -> Result<()> {
         let mut conn = self.conn()?;
-        let mut job = self.get_job_required(id)?;
+        let mut job = self.get_job_required(&mut conn, id)?;
 
         if job.status != JobStatus::Running {
             return Err(QueueError::JobNotFound(id.to_string()));
@@ -141,7 +147,7 @@ impl RedisStorage {
     /// A job in another namespace reports `JobNotFound`, like an unknown id.
     pub fn retry(&self, id: &str, next_scheduled_at: i64, namespace: Option<&str>) -> Result<()> {
         let mut conn = self.conn()?;
-        let mut job = self.get_job_required_in(id, namespace)?;
+        let mut job = self.get_job_required_in(&mut conn, id, namespace)?;
         let old_status = job.status;
 
         job.status = JobStatus::Pending;
@@ -170,7 +176,7 @@ impl RedisStorage {
         namespace: Option<&str>,
     ) -> Result<()> {
         let mut conn = self.conn()?;
-        let mut job = self.get_job_required_in(id, namespace)?;
+        let mut job = self.get_job_required_in(&mut conn, id, namespace)?;
         let old_status = job.status;
 
         job.status = JobStatus::Pending;
@@ -191,11 +197,12 @@ impl RedisStorage {
     /// clears any pending cancel request. Returns `false` when the job is
     /// missing or not `Running`.
     pub fn requeue_stuck(&self, id: &str, now: i64) -> Result<bool> {
-        let mut conn = self.conn()?;
         let mut job = match self.get_job(id, None)? {
             Some(j) => j,
             None => return Ok(false),
         };
+        // Checked out after `get_job` returns its own, so that one is reused.
+        let mut conn = self.conn()?;
         if job.status != JobStatus::Running {
             return Ok(false);
         }
@@ -253,11 +260,12 @@ impl RedisStorage {
     /// A job in another namespace also reports `false`, so a scoped caller
     /// learns nothing about ids outside its own namespace.
     pub fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
-        let mut conn = self.conn()?;
         let job = match self.get_job(id, namespace)? {
             Some(j) => j,
             None => return Ok(false),
         };
+        // Checked out after `get_job` returns its own, so that one is reused.
+        let mut conn = self.conn()?;
 
         if job.status != JobStatus::Pending {
             return Ok(false);
@@ -283,11 +291,12 @@ impl RedisStorage {
     /// for it. Returns `false` when no running job matched, which is also the
     /// answer for a job in another namespace.
     pub fn request_cancel(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
-        let mut conn = self.conn()?;
         let mut job = match self.get_job(id, namespace)? {
             Some(j) => j,
             None => return Ok(false),
         };
+        // Checked out after `get_job` returns its own, so that one is reused.
+        let mut conn = self.conn()?;
 
         if job.status != JobStatus::Running {
             return Ok(false);
@@ -378,7 +387,7 @@ impl RedisStorage {
     /// A job in another namespace is left alone.
     pub fn mark_cancelled(&self, id: &str, namespace: Option<&str>) -> Result<()> {
         let mut conn = self.conn()?;
-        let mut job = self.get_job_required(id)?;
+        let mut job = self.get_job_required(&mut conn, id)?;
         if namespace.is_some_and(|scope| job.namespace.as_deref() != Some(scope)) {
             return Ok(());
         }
@@ -495,7 +504,7 @@ impl RedisStorage {
             ));
         }
         let mut conn = self.conn()?;
-        let mut job = self.get_job_required(id)?;
+        let mut job = self.get_job_required(&mut conn, id)?;
         if namespace.is_some_and(|scope| job.namespace.as_deref() != Some(scope)) {
             return Err(QueueError::JobNotFound(id.to_string()));
         }

@@ -16,7 +16,9 @@ readme = "README.md"
 exclude = ["tests/wire_vectors.rs"]
 
 [features]
-default = []
+# Push-dispatch is on by default so a Redis worker wakes on enqueue, matching
+# the other shells' shipped builds; without it every worker polls.
+default = ["push-dispatch"]
 # Forwarded verbatim so `cargo add flexiq --features postgres` behaves exactly
 # as the same flag on flexiq-core does.
 postgres = ["flexiq-core/postgres", "flexiq-workflows?/postgres"]

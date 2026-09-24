@@ -67,6 +67,12 @@ Task::run_encoded(job: &Job) -> Outcome<Option<Vec<u8>>>
 worker.num_workers(num_workers: usize) -> Self
 ```
 
+### `worker.push_dispatch()`
+
+```rust
+worker.push_dispatch(enabled: bool) -> Self
+```
+
 ### `worker.queues()`
 
 ```rust

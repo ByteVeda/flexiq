@@ -5,7 +5,7 @@ use redis::Commands;
 use super::dequeue_score;
 use crate::error::{QueueError, Result};
 use crate::job::{Job, JobStatus};
-use crate::storage::redis_backend::{map_err, RedisStorage};
+use crate::storage::redis_backend::{map_err, RedisConnection, RedisStorage};
 
 /// Lua: release a unique-key pointer only if it still points at `ARGV[1]`.
 /// A newer job may have reused the same `unique_key` after this job left the
@@ -87,7 +87,7 @@ impl RedisStorage {
 
     pub(in crate::storage::redis_backend) fn load_job(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         id: &str,
     ) -> Result<Option<Job>> {
         let job_key = self.key(&["job", id]);
@@ -103,7 +103,7 @@ impl RedisStorage {
 
     pub(in crate::storage::redis_backend) fn load_archived_job(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         id: &str,
     ) -> Result<Option<Job>> {
         let archived_key = self.key(&["archived", id]);
@@ -127,9 +127,11 @@ impl RedisStorage {
     /// directly without the archived fallback, so a mutator never operates on a
     /// terminal job that has already left the live indices (which would leave
     /// the reindex partial). Read paths must use `get_job` instead.
-    pub(super) fn get_job_required(&self, id: &str) -> Result<Job> {
-        let mut conn = self.conn()?;
-        self.load_job(&mut conn, id)?
+    ///
+    /// Reads on the caller's connection: a checkout while one is held cannot
+    /// reuse it, so it would cost a second connection.
+    pub(super) fn get_job_required(&self, conn: &mut RedisConnection, id: &str) -> Result<Job> {
+        self.load_job(conn, id)?
             .ok_or_else(|| QueueError::JobNotFound(id.to_string()))
     }
 
@@ -140,10 +142,11 @@ impl RedisStorage {
     /// trip. `None` addresses every namespace.
     pub(in crate::storage::redis_backend) fn get_job_required_in(
         &self,
+        conn: &mut RedisConnection,
         id: &str,
         namespace: Option<&str>,
     ) -> Result<Job> {
-        let job = self.get_job_required(id)?;
+        let job = self.get_job_required(conn, id)?;
         if namespace.is_some() && job.namespace.as_deref() != namespace {
             return Err(QueueError::JobNotFound(id.to_string()));
         }
@@ -165,7 +168,7 @@ impl RedisStorage {
     /// next attempt then replays as a memo hit.
     pub(in crate::storage::redis_backend) fn requeue_pending(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         job: &Job,
         old_status: JobStatus,
         revoke_claim: bool,
@@ -209,7 +212,7 @@ impl RedisStorage {
     /// call when a newer job may have reused the same `unique_key`.
     pub(in crate::storage::redis_backend) fn release_unique_key(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         namespace: Option<&str>,
         unique_key: &str,
         job_id: &str,
@@ -308,7 +311,7 @@ impl RedisStorage {
     /// both the live and archived indices at once.
     pub(in crate::storage::redis_backend) fn archive_job_immediately(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         job: &Job,
         old_status: JobStatus,
     ) -> Result<()> {
@@ -327,7 +330,7 @@ impl RedisStorage {
     /// its own window (see the Diesel `purge_archived_id_batch` split).
     pub(in crate::storage::redis_backend) fn delete_archived_job(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         job: &Job,
         cascade_diagnostics: bool,
     ) -> Result<()> {

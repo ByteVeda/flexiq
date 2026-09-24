@@ -4,7 +4,7 @@ use redis::Commands;
 
 use crate::error::Result;
 use crate::job::{Job, JobStatus};
-use crate::storage::redis_backend::{map_err, strip_list_blobs, RedisStorage};
+use crate::storage::redis_backend::{map_err, strip_list_blobs, RedisConnection, RedisStorage};
 use crate::storage::QueueStats;
 
 impl RedisStorage {
@@ -94,7 +94,7 @@ impl RedisStorage {
     /// active sets, None → both), shared by the keyset listing paths.
     fn load_status_candidates(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         status: Option<i32>,
     ) -> Result<Vec<Job>> {
         match status {
@@ -132,7 +132,7 @@ impl RedisStorage {
         )
     }
 
-    fn load_live_jobs(&self, conn: &mut redis::Connection, ids: &[String]) -> Result<Vec<Job>> {
+    fn load_live_jobs(&self, conn: &mut RedisConnection, ids: &[String]) -> Result<Vec<Job>> {
         let mut jobs = Vec::new();
         for id in ids {
             if let Some(mut job) = self.load_job(conn, id)? {
@@ -143,7 +143,7 @@ impl RedisStorage {
         Ok(jobs)
     }
 
-    fn load_archived_jobs(&self, conn: &mut redis::Connection, ids: &[String]) -> Result<Vec<Job>> {
+    fn load_archived_jobs(&self, conn: &mut RedisConnection, ids: &[String]) -> Result<Vec<Job>> {
         let mut jobs = Vec::new();
         for id in ids {
             if let Some(mut job) = self.load_archived_job(conn, id)? {
@@ -211,7 +211,7 @@ impl RedisStorage {
     /// set stays cheap regardless of how large the membership set has grown.
     fn count_in_status(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         membership_key: &str,
         status: JobStatus,
     ) -> Result<i64> {
@@ -229,7 +229,7 @@ impl RedisStorage {
     /// server-side without transferring any job.
     fn count_in_archived_status(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         membership_key: &str,
         status: JobStatus,
     ) -> Result<i64> {
@@ -245,7 +245,7 @@ impl RedisStorage {
     /// Full breakdown for one queue: live pending/running from `jobs:by_queue`,
     /// terminal counts from `archived:by_queue` — all `SINTERCARD`, bounded by
     /// the status count rather than the job population.
-    fn queue_stats(&self, conn: &mut redis::Connection, queue_name: &str) -> Result<QueueStats> {
+    fn queue_stats(&self, conn: &mut RedisConnection, queue_name: &str) -> Result<QueueStats> {
         let by_queue = self.key(&["jobs", "by_queue", queue_name]);
         let archived_by_queue = self.key(&["archived", "by_queue", queue_name]);
         Ok(QueueStats {
@@ -321,7 +321,7 @@ impl RedisStorage {
     /// Redis has no per-namespace index, so a scoped count walks the same
     /// candidate set `list_jobs` does — O(N), like every other Redis listing,
     /// and correct for rows written before namespaces were used.
-    fn jobs_in_namespace(&self, conn: &mut redis::Connection, namespace: &str) -> Result<Vec<Job>> {
+    fn jobs_in_namespace(&self, conn: &mut RedisConnection, namespace: &str) -> Result<Vec<Job>> {
         let live_key = self.key(&["jobs", "all"]);
         let live_ids: Vec<String> = conn.zrange(&live_key, 0, -1).map_err(map_err)?;
         let mut jobs = self.load_live_jobs(conn, &live_ids)?;

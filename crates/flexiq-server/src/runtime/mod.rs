@@ -209,6 +209,7 @@ pub fn run(config: Config) -> Result<()> {
                 namespace: config.namespace.clone(),
                 workers: config.workers,
                 maintenance: config.maintenance,
+                push_dispatch: config.push_dispatch,
             },
         ))),
         _ => None,

@@ -282,6 +282,7 @@ impl Deployment {
                     namespace: None,
                     workers,
                     maintenance: false,
+                    push_dispatch: None,
                 },
             )),
         }

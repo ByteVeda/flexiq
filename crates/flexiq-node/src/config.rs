@@ -267,7 +267,8 @@ pub struct WorkerOptions {
     /// which is the historical behaviour — a worker then claims jobs it cannot
     /// run yet, stranding them Running and starving peers on the same database.
     pub concurrency: Option<u32>,
-    /// Jobs claimed per scheduler poll (default 1).
+    /// Jobs claimed per scheduler poll. Unset lets the backend choose (8 on
+    /// Redis, 1 elsewhere); an explicit value is always honoured.
     pub batch_size: Option<u32>,
     /// Every task name this worker has a handler for, used to fingerprint its
     /// registry on the worker row. Distinct from `task_configs`, which carries
@@ -283,10 +284,10 @@ pub struct WorkerOptions {
     pub mesh: Option<MeshWorkerConfig>,
     /// Per-table retention windows for auto-cleanup.
     pub retention: Option<RetentionInput>,
-    /// Opt into event-driven dispatch: an enqueue wakes the scheduler right
-    /// away instead of it waiting for the next poll. Requires the addon to be
-    /// built with the `push-dispatch` cargo feature; otherwise accepted and
-    /// ignored (polling is kept).
+    /// Event-driven dispatch: an enqueue wakes the scheduler right away instead
+    /// of it waiting for the next poll. `true` opts in, `false` keeps polling,
+    /// unset lets the backend choose (on for Redis). Builds without the
+    /// `push-dispatch` cargo feature always poll.
     pub push_dispatch: Option<bool>,
 }
 

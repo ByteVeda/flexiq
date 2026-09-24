@@ -221,28 +221,34 @@ impl PostgresStorage {
     }
 }
 
-/// Postgres `NOTIFY` channel that carries "a ready job was enqueued" signals.
+/// Postgres `NOTIFY` channel reserved for "a ready job was enqueued" signals.
+/// Nothing publishes on it yet: the stub listener never reads a notification,
+/// so enqueue skips `pg_notify` rather than pay a round trip for nothing.
 #[cfg(feature = "push-dispatch")]
 pub const JOB_READY_CHANNEL: &str = "flexiq_job_ready";
 
-#[cfg(feature = "push-dispatch")]
-impl crate::storage::notify::StorageNotifier for PostgresStorage {
-    fn notify_job_ready(&self, queue: &str, _scheduled_at: i64) {
-        // Best-effort: a failed NOTIFY only costs the latency improvement —
-        // the scheduler's fallback poll still picks the job up.
-        let mut conn = match self.conn() {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("push-dispatch: NOTIFY conn failed: {e}");
-                return;
-            }
-        };
-        // Bind the queue as a parameter so the payload can't break out of the
-        // NOTIFY statement.
-        let stmt = diesel::sql_query(format!("SELECT pg_notify('{JOB_READY_CHANNEL}', $1)"))
-            .bind::<diesel::sql_types::Text, _>(queue);
-        if let Err(e) = stmt.execute(&mut conn) {
-            log::warn!("push-dispatch: pg_notify failed: {e}");
-        }
+#[cfg(all(test, feature = "push-dispatch"))]
+mod notify_tests {
+    use super::PostgresStorage;
+    use crate::storage::notify::StorageNotifier;
+
+    // Inherent const wins when `T: StorageNotifier`, else the blanket trait
+    // const answers — a compile-time "does T implement it" probe.
+    trait Fallback {
+        const NOTIFIES: bool = false;
+    }
+    impl<T> Fallback for T {}
+    struct Probe<T>(std::marker::PhantomData<T>);
+    impl<T: StorageNotifier> Probe<T> {
+        const NOTIFIES: bool = true;
+    }
+
+    /// The enqueue path cannot issue a `pg_notify`: Postgres has no
+    /// `StorageNotifier` impl to call, while SQLite still does. Checked at
+    /// compile time; the test exists so the proof shows up in the suite.
+    #[test]
+    fn postgres_enqueue_issues_no_notify() {
+        const { assert!(!<Probe<PostgresStorage>>::NOTIFIES) };
+        const { assert!(<Probe<crate::storage::sqlite::SqliteStorage>>::NOTIFIES) };
     }
 }

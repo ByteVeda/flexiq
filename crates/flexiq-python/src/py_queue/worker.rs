@@ -697,7 +697,7 @@ impl PyQueue {
         let mesh_enabled = false;
 
         // Captured for the wake-source install inside the runtime below.
-        let push_dispatch_enabled = self.push_dispatch;
+        let push_dispatch = self.push_dispatch;
 
         // Move result_tx into the runtime — don't keep a copy in the main thread
         // so result_rx disconnects when all workers are done.
@@ -717,11 +717,13 @@ impl PyQueue {
             rt.block_on(async {
                 // Push-dispatch: install the wake source before the scheduler
                 // loop takes it. Inside the runtime because the Postgres and
-                // Redis sources spawn a listener task. Without the
-                // `push-dispatch` feature this logs and keeps polling, so
-                // `push_dispatch=True` is accepted and ignored.
-                if push_dispatch_enabled {
-                    scheduler_for_dispatch.enable_push_dispatch();
+                // Redis sources spawn a listener task. `None` leaves the core
+                // default (on for Redis). Without the `push-dispatch` feature
+                // both calls are no-ops and the scheduler polls.
+                match push_dispatch {
+                    Some(true) => scheduler_for_dispatch.enable_push_dispatch(),
+                    Some(false) => scheduler_for_dispatch.disable_push_dispatch(),
+                    None => {}
                 }
 
                 // When mesh is enabled, interpose a local deque between

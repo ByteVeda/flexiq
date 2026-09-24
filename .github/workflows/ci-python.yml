@@ -88,7 +88,7 @@ jobs:
         uses: PyO3/maturin-action@v1.51.0
         with:
           command: develop
-          args: --release --features extension-module,postgres,redis,native-async,workflows,mesh
+          args: --release --features extension-module,postgres,redis,native-async,workflows,mesh,push-dispatch
           maturin-version: v1.13.3
           working-directory: sdks/python
 

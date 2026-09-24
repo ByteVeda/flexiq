@@ -25,6 +25,13 @@ use crate::storage::StorageBackend;
 
 pub use crate::job::Job;
 
+/// Dispatch batch size Redis gets when `SchedulerConfig::batch_size` is `None`.
+/// One selection-and-claim script already pays a network round trip; serving
+/// several claims out of it is free. SQLite/Postgres gain nothing from this —
+/// a bigger batch there only widens the claim-to-dispatch window — so they
+/// keep the historical default of 1.
+pub const REDIS_DEFAULT_BATCH_SIZE: usize = 8;
+
 /// Configuration for the scheduler's timing and behavior.
 #[derive(Debug, Clone)]
 pub struct SchedulerConfig {
@@ -46,10 +53,12 @@ pub struct SchedulerConfig {
     /// Per-table retention windows. When set, wins over `result_ttl_ms`. `None`
     /// falls back to the legacy `result_ttl_ms` mapping.
     pub retention: Option<retention::RetentionConfig>,
-    /// Maximum number of jobs claimed per dispatch round. `1` (the default)
-    /// preserves the original one-job-per-round-trip behavior; values above
-    /// `1` enable batch claiming for higher throughput.
-    pub batch_size: usize,
+    /// Maximum number of jobs claimed per dispatch round. `None` (the
+    /// default) lets the backend pick: [`REDIS_DEFAULT_BATCH_SIZE`] on Redis,
+    /// `1` (unchanged behavior) on SQLite/Postgres. `Some(n)` is always
+    /// honoured, clamped to at least 1. Resolved once per dispatch round by
+    /// the scheduler's internal `batch_size()`.
+    pub batch_size: Option<usize>,
     /// Upper bound on jobs this scheduler keeps in flight (dispatched to the
     /// worker channel but not yet finished). Set it to the worker pool's
     /// execution parallelism so a single scheduler never claims more work than
@@ -75,7 +84,7 @@ impl Default for SchedulerConfig {
             cleanup_interval: 1200,
             result_ttl_ms: None,
             retention: None,
-            batch_size: 1,
+            batch_size: None,
             max_in_flight: None,
             dlq_auto_retry_delay_ms: None,
             dlq_auto_retry_max: 1,
@@ -516,14 +525,25 @@ pub struct Scheduler {
     /// informative. Per-instance (`Scheduler` is not `Clone`).
     retention_announced: std::sync::Once,
     /// Wake source for push-dispatch, installed before `run()`. Taken (moved
-    /// out) once when the loop starts. `None` means the loop polls as today.
+    /// out) once when the loop starts. `None` defers to the backend default
+    /// (see `resolve_wake_source`): push on Redis, polling elsewhere.
     #[cfg(feature = "push-dispatch")]
     wake_source: Mutex<Option<wake::WakeSource>>,
-    /// Earliest `scheduled_at` of any delayed job seen at enqueue time, so the
-    /// push loop can arm a timer for the next delayed job rather than waking
-    /// immediately. Milliseconds; `i64::MAX` means "nothing scheduled".
+    /// Set by [`Self::disable_push_dispatch`]: keeps a backend whose default is
+    /// push (Redis) on the poll loop.
     #[cfg(feature = "push-dispatch")]
-    next_scheduled_at: std::sync::atomic::AtomicI64,
+    push_opted_out: std::sync::atomic::AtomicBool,
+    /// Future `scheduled_at`s (ms) this scheduler has heard of — announced
+    /// delayed enqueues, its own retries, sleeps and gate deferrals — so the
+    /// push loop arms a timer for each rather than waiting out the fallback.
+    /// A set, not a single minimum: once the earliest fires, the next is known.
+    #[cfg(feature = "push-dispatch")]
+    delayed_deadlines: Mutex<std::collections::BTreeSet<i64>>,
+    /// Earliest deadline deferred during the current dispatch pass (ms,
+    /// `i64::MAX` = none), armed once when the pass ends. Arming each jittered
+    /// deferral would give every one its own drain, which defers the next batch.
+    #[cfg(feature = "push-dispatch")]
+    deferred_floor: std::sync::atomic::AtomicI64,
 }
 
 /// Counters for tick-based scheduling of periodic maintenance tasks.
@@ -575,13 +595,32 @@ impl Scheduler {
             #[cfg(feature = "push-dispatch")]
             wake_source: Mutex::new(None),
             #[cfg(feature = "push-dispatch")]
-            next_scheduled_at: std::sync::atomic::AtomicI64::new(i64::MAX),
+            push_opted_out: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(feature = "push-dispatch")]
+            delayed_deadlines: Mutex::new(std::collections::BTreeSet::new()),
+            #[cfg(feature = "push-dispatch")]
+            deferred_floor: std::sync::atomic::AtomicI64::new(i64::MAX),
         }
     }
 
     /// The storage backend this scheduler runs on.
     pub fn storage(&self) -> &StorageBackend {
         &self.storage
+    }
+
+    /// Resolve `config.batch_size`: an explicit value wins (clamped to at
+    /// least 1), otherwise the backend picks — [`REDIS_DEFAULT_BATCH_SIZE`] on
+    /// Redis, `1` (no behavior change) elsewhere. Cheap enough to call per
+    /// dispatch round rather than caching at construction.
+    fn batch_size(&self) -> usize {
+        match self.config.batch_size {
+            Some(n) => n.max(1),
+            None => match &self.storage {
+                #[cfg(feature = "redis")]
+                StorageBackend::Redis(_) => REDIS_DEFAULT_BATCH_SIZE,
+                _ => 1,
+            },
+        }
     }
 
     /// Set the execution-claim owner to this process's `worker_id`. Bindings
@@ -808,12 +847,17 @@ impl Scheduler {
     /// exponentially (up to `max_interval`, 200ms) when no jobs are found,
     /// resets immediately when a job is dispatched. Each wake drains all ready
     /// work before sleeping again.
+    ///
+    /// With the `push-dispatch` feature the loop is event-driven instead when
+    /// a wake source was installed, or by default on Redis unless
+    /// [`Self::disable_push_dispatch`] was called. Call from inside a Tokio
+    /// runtime: the Redis default spawns its listener here.
     pub async fn run(&self, job_tx: tokio::sync::mpsc::Sender<Job>) {
-        // Push-dispatch: if a wake source was configured, run the event-driven
-        // loop. Otherwise (and always when the feature is off) fall through to
-        // the unchanged adaptive-poll loop below.
+        // Push-dispatch: if a wake source was configured (or the backend
+        // defaults to one), run the event-driven loop. Otherwise (and always
+        // when the feature is off) fall through to the adaptive-poll loop below.
         #[cfg(feature = "push-dispatch")]
-        if let Some(wake) = self.take_wake_source() {
+        if let Some(wake) = self.resolve_wake_source() {
             self.run_push(job_tx, wake).await;
             return;
         }
@@ -867,11 +911,13 @@ impl Scheduler {
     /// drain loops and the poll backoff key off. Pulled out so the push loop can
     /// run dispatch independently of the maintenance cadence.
     fn tick_dispatch(&self, job_tx: &tokio::sync::mpsc::Sender<Job>) -> bool {
-        let dispatch_result = if self.config.batch_size > 1 {
+        let dispatch_result = if self.batch_size() > 1 {
             self.try_dispatch_batch(job_tx)
         } else {
             self.try_dispatch(job_tx)
         };
+        #[cfg(feature = "push-dispatch")]
+        self.arm_deferrals();
         match dispatch_result {
             Ok(d) => d,
             Err(e) => {
@@ -941,7 +987,15 @@ impl Scheduler {
     const PUSH_FALLBACK_INTERVAL: Duration = Duration::from_secs(2);
 
     /// Cadence of the dedicated maintenance ticker, decoupled from dispatch.
-    const PUSH_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(500);
+    /// Matches the poll loop's idle backoff ceiling, so the tick-counted reap,
+    /// periodic, DLQ-retry and cleanup intervals keep their idle-poll timing.
+    const PUSH_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(200);
+
+    /// Least time between two drains a delayed deadline triggers. Jittered
+    /// deferrals and superseded debounce deadlines land a few ms apart; each
+    /// drain is Redis round trips, so without a floor they run back to back.
+    /// Wakes for ready jobs, freed slots and the fallback are not held back.
+    const MIN_DELAYED_GAP: Duration = Duration::from_millis(100);
 
     /// Switch this scheduler from polling to event-driven dispatch, using the
     /// wake source that matches its storage backend. Call before [`Self::run`],
@@ -951,13 +1005,50 @@ impl Scheduler {
     /// This is the entry point binding shells call for their `push_dispatch`
     /// option. It also exists — as a logged no-op — in builds without the
     /// `push-dispatch` feature, so a shell can offer the option unconditionally
-    /// and degrade to polling.
+    /// and degrade to polling. Redis needs no call: [`Self::run`] installs its
+    /// source by default.
     pub fn enable_push_dispatch(&self) {
-        self.set_wake_source(wake::WakeSource::for_storage(&self.storage));
+        self.set_wake_source(self.backend_wake_source());
+    }
+
+    /// The backend's wake source for exactly what this scheduler serves.
+    fn backend_wake_source(&self) -> wake::WakeSource {
+        wake::WakeSource::for_storage(&self.storage, self.namespace.as_deref(), &self.queues)
+    }
+
+    /// Keep this scheduler polling, opting out of the Redis push default and
+    /// dropping any wake source already installed. Whichever of this and
+    /// [`Self::enable_push_dispatch`] is called last wins.
+    pub fn disable_push_dispatch(&self) {
+        self.push_opted_out
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.take_wake_source();
+    }
+
+    /// The wake source `run` should use: an explicitly installed one, else the
+    /// backend default — push on Redis (#961), where each poll is a network
+    /// round trip, and polling on SQLite/Postgres. Crate-visible so the
+    /// turnkey `Worker`'s push knob can be tested against it.
+    pub(crate) fn resolve_wake_source(&self) -> Option<wake::WakeSource> {
+        if let Some(wake) = self.take_wake_source() {
+            return Some(wake);
+        }
+        if self
+            .push_opted_out
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return None;
+        }
+        match &self.storage {
+            #[cfg(feature = "redis")]
+            StorageBackend::Redis(_) => Some(self.backend_wake_source()),
+            _ => None,
+        }
     }
 
     /// Install the wake source the push loop should consume. Call before
-    /// `run()`. With no wake source installed, `run()` keeps polling.
+    /// `run()`. With none installed, `run()` falls back to the backend default
+    /// (see `resolve_wake_source`): push on Redis, polling elsewhere.
     pub fn set_wake_source(&self, source: wake::WakeSource) {
         let mut guard = self.wake_source.lock().unwrap_or_else(|p| p.into_inner());
         *guard = Some(source);
@@ -972,60 +1063,90 @@ impl Scheduler {
             .take()
     }
 
-    /// Bridge a (re)scheduled job into the push loop: wake immediately if it
-    /// is ready now, otherwise arm the delayed timer. Used by the retry and
-    /// periodic-enqueue paths, which run on the scheduler and already hold a
-    /// storage handle.
-    pub(crate) fn signal_scheduled(&self, scheduled_at: i64) {
-        use crate::storage::notify::StorageNotifier;
+    /// Bridge a (re)scheduled job on `queue` into the push loop: wake that
+    /// queue's schedulers if it is ready now, otherwise arm the delayed timer.
+    /// Used by the retry and step-sleep paths, which reschedule without an
+    /// enqueue and so bypass the storage-side notify. The job was claimed by
+    /// this scheduler, so its namespace is this scheduler's.
+    pub(crate) fn signal_scheduled(&self, queue: &str, scheduled_at: i64) {
         if scheduled_at <= crate::job::now_millis() {
-            match &self.storage {
-                StorageBackend::Sqlite(s) => s.notify_job_ready("", scheduled_at),
-                #[cfg(feature = "postgres")]
-                StorageBackend::Postgres(s) => s.notify_job_ready("", scheduled_at),
-                #[cfg(feature = "redis")]
-                StorageBackend::Redis(s) => s.notify_job_ready("", scheduled_at),
-            }
+            // Not an enqueue write, so nothing already published — always
+            // call the backend's own notify (see `notify_rescheduled`).
+            self.storage
+                .notify_rescheduled(self.namespace.as_deref(), queue, scheduled_at);
         } else {
             self.note_scheduled_at(scheduled_at);
         }
     }
 
-    /// Record the earliest delayed-job schedule so the loop can arm a timer.
-    /// Ready jobs (`scheduled_at <= now`) wake immediately and don't update
-    /// this. Safe to call from any thread.
+    /// Deadlines tracked at once. Past it the latest are dropped, and those
+    /// jobs wait for the fallback timer instead.
+    const MAX_DELAYED_DEADLINES: usize = 1024;
+
+    /// Record a delayed job's `scheduled_at` so the loop arms a timer for it.
+    /// Safe to call from any thread.
     pub fn note_scheduled_at(&self, scheduled_at: i64) {
-        use std::sync::atomic::Ordering;
-        let mut current = self.next_scheduled_at.load(Ordering::Relaxed);
-        while scheduled_at < current {
-            match self.next_scheduled_at.compare_exchange_weak(
-                current,
-                scheduled_at,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(observed) => current = observed,
-            }
+        let mut deadlines = self.lock_deadlines();
+        deadlines.insert(scheduled_at);
+        if deadlines.len() > Self::MAX_DELAYED_DEADLINES {
+            deadlines.pop_last();
         }
     }
 
-    /// Duration until the next delayed job is due, capped at the fallback
-    /// interval. Resets the tracker once the time has passed so a stale value
-    /// can't pin the timer low forever.
+    fn lock_deadlines(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeSet<i64>> {
+        self.delayed_deadlines
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Duration until the next tracked deadline, capped at the fallback
+    /// interval; zero once one is due. Read-only: a deadline is dropped only
+    /// by the drain that serves it (`clear_due_deadlines`), so a `select!`
+    /// that picks another branch cannot lose it.
     fn next_delayed_timer(&self) -> Duration {
-        use std::sync::atomic::Ordering;
-        let next = self.next_scheduled_at.load(Ordering::Relaxed);
-        if next == i64::MAX {
+        let Some(next) = self.lock_deadlines().first().copied() else {
             return Self::PUSH_FALLBACK_INTERVAL;
+        };
+        let wait = next.saturating_sub(crate::job::now_millis()).max(0);
+        Duration::from_millis(wait.unsigned_abs()).min(Self::PUSH_FALLBACK_INTERVAL)
+    }
+
+    /// Forget every deadline a drain that started at `drained_at` could claim.
+    fn clear_due_deadlines(&self, drained_at: i64) {
+        let mut deadlines = self.lock_deadlines();
+        *deadlines = deadlines.split_off(&drained_at.saturating_add(1));
+    }
+
+    /// Arm the timer for the earliest deferral this dispatch pass made, once.
+    /// The rest come due in drains that timer (or a later one) triggers.
+    fn arm_deferrals(&self) {
+        let floor = self
+            .deferred_floor
+            .swap(i64::MAX, std::sync::atomic::Ordering::Relaxed);
+        if floor != i64::MAX {
+            self.note_scheduled_at(floor);
         }
-        let now = crate::job::now_millis();
-        if next <= now {
-            // The delayed job is due; clear the tracker and dispatch now.
-            self.next_scheduled_at.store(i64::MAX, Ordering::Relaxed);
-            return Duration::ZERO;
+    }
+
+    /// When the loop should drain next without a wake: the fallback after
+    /// `last_drain`, or the next tracked deadline — but a deadline never
+    /// earlier than [`Self::MIN_DELAYED_GAP`] after `last_drain`.
+    fn next_drain_at(
+        last_drain: tokio::time::Instant,
+        now: tokio::time::Instant,
+        delayed: Duration,
+    ) -> tokio::time::Instant {
+        let delayed_at = (now + delayed).max(last_drain + Self::MIN_DELAYED_GAP);
+        (last_drain + Self::PUSH_FALLBACK_INTERVAL).min(delayed_at)
+    }
+
+    /// Arm a timer for each deadline `heard` announced; true when it asks
+    /// for a drain.
+    fn absorb_wake(&self, heard: wake::Wake) -> bool {
+        for scheduled_at in heard.delayed {
+            self.note_scheduled_at(scheduled_at);
         }
-        Duration::from_millis((next - now) as u64).min(Self::PUSH_FALLBACK_INTERVAL)
+        heard.ready
     }
 
     /// Event-driven dispatch loop. Dispatches on a wake signal, on the
@@ -1035,24 +1156,37 @@ impl Scheduler {
         let mut counters = TickCounters::default();
         let mut maintenance = tokio::time::interval(Self::PUSH_MAINTENANCE_INTERVAL);
         maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The fallback is anchored to the last drain, not re-armed each pass:
+        // the maintenance tick restarts the loop more often than the fallback
+        // interval, so a per-pass sleep would never fire.
+        // Drain a backlog that predates this loop first: no wake announces it,
+        // and the poll loop this replaces dispatched on its first pass.
+        while self.tick_dispatch(&job_tx) {}
+        let mut last_drain = tokio::time::Instant::now();
 
         loop {
-            let fallback = self.next_delayed_timer();
-            tokio::select! {
+            let fallback_at = Self::next_drain_at(
+                last_drain,
+                tokio::time::Instant::now(),
+                self.next_delayed_timer(),
+            );
+            let drain = tokio::select! {
                 _ = self.shutdown.notified() => break,
-                _ = wake.wait() => {
-                    // Drain dispatch fully so a single wake clears the queue.
-                    while self.tick_dispatch(&job_tx) {}
-                }
-                _ = tokio::time::sleep(fallback) => {
-                    while self.tick_dispatch(&job_tx) {}
-                }
-                _ = maintenance.tick() => {
-                    if self.tick_maintenance(&mut counters) {
-                        // Periodic enqueue may have produced ready work.
-                        while self.tick_dispatch(&job_tx) {}
-                    }
-                }
+                // A delayed job's announcement only re-arms the timer above.
+                heard = wake.wait() => self.absorb_wake(heard),
+                // A finished job freed an in-flight slot — refill now, as the
+                // poll loop does, instead of idling to the next wake.
+                _ = self.dispatch_wake.notified() => true,
+                _ = tokio::time::sleep_until(fallback_at) => true,
+                // Periodic enqueue may have produced ready work.
+                _ = maintenance.tick() => self.tick_maintenance(&mut counters),
+            };
+            if drain {
+                // Drain dispatch fully so a single wake clears the queue.
+                let drained_at = crate::job::now_millis();
+                while self.tick_dispatch(&job_tx) {}
+                self.clear_due_deadlines(drained_at);
+                last_drain = tokio::time::Instant::now();
             }
         }
     }
@@ -1070,6 +1204,10 @@ impl Scheduler {
              feature; falling back to polling"
         );
     }
+
+    /// Stand-in for the push-dispatch build's opt-out. Without the feature the
+    /// scheduler always polls, so there is nothing to opt out of.
+    pub fn disable_push_dispatch(&self) {}
 }
 
 #[cfg(test)]
@@ -1090,6 +1228,70 @@ mod tests {
             SchedulerConfig::default(),
             None,
         )
+    }
+
+    /// #959: an unset `batch_size` keeps SQLite's historical single-claim
+    /// default — and since `tick_dispatch` branches on `batch_size() > 1`,
+    /// resolving to 1 here is exactly what sends it down the `try_dispatch`
+    /// (not `try_dispatch_batch`) path.
+    #[test]
+    fn batch_size_resolves_to_one_on_sqlite_when_unset() {
+        let scheduler = test_scheduler();
+        assert_eq!(scheduler.batch_size(), 1);
+    }
+
+    #[test]
+    fn batch_size_honours_an_explicit_value() {
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let config = SchedulerConfig {
+            batch_size: Some(8),
+            ..SchedulerConfig::default()
+        };
+        let scheduler = Scheduler::new(storage, vec!["default".to_string()], config, None);
+        assert_eq!(scheduler.batch_size(), 8);
+    }
+
+    /// `Some(0)` clamps to 1 rather than disabling dispatch.
+    #[test]
+    fn batch_size_clamps_zero_to_one() {
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let config = SchedulerConfig {
+            batch_size: Some(0),
+            ..SchedulerConfig::default()
+        };
+        let scheduler = Scheduler::new(storage, vec!["default".to_string()], config, None);
+        assert_eq!(scheduler.batch_size(), 1);
+    }
+
+    /// #959: an unset `batch_size` widens to [`REDIS_DEFAULT_BATCH_SIZE`] on
+    /// Redis — resolution reads only the storage variant, so this needs a
+    /// live connection just to construct `RedisStorage`, not to exercise
+    /// dispatch. Skips gracefully (like `redis_storage_tests`) when no hosted
+    /// Redis is configured.
+    #[cfg(feature = "redis")]
+    #[test]
+    fn batch_size_resolves_to_redis_default_when_unset() {
+        let Ok(url) = std::env::var("FLEXIQ_REDIS_TEST_URL") else {
+            eprintln!("Skipping (FLEXIQ_REDIS_TEST_URL not set): batch_size_resolves_to_redis_default_when_unset");
+            return;
+        };
+        let prefix = format!("sched_batch_test_{}:", uuid::Uuid::now_v7().simple());
+        let storage = match crate::RedisStorage::with_prefix(&url, &prefix) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Skipping Redis test (cannot connect): {e}");
+                return;
+            }
+        };
+        let scheduler = Scheduler::new(
+            StorageBackend::Redis(storage),
+            vec!["default".to_string()],
+            SchedulerConfig::default(),
+            None,
+        );
+        assert_eq!(scheduler.batch_size(), REDIS_DEFAULT_BATCH_SIZE);
     }
 
     /// #836: a scheduler honours its own namespace's pauses and no other's.
@@ -1839,7 +2041,7 @@ mod tests {
         let storage =
             StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
         let config = SchedulerConfig {
-            batch_size,
+            batch_size: Some(batch_size),
             ..SchedulerConfig::default()
         };
         let mut scheduler = Scheduler::new(storage, vec!["default".to_string()], config, None);
@@ -1866,6 +2068,99 @@ mod tests {
             dispatched += 1;
         }
         dispatched
+    }
+
+    /// A gate deferral arms the push loop's timer for the job's new deadline
+    /// (the ~1-1.5 s rate-limit delay) on both claim paths. No enqueue
+    /// announces a deferral, so otherwise only the 2 s fallback would find it.
+    #[cfg(feature = "push-dispatch")]
+    #[test]
+    fn test_gate_deferral_arms_the_push_timer() {
+        for batch_size in [1, 4] {
+            let scheduler = rate_limited_scheduler(shed::OnExcess::Defer, batch_size);
+            scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+            scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+            assert_eq!(
+                scheduler.next_delayed_timer(),
+                Scheduler::PUSH_FALLBACK_INTERVAL,
+                "nothing deferred yet"
+            );
+
+            let (tx, mut rx) = make_channel(16);
+            let mut counters = TickCounters::default();
+            scheduler.tick(&tx, &mut counters);
+            scheduler.tick(&tx, &mut counters);
+            assert_eq!(
+                drain_dispatched(&mut rx),
+                1,
+                "one job admitted, one deferred"
+            );
+
+            let timer = scheduler.next_delayed_timer();
+            assert!(
+                timer >= Duration::from_millis(900) && timer < Scheduler::PUSH_FALLBACK_INTERVAL,
+                "batch_size {batch_size}: the timer must land on the deferral, got {timer:?}"
+            );
+        }
+    }
+
+    /// A pass that defers a whole batch arms one deadline, not one per job:
+    /// eight jittered deadlines would each fire a drain that defers the next
+    /// eight, keeping a saturated limiter in a near-continuous drain loop.
+    #[cfg(feature = "push-dispatch")]
+    #[test]
+    fn test_a_deferred_batch_arms_one_deadline() {
+        let scheduler = rate_limited_scheduler(shed::OnExcess::Defer, 8);
+        for _ in 0..8 {
+            scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+        }
+        let (tx, mut rx) = make_channel(16);
+        let mut counters = TickCounters::default();
+        // One pass claims all eight: the token admits one, seven are deferred.
+        scheduler.tick(&tx, &mut counters);
+        assert_eq!(drain_dispatched(&mut rx), 1, "one admitted");
+
+        let deferred = scheduler
+            .storage
+            .list_jobs(Some(JobStatus::Pending as i32), None, None, 20, 0, None)
+            .unwrap();
+        assert_eq!(deferred.len(), 7);
+        let earliest = deferred.iter().map(|j| j.scheduled_at).min().unwrap();
+        assert_eq!(
+            scheduler
+                .lock_deadlines()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![earliest],
+            "only the pass's earliest deferral is armed"
+        );
+    }
+
+    /// A due deadline cannot drain sooner than the gap after the last drain;
+    /// with none tracked, the fallback governs as before.
+    #[cfg(feature = "push-dispatch")]
+    #[test]
+    fn test_delayed_drains_keep_the_minimum_gap() {
+        let last = tokio::time::Instant::now();
+        let gap = Scheduler::MIN_DELAYED_GAP;
+        assert_eq!(
+            Scheduler::next_drain_at(last, last, Duration::ZERO),
+            last + gap
+        );
+        let later = last + Duration::from_millis(30);
+        assert_eq!(
+            Scheduler::next_drain_at(last, later, Duration::ZERO),
+            last + gap
+        );
+        assert_eq!(
+            Scheduler::next_drain_at(last, last, Duration::from_millis(700)),
+            last + Duration::from_millis(700)
+        );
+        assert_eq!(
+            Scheduler::next_drain_at(last, last, Scheduler::PUSH_FALLBACK_INTERVAL),
+            last + Scheduler::PUSH_FALLBACK_INTERVAL
+        );
     }
 
     #[test]
@@ -2331,7 +2626,7 @@ mod tests {
         let storage =
             StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
         let config = SchedulerConfig {
-            batch_size: 8,
+            batch_size: Some(8),
             ..SchedulerConfig::default()
         };
         let mut scheduler = Scheduler::new(storage, vec!["default".to_string()], config, None);
@@ -3969,14 +4264,20 @@ mod push_tests {
     use std::time::Duration;
 
     fn push_scheduler() -> Scheduler {
-        let storage =
-            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
-        Scheduler::new(
-            storage,
+        push_scheduler_with_sqlite().0
+    }
+
+    /// A push scheduler plus a handle on its SQLite storage (a clone sharing
+    /// the pool and notify handle), for tests that bypass the backend enum.
+    fn push_scheduler_with_sqlite() -> (Scheduler, crate::storage::sqlite::SqliteStorage) {
+        let sqlite = crate::storage::sqlite::SqliteStorage::in_memory().unwrap();
+        let scheduler = Scheduler::new(
+            StorageBackend::Sqlite(sqlite.clone()),
             vec!["default".to_string()],
             SchedulerConfig::default(),
             None,
-        )
+        );
+        (scheduler, sqlite)
     }
 
     fn ready_job(task_name: &str) -> NewJob {
@@ -4004,11 +4305,8 @@ mod push_tests {
     fn test_wake_fires_on_immediate_enqueue() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let scheduler = push_scheduler();
-            let notify = match scheduler.storage() {
-                StorageBackend::Sqlite(s) => s.notify_handle().clone(),
-                _ => unreachable!("test uses sqlite"),
-            };
+            let (scheduler, sqlite) = push_scheduler_with_sqlite();
+            let notify = sqlite.notify_handle().clone();
 
             // Enqueue goes through the StorageBackend chokepoint, which calls
             // notify_one() for ready jobs.
@@ -4024,28 +4322,74 @@ mod push_tests {
         });
     }
 
-    /// A delayed job must NOT wake immediately — the Notify stays unsignaled.
-    #[test]
-    fn test_delayed_job_does_not_wake() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let scheduler = push_scheduler();
-            let notify = match scheduler.storage() {
-                StorageBackend::Sqlite(s) => s.notify_handle().clone(),
-                _ => unreachable!("test uses sqlite"),
-            };
+    /// A delayed enqueue announces its deadline with the wake, and the loop's
+    /// timer lands on it — 1 s out, strictly inside the 2 s fallback, so the
+    /// fallback alone cannot satisfy this.
+    #[tokio::test]
+    async fn test_delayed_job_arms_the_timer() {
+        let scheduler = push_scheduler();
+        scheduler.enable_push_dispatch();
+        let mut wake = scheduler
+            .take_wake_source()
+            .expect("enable_push_dispatch must install a wake source");
 
-            let mut delayed = ready_job("later_task");
-            delayed.scheduled_at = now_millis() + 60_000; // 1 minute out
-            scheduler.storage().enqueue(delayed).unwrap();
+        let due = now_millis() + 1_000;
+        let mut delayed = ready_job("later_task");
+        delayed.scheduled_at = due;
+        scheduler.storage().enqueue(delayed).unwrap();
 
-            let woke = tokio::time::timeout(Duration::from_millis(50), notify.notified()).await;
-            assert!(woke.is_err(), "a delayed job must not wake immediately");
+        let heard = tokio::time::timeout(Duration::from_millis(50), wake.wait())
+            .await
+            .expect("a delayed enqueue must announce its deadline");
+        assert_eq!(heard.delayed, vec![due]);
+        assert!(
+            !heard.ready,
+            "a delayed-only wake arms the timer without a drain"
+        );
+        scheduler.absorb_wake(heard);
 
-            // It should instead arm the delayed timer.
-            let timer = scheduler.next_delayed_timer();
-            assert!(timer > Duration::ZERO && timer <= Scheduler::PUSH_FALLBACK_INTERVAL);
-        });
+        // A ready enqueue alongside one still drains.
+        scheduler.storage().enqueue(ready_job("now_task")).unwrap();
+        let heard = tokio::time::timeout(Duration::from_millis(50), wake.wait())
+            .await
+            .expect("a ready enqueue must wake");
+        assert!(heard.ready && heard.delayed.is_empty());
+
+        let timer = scheduler.next_delayed_timer();
+        assert!(
+            timer > Duration::from_millis(500) && timer < Scheduler::PUSH_FALLBACK_INTERVAL,
+            "the timer must land on the 1 s deadline, got {timer:?}"
+        );
+    }
+
+    /// End to end on the run loop: a job enqueued 1 s out dispatches at its
+    /// deadline. The loop's startup drain, just before the enqueue, anchors
+    /// the 2 s fallback, so without the announced deadline it could not
+    /// dispatch before ~2 s.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn push_dispatches_a_delayed_job_at_its_deadline() {
+        let scheduler = Arc::new(push_scheduler());
+        scheduler.enable_push_dispatch();
+        let (run, mut rx) = spawn_run(&scheduler);
+
+        let enqueued_at = tokio::time::Instant::now();
+        let mut delayed = ready_job("delayed_task");
+        delayed.scheduled_at = now_millis() + 1_000;
+        let enqueued = scheduler.storage().enqueue(delayed).unwrap();
+
+        let job = tokio::time::timeout_at(enqueued_at + Duration::from_millis(1500), rx.recv())
+            .await
+            .expect("a delayed job must dispatch at its deadline, not the fallback")
+            .expect("run loop alive");
+        assert_eq!(job.id, enqueued.id);
+        assert!(
+            enqueued_at.elapsed() >= Duration::from_millis(900),
+            "dispatched before its deadline: {:?}",
+            enqueued_at.elapsed()
+        );
+
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
     }
 
     /// With no wake delivered, the fallback timer still dispatches a job.
@@ -4053,17 +4397,12 @@ mod push_tests {
     fn test_fallback_poll_dispatches_without_wake() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let scheduler = push_scheduler();
+            let (scheduler, sqlite) = push_scheduler_with_sqlite();
 
             // Insert a ready job directly via the inherent SQLite method so the
             // StorageBackend notify chokepoint is bypassed — simulating a
             // missed wake. The fallback dispatch path must still pick it up.
-            match scheduler.storage() {
-                StorageBackend::Sqlite(s) => {
-                    s.enqueue(ready_job("fallback_task")).unwrap();
-                }
-                _ => unreachable!("test uses sqlite"),
-            }
+            sqlite.enqueue(ready_job("fallback_task")).unwrap();
 
             let (tx, mut rx) = tokio::sync::mpsc::channel(16);
             // Drive a single fallback dispatch round directly.
@@ -4097,6 +4436,635 @@ mod push_tests {
         tokio::time::timeout(Duration::from_secs(5), wake.wait())
             .await
             .expect("an enqueued ready job must wake the push loop");
+    }
+
+    /// Run `scheduler` on the current runtime, returning its dispatch channel.
+    fn spawn_run(
+        scheduler: &Arc<Scheduler>,
+    ) -> (
+        tokio::task::JoinHandle<()>,
+        tokio::sync::mpsc::Receiver<Job>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        let runner = Arc::clone(scheduler);
+        (tokio::spawn(async move { runner.run(tx).await }), rx)
+    }
+
+    /// A job no wake announces (another process's delayed enqueue, a missed
+    /// wake) must still dispatch on the fallback timer. The maintenance tick
+    /// restarts the loop well inside the fallback, so a per-pass one never fired.
+    #[tokio::test]
+    async fn push_fallback_dispatches_an_unannounced_job() {
+        let sqlite = crate::storage::sqlite::SqliteStorage::in_memory().unwrap();
+        let scheduler = Arc::new(Scheduler::new(
+            StorageBackend::Sqlite(sqlite.clone()),
+            vec!["default".to_string()],
+            SchedulerConfig::default(),
+            None,
+        ));
+        scheduler.enable_push_dispatch();
+        let (run, mut rx) = spawn_run(&scheduler);
+        // A woken job first, so the loop is past its start drain.
+        scheduler.storage().enqueue(ready_job("woken")).unwrap();
+        rx.recv().await.expect("run loop alive");
+        // Let that drain finish so it cannot sweep up the next job.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // The inherent SQLite enqueue skips the notify chokepoint.
+        sqlite.enqueue(ready_job("unannounced")).unwrap();
+        let enqueued_at = tokio::time::Instant::now();
+
+        let job = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the fallback timer must dispatch an unannounced job")
+            .expect("run loop alive");
+        assert_eq!(job.task_name, "unannounced");
+        // Proves the fallback, not a stray wake or drain, delivered it.
+        assert!(enqueued_at.elapsed() >= Duration::from_secs(1));
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
+    /// A backlog that predates `run` has no wake to announce it; the push loop
+    /// must drain it on start, as the poll loop's first pass did, not idle
+    /// until the 2 s fallback.
+    #[tokio::test]
+    async fn push_drains_a_backlog_on_start() {
+        let sqlite = crate::storage::sqlite::SqliteStorage::in_memory().unwrap();
+        // The inherent enqueue skips the notify, so only the start drain finds it.
+        sqlite.enqueue(ready_job("backlog")).unwrap();
+        let scheduler = Arc::new(Scheduler::new(
+            StorageBackend::Sqlite(sqlite),
+            vec!["default".to_string()],
+            SchedulerConfig::default(),
+            None,
+        ));
+        scheduler.enable_push_dispatch();
+        let (run, mut rx) = spawn_run(&scheduler);
+
+        let job = tokio::time::timeout(Duration::from_millis(1000), rx.recv())
+            .await
+            .expect("a pre-start backlog must dispatch before the fallback")
+            .expect("run loop alive");
+        assert_eq!(job.task_name, "backlog");
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
+    /// With the in-flight cap full, a finished job must refill its slot at
+    /// once, as the poll loop does — not idle until the next wake or fallback.
+    #[tokio::test]
+    async fn push_refills_a_freed_in_flight_slot() {
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let config = SchedulerConfig {
+            max_in_flight: Some(1),
+            ..SchedulerConfig::default()
+        };
+        let scheduler = Arc::new(Scheduler::new(
+            storage,
+            vec!["default".to_string()],
+            config,
+            None,
+        ));
+        scheduler.enable_push_dispatch();
+        scheduler.storage().enqueue(ready_job("capped")).unwrap();
+        scheduler.storage().enqueue(ready_job("capped")).unwrap();
+        let (run, mut rx) = spawn_run(&scheduler);
+
+        let first = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the enqueue wake dispatches the first job")
+            .expect("run loop alive");
+        scheduler
+            .handle_result(JobResult::Success {
+                job_id: first.id.clone(),
+                result: None,
+                task_name: "capped".to_string(),
+                wall_time_ns: 1,
+            })
+            .unwrap();
+
+        // Well inside the 2 s fallback, so only the slot wake can deliver it.
+        let second = tokio::time::timeout(Duration::from_millis(1000), rx.recv())
+            .await
+            .expect("a freed slot must refill before the fallback fires")
+            .expect("run loop alive");
+        assert_ne!(second.id, first.id);
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
+    /// A dependent skipped while its parent ran dispatches as soon as the
+    /// parent completes, not on the fallback: no enqueue announces it again.
+    #[tokio::test]
+    async fn push_completion_wakes_a_blocked_dependent() {
+        let scheduler = Arc::new(push_scheduler());
+        scheduler.enable_push_dispatch();
+        let (run, mut rx) = spawn_run(&scheduler);
+        let parent = scheduler.storage().enqueue(ready_job("parent")).unwrap();
+        let running = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the parent dispatches")
+            .expect("run loop alive");
+        assert_eq!(running.id, parent.id);
+
+        let dependent = scheduler
+            .storage()
+            .enqueue(NewJob {
+                depends_on: vec![parent.id.clone()],
+                ..ready_job("dependent")
+            })
+            .unwrap();
+        // Let the enqueue-wake drain skip it; that also re-anchors the fallback.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(rx.try_recv().is_err(), "blocked while the parent runs");
+
+        let completed_at = tokio::time::Instant::now();
+        scheduler
+            .storage()
+            .complete(&parent.id, None, None)
+            .unwrap();
+        let job = tokio::time::timeout_at(completed_at + Duration::from_millis(1000), rx.recv())
+            .await
+            .expect("the parent's completion must wake the push loop")
+            .expect("run loop alive");
+        assert_eq!(job.id, dependent.id);
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
+    /// #961: SQLite keeps polling unless a shell opts in — no source after
+    /// construction, and none resolved by default.
+    #[test]
+    fn sqlite_default_stays_polling() {
+        let scheduler = push_scheduler();
+        assert!(scheduler.take_wake_source().is_none());
+        assert!(scheduler.resolve_wake_source().is_none());
+    }
+
+    /// `disable_push_dispatch` drops a source a shell already installed.
+    #[test]
+    fn disable_push_dispatch_drops_an_installed_source() {
+        let scheduler = push_scheduler();
+        scheduler.enable_push_dispatch();
+        scheduler.disable_push_dispatch();
+        assert!(scheduler.resolve_wake_source().is_none());
+    }
+
+    /// A uniquely prefixed Redis keyspace, or `None` (skip) when no hosted
+    /// Redis is configured.
+    #[cfg(feature = "redis")]
+    fn redis_storage(test: &str) -> Option<crate::RedisStorage> {
+        let Ok(url) = std::env::var("FLEXIQ_REDIS_TEST_URL") else {
+            eprintln!("Skipping (FLEXIQ_REDIS_TEST_URL not set): {test}");
+            return None;
+        };
+        let prefix = format!("push_test_{}:", uuid::Uuid::now_v7().simple());
+        match crate::RedisStorage::with_prefix(&url, &prefix) {
+            Ok(storage) => Some(storage),
+            Err(e) => {
+                eprintln!("Skipping Redis test (cannot connect): {e}");
+                None
+            }
+        }
+    }
+
+    /// A scheduler serving only `queue` over `storage`.
+    #[cfg(feature = "redis")]
+    fn redis_scheduler_on(storage: &crate::RedisStorage, queue: &str) -> Scheduler {
+        Scheduler::new(
+            StorageBackend::Redis(storage.clone()),
+            vec![queue.to_string()],
+            SchedulerConfig::default(),
+            None,
+        )
+    }
+
+    /// A scheduler serving `default` over a fresh Redis keyspace.
+    #[cfg(feature = "redis")]
+    fn redis_scheduler(test: &str) -> Option<Scheduler> {
+        redis_storage(test).map(|storage| redis_scheduler_on(&storage, "default"))
+    }
+
+    /// Enqueue a job on `queue` and wait (by wake or fallback) for `rx` to get
+    /// it: warms the connections and re-anchors the scheduler's fallback.
+    #[cfg(feature = "redis")]
+    async fn warm_up(
+        storage: &StorageBackend,
+        queue: &str,
+        rx: &mut tokio::sync::mpsc::Receiver<Job>,
+    ) {
+        storage
+            .enqueue(NewJob {
+                queue: queue.to_string(),
+                ..ready_job("warm")
+            })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("the warm-up job dispatches by wake or fallback")
+            .expect("run loop alive");
+    }
+
+    /// Two schedulers on one keyspace serving different queues: an enqueue to
+    /// B wakes B promptly while A runs. A consumed signal (the old list pop)
+    /// let A swallow it, leaving B to its 2 s fallback.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_wake_reaches_the_queues_own_scheduler() {
+        let Some(storage) = redis_storage("redis_wake_reaches_the_queues_own_scheduler") else {
+            return;
+        };
+        let a = Arc::new(redis_scheduler_on(&storage, "queue_a"));
+        let b = Arc::new(redis_scheduler_on(&storage, "queue_b"));
+        let (run_a, _rx_a) = spawn_run(&a);
+        let (run_b, mut rx_b) = spawn_run(&b);
+        warm_up(b.storage(), "queue_b", &mut rx_b).await;
+
+        let enqueue_started = tokio::time::Instant::now();
+        let enqueued = b
+            .storage()
+            .enqueue(NewJob {
+                queue: "queue_b".to_string(),
+                ..ready_job("woken")
+            })
+            .unwrap();
+        let deadline = enqueue_started + Duration::from_millis(1500);
+        let job = tokio::time::timeout_at(deadline, rx_b.recv())
+            .await
+            .expect("queue B's scheduler must wake before its fallback")
+            .expect("run loop alive");
+        assert_eq!(job.id, enqueued.id);
+
+        for (scheduler, run) in [(a, run_a), (b, run_b)] {
+            scheduler.shutdown_handle().notify_one();
+            run.await.unwrap();
+        }
+    }
+
+    /// A dependent on another scheduler's queue dispatches promptly once its
+    /// parent completes. Its own enqueue wake drained B while the parent ran,
+    /// re-anchoring B's 2 s fallback, so 1.5 s after the completion can only be
+    /// the completion's wake — B's scheduler is not the one that finished it.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_completion_wakes_a_dependent_on_another_queue() {
+        let Some(storage) = redis_storage("redis_completion_wakes_a_dependent_on_another_queue")
+        else {
+            return;
+        };
+        let a = Arc::new(redis_scheduler_on(&storage, "queue_a"));
+        let b = Arc::new(redis_scheduler_on(&storage, "queue_b"));
+        let (run_a, mut rx_a) = spawn_run(&a);
+        let (run_b, mut rx_b) = spawn_run(&b);
+        warm_up(b.storage(), "queue_b", &mut rx_b).await;
+
+        let parent = a
+            .storage()
+            .enqueue(NewJob {
+                queue: "queue_a".to_string(),
+                ..ready_job("parent")
+            })
+            .unwrap();
+        let running = tokio::time::timeout(Duration::from_secs(10), rx_a.recv())
+            .await
+            .expect("the parent dispatches")
+            .expect("run loop alive");
+        assert_eq!(running.id, parent.id);
+
+        let dependent = b
+            .storage()
+            .enqueue(NewJob {
+                queue: "queue_b".to_string(),
+                depends_on: vec![parent.id.clone()],
+                ..ready_job("dependent")
+            })
+            .unwrap();
+        // Let B's enqueue-wake drain run and skip the still-blocked dependent.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(rx_b.try_recv().is_err(), "blocked while the parent runs");
+
+        let completed_at = tokio::time::Instant::now();
+        a.storage().complete(&parent.id, None, None).unwrap();
+        let job = tokio::time::timeout_at(completed_at + Duration::from_millis(1500), rx_b.recv())
+            .await
+            .expect("the parent's completion must wake the dependent's scheduler")
+            .expect("run loop alive");
+        assert_eq!(job.id, dependent.id);
+        eprintln!(
+            "redis completion-to-dependent dispatch: {:?}",
+            completed_at.elapsed()
+        );
+
+        for (scheduler, run) in [(a, run_a), (b, run_b)] {
+            scheduler.shutdown_handle().notify_one();
+            run.await.unwrap();
+        }
+    }
+
+    /// Two schedulers serving the same queue both hear one signal — a
+    /// broadcast, not a single consumable token. Observed on the wake
+    /// channels themselves, after a subscribe handshake drains them.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_wake_reaches_every_scheduler_on_the_queue() {
+        use crate::storage::notify::StorageNotifier;
+        let Some(storage) = redis_storage("redis_wake_reaches_every_scheduler_on_the_queue") else {
+            return;
+        };
+        let channel = |scheduler: &Scheduler| match scheduler.resolve_wake_source() {
+            Some(wake::WakeSource::Channel(rx)) => rx,
+            _ => panic!("Redis defaults to a listener channel"),
+        };
+        let mut first = channel(&redis_scheduler_on(&storage, "shared"));
+        let mut second = channel(&redis_scheduler_on(&storage, "shared"));
+
+        // Handshake: signal until both listeners have subscribed and heard one.
+        let handshake = async {
+            let (mut got_first, mut got_second) = (false, false);
+            while !(got_first && got_second) {
+                storage.notify_job_ready(None, "shared", 0);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                got_first |= first.try_recv().is_ok();
+                got_second |= second.try_recv().is_ok();
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), handshake)
+            .await
+            .expect("both listeners subscribe");
+        // Let in-flight handshake signals land, then start from empty channels.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        while first.try_recv().is_ok() {}
+        while second.try_recv().is_ok() {}
+
+        storage.notify_job_ready(None, "shared", 0);
+        let both = async { tokio::join!(first.recv(), second.recv()) };
+        let (a, b) = tokio::time::timeout(Duration::from_secs(5), both)
+            .await
+            .expect("one signal must wake every scheduler on the queue");
+        assert!(a.is_some() && b.is_some(), "listeners alive");
+    }
+
+    /// A ready job in namespace `a` wakes `a`'s scheduler and not `b`'s on the
+    /// same queue name: `b` could never claim it, so the wake would be spurious.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_wake_stays_in_its_namespace() {
+        use crate::storage::notify::StorageNotifier;
+        let Some(storage) = redis_storage("redis_wake_stays_in_its_namespace") else {
+            return;
+        };
+        let channel = |namespace: &str| {
+            let scheduler = Scheduler::new(
+                StorageBackend::Redis(storage.clone()),
+                vec!["shared".to_string()],
+                SchedulerConfig::default(),
+                Some(namespace.to_string()),
+            );
+            match scheduler.resolve_wake_source() {
+                Some(wake::WakeSource::Channel(rx)) => rx,
+                _ => panic!("Redis defaults to a listener channel"),
+            }
+        };
+        let mut a = channel("a");
+        let mut b = channel("b");
+
+        // Handshake each listener on its own namespace's channel.
+        let handshake = async {
+            let (mut got_a, mut got_b) = (false, false);
+            while !(got_a && got_b) {
+                storage.notify_job_ready(Some("a"), "shared", 0);
+                storage.notify_job_ready(Some("b"), "shared", 0);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                got_a |= a.try_recv().is_ok();
+                got_b |= b.try_recv().is_ok();
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), handshake)
+            .await
+            .expect("both listeners subscribe");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        while a.try_recv().is_ok() {}
+        while b.try_recv().is_ok() {}
+
+        storage.notify_job_ready(Some("a"), "shared", 0);
+        tokio::time::timeout(Duration::from_secs(5), a.recv())
+            .await
+            .expect("namespace a's scheduler must wake")
+            .expect("listener alive");
+        // `a` heard it, so it was delivered; give `b` the same chance.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(
+            b.try_recv().is_err(),
+            "namespace b's scheduler must not wake for namespace a's job"
+        );
+
+        // Same for the PUBLISH folded into an enqueue's own pipeline.
+        StorageBackend::Redis(storage.clone())
+            .enqueue(NewJob {
+                queue: "shared".to_string(),
+                namespace: Some("a".to_string()),
+                ..ready_job("ns_a")
+            })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), a.recv())
+            .await
+            .expect("namespace a's enqueue must wake a")
+            .expect("listener alive");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(
+            b.try_recv().is_err(),
+            "namespace a's enqueue must not wake b"
+        );
+    }
+
+    /// #961: on Redis `run` wakes on enqueue with no explicit opt-in. A first
+    /// job warms the connections and, being drained, re-anchors the 2 s
+    /// fallback no earlier than its receipt — so a second job dispatched
+    /// within 1.5 s of its enqueue can only be the wake path.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_worker_wakes_on_enqueue_by_default() {
+        let Some(scheduler) = redis_scheduler("redis_worker_wakes_on_enqueue_by_default") else {
+            return;
+        };
+        let scheduler = Arc::new(scheduler);
+        let (run, mut rx) = spawn_run(&scheduler);
+        warm_up(scheduler.storage(), "default", &mut rx).await;
+
+        let enqueue_started = tokio::time::Instant::now();
+        let enqueued = scheduler.storage().enqueue(ready_job("woken")).unwrap();
+        let deadline = enqueue_started + Duration::from_millis(1500);
+        let job = tokio::time::timeout_at(deadline, rx.recv())
+            .await
+            .expect("a Redis enqueue must wake the scheduler before the fallback")
+            .expect("run loop alive");
+        assert_eq!(job.id, enqueued.id);
+        eprintln!("redis enqueue-to-dispatch: {:?}", enqueue_started.elapsed());
+
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
+    /// A job enqueued 1 s out by another process (a separate storage handle,
+    /// so nothing in-process can arm the timer) dispatches at its deadline.
+    /// The warm-up right before the enqueue re-anchors the 2 s fallback, so
+    /// dispatching within 1.75 s of the enqueue can only be the announced
+    /// deadline; the margin over 1 s absorbs the hosted Redis's claim latency.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_delayed_enqueue_elsewhere_dispatches_at_its_deadline() {
+        let Some(storage) =
+            redis_storage("redis_delayed_enqueue_elsewhere_dispatches_at_its_deadline")
+        else {
+            return;
+        };
+        let url = std::env::var("FLEXIQ_REDIS_TEST_URL").unwrap();
+        let producer = StorageBackend::Redis(
+            crate::RedisStorage::with_prefix(&url, storage.prefix()).unwrap(),
+        );
+        let scheduler = Arc::new(redis_scheduler_on(&storage, "default"));
+        let (run, mut rx) = spawn_run(&scheduler);
+        warm_up(scheduler.storage(), "default", &mut rx).await;
+
+        let enqueued_at = tokio::time::Instant::now();
+        let mut delayed = ready_job("delayed_elsewhere");
+        delayed.scheduled_at = now_millis() + 1_000;
+        let enqueued = producer.enqueue(delayed).unwrap();
+
+        let job = tokio::time::timeout_at(enqueued_at + Duration::from_millis(1750), rx.recv())
+            .await
+            .expect("a delayed job enqueued elsewhere must dispatch at its deadline")
+            .expect("run loop alive");
+        assert_eq!(job.id, enqueued.id);
+        assert!(
+            enqueued_at.elapsed() >= Duration::from_millis(900),
+            "dispatched before its deadline: {:?}",
+            enqueued_at.elapsed()
+        );
+        eprintln!(
+            "redis delayed enqueue-to-dispatch: {:?}",
+            enqueued_at.elapsed()
+        );
+
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
+    /// A fresh subscription wakes the loop once with nothing published, so a
+    /// publish that raced the SUBSCRIBE (startup, reconnect) is still drained.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_listener_wakes_once_subscribed() {
+        let Some(scheduler) = redis_scheduler("redis_listener_wakes_once_subscribed") else {
+            return;
+        };
+        let Some(wake::WakeSource::Channel(mut rx)) = scheduler.resolve_wake_source() else {
+            panic!("Redis defaults to a listener channel");
+        };
+        tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("a completed subscribe must forward one wake")
+            .expect("listener alive");
+    }
+
+    /// Jobs enqueued before `run` published to no subscriber; a Redis push
+    /// scheduler must still dispatch them promptly on start, well inside the
+    /// 2 s fallback.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_push_dispatches_a_backlog_on_start() {
+        let Some(scheduler) = redis_scheduler("redis_push_dispatches_a_backlog_on_start") else {
+            return;
+        };
+        let first = scheduler.storage().enqueue(ready_job("before")).unwrap();
+        let second = scheduler.storage().enqueue(ready_job("before")).unwrap();
+        let scheduler = Arc::new(scheduler);
+
+        let started = tokio::time::Instant::now();
+        let (run, mut rx) = spawn_run(&scheduler);
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let job = tokio::time::timeout_at(started + Duration::from_millis(1500), rx.recv())
+                .await
+                .expect("a pre-start backlog must dispatch before the fallback")
+                .expect("run loop alive");
+            ids.push(job.id);
+        }
+        ids.sort();
+        let mut expected = vec![first.id, second.id];
+        expected.sort();
+        assert_eq!(ids, expected);
+
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
+    /// `disable_push_dispatch` keeps a Redis scheduler on the poll loop: no
+    /// wake source resolves, while the same scheduler without it gets one.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_push_opt_out_keeps_polling() {
+        let Some(scheduler) = redis_scheduler("redis_push_opt_out_keeps_polling") else {
+            return;
+        };
+        assert!(
+            matches!(
+                scheduler.resolve_wake_source(),
+                Some(wake::WakeSource::Channel(_))
+            ),
+            "Redis defaults to push"
+        );
+        scheduler.disable_push_dispatch();
+        assert!(
+            scheduler.resolve_wake_source().is_none(),
+            "an opted-out Redis scheduler must poll"
+        );
+    }
+
+    /// Stopping a push scheduler on Redis and dropping its runtime must finish
+    /// promptly: `Runtime::drop` waits on the listener's blocking task, which
+    /// only ends once it notices the push loop is gone.
+    #[cfg(feature = "redis")]
+    #[test]
+    fn redis_listener_shutdown_is_bounded() {
+        let Some(scheduler) = redis_scheduler("redis_listener_shutdown_is_bounded") else {
+            return;
+        };
+        let scheduler = Arc::new(scheduler);
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (run, mut rx) = rt.block_on(async { spawn_run(&scheduler) });
+
+        // Prove the listener is live (a woken dispatch) before stopping it.
+        // The warm-up re-anchors the fallback, so 1.5 s can only be the wake.
+        rt.block_on(async {
+            warm_up(scheduler.storage(), "default", &mut rx).await;
+            scheduler.storage().enqueue(ready_job("live")).unwrap();
+            tokio::time::timeout(Duration::from_millis(1500), rx.recv())
+                .await
+                .expect("push must be active before the shutdown is measured")
+                .expect("run loop alive");
+        });
+
+        let started = std::time::Instant::now();
+        let shutdown = scheduler.shutdown_handle();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        // Stop and drop off-thread so a hang fails the deadline, not the suite.
+        std::thread::spawn(move || {
+            shutdown.notify_one();
+            let _ = rt.block_on(run);
+            drop(rt);
+            let _ = done_tx.send(());
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("scheduler stop + runtime drop must finish within 3 s");
+        eprintln!("redis stop + runtime drop: {:?}", started.elapsed());
     }
 
     /// `note_scheduled_at` keeps the earliest schedule and clears once due.

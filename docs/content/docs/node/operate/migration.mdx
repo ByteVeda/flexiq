@@ -748,9 +748,12 @@ Keeping Redis is a fine choice, with a few things to know:
 
 Workers poll storage rather than blocking on it — every 50 ms while there is
 work, backing off to 200 ms when idle — so an idle worker can take up to about
-200 ms to pick up a new job, where a blocked BullMQ worker wakes at once. The
-`pushDispatch` worker option removes that floor, but needs a native build with
-the `push-dispatch` feature, which the published package does not include.
+200 ms to pick up a new job, where a blocked BullMQ worker wakes at once. A
+Redis-backed worker gets event-driven `pushDispatch` automatically, which
+closes that gap for every job whose enqueue wake reaches it. Work no wake
+announces — say, when the Redis ACL refuses the wake's `PUBLISH` — waits for the
+push loop's fallback poll, up to 2 seconds. Opt out with
+`pushDispatch: false`, or opt in on other backends with `pushDispatch: true`.
 
 ## What you lose
 

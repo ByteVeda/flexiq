@@ -4,6 +4,8 @@
 //! concern. Shared helpers live in `helpers.rs`; the `dequeue_score`
 //! function used by enqueue/retry paths is here.
 
+#[cfg(feature = "push-dispatch")]
+mod dependents_wake;
 mod dequeue;
 mod enqueue;
 mod errors;

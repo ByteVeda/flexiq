@@ -1,6 +1,6 @@
 use redis::Commands;
 
-use super::{map_err, RedisStorage};
+use super::{map_err, watched_transaction, RedisConnection, RedisStorage};
 use crate::error::Result;
 use crate::job::now_millis;
 use crate::storage::records::{WorkerInfo, WorkerRegistration};
@@ -87,7 +87,7 @@ impl RedisStorage {
         let wanted = Self::namespace_segment(namespace);
         let draining = crate::storage::records::WorkerStatus::Draining.as_str();
 
-        redis::transaction(&mut conn, &[wkey.as_str()], |conn, pipe| {
+        watched_transaction(&mut conn, &[wkey.as_str()], |conn, pipe| {
             let (registered, segment): (bool, Option<String>) = redis::pipe()
                 .exists(&wkey)
                 .hget(&wkey, "namespace")
@@ -249,7 +249,7 @@ impl RedisStorage {
     /// order so callers can zip the result back onto the id list.
     fn heartbeats_pipelined(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         worker_ids: &[String],
     ) -> Result<Vec<Option<i64>>> {
         let mut pipe = redis::pipe();

@@ -75,6 +75,7 @@ reads as unset, which is what makes `FOO=` in a Compose file mean "off".
 | `FLEXIQ_QUEUES` | `default` | Comma-separated queues to consume |
 | `FLEXIQ_WORKERS` | The dispatch path's slot count | Dispatch concurrency. Must be a positive integer |
 | `FLEXIQ_MAINTENANCE` | `on` | Whether this process runs retention sweeps |
+| `FLEXIQ_PUSH_DISPATCH` | `on` for Redis, `off` otherwise | Whether the scheduler wakes on enqueue instead of polling. Unrelated to `FLEXIQ_PUSH_TARGET_URL` |
 | `FLEXIQ_AUTO_MIGRATE` | `on` | Whether opening storage applies pending schema changes |
 
 `FLEXIQ_WORKERS` defaults to the slots the dispatch path in use reports — the
@@ -82,6 +83,15 @@ capacity attached executors advertise, or `FLEXIQ_PUSH_TARGET_CAPACITY` under
 push. That is the number you want unless you have measured otherwise:
 `max_in_flight` derives from it, and a value above the available slots claims
 work nothing has room to run.
+
+On Redis the scheduler subscribes to one pub/sub channel per queue in its
+namespace, so an enqueue wakes it at once only when the job's namespace matches
+`FLEXIQ_NAMESPACE` exactly — a job enqueued with an empty-string namespace does
+not wake a scheduler whose namespace is unset. Set `FLEXIQ_PUSH_DISPATCH=off` when the Redis in front of it refuses
+`SUBSCRIBE` — an ACL without `@pubsub`, or a proxy without pub/sub. Jobs still
+dispatch without it, on the scheduler's poll. An empty value keeps the backend
+default here, so write `off` explicitly; unlike `FLEXIQ_MAINTENANCE`, a value
+this variable does not recognise is refused at startup.
 
 Turn `FLEXIQ_AUTO_MIGRATE` off when the database credential the server holds is
 not allowed to run DDL. The schema then has to be applied out of band before the

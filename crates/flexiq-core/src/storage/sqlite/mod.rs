@@ -62,10 +62,18 @@ impl CustomizeConnection<SqliteConnection, diesel::r2d2::Error> for SqlitePragma
 pub struct SqliteStorage {
     pool: DbPool,
     /// In-process wake handle, set by the scheduler when push-dispatch is
-    /// enabled. Enqueue of a ready job calls `notify_one()` so the scheduler
-    /// dispatches immediately instead of waiting for the next poll.
+    /// enabled. Enqueue calls `notify_one()` so the scheduler dispatches a
+    /// ready job immediately instead of waiting for the next poll.
     #[cfg(feature = "push-dispatch")]
     notify: std::sync::Arc<tokio::sync::Notify>,
+    /// Delayed jobs' deadlines, handed to the scheduler with the next wake so
+    /// it arms a timer for each instead of waiting out its fallback.
+    #[cfg(feature = "push-dispatch")]
+    delayed: crate::scheduler::wake::DelayedHints,
+    /// Set once a push loop takes this handle's wakes, so a polling-only
+    /// deployment never pays the completion's dependents lookup.
+    #[cfg(feature = "push-dispatch")]
+    push_listening: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SqliteStorage {
@@ -90,6 +98,10 @@ impl SqliteStorage {
             pool,
             #[cfg(feature = "push-dispatch")]
             notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+            #[cfg(feature = "push-dispatch")]
+            delayed: Default::default(),
+            #[cfg(feature = "push-dispatch")]
+            push_listening: Default::default(),
         };
         if auto_migrate {
             storage.migrate()?;
@@ -157,6 +169,10 @@ impl SqliteStorage {
             pool,
             #[cfg(feature = "push-dispatch")]
             notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+            #[cfg(feature = "push-dispatch")]
+            delayed: Default::default(),
+            #[cfg(feature = "push-dispatch")]
+            push_listening: Default::default(),
         };
         storage.migrate()?;
         Ok(storage)
@@ -170,10 +186,45 @@ impl SqliteStorage {
     }
 
     /// The in-process wake handle. Enqueue paths call `notify_one()` on this
-    /// when a ready job is inserted.
+    /// when a job is inserted.
     #[cfg(feature = "push-dispatch")]
     pub fn notify_handle(&self) -> &std::sync::Arc<tokio::sync::Notify> {
         &self.notify
+    }
+
+    /// Delayed-job deadlines announced since the scheduler's last wake.
+    #[cfg(feature = "push-dispatch")]
+    pub(crate) fn delayed_hints(&self) -> &crate::scheduler::wake::DelayedHints {
+        &self.delayed
+    }
+
+    /// Record that a push loop now consumes this handle's wakes.
+    #[cfg(feature = "push-dispatch")]
+    pub(crate) fn mark_push_listening(&self) {
+        self.push_listening
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Wake the push loop when any of the just-completed `ids` has dependents:
+    /// a drain skipped them while the parent ran, and no enqueue will announce
+    /// them again. Best-effort — the completion has committed, so a failed
+    /// lookup only costs latency.
+    #[cfg(feature = "push-dispatch")]
+    pub(crate) fn wake_if_dependents(&self, ids: &[&str]) {
+        if !self
+            .push_listening
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return;
+        }
+        match self.has_dependents(ids) {
+            Ok(true) => {
+                self.delayed.mark_ready();
+                self.notify.notify_one();
+            }
+            Ok(false) => {}
+            Err(e) => log::warn!("push-dispatch: dependents lookup after completion failed: {e}"),
+        }
     }
 
     /// Check a pooled SQLite connection out of the r2d2 pool.
@@ -186,8 +237,14 @@ impl SqliteStorage {
 
 #[cfg(feature = "push-dispatch")]
 impl crate::storage::notify::StorageNotifier for SqliteStorage {
-    fn notify_job_ready(&self, _queue: &str, _scheduled_at: i64) {
-        // Single-process: wake the in-memory scheduler loop directly.
+    fn notify_job_ready(&self, _namespace: Option<&str>, _queue: &str, scheduled_at: i64) {
+        // Single-process: wake the in-memory scheduler loop directly; a
+        // delayed job's deadline rides along so the loop arms a timer for it.
+        if scheduled_at > crate::job::now_millis() {
+            self.delayed.push(scheduled_at);
+        } else {
+            self.delayed.mark_ready();
+        }
         self.notify.notify_one();
     }
 }

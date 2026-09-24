@@ -315,9 +315,10 @@ fn main() -> flexiq::Result<()> {
         .register::<noop>()
         .num_workers(8)
         .scheduler_config(SchedulerConfig {
-            // Defaults are one job per round trip and unbounded dispatch;
-            // a backlog this deep wants a batch and a ceiling.
-            batch_size: 64,
+            // Unset dispatch is unbounded, and SQLite's default batch is one
+            // job per round trip; a backlog this deep wants a batch and a
+            // ceiling.
+            batch_size: Some(64),
             max_in_flight: Some(8),
             ..SchedulerConfig::default()
         })
@@ -562,7 +563,7 @@ queue = Queue(db_path="tasks.db")
 | Lever | Effect |
 | --- | --- |
 | `enqueue_batch` | one storage round-trip per batch instead of per job |
-| `SchedulerConfig::batch_size` | jobs claimed per scheduler poll — `1` by default, so this is the first knob to move |
+| `SchedulerConfig::batch_size` | jobs claimed per scheduler poll — backend-chosen (`1` on SQLite/Postgres, `8` on Redis) unless set explicitly; the first knob to move on SQLite |
 | `SchedulerConfig::max_in_flight` | ceiling on jobs dispatched but not yet finished; unbounded by default |
 | `SchedulerConfig::poll_interval` | 50ms by default — lower it for latency, raise it to spare the database |
 | `num_workers` | handlers running at once; near the core count for CPU-bound bodies |

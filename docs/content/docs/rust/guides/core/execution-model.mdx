@@ -68,9 +68,11 @@ queue.worker().register::<resize>().num_workers(8).spawn()?;
 `["default"]` alone, so a task declared with `queue = "billing"` needs a worker
 that names that queue.
 
-Claim-side tuning lives on `SchedulerConfig` — `batch_size` (default 1) is how
-many due jobs are claimed per poll, and `max_in_flight` caps how many this
-scheduler keeps dispatched at once:
+Claim-side tuning lives on `SchedulerConfig` — `batch_size` is how many due
+jobs are claimed per poll, and `max_in_flight` caps how many this scheduler
+keeps dispatched at once. Left `None`, the backend picks: `8` on Redis (one
+claim covers a round trip), `1` on SQLite/Postgres; an explicit value is
+always honoured:
 
 ```rust
 use flexiq::SchedulerConfig;
@@ -80,7 +82,7 @@ queue
     .register::<resize>()
     .num_workers(8)
     .scheduler_config(SchedulerConfig {
-        batch_size: 16,
+        batch_size: Some(16),
         max_in_flight: Some(8),
         ..Default::default()
     })

@@ -85,7 +85,7 @@ pub use storage::records::{
     WorkerStatus,
 };
 #[cfg(feature = "redis")]
-pub use storage::redis_backend::RedisStorage;
+pub use storage::redis_backend::{RedisConnection, RedisStorage};
 pub use storage::sqlite::SqliteStorage;
 pub use storage::Storage;
 pub use storage::StorageBackend;

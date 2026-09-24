@@ -1575,22 +1575,108 @@ impl StorageBackend {
         }
     }
 
-    /// Signal the scheduler that a ready job was enqueued, so it can dispatch
-    /// immediately instead of waiting for the next poll. No-op for delayed
-    /// jobs (`scheduled_at > now`) — those rely on the fallback timer — and a
-    /// no-op entirely when `push-dispatch` is off.
+    /// Announce an enqueued job to the scheduler: a ready one (`scheduled_at
+    /// <= now`) so it dispatches immediately instead of waiting for the next
+    /// poll, a delayed one so it arms a timer for `scheduled_at` instead of
+    /// waiting out the fallback. A no-op entirely when `push-dispatch` is off.
+    /// `(namespace, queue)` routes the signal: Redis wakes only the schedulers
+    /// serving that pair.
+    ///
+    /// Redis is a deliberate no-op here: every Redis enqueue path folds its
+    /// own `PUBLISH` into the write's pipeline/script (see
+    /// `redis_backend::jobs::enqueue`), so the write already notified by the
+    /// time this runs. Calling `notify_job_ready` too would both double-
+    /// publish and pay the extra connection + round trip folding exists to
+    /// avoid. A deduplicated unique enqueue on Redis publishes nothing: the
+    /// existing job was announced when it was inserted. Retry / `step.sleep`
+    /// reschedule outside any enqueue write, so they call
+    /// [`notify_rescheduled`](Self::notify_rescheduled) instead.
+    ///
+    /// Postgres is a no-op too: its listener is a stub that never reads
+    /// notifications (`postgres::listener`), so a `pg_notify` would be a wasted
+    /// pool checkout + round trip on every enqueue.
     #[cfg(feature = "push-dispatch")]
-    fn notify_if_ready(&self, scheduled_at: i64) {
+    pub(crate) fn notify_enqueued(&self, namespace: Option<&str>, queue: &str, scheduled_at: i64) {
+        use crate::storage::notify::StorageNotifier;
+        match self {
+            StorageBackend::Sqlite(s) => s.notify_job_ready(namespace, queue, scheduled_at),
+            // Stub listener never reads a NOTIFY (`postgres::listener`).
+            #[cfg(feature = "postgres")]
+            StorageBackend::Postgres(_) => {}
+            #[cfg(feature = "redis")]
+            StorageBackend::Redis(_) => {}
+        }
+    }
+
+    /// Signal a (re)scheduled job outside any enqueue write — retry backoff,
+    /// `step.sleep` wake (`Scheduler::signal_scheduled`), ready ones only: the
+    /// scheduler arms its own timer for a delayed one. Unlike
+    /// [`notify_enqueued`](Self::notify_enqueued), Redis's own
+    /// `notify_job_ready` runs here: there is no pipeline for this notify to
+    /// ride, so it pays its own connection + round trip same as before folding
+    /// existed on the enqueue paths. Postgres stays a no-op (stub listener).
+    #[cfg(feature = "push-dispatch")]
+    pub(crate) fn notify_rescheduled(
+        &self,
+        namespace: Option<&str>,
+        queue: &str,
+        scheduled_at: i64,
+    ) {
         use crate::storage::notify::StorageNotifier;
         if scheduled_at > crate::job::now_millis() {
             return;
         }
         match self {
-            StorageBackend::Sqlite(s) => s.notify_job_ready("", scheduled_at),
+            StorageBackend::Sqlite(s) => s.notify_job_ready(namespace, queue, scheduled_at),
+            // Stub listener never reads a NOTIFY (`postgres::listener`).
             #[cfg(feature = "postgres")]
-            StorageBackend::Postgres(s) => s.notify_job_ready("", scheduled_at),
+            StorageBackend::Postgres(_) => {}
             #[cfg(feature = "redis")]
-            StorageBackend::Redis(s) => s.notify_job_ready("", scheduled_at),
+            StorageBackend::Redis(s) => s.notify_job_ready(namespace, queue, scheduled_at),
+        }
+    }
+
+    /// Wake the push loop for dependents the completion of `ids` may have
+    /// unblocked. Redis publishes from inside its own completion write
+    /// (`redis_backend::jobs::dependents_wake`), and Postgres's listener is a
+    /// stub, so only SQLite acts here.
+    #[cfg(feature = "push-dispatch")]
+    fn notify_completed(&self, ids: &[&str]) {
+        match self {
+            StorageBackend::Sqlite(s) => s.wake_if_dependents(ids),
+            #[cfg(feature = "postgres")]
+            StorageBackend::Postgres(_) => {}
+            #[cfg(feature = "redis")]
+            StorageBackend::Redis(_) => {}
+        }
+    }
+
+    /// Announce a batch: once per distinct `(namespace, queue)` holding a ready
+    /// job, so each pair's schedulers hear about it without one signal per
+    /// job, and once per distinct delayed deadline, so each arms a timer.
+    #[cfg(feature = "push-dispatch")]
+    fn notify_enqueued_batch<'a>(&self, jobs: impl Iterator<Item = &'a Job>) {
+        use std::collections::BTreeSet;
+        // Only SQLite's arm of `notify_enqueued` does anything; skip the sets.
+        if !matches!(self, StorageBackend::Sqlite(_)) {
+            return;
+        }
+        let now = crate::job::now_millis();
+        let mut ready: BTreeSet<(Option<&str>, &str)> = BTreeSet::new();
+        let mut delayed: BTreeSet<(Option<&str>, &str, i64)> = BTreeSet::new();
+        for job in jobs {
+            let target = (job.namespace.as_deref(), job.queue.as_str());
+            if job.scheduled_at <= now {
+                ready.insert(target);
+            } else {
+                delayed.insert((target.0, target.1, job.scheduled_at));
+            }
+        }
+        for (namespace, queue) in ready {
+            self.notify_enqueued(namespace, queue, now);
+        }
+        for (namespace, queue, scheduled_at) in delayed {
+            self.notify_enqueued(namespace, queue, scheduled_at);
         }
     }
 }
@@ -1599,18 +1685,13 @@ impl Storage for StorageBackend {
     fn enqueue(&self, new_job: NewJob) -> Result<Job> {
         let job = delegate!(self, enqueue, new_job)?;
         #[cfg(feature = "push-dispatch")]
-        self.notify_if_ready(job.scheduled_at);
+        self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
         Ok(job)
     }
     fn enqueue_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
         let jobs = delegate!(self, enqueue_batch, new_jobs)?;
         #[cfg(feature = "push-dispatch")]
-        if jobs
-            .iter()
-            .any(|j| j.scheduled_at <= crate::job::now_millis())
-        {
-            self.notify_if_ready(0);
-        }
+        self.notify_enqueued_batch(jobs.iter());
         Ok(jobs)
     }
     fn enqueue_unique(&self, new_job: NewJob) -> Result<Job> {
@@ -1619,13 +1700,13 @@ impl Storage for StorageBackend {
     fn enqueue_unique_reporting(&self, new_job: NewJob) -> Result<(Job, bool)> {
         let (job, deduplicated) = delegate!(self, enqueue_unique_reporting, new_job)?;
         #[cfg(feature = "push-dispatch")]
-        self.notify_if_ready(job.scheduled_at);
+        self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
         Ok((job, deduplicated))
     }
     fn enqueue_debounced(&self, new_job: NewJob, options: records::DebounceOptions) -> Result<Job> {
         let job = delegate!(self, enqueue_debounced, new_job, options)?;
         #[cfg(feature = "push-dispatch")]
-        self.notify_if_ready(job.scheduled_at);
+        self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
         Ok(job)
     }
     fn enqueue_unique_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
@@ -1638,12 +1719,7 @@ impl Storage for StorageBackend {
     fn enqueue_unique_batch_reporting(&self, new_jobs: Vec<NewJob>) -> Result<Vec<(Job, bool)>> {
         let jobs = delegate!(self, enqueue_unique_batch_reporting, new_jobs)?;
         #[cfg(feature = "push-dispatch")]
-        if jobs
-            .iter()
-            .any(|(j, _)| j.scheduled_at <= crate::job::now_millis())
-        {
-            self.notify_if_ready(0);
-        }
+        self.notify_enqueued_batch(jobs.iter().map(|(job, _)| job));
         Ok(jobs)
     }
     fn dequeue(&self, queue_name: &str, now: i64, namespace: Option<&str>) -> Result<Option<Job>> {
@@ -1691,14 +1767,23 @@ impl Storage for StorageBackend {
         result_bytes: Option<Vec<u8>>,
         namespace: Option<&str>,
     ) -> Result<()> {
-        delegate!(self, complete, id, result_bytes, namespace)
+        delegate!(self, complete, id, result_bytes, namespace)?;
+        #[cfg(feature = "push-dispatch")]
+        self.notify_completed(&[id]);
+        Ok(())
     }
     fn complete_batch(
         &self,
         completions: &[crate::job::JobCompletion],
         namespace: Option<&str>,
     ) -> Result<()> {
-        delegate!(self, complete_batch, completions, namespace)
+        delegate!(self, complete_batch, completions, namespace)?;
+        #[cfg(feature = "push-dispatch")]
+        {
+            let ids: Vec<&str> = completions.iter().map(|c| c.job_id.as_str()).collect();
+            self.notify_completed(&ids);
+        }
+        Ok(())
     }
     fn fail(&self, id: &str, error: &str) -> Result<()> {
         delegate!(self, fail, id, error)

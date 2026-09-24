@@ -33,7 +33,7 @@
 use redis::Commands;
 use serde::{Deserialize, Serialize};
 
-use super::{map_err, RedisStorage};
+use super::{map_err, watched_transaction, RedisStorage};
 use crate::error::Result;
 use crate::storage::records::{NewPeriodicTask, PeriodicTask};
 
@@ -118,7 +118,7 @@ impl RedisStorage {
         let mut conn = self.conn()?;
         let due_key = self.periodic_due_key();
 
-        redis::transaction(&mut conn, &[key], |conn, pipe| {
+        watched_transaction(&mut conn, &[key], |conn, pipe| {
             let stored: Option<String> = conn.get(key)?;
             let existing = stored.as_deref().map(decode_entry).transpose()?;
 

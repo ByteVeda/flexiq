@@ -41,10 +41,10 @@ value becomes the job result; a thrown exception fails the attempt.
 | `queues(String...)` | `default` | Queue names to serve. |
 | `concurrency(int)` | 0 (cached pool) | Fixed handler-thread count. |
 | `channelCapacity(int)` | 128 | In-flight dispatch channel capacity. |
-| `batchSize(int)` | 1 | Jobs claimed per scheduler poll. |
+| `batchSize(int)` | Redis: 8; else 1 | Jobs claimed per scheduler poll. |
 | `autoscale(AutoscaleOptions)` | — | Resize the handler pool between `min..max` threads by queue depth. |
 | `mesh(MeshOptions)` | — | Join a scheduling mesh (gossip discovery + work stealing). |
-| `pushDispatch(boolean)` | `false` | Wake the scheduler on enqueue instead of polling. Needs a native library built with the `push-dispatch` cargo feature; ignored otherwise. |
+| `pushDispatch(boolean)` | Redis: `true`; else `false` | Wake the scheduler on enqueue instead of polling. Opt out on Redis with `pushDispatch(false)`. |
 | `on(EventName, Consumer<OutcomeEvent>)` | — | Outcome listeners: `SUCCESS`, `RETRY`, `DEAD`, `CANCELLED`. |
 | `trackWorkflows()` / `trackWorkflows(Workflow...)` | off | Drive [workflow](/java/api-reference/workflows) state from this worker's outcomes; register workflows whose deferred nodes need payloads. |
 

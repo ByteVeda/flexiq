@@ -44,9 +44,30 @@ def test_batch_dequeue_processes_burst(tmp_path: Path, poll_until: PollUntil) ->
 
 
 def test_batch_dequeue_default_is_one(tmp_path: Path) -> None:
-    """scheduler_batch_size defaults to 1 (back-compat preserved)."""
+    """Omitting scheduler_batch_size passes None; on SQLite that resolves to
+    1 (back-compat preserved)."""
     db_path = str(tmp_path / "default.db")
     queue = Queue(db_path=db_path, workers=2)
+
+    @queue.task()
+    def echo(x: str) -> str:
+        return x
+
+    job = echo.delay("hello")
+
+    worker = threading.Thread(target=queue.run_worker, daemon=True)
+    worker.start()
+    try:
+        assert job.result(timeout=10) == "hello"
+    finally:
+        queue._inner.request_shutdown()
+        join_worker(worker)
+
+
+def test_batch_dequeue_accepts_explicit_none(tmp_path: Path) -> None:
+    """scheduler_batch_size=None is accepted explicitly, not just by omission."""
+    db_path = str(tmp_path / "explicit_none.db")
+    queue = Queue(db_path=db_path, workers=2, scheduler_batch_size=None)
 
     @queue.task()
     def echo(x: str) -> str:

@@ -4234,6 +4234,7 @@ fn redis_storage_tests() {
     redis_mutators_reject_archived_jobs(&storage);
     redis_purge_preserves_reused_unique_key(&storage);
     redis_claim_skips_job_dropped_from_pending_set(&storage);
+    redis_deferred_claim_is_not_starved(&storage);
     redis_retry_keeps_job_dequeuable(&storage);
     redis_complete_preserves_reused_unique_key(&storage);
     redis_update_progress_never_resurrects_archived(&storage);
@@ -4243,10 +4244,87 @@ fn redis_storage_tests() {
     redis_keyset_pages_a_large_tie_bucket(&storage);
     redis_backfills_expiry_for_preupgrade_rows(&storage);
     redis_debounce_index_never_outlives_its_job(&storage);
+    redis_namespaced_debounce_claim_clears_its_index(&storage);
     redis_debounce_coalesces_onto_a_plainly_enqueued_job(&storage);
     redis_debounce_slides_an_empty_payload(&storage);
     redis_purge_metrics_drains_across_batches(&storage);
     redis_prunes_a_legacy_due_member(&storage);
+    redis_claim_preserves_empty_payload(&storage);
+    redis_claim_respects_priority_then_schedule_order(&storage);
+    redis_claim_skips_future_and_foreign_namespace(&storage);
+    redis_claim_prefilter_reaches_the_ready_job_behind_the_head(&storage);
+    redis_claim_waits_for_dependencies(&storage);
+    redis_claim_does_not_starve_ready_dependents(&storage);
+    redis_select_and_claim_is_one_round_trip(&storage);
+    redis_storage_reuses_pooled_connections(&storage);
+    redis_failed_transaction_returns_a_clean_connection(&storage);
+
+    // The enqueue-notify fold only exists on a `push-dispatch` build (#4).
+    #[cfg(feature = "push-dispatch")]
+    {
+        redis_enqueue_ready_job_publishes_once(&storage);
+        redis_enqueue_future_job_announces_its_deadline(&storage);
+        redis_enqueue_batch_publishes_once_per_queue_and_deadline(&storage);
+        redis_enqueue_unique_publishes_ready_job_once(&storage);
+        redis_enqueue_survives_a_denied_wake(&storage, &url);
+        redis_complete_wakes_each_dependent_queue_once(&storage);
+    }
+}
+
+/// Storage calls borrow pooled connections instead of dialling one each: 40
+/// rounds of enqueue + read + checkout see only the few connections a warm
+/// pool holds. Before pooling, every checkout was a new `CLIENT ID`.
+#[cfg(feature = "redis")]
+fn redis_storage_reuses_pooled_connections(s: &flexiq_core::RedisStorage) {
+    let mut ids = std::collections::HashSet::new();
+    for _ in 0..40 {
+        let job = s.enqueue(make_job("q-pool-reuse", "pool_reuse")).unwrap();
+        assert!(s.get_job(&job.id, None).unwrap().is_some());
+        let mut conn = s.conn().unwrap();
+        let id: i64 = redis::cmd("CLIENT").arg("ID").query(&mut conn).unwrap();
+        ids.insert(id);
+    }
+    // The pool hands back its most recently returned connection, so a
+    // sequential caller keeps meeting the same one (two if the server closed it).
+    assert!(
+        ids.len() <= 2,
+        "40 rounds dialled {} connections",
+        ids.len()
+    );
+}
+
+/// A transaction whose closure fails must not hand its connection back still
+/// `WATCH`ing: the next borrower's `MULTI`/`EXEC` would abort for a key it
+/// never read. A corrupt schedule document fails the periodic rewrite mid-watch.
+#[cfg(feature = "redis")]
+fn redis_failed_transaction_returns_a_clean_connection(s: &flexiq_core::RedisStorage) {
+    let key = format!("{}periodic:-:corrupt", s.prefix());
+    let mut conn = s.conn().unwrap();
+    let _: () = redis::cmd("SET")
+        .arg(&key)
+        .arg("not json")
+        .query(&mut conn)
+        .unwrap();
+    drop(conn);
+
+    assert!(s.register_periodic(&periodic_row("corrupt", None)).is_err());
+
+    // Hold several at once so the failed call's connection is among them,
+    // whichever the pool hands out first.
+    let mut held: Vec<_> = (0..3).map(|_| s.conn().unwrap()).collect();
+    for conn in &mut held {
+        // Mid-transaction a proxied Redis refuses `CLIENT INFO` ("inside
+        // MULTI") and a plain one answers `QUEUED`; only a clean one says `watch=0`.
+        let line: String = redis::cmd("CLIENT")
+            .arg("INFO")
+            .query(conn)
+            .unwrap_or_else(|e| panic!("connection left mid-transaction: {e}"));
+        assert!(
+            line.split_whitespace().any(|field| field == "watch=0"),
+            "connection left WATCHing or in MULTI: {line}"
+        );
+    }
+    let _: () = redis::cmd("DEL").arg(&key).query(&mut held[0]).unwrap();
 }
 
 /// A schedule registered before #918 lives at `periodic:<name>` and is a bare
@@ -4440,6 +4518,43 @@ fn drain_queue(s: &flexiq_core::RedisStorage, q: &str) {
         .unwrap()
         .is_some()
     {}
+}
+
+/// A document the claim script cannot patch in place is deferred to Rust, and
+/// it must count against the batch: at the head of the queue with `max` plain
+/// jobs behind it, it still gets claimed rather than losing every batch to them.
+#[cfg(feature = "redis")]
+fn redis_deferred_claim_is_not_starved(s: &flexiq_core::RedisStorage) {
+    use redis::Commands;
+    let q = "q-redis-deferred-head";
+    drain_queue(s, q);
+    let now = now_millis();
+    let mut head = make_job(q, "deferred_head");
+    head.scheduled_at = now - 10_000;
+    let head = s.enqueue(head).unwrap();
+    for i in 0..2 {
+        let mut plain = make_job(q, &format!("plain_{i}"));
+        plain.scheduled_at = now - 5_000;
+        s.enqueue(plain).unwrap();
+    }
+
+    // Valid JSON serde still reads, but no exact `"started_at":null` token for
+    // the script to swap — the shape that sends a doc down the deferred path.
+    let mut conn = s.conn().unwrap();
+    let job_key = rkey(s, &["job", &head.id]);
+    let doc: String = conn.get(&job_key).unwrap();
+    let respaced = doc.replacen("\"started_at\":null", "\"started_at\": null", 1);
+    assert_ne!(respaced, doc, "the document carries a null started_at");
+    let _: () = conn.set(&job_key, respaced).unwrap();
+
+    let claimed = s.dequeue_batch(q, now_millis(), None, 2).unwrap();
+    assert!(
+        claimed.iter().any(|j| j.id == head.id),
+        "the deferred head must be claimed, got {:?}",
+        claimed.iter().map(|j| &j.task_name).collect::<Vec<_>>()
+    );
+    assert_eq!(claimed.len(), 2);
+    drain_queue(s, q);
 }
 
 /// The atomic claim must refuse a candidate that a concurrent cancel/expire
@@ -4681,16 +4796,75 @@ fn redis_purge_preserves_reused_unique_key(s: &flexiq_core::RedisStorage) {
     );
 }
 
-/// Members of the debounce index of a default-namespace key. The index is an
-/// implementation detail of the Redis backend, so the key is rebuilt here from
-/// the same shape `debounce_index_key` writes (`-` is the default namespace).
+/// Members of the debounce index of a default-namespace key.
 #[cfg(feature = "redis")]
 fn redis_debounce_index_size(s: &flexiq_core::RedisStorage, debounce_key: &str) -> i64 {
+    redis_debounce_index_size_in(s, None, debounce_key)
+}
+
+/// Members of the debounce index of `(namespace, debounce_key)`. The index is
+/// an implementation detail of the Redis backend, so the key is rebuilt here
+/// from the same shape `debounce_index_key` writes: `-` for the default
+/// namespace, `<len>:<ns>` otherwise.
+#[cfg(feature = "redis")]
+fn redis_debounce_index_size_in(
+    s: &flexiq_core::RedisStorage,
+    namespace: Option<&str>,
+    debounce_key: &str,
+) -> i64 {
+    let segment = match namespace {
+        Some(ns) => format!("{}:{ns}", ns.len()),
+        None => "-".to_string(),
+    };
     let mut conn = s.conn().unwrap();
     redis::cmd("ZCARD")
-        .arg(format!("{}jobs:debounce:-:{debounce_key}", s.prefix()))
+        .arg(format!(
+            "{}jobs:debounce:{segment}:{debounce_key}",
+            s.prefix()
+        ))
         .query(&mut conn)
         .unwrap()
+}
+
+/// The claim script drops a namespaced job's debounce entry too: it rebuilds
+/// the index key from the job's namespace in Lua, which must match
+/// `namespace_segment` byte for byte or the entry would outlive the claim.
+#[cfg(feature = "redis")]
+fn redis_namespaced_debounce_claim_clears_its_index(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-debounce-ns";
+    let ns = Some("t");
+    let in_ns = |key: &str| {
+        let mut job = debounced(q, key);
+        job.namespace = ns.map(str::to_string);
+        job
+    };
+
+    let single = s
+        .enqueue_debounced(in_ns("ns-single"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_eq!(redis_debounce_index_size_in(s, ns, "ns-single"), 1);
+    let claimed = s.dequeue(q, now_millis() + 10_000, ns).unwrap().unwrap();
+    assert_eq!(claimed.id, single.id);
+    assert_eq!(
+        redis_debounce_index_size_in(s, ns, "ns-single"),
+        0,
+        "dequeue must close a namespaced window"
+    );
+
+    let batched = s
+        .enqueue_debounced(in_ns("ns-batch"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_eq!(redis_debounce_index_size_in(s, ns, "ns-batch"), 1);
+    let claimed = s.dequeue_batch(q, now_millis() + 10_000, ns, 8).unwrap();
+    assert_eq!(
+        claimed.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(),
+        vec![batched.id.as_str()]
+    );
+    assert_eq!(
+        redis_debounce_index_size_in(s, ns, "ns-batch"),
+        0,
+        "dequeue_batch must close a namespaced window"
+    );
 }
 
 /// The index entry cannot outlive the job it points at: claiming drops it, and
@@ -4782,6 +4956,694 @@ fn redis_debounce_slides_an_empty_payload(s: &flexiq_core::RedisStorage) {
             .is_empty(),
         "the slid document must still decode"
     );
+}
+
+/// The claim script patches the stored document by token swap rather than a
+/// `cjson` round trip, so an empty payload (`[]`) must survive the claim.
+#[cfg(feature = "redis")]
+fn redis_claim_preserves_empty_payload(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-claim-empty-payload";
+    drain_queue(s, q);
+    let mut job = make_job(q, "claim_empty_payload");
+    job.payload = Vec::new();
+    let job = s.enqueue(job).unwrap();
+
+    let now = now_millis() + 1_000;
+    let claimed = s.dequeue(q, now, None).unwrap().unwrap();
+    assert_eq!(claimed.id, job.id);
+    assert!(claimed.payload.is_empty());
+    assert_eq!(claimed.started_at, Some(now));
+
+    let stored = s.get_job(&job.id, None).unwrap().unwrap();
+    assert!(
+        stored.payload.is_empty(),
+        "the claimed document must decode"
+    );
+    assert_eq!(stored.status, JobStatus::Running);
+    assert_eq!(stored.started_at, Some(now));
+}
+
+/// One batch claim returns jobs in dispatch order: higher priority first, then
+/// earlier `scheduled_at`, whatever order they were enqueued in.
+#[cfg(feature = "redis")]
+fn redis_claim_respects_priority_then_schedule_order(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-claim-order";
+    drain_queue(s, q);
+    let base = now_millis() - 10_000;
+    let enqueue = |priority: i32, scheduled_at: i64| {
+        let mut job = make_job(q, "claim_order");
+        job.priority = priority;
+        job.scheduled_at = scheduled_at;
+        s.enqueue(job).unwrap().id
+    };
+    let low = enqueue(0, base);
+    let high_late = enqueue(5, base + 10);
+    let mid_early = enqueue(1, base - 5);
+    let high_early = enqueue(5, base);
+
+    let claimed: Vec<String> = s
+        .dequeue_batch(q, now_millis() + 1_000, None, 4)
+        .unwrap()
+        .into_iter()
+        .map(|job| job.id)
+        .collect();
+    assert_eq!(claimed, vec![high_early, high_late, mid_early, low]);
+}
+
+/// Jobs that are not yet due, or belong to another namespace, stay Pending: a
+/// `None` namespace claims only jobs without one, and `Some(ns)` only its own.
+#[cfg(feature = "redis")]
+fn redis_claim_skips_future_and_foreign_namespace(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-claim-filters";
+    drain_queue(s, q);
+    let now = now_millis() + 1_000;
+    let namespaced = |ns: &str| {
+        let mut job = make_job(q, "claim_filters");
+        job.namespace = Some(ns.to_string());
+        s.enqueue(job).unwrap().id
+    };
+
+    let mut future = make_job(q, "claim_filters");
+    future.scheduled_at = now + 60_000;
+    let future = s.enqueue(future).unwrap().id;
+    let tenant_a = namespaced("tenant-a");
+    let tenant_b = namespaced("tenant-b");
+    let plain = s.enqueue(make_job(q, "claim_filters")).unwrap().id;
+
+    let claimed = s.dequeue_batch(q, now, None, 10).unwrap();
+    assert_eq!(
+        claimed.iter().map(|j| &j.id).collect::<Vec<_>>(),
+        vec![&plain],
+        "None claims only the due, un-namespaced job"
+    );
+
+    let other_plain = s.enqueue(make_job(q, "claim_filters")).unwrap().id;
+    let claimed = s.dequeue_batch(q, now, Some("tenant-a"), 10).unwrap();
+    assert_eq!(
+        claimed.iter().map(|j| &j.id).collect::<Vec<_>>(),
+        vec![&tenant_a],
+        "Some(ns) claims only its own namespace"
+    );
+
+    let pending = |id: &str, ns: Option<&str>| s.get_job(id, ns).unwrap().unwrap().status;
+    assert_eq!(pending(&future, None), JobStatus::Pending);
+    assert_eq!(pending(&other_plain, None), JobStatus::Pending);
+    assert_eq!(pending(&tenant_b, Some("tenant-b")), JobStatus::Pending);
+}
+
+/// The claim script's raw-token prefilter skips a head of future and
+/// foreign-namespace jobs without touching them, still claims the ready job
+/// behind it, and is not fooled by the same tokens quoted inside a string.
+#[cfg(feature = "redis")]
+fn redis_claim_prefilter_reaches_the_ready_job_behind_the_head(s: &flexiq_core::RedisStorage) {
+    use redis::Commands;
+    let q = "q-redis-claim-prefilter";
+    drain_queue(s, q);
+    let later = now_millis() + 60_000;
+    // Priority puts every skipped job ahead of the target in score order.
+    let head_job = || {
+        let mut job = make_job(q, "prefilter_head");
+        job.priority = 10;
+        job
+    };
+    let mut skipped = Vec::new();
+    for _ in 0..30 {
+        let mut future = head_job();
+        future.scheduled_at = later;
+        skipped.push((s.enqueue(future).unwrap().id, None));
+        let mut foreign = head_job();
+        foreign.namespace = Some("tenant-prefilter".to_string());
+        skipped.push((s.enqueue(foreign).unwrap().id, Some("tenant-prefilter")));
+    }
+    // Every prefilter token, quoted inside a value: escaped, so still ready.
+    let mut target = make_job(q, "prefilter_target");
+    target.metadata =
+        Some(r#"{"status":"Running","scheduled_at":99999999999999,"namespace":"x"}"#.to_string());
+    let target = s.enqueue(target).unwrap().id;
+
+    let mut conn = s.conn().unwrap();
+    let raw = |conn: &mut flexiq_core::RedisConnection, id: &str| -> String {
+        conn.get(format!("{}job:{id}", s.prefix())).unwrap()
+    };
+    let before: Vec<String> = skipped.iter().map(|(id, _)| raw(&mut conn, id)).collect();
+
+    // Taken after the enqueues: 61 remote round trips can outlast any margin.
+    let claimed = s.dequeue_batch(q, now_millis(), None, 1).unwrap();
+    assert_eq!(
+        claimed.iter().map(|j| &j.id).collect::<Vec<_>>(),
+        vec![&target],
+        "the ready job behind 60 skipped candidates is claimed"
+    );
+
+    for ((id, ns), doc) in skipped.iter().zip(before) {
+        assert_eq!(raw(&mut conn, id), doc, "a skipped document is untouched");
+        assert_eq!(
+            s.get_job(id, *ns).unwrap().unwrap().status,
+            JobStatus::Pending
+        );
+    }
+}
+
+/// A job with an incomplete dependency is left Pending; once the dependency
+/// completes (and is archived) the next dequeue claims it.
+#[cfg(feature = "redis")]
+fn redis_claim_waits_for_dependencies(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-claim-deps";
+    drain_queue(s, q);
+    let parent = s.enqueue(make_job(q, "claim_parent")).unwrap();
+    let mut child = make_job(q, "claim_child");
+    child.depends_on = vec![parent.id.clone()];
+    let child = s.enqueue(child).unwrap();
+
+    let now = now_millis() + 1_000;
+    let claimed = s.dequeue_batch(q, now, None, 10).unwrap();
+    assert_eq!(
+        claimed.iter().map(|j| &j.id).collect::<Vec<_>>(),
+        vec![&parent.id],
+        "the child waits for its parent"
+    );
+    assert_eq!(
+        s.get_job(&child.id, None).unwrap().unwrap().status,
+        JobStatus::Pending
+    );
+
+    s.complete(&parent.id, None, None).unwrap();
+    let claimed = s.dequeue_batch(q, now, None, 10).unwrap();
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].id, child.id);
+    assert_eq!(claimed[0].status, JobStatus::Running);
+    assert_eq!(claimed[0].started_at, Some(now));
+}
+
+/// A ready dependent is claimed in its score-order turn, even with at least
+/// `max` ready plain jobs behind it — the batch budget must not starve it.
+#[cfg(feature = "redis")]
+fn redis_claim_does_not_starve_ready_dependents(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-claim-deps-order";
+    drain_queue(s, q);
+    let now = now_millis() + 1_000;
+    let parent = s.enqueue(make_job(q, "claim_order_parent")).unwrap();
+    assert_eq!(s.dequeue(q, now, None).unwrap().unwrap().id, parent.id);
+    s.complete(&parent.id, None, None).unwrap();
+
+    let base = now_millis() - 10_000;
+    let mut child = make_job(q, "claim_order_child");
+    child.depends_on = vec![parent.id.clone()];
+    child.scheduled_at = base;
+    let child = s.enqueue(child).unwrap();
+    assert!(child.has_deps);
+    let plain: Vec<String> = (1..=4)
+        .map(|i| {
+            let mut job = make_job(q, "claim_order_plain");
+            job.scheduled_at = base + i;
+            s.enqueue(job).unwrap().id
+        })
+        .collect();
+
+    let claimed: Vec<String> = s
+        .dequeue_batch(q, now, None, 4)
+        .unwrap()
+        .into_iter()
+        .map(|job| job.id)
+        .collect();
+    assert_eq!(
+        claimed,
+        vec![
+            child.id.clone(),
+            plain[0].clone(),
+            plain[1].clone(),
+            plain[2].clone()
+        ]
+    );
+}
+
+/// `calls` for one command in an `INFO commandstats` reply, or 0 before its
+/// first call.
+#[cfg(feature = "redis")]
+fn redis_command_calls(info: &str, command: &str) -> u64 {
+    let prefix = format!("cmdstat_{command}:calls=");
+    info.lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .and_then(|rest| rest.split(',').next())
+        .map_or(0, |calls| calls.parse().unwrap())
+}
+
+/// `INFO commandstats` taken after every command sent so far. A hosted Redis
+/// may serve a snapshot refreshed only every few seconds, so send an `ECHO`
+/// marker and wait for a snapshot that counts it.
+#[cfg(feature = "redis")]
+fn redis_fresh_commandstats(
+    conn: &mut flexiq_core::storage::redis_backend::RedisConnection,
+) -> String {
+    let read = |conn: &mut flexiq_core::storage::redis_backend::RedisConnection| -> String {
+        redis::cmd("INFO").arg("commandstats").query(conn).unwrap()
+    };
+    let marked = redis_command_calls(&read(conn), "echo") + 1;
+    let _: String = redis::cmd("ECHO").arg("marker").query(conn).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        let info = read(conn);
+        if redis_command_calls(&info, "echo") >= marked {
+            return info;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    panic!("INFO commandstats never counted the ECHO marker");
+}
+
+/// A batch claim is one script call: exactly one `EVALSHA`, and no client-side
+/// `ZRANGEBYSCORE` or `MGET` beside it.
+#[cfg(feature = "redis")]
+fn redis_select_and_claim_is_one_round_trip(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-claim-round-trip";
+    drain_queue(s, q);
+    let now = now_millis() + 1_000;
+    // The first invocation of a script may be EVALSHA → NOSCRIPT → SCRIPT LOAD.
+    assert!(s.dequeue_batch(q, now, None, 4).unwrap().is_empty());
+    for _ in 0..4 {
+        s.enqueue(make_job(q, "claim_round_trip")).unwrap();
+    }
+
+    let mut stats = s.conn().unwrap();
+    let commands = ["zrangebyscore", "mget", "evalsha", "eval"];
+    let before = redis_fresh_commandstats(&mut stats);
+    assert_eq!(s.dequeue_batch(q, now, None, 4).unwrap().len(), 4);
+    let after = redis_fresh_commandstats(&mut stats);
+    let grown: Vec<u64> = commands
+        .iter()
+        .map(|c| redis_command_calls(&after, c) - redis_command_calls(&before, c))
+        .collect();
+
+    // Commands a script runs are counted too, so the scripted ZRANGEBYSCORE
+    // shows as 1; a client-side scan would add a second, an MGET and 4 claims.
+    assert_eq!(grown[0], 1, "zrangebyscore");
+    assert_eq!(grown[1], 0, "mget");
+    assert_eq!(grown[2], 1, "evalsha");
+    assert_eq!(grown[3], 0, "eval");
+}
+
+/// The default-namespace ready-job channel for `queue` under `s`'s prefix,
+/// computed the same way `RedisStorage::notify_channel` builds it
+/// (`notify_channel` itself is `pub(crate)`, so an external integration test
+/// rebuilds it from the public `prefix()`; `-` is the default namespace).
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_notify_channel(s: &flexiq_core::RedisStorage, queue: &str) -> String {
+    format!("{}notify:-:{}", s.prefix(), queue)
+}
+
+/// Subscribe to `channel` on a dedicated connection, run `action`, then return
+/// the payload of every message that arrives within `timeout` after the
+/// subscribe acknowledgement (so nothing `action` publishes can race the
+/// SUBSCRIBE). Reading stops at the first timed-out `get_message`, which — on
+/// a `push-dispatch` build — is exactly the round trip a fold-in must not add:
+/// `INFO commandstats` counts a scripted or pipelined command the same as a
+/// standalone one, so it cannot show a saved round trip; this instead proves
+/// the *count* of publishes is exactly what folding promises (no drop, no
+/// double-publish from `notify_enqueued`'s Redis arm still firing).
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_published_payloads(
+    client: &redis::Client,
+    channel: &str,
+    timeout: std::time::Duration,
+    action: impl FnOnce(),
+) -> Vec<String> {
+    let mut conn = client.get_connection().unwrap();
+    let mut pubsub = conn.as_pubsub();
+    pubsub.subscribe(channel).unwrap();
+    action();
+    pubsub.set_read_timeout(Some(timeout)).unwrap();
+    let mut payloads = Vec::new();
+    while let Ok(msg) = pubsub.get_message() {
+        payloads.push(msg.get_payload::<String>().unwrap());
+    }
+    payloads
+}
+
+/// #4: a ready `enqueue` publishes exactly once through the full
+/// `StorageBackend` wrapper — proving both that the pipeline fold fires and
+/// that `notify_enqueued`'s Redis arm (a no-op) does not also fire and
+/// double-publish. The payload is the job's `scheduled_at`.
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_enqueue_ready_job_publishes_once(s: &flexiq_core::RedisStorage) {
+    use flexiq_core::storage::{Storage, StorageBackend};
+    let q = "q-notify-ready-once";
+    drain_queue(s, q);
+    let channel = redis_notify_channel(s, q);
+    let backend = StorageBackend::Redis(s.clone());
+    let job = make_job(q, "notify_ready");
+    let scheduled_at = job.scheduled_at;
+    let payloads = redis_published_payloads(
+        s.client(),
+        &channel,
+        std::time::Duration::from_secs(5),
+        || {
+            backend.enqueue(job).unwrap();
+        },
+    );
+    assert_eq!(
+        payloads,
+        vec![scheduled_at.to_string()],
+        "a ready enqueue must publish exactly once"
+    );
+}
+
+/// A future-scheduled `enqueue` publishes its deadline once, in the same
+/// pipeline, so a scheduler in another process arms a timer for it instead
+/// of waiting out its fallback.
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_enqueue_future_job_announces_its_deadline(s: &flexiq_core::RedisStorage) {
+    use flexiq_core::storage::{Storage, StorageBackend};
+    let q = "q-notify-future";
+    drain_queue(s, q);
+    let channel = redis_notify_channel(s, q);
+    let backend = StorageBackend::Redis(s.clone());
+    let mut job = make_job(q, "notify_future");
+    job.scheduled_at = now_millis() + 60_000;
+    let scheduled_at = job.scheduled_at;
+    let payloads = redis_published_payloads(
+        s.client(),
+        &channel,
+        std::time::Duration::from_secs(2),
+        || {
+            backend.enqueue(job).unwrap();
+        },
+    );
+    assert_eq!(
+        payloads,
+        vec![scheduled_at.to_string()],
+        "a future-scheduled enqueue announces its deadline exactly once"
+    );
+}
+
+/// #4: `enqueue_batch` publishes per queue, not per job: once if any job is
+/// ready, plus once per distinct delayed deadline — duplicates collapse.
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_enqueue_batch_publishes_once_per_queue_and_deadline(s: &flexiq_core::RedisStorage) {
+    use flexiq_core::storage::{Storage, StorageBackend};
+    let q_ready = "q-notify-batch-ready";
+    let q_future = "q-notify-batch-future";
+    drain_queue(s, q_ready);
+    drain_queue(s, q_future);
+    let chan_ready = redis_notify_channel(s, q_ready);
+    let chan_future = redis_notify_channel(s, q_future);
+    let backend = StorageBackend::Redis(s.clone());
+
+    let mut conn = s.client().get_connection().unwrap();
+    let mut pubsub = conn.as_pubsub();
+    pubsub
+        .subscribe(vec![chan_ready.clone(), chan_future.clone()])
+        .unwrap();
+
+    let ready_job = make_job(q_ready, "notify_batch_ready");
+    let mut second_ready_job = make_job(q_ready, "notify_batch_ready_2");
+    second_ready_job.scheduled_at = ready_job.scheduled_at - 5;
+    let later = now_millis() + 60_000;
+    let mut ready_queue_future_jobs = [
+        make_job(q_ready, "notify_batch_ready_future"),
+        make_job(q_ready, "notify_batch_ready_future_2"),
+    ];
+    for job in &mut ready_queue_future_jobs {
+        job.scheduled_at = later;
+    }
+    let mut future_job = make_job(q_future, "notify_batch_future");
+    future_job.scheduled_at = later + 1;
+    let earliest_ready = second_ready_job.scheduled_at;
+
+    let [first_future, second_future] = ready_queue_future_jobs;
+    backend
+        .enqueue_batch(vec![
+            ready_job,
+            second_ready_job,
+            first_future,
+            second_future,
+            future_job,
+        ])
+        .unwrap();
+
+    pubsub
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    let (mut on_ready, mut on_future) = (Vec::new(), Vec::new());
+    while let Ok(msg) = pubsub.get_message() {
+        let payload: String = msg.get_payload().unwrap();
+        match msg.get_channel_name() {
+            c if c == chan_ready => on_ready.push(payload),
+            c if c == chan_future => on_future.push(payload),
+            other => panic!("unexpected channel: {other}"),
+        }
+    }
+    assert_eq!(
+        on_ready,
+        vec![earliest_ready.to_string(), later.to_string()],
+        "one ready publish for the queue, then its one distinct deadline"
+    );
+    assert_eq!(
+        on_future,
+        vec![(later + 1).to_string()],
+        "a queue holding only a delayed job announces its deadline"
+    );
+}
+
+/// #4: `enqueue_unique`'s store script (the Lua path carrying the trailing,
+/// optional notify ARGV) also publishes exactly once for a fresh, ready
+/// insert — sanity on the ARGV-position surgery beside the plain paths above.
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_enqueue_unique_publishes_ready_job_once(s: &flexiq_core::RedisStorage) {
+    use flexiq_core::storage::{Storage, StorageBackend};
+    let q = "q-notify-unique-once";
+    drain_queue(s, q);
+    let channel = redis_notify_channel(s, q);
+    let backend = StorageBackend::Redis(s.clone());
+    let mut job = make_job(q, "notify_unique");
+    job.unique_key = Some(format!("notify-unique-{}", uuid::Uuid::now_v7()));
+    let scheduled_at = job.scheduled_at;
+    let payloads = redis_published_payloads(
+        s.client(),
+        &channel,
+        std::time::Duration::from_secs(5),
+        || {
+            backend.enqueue_unique(job).unwrap();
+        },
+    );
+    assert_eq!(
+        payloads,
+        vec![scheduled_at.to_string()],
+        "a ready enqueue_unique insert must publish exactly once"
+    );
+}
+
+/// Every `(channel, payload)` published on any notify channel under `s`'s
+/// prefix within `timeout` of running `action`, as [`redis_published_payloads`].
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_notify_messages(
+    s: &flexiq_core::RedisStorage,
+    timeout: std::time::Duration,
+    action: impl FnOnce(),
+) -> Vec<(String, String)> {
+    let mut conn = s.client().get_connection().unwrap();
+    let mut pubsub = conn.as_pubsub();
+    pubsub
+        .psubscribe(format!("{}notify:*", s.prefix()))
+        .unwrap();
+    action();
+    pubsub.set_read_timeout(Some(timeout)).unwrap();
+    let mut messages = Vec::new();
+    while let Ok(msg) = pubsub.get_message() {
+        messages.push((
+            msg.get_channel_name().to_string(),
+            msg.get_payload::<String>().unwrap(),
+        ));
+    }
+    messages
+}
+
+/// Completing a parent wakes each distinct queue holding a pending dependent
+/// once, with its earliest `scheduled_at`: the scheduler that finished the
+/// parent may not serve them. A job without dependents publishes nothing.
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_complete_wakes_each_dependent_queue_once(s: &flexiq_core::RedisStorage) {
+    let (q_parent, q_a, q_b) = ("q-depwake-parent", "q-depwake-a", "q-depwake-b");
+    for q in [q_parent, q_a, q_b] {
+        drain_queue(s, q);
+    }
+    let parent = s.enqueue(make_job(q_parent, "depwake_parent")).unwrap();
+    let dependent = |queue: &str, scheduled_at: i64| {
+        let mut job = make_job(queue, "depwake_child");
+        job.depends_on = vec![parent.id.clone()];
+        job.scheduled_at = scheduled_at;
+        s.enqueue(job).unwrap()
+    };
+    let now = now_millis();
+    let early_a = dependent(q_a, now - 1_000);
+    dependent(q_a, now);
+    let only_b = dependent(q_b, now);
+    let claimed = s.dequeue(q_parent, now_millis(), None).unwrap().unwrap();
+    assert_eq!(claimed.id, parent.id);
+
+    let mut messages = redis_notify_messages(s, std::time::Duration::from_secs(2), || {
+        s.complete(&parent.id, None, None).unwrap();
+    });
+    messages.sort();
+    let mut expected = vec![
+        (
+            redis_notify_channel(s, q_a),
+            early_a.scheduled_at.to_string(),
+        ),
+        (
+            redis_notify_channel(s, q_b),
+            only_b.scheduled_at.to_string(),
+        ),
+    ];
+    expected.sort();
+    assert_eq!(messages, expected, "one wake per dependent queue");
+
+    let lone = s.enqueue(make_job(q_parent, "depwake_lone")).unwrap();
+    let claimed = s.dequeue(q_parent, now_millis(), None).unwrap().unwrap();
+    assert_eq!(claimed.id, lone.id);
+    let messages = redis_notify_messages(s, std::time::Duration::from_secs(2), || {
+        s.complete(&lone.id, None, None).unwrap();
+    });
+    assert!(
+        messages.is_empty(),
+        "a job without dependents must publish nothing: {messages:?}"
+    );
+
+    for q in [q_a, q_b] {
+        drain_queue(s, q);
+    }
+}
+
+/// `url` with its userinfo replaced by `user:password`.
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_url_as(url: &str, user: &str, password: &str) -> String {
+    let (scheme, rest) = url.split_once("://").expect("redis URL has a scheme");
+    let host = rest.rsplit_once('@').map_or(rest, |(_, host)| host);
+    format!("{scheme}://{user}:{password}@{host}")
+}
+
+/// Drops the ACL user and every key under the prefix, even when the test fails.
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+struct DeniedWakeCleanup<'a> {
+    admin: &'a flexiq_core::RedisStorage,
+    user: String,
+    prefix: String,
+}
+
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+impl Drop for DeniedWakeCleanup<'_> {
+    fn drop(&mut self) {
+        let Ok(mut conn) = self.admin.conn() else {
+            eprintln!("cleanup: no connection to drop ACL user {}", self.user);
+            return;
+        };
+        if let Err(e) = redis::cmd("ACL")
+            .arg("DELUSER")
+            .arg(&self.user)
+            .query::<i64>(&mut conn)
+        {
+            eprintln!("cleanup: ACL DELUSER {} failed: {e}", self.user);
+        }
+        let keys: Vec<String> = redis::cmd("KEYS")
+            .arg(format!("{}*", self.prefix))
+            .query(&mut conn)
+            .unwrap_or_default();
+        if !keys.is_empty() {
+            let _ = redis::cmd("DEL").arg(&keys).query::<i64>(&mut conn);
+        }
+    }
+}
+
+/// An ACL user that may write but not publish — Redis 7's default for a user
+/// created without channel rules — still enqueues on every path: the wake is
+/// best-effort and a committed write must never report failure.
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_enqueue_survives_a_denied_wake(admin: &flexiq_core::RedisStorage, url: &str) {
+    let tag = uuid::Uuid::now_v7().simple().to_string();
+    let user = format!("flexiq-nowake-{tag}");
+    let password = format!("pw-{tag}");
+    let mut conn = admin.conn().unwrap();
+    let created = redis::cmd("ACL")
+        .arg("SETUSER")
+        .arg(&user)
+        .arg("on")
+        .arg(format!(">{password}"))
+        .arg("~*")
+        .arg("resetchannels")
+        .arg("+@all")
+        .query::<()>(&mut conn);
+    drop(conn);
+    if let Err(e) = created {
+        eprintln!("Skipping denied-wake test: ACL SETUSER refused: {e}");
+        return;
+    }
+    let prefix = format!("flexiq-nowake-{tag}:");
+    let _cleanup = DeniedWakeCleanup {
+        admin,
+        user: user.clone(),
+        prefix: prefix.clone(),
+    };
+    let s = flexiq_core::RedisStorage::with_prefix(&redis_url_as(url, &user, &password), &prefix)
+        .unwrap();
+
+    // Prove the premise: this user really cannot publish on a notify channel.
+    let mut conn = s.conn().unwrap();
+    let denied = redis::cmd("PUBLISH")
+        .arg(redis_notify_channel(&s, "q-nowake"))
+        .arg("0")
+        .query::<i64>(&mut conn);
+    drop(conn);
+    assert!(denied.is_err(), "the ACL user must be denied PUBLISH");
+
+    let q = "q-nowake";
+    let exists = |id: &str| s.get_job(id, None).unwrap().is_some();
+
+    let job = s.enqueue(make_job(q, "nowake_plain")).unwrap();
+    assert!(exists(&job.id), "enqueue must commit");
+
+    let batch = s
+        .enqueue_batch(vec![
+            make_job(q, "nowake_batch"),
+            make_job(q, "nowake_batch"),
+        ])
+        .unwrap();
+    assert!(
+        batch.iter().all(|j| exists(&j.id)),
+        "enqueue_batch must commit"
+    );
+
+    let mut unique = make_job(q, "nowake_unique");
+    unique.unique_key = Some(format!("nowake-{tag}"));
+    let (inserted, deduped) = s.enqueue_unique_reporting(unique).unwrap();
+    assert!(
+        !deduped && exists(&inserted.id),
+        "enqueue_unique must insert"
+    );
+
+    let opened = s
+        .enqueue_debounced(debounced(q, "nowake:user-1"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert!(exists(&opened.id), "a debounced insert must commit");
+    let slid = s
+        .enqueue_debounced(debounced(q, "nowake:user-1"), debounce_opts(10_000, 60_000))
+        .unwrap();
+    assert_eq!(slid.id, opened.id, "the second call slides the open window");
+    assert!(slid.scheduled_at > opened.scheduled_at);
+    let stored = s.get_job(&slid.id, None).unwrap().expect("slid job exists");
+    assert_eq!(
+        stored.scheduled_at, slid.scheduled_at,
+        "the slide must commit"
+    );
+
+    // A completion's dependent wake is best-effort too.
+    let dq = "q-nowake-dep";
+    let parent = s.enqueue(make_job(dq, "nowake_parent")).unwrap();
+    let mut child = make_job(dq, "nowake_child");
+    child.depends_on = vec![parent.id.clone()];
+    s.enqueue(child).unwrap();
+    let claimed = s.dequeue(dq, now_millis(), None).unwrap().unwrap();
+    assert_eq!(claimed.id, parent.id);
+    s.complete(&parent.id, None, None)
+        .expect("a completion must commit despite a denied dependent wake");
 }
 
 #[cfg(feature = "postgres")]

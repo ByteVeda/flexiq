@@ -34,6 +34,24 @@ impl SqliteStorage {
         conn.immediate_transaction(f)
     }
 
+    /// Whether any job depends on one of `ids` — an indexed probe on
+    /// `depends_on_job_id`, stopping at the first hit.
+    #[cfg(feature = "push-dispatch")]
+    pub(crate) fn has_dependents(&self, ids: &[&str]) -> Result<bool> {
+        let mut conn = self.conn()?;
+        for chunk in ids.chunks(crate::storage::diesel_common::purge::DELETE_ID_CHUNK) {
+            let hit = job_dependencies::table
+                .filter(job_dependencies::depends_on_job_id.eq_any(chunk))
+                .select(job_dependencies::id)
+                .first::<String>(&mut conn)
+                .optional()?;
+            if hit.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Pending rows a debounced enqueue may slide, oldest first (narrow — no
     /// payload/result blobs; the winner is re-read in full).
     ///

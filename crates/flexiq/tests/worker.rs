@@ -63,6 +63,27 @@ fn a_registered_task_runs_and_records_its_result() {
     assert!(done.result.is_some(), "a returned value must be archived");
 }
 
+/// Either push choice still runs the job: `true` wakes on enqueue, `false`
+/// polls — neither may strand it.
+#[test]
+fn a_worker_runs_jobs_with_push_dispatch_on_or_off() {
+    for enabled in [true, false] {
+        let q = FlexiQ::in_memory().expect("opens");
+        let worker = q
+            .worker()
+            .register::<reads_its_argument>()
+            .push_dispatch(enabled)
+            .spawn()
+            .expect("spawns");
+        let job = q
+            .enqueue(reads_its_argument::call("push".into()))
+            .expect("enqueues");
+        let done = wait_terminal(&q, &job.id);
+        worker.shutdown().expect("clean shutdown");
+        assert_eq!(done.status, JobStatus::Complete, "push_dispatch({enabled})");
+    }
+}
+
 /// The arguments reach the body, not merely the payload.
 #[test]
 fn a_task_receives_its_decoded_arguments() {

@@ -7,6 +7,7 @@ mod locks;
 mod logs;
 mod metrics;
 mod periodic;
+mod pool;
 mod pubsub;
 mod queue_state;
 mod rate_limits;
@@ -18,13 +19,21 @@ mod workers;
 #[doc(hidden)]
 pub mod listener;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use crate::error::{QueueError, Result};
+
+pub use pool::RedisConnection;
 
 /// Redis-backed storage for the task queue.
 #[derive(Clone)]
 pub struct RedisStorage {
-    client: redis::Client,
+    pool: Arc<pool::ConnectionPool>,
     prefix: String,
+    /// Set once an enqueue's wake `PUBLISH` has been refused and warned about,
+    /// so a denied channel warns once per storage, not once per enqueue.
+    wake_refusal_warned: Arc<AtomicBool>,
 }
 
 impl RedisStorage {
@@ -38,7 +47,7 @@ impl RedisStorage {
         let client = redis::Client::open(redis_url)
             .map_err(|e| QueueError::Config(format!("Redis connection error: {e}")))?;
 
-        // Validate the connection works
+        // Validate the connection works; it then seeds the pool.
         let mut conn = client
             .get_connection()
             .map_err(|e| QueueError::Config(format!("Redis connection error: {e}")))?;
@@ -47,8 +56,9 @@ impl RedisStorage {
             .map_err(|e| QueueError::Config(format!("Redis ping failed: {e}")))?;
 
         Ok(Self {
-            client,
+            pool: pool::ConnectionPool::new(client, conn),
             prefix: prefix.to_string(),
+            wake_refusal_warned: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -79,10 +89,15 @@ impl RedisStorage {
         k
     }
 
-    /// Get a Redis connection.
-    pub fn conn(&self) -> Result<redis::Connection> {
-        self.client
-            .get_connection()
+    /// Reuse an idle connection, or dial one; it returns to the pool when
+    /// dropped. No `PING` on checkout — that would put back the round trip
+    /// reuse removes; a dead socket fails its command and is not returned.
+    ///
+    /// Hold it only for the commands at hand, and never check out a second
+    /// while holding one: each would be a connection of its own.
+    pub fn conn(&self) -> Result<RedisConnection> {
+        self.pool
+            .get()
             .map_err(|e| QueueError::Other(format!("Redis connection error: {e}")))
     }
 
@@ -94,24 +109,100 @@ impl RedisStorage {
         &self.prefix
     }
 
-    /// The single list key push-dispatch uses to signal ready jobs. The
-    /// enqueue side `LPUSH`es a sentinel here; the listener `BLPOP`s it.
+    /// The pub/sub channel push-dispatch signals ready jobs of `(namespace,
+    /// queue)` on. The enqueue side `PUBLISH`es here; every scheduler serving
+    /// that queue in that namespace listens. A scheduler only claims its own
+    /// namespace's jobs, so a shared channel would wake it for nothing.
     #[cfg(feature = "push-dispatch")]
-    pub(crate) fn notify_key(&self) -> String {
-        self.key(&["notify", "_ready"])
+    pub(crate) fn notify_channel(&self, namespace: Option<&str>, queue: &str) -> String {
+        self.key(&["notify", &Self::namespace_segment(namespace), queue])
     }
 
-    /// A raw client clone, for the listener's dedicated blocking connection.
+    /// The client, for the listener's dedicated blocking connection — a
+    /// `SUBSCRIBE`d connection must never return to the pool.
     #[cfg(feature = "push-dispatch")]
     pub fn client(&self) -> &redis::Client {
-        &self.client
+        self.pool.client()
     }
+
+    /// Append `PUBLISH <notify-channel> <scheduled_at>` for `(namespace, queue)`
+    /// onto `pipe`, `.ignore()`d so it never changes the pipe's reply shape.
+    /// Every enqueue write path folds its notify in here instead of paying
+    /// `notify_job_ready`'s own connection checkout + round trip (see
+    /// `jobs/enqueue.rs`). The payload is the job's `scheduled_at` in ms: a
+    /// listener drains when it is due and arms a timer for it otherwise.
+    ///
+    /// Run the pipe with [`exec_enqueue_pipe`](Self::exec_enqueue_pipe), and
+    /// never fold into an atomic (`MULTI`/`EXEC`) pipe: an ACL that denies the
+    /// channel rejects the `PUBLISH` at queue time, and `EXEC` then discards
+    /// the whole transaction — a lost wake would become a lost enqueue.
+    #[cfg(feature = "push-dispatch")]
+    pub(crate) fn fold_notify(
+        &self,
+        pipe: &mut redis::Pipeline,
+        namespace: Option<&str>,
+        queue: &str,
+        scheduled_at: i64,
+    ) {
+        pipe.publish(self.notify_channel(namespace, queue), scheduled_at)
+            .ignore();
+    }
+
+    /// Run a non-atomic enqueue `pipe`, treating an error reply on a folded
+    /// wake `PUBLISH` as a lost wake rather than a failed enqueue.
+    ///
+    /// Redis runs every command of a plain pipeline, so when only `PUBLISH`
+    /// slots failed (say, an ACL user without channel permissions) the writes
+    /// are committed and reporting `Err` would invite a duplicating retry. The
+    /// wake is best-effort: the scheduler's fallback poll still finds the job.
+    pub(crate) fn exec_enqueue_pipe(
+        &self,
+        pipe: &redis::Pipeline,
+        conn: &mut RedisConnection,
+    ) -> Result<()> {
+        let err = match pipe.query::<()>(conn) {
+            Ok(()) => return Ok(()),
+            Err(err) => err,
+        };
+        // redis-rs reports every failing slot by its index in `pipe`, ignored
+        // slots included, so a write's error can never hide behind a wake's.
+        let only_wakes_failed = !pipe.is_transaction()
+            && err.clone().into_server_errors().is_some_and(|failed| {
+                !failed.is_empty() && failed.iter().all(|(slot, _)| is_publish(pipe, *slot))
+            });
+        if !only_wakes_failed {
+            return Err(map_err(err));
+        }
+        if self.wake_refusal_warned.swap(true, Ordering::Relaxed) {
+            log::debug!("push-dispatch: enqueue wake PUBLISH refused: {err}");
+        } else {
+            log::warn!(
+                "push-dispatch: enqueue wake PUBLISH refused ({err}); jobs are still \
+                 enqueued and dispatch on the fallback poll. Grant the connection's \
+                 ACL user PUBLISH on the notify channels to restore push latency; \
+                 further refusals log at debug"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Whether command `slot` of `pipe` is a `PUBLISH` — the only command an
+/// enqueue pipe carries that is not a write.
+fn is_publish(pipe: &redis::Pipeline, slot: usize) -> bool {
+    pipe.cmd_iter()
+        .nth(slot)
+        .and_then(|cmd| cmd.args_iter().next())
+        .is_some_and(
+            |name| matches!(name, redis::Arg::Simple(n) if n.eq_ignore_ascii_case(b"PUBLISH")),
+        )
 }
 
 #[cfg(feature = "push-dispatch")]
 impl crate::storage::notify::StorageNotifier for RedisStorage {
-    fn notify_job_ready(&self, _queue: &str, _scheduled_at: i64) {
-        // Best-effort LPUSH of a sentinel onto the notify list. A failure only
+    fn notify_job_ready(&self, namespace: Option<&str>, queue: &str, scheduled_at: i64) {
+        // Best-effort PUBLISH: a broadcast, so every scheduler serving `queue`
+        // wakes, not whichever popped a shared signal first. A failure only
         // costs the latency improvement — the fallback poll still dispatches.
         let mut conn = match self.conn() {
             Ok(c) => c,
@@ -120,21 +211,40 @@ impl crate::storage::notify::StorageNotifier for RedisStorage {
                 return;
             }
         };
-        let key = self.notify_key();
-        // Keep the list short — a single pending sentinel is enough to wake the
-        // listener; trim so it can't grow unbounded under bursty enqueues.
-        let res: redis::RedisResult<()> = redis::pipe()
-            .lpush(&key, 1)
-            .ltrim(&key, 0, 15)
+        let res: redis::RedisResult<()> = redis::cmd("PUBLISH")
+            .arg(self.notify_channel(namespace, queue))
+            .arg(scheduled_at)
             .query(&mut conn);
         if let Err(e) = res {
-            log::warn!("push-dispatch: redis LPUSH notify failed: {e}");
+            log::warn!("push-dispatch: redis PUBLISH notify failed: {e}");
         }
     }
 }
 
 fn map_err(e: redis::RedisError) -> QueueError {
     QueueError::Redis(e)
+}
+
+/// [`redis::transaction`] that never hands a connection back to the pool
+/// still `WATCH`ing: the helper `UNWATCH`es only on success, and a stale watch
+/// would make the next borrower's `MULTI`/`EXEC` abort for a key it never read.
+fn watched_transaction<T, F>(
+    conn: &mut RedisConnection,
+    keys: &[&str],
+    func: F,
+) -> redis::RedisResult<T>
+where
+    F: FnMut(&mut RedisConnection, &mut redis::Pipeline) -> redis::RedisResult<Option<T>>,
+{
+    let result = redis::transaction(conn, keys, func);
+    if result.is_err() {
+        // Best-effort: a failure here means the socket is gone or out of step,
+        // and such a connection is dropped by the pool rather than reused.
+        if let Err(e) = redis::cmd("UNWATCH").exec(conn) {
+            log::debug!("redis UNWATCH after a failed transaction: {e}");
+        }
+    }
+    result
 }
 
 /// Batch size for the bounded history scans (SSCAN/ZSCAN COUNT hint and the
@@ -164,7 +274,7 @@ fn strip_dead_blob(dead: &mut crate::storage::DeadJob) {
 /// keyset: Redis orders equal-score members by reverse-lexicographic id under
 /// `ZREVRANGEBYSCORE`, which is exactly `id DESC`.
 fn zset_keyset_page(
-    conn: &mut redis::Connection,
+    conn: &mut RedisConnection,
     zkey: &str,
     after: Option<(i64, &str)>,
     limit: i64,
@@ -214,4 +324,74 @@ fn zset_keyset_page(
     }
 
     Ok(page)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A storage over the hosted test Redis under a fresh prefix, or `None`
+    /// (with a skip line) when none is configured.
+    fn test_storage() -> Option<RedisStorage> {
+        let Ok(url) = std::env::var("FLEXIQ_REDIS_TEST_URL") else {
+            eprintln!("Skipping: FLEXIQ_REDIS_TEST_URL unset");
+            return None;
+        };
+        let prefix = format!("flexiq-wake-test-{}:", uuid::Uuid::now_v7());
+        Some(RedisStorage::with_prefix(&url, &prefix).unwrap())
+    }
+
+    /// A malformed `PUBLISH` (wrong arity) stands in for an ACL-denied one:
+    /// both are an error reply on the wake's slot after the writes ran.
+    fn failing_wake(pipe: &mut redis::Pipeline) {
+        pipe.cmd("PUBLISH").arg("only-a-channel").ignore();
+    }
+
+    #[test]
+    fn a_refused_wake_does_not_fail_the_enqueue_pipe() {
+        let Some(s) = test_storage() else { return };
+        let key = s.key(&["written"]);
+        let mut conn = s.conn().unwrap();
+        let pipe = &mut redis::pipe();
+        pipe.set(&key, "v");
+        failing_wake(pipe);
+
+        s.exec_enqueue_pipe(pipe, &mut conn).unwrap();
+        let written: Option<String> = redis::Commands::get(&mut conn, &key).unwrap();
+        let _: () = redis::Commands::del(&mut conn, &key).unwrap();
+        assert_eq!(written.as_deref(), Some("v"), "the write must land");
+        assert!(s.wake_refusal_warned.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_failed_write_still_fails_the_enqueue_pipe() {
+        let Some(s) = test_storage() else { return };
+        let key = s.key(&["a-string"]);
+        let mut conn = s.conn().unwrap();
+        let pipe = &mut redis::pipe();
+        pipe.set(&key, "v").ignore();
+        // WRONGTYPE on an ignored write, beside a failing wake: still an error.
+        pipe.sadd(&key, "member").ignore();
+        failing_wake(pipe);
+
+        let result = s.exec_enqueue_pipe(pipe, &mut conn);
+        let _: () = redis::Commands::del(&mut conn, &key).unwrap();
+        assert!(result.is_err(), "a write's error must surface");
+    }
+
+    #[test]
+    fn a_transaction_never_hides_its_wake_failure() {
+        let Some(s) = test_storage() else { return };
+        let key = s.key(&["in-multi"]);
+        let mut conn = s.conn().unwrap();
+        let pipe = &mut redis::pipe();
+        pipe.atomic().set(&key, "v");
+        failing_wake(pipe);
+
+        // A queue-time rejection aborts the EXEC, so nothing was written and
+        // the error is the honest answer.
+        assert!(s.exec_enqueue_pipe(pipe, &mut conn).is_err());
+        let written: Option<String> = redis::Commands::get(&mut conn, &key).unwrap();
+        assert_eq!(written, None, "EXECABORT discards the whole transaction");
+    }
 }

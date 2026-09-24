@@ -39,7 +39,7 @@ use crate::step::StepLimits;
 use crate::storage::records::{
     AttemptFence, JobStep, NewJobStep, SleepOutcome, StepCommit, StepKind,
 };
-use crate::storage::redis_backend::{map_err, RedisStorage};
+use crate::storage::redis_backend::{map_err, RedisConnection, RedisStorage};
 
 use super::jobs::dequeue_score;
 
@@ -447,7 +447,7 @@ impl RedisStorage {
             let stored = self.stored_sleep(&mut conn, step)?;
             let deadline = stored.unwrap_or(wake_at);
 
-            let mut job = self.get_job_required_in(step.job_id, namespace)?;
+            let mut job = self.get_job_required_in(&mut conn, step.job_id, namespace)?;
             let old_status = job.status;
             job.status = JobStatus::Pending;
             job.scheduled_at = deadline;
@@ -565,7 +565,7 @@ impl RedisStorage {
     /// The deadline already committed at this position, if any.
     fn stored_sleep(
         &self,
-        conn: &mut redis::Connection,
+        conn: &mut RedisConnection,
         step: &NewJobStep<'_>,
     ) -> Result<Option<i64>> {
         let stored: Option<String> = conn
