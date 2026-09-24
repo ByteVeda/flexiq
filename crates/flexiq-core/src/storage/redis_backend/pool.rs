@@ -8,7 +8,12 @@
 //! leaves a process that `fork`s mid-dial (a pre-forking web server, a
 //! `multiprocessing` child) with a wedged copy of that machinery. Here the
 //! caller dials on its own thread, and nothing runs between calls.
+//!
+//! A forked child that inherits a storage (a module-level queue in a
+//! pre-forking server) adopts its pool: it discards the parent's idle sockets
+//! and pools its own from then on.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -35,7 +40,7 @@ pub(super) struct ConnectionPool {
     idle: Mutex<Vec<IdleConnection>>,
     /// The process whose sockets `idle` holds. A forked child inherits them
     /// still open on the parent's side too, so it must never use them.
-    owner_pid: u32,
+    owner_pid: AtomicU32,
 }
 
 impl ConnectionPool {
@@ -48,7 +53,7 @@ impl ConnectionPool {
         let pool = Arc::new(Self {
             client,
             idle: Mutex::new(Vec::with_capacity(MAX_IDLE)),
-            owner_pid,
+            owner_pid: AtomicU32::new(owner_pid),
         });
         pool.put_back(warm, false);
         pool
@@ -62,30 +67,50 @@ impl ConnectionPool {
 
     /// Reuse the most recently returned live connection, or dial a new one.
     pub(super) fn get(self: &Arc<Self>) -> redis::RedisResult<RedisConnection> {
-        if std::process::id() != self.owner_pid {
-            // Inherited across a fork: dial per call, as before pooling, and
-            // never touch the parent's sockets or its lock.
+        let pid = std::process::id();
+        let Some(mut idle) = self.lock_as(pid) else {
+            // The stack was locked when this process was forked, so its lock
+            // may never be released here: dial per call, pooling nothing.
             return Ok(RedisConnection {
                 conn: Some(self.client.get_connection()?),
                 pool: None,
+                pid,
                 poisoned: false,
             });
-        }
-        loop {
-            let Some(idle) = self.lock_idle().pop() else {
-                break;
-            };
-            if idle.conn.is_open() && idle.since.elapsed() < MAX_IDLE_AGE {
-                return Ok(self.lend(idle.conn));
+        };
+        while let Some(entry) = idle.pop() {
+            if entry.conn.is_open() && entry.since.elapsed() < MAX_IDLE_AGE {
+                drop(idle);
+                return Ok(self.lend(entry.conn, pid));
             }
         }
-        Ok(self.lend(self.client.get_connection()?))
+        drop(idle);
+        Ok(self.lend(self.client.get_connection()?, pid))
     }
 
-    fn lend(self: &Arc<Self>, conn: redis::Connection) -> RedisConnection {
+    /// Lock the idle stack on behalf of process `pid`, adopting the pool first
+    /// if it was built in a parent. `None` when an inherited lock cannot be
+    /// taken without waiting — a thread that no longer exists may hold it.
+    fn lock_as(&self, pid: u32) -> Option<MutexGuard<'_, Vec<IdleConnection>>> {
+        if self.owner_pid.load(Ordering::Acquire) == pid {
+            return Some(self.lock_idle());
+        }
+        // Never block here: a lock held at fork time is never released.
+        let mut idle = self.idle.try_lock().ok()?;
+        if self.owner_pid.load(Ordering::Acquire) != pid {
+            // The parent's sockets. Dropping them closes only this process's
+            // descriptors and sends nothing, so the parent keeps its own.
+            idle.clear();
+            self.owner_pid.store(pid, Ordering::Release);
+        }
+        Some(idle)
+    }
+
+    fn lend(self: &Arc<Self>, conn: redis::Connection, pid: u32) -> RedisConnection {
         RedisConnection {
             conn: Some(conn),
             pool: Some(Arc::clone(self)),
+            pid,
             poisoned: false,
         }
     }
@@ -132,8 +157,12 @@ impl ConnectionPool {
 pub struct RedisConnection {
     /// `Some` until drop.
     conn: Option<redis::Connection>,
-    /// `None` for a connection dialled in a forked child, which is not pooled.
+    /// `None` for a connection dialled in a forked child that could not adopt
+    /// the pool, which is not pooled.
     pool: Option<Arc<ConnectionPool>>,
+    /// The process that checked it out. A guard carried across a fork holds
+    /// the parent's socket, which must not enter the child's pool.
+    pid: u32,
     /// A failed read may have left part of a reply unread; the next borrower
     /// would take it for its own. redis-rs only marks the connection closed on
     /// EOF, so the guard remembers any such failure itself.
@@ -208,8 +237,14 @@ impl ConnectionLike for RedisConnection {
 
 impl Drop for RedisConnection {
     fn drop(&mut self) {
-        if let (Some(conn), Some(pool)) = (self.conn.take(), self.pool.as_ref()) {
-            pool.put_back(conn, self.poisoned);
+        let Some(conn) = self.conn.take() else {
+            return;
+        };
+        match &self.pool {
+            // Not across a fork: that socket is the parent's, and the pool's
+            // lock may be one the parent held when it forked.
+            Some(pool) if self.pid == std::process::id() => pool.put_back(conn, self.poisoned),
+            _ => drop(conn),
         }
     }
 }
@@ -246,21 +281,60 @@ mod tests {
     }
 
     /// A forked child inherits the parent's idle sockets; using one would
-    /// interleave two processes' replies on it.
+    /// interleave two processes' replies on it. It drops them and pools its own.
     #[test]
-    fn another_process_never_takes_the_idle_connections() {
-        let Some(pool) = test_pool(std::process::id().wrapping_add(1)) else {
+    fn a_forked_child_adopts_the_pool() {
+        let parent = std::process::id().wrapping_add(1);
+        let Some(pool) = test_pool(parent) else {
             return;
         };
+        let inherited = client_id(&mut pool.lock_idle()[0].conn);
+
+        let mut conn = pool.get().unwrap();
+        assert!(
+            conn.pool.is_some(),
+            "the adopted pool lent an unpooled connection"
+        );
+        let own = client_id(&mut conn);
+        assert_ne!(own, inherited, "the child reused the parent's socket");
+        drop(conn);
+
+        assert_eq!(pool.owner_pid.load(Ordering::Acquire), std::process::id());
+        assert_eq!(client_id(&mut pool.get().unwrap()), own);
+    }
+
+    /// A lock held when the process forked is never released in the child;
+    /// the child dials per call rather than wait on it.
+    #[test]
+    fn a_child_forked_mid_lock_dials_without_waiting() {
+        let parent = std::process::id().wrapping_add(1);
+        let Some(pool) = test_pool(parent) else {
+            return;
+        };
+        let held_at_fork = pool.lock_idle();
         let mut conn = pool.get().unwrap();
         assert!(
             conn.pool.is_none(),
-            "a foreign process's checkout is pooled"
+            "a connection was pooled past a held lock"
         );
         client_id(&mut conn);
         drop(conn);
-        // Still exactly the one seeded connection: nothing taken or added.
-        assert_eq!(pool.lock_idle().len(), 1);
+        assert_eq!(held_at_fork.len(), 1);
+        drop(held_at_fork);
+        assert_eq!(pool.owner_pid.load(Ordering::Acquire), parent);
+    }
+
+    /// A guard carried across a fork holds the parent's socket: dropping it in
+    /// the child must not hand that socket to the child's pool.
+    #[test]
+    fn a_guard_dropped_after_a_fork_is_not_pooled() {
+        let Some(pool) = test_pool(std::process::id()) else {
+            return;
+        };
+        let mut conn = pool.get().unwrap();
+        conn.pid = conn.pid.wrapping_add(1);
+        drop(conn);
+        assert!(pool.lock_idle().is_empty());
     }
 
     #[test]
