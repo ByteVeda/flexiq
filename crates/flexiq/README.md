@@ -139,10 +139,10 @@ otherwise.
 
 | Feature | Effect |
 | --- | --- |
-| *(default)* | SQLite storage |
+| *(default)* | SQLite storage, plus `push-dispatch` |
 | `postgres` | PostgreSQL storage |
 | `redis` | Redis storage |
-| `push-dispatch` | event-driven scheduler wakeups instead of polling |
+| `push-dispatch` | a Redis worker wakes on enqueue instead of polling |
 | `workflows` | DAG workflows at `flexiq::workflows` |
 | `mesh` | decentralized mesh scheduling at `flexiq::mesh` |
 
