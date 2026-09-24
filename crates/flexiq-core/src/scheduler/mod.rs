@@ -1100,6 +1100,9 @@ impl Scheduler {
         // The fallback is anchored to the last drain, not re-armed each pass:
         // the maintenance tick restarts the loop more often than the fallback
         // interval, so a per-pass sleep would never fire.
+        // Drain a backlog that predates this loop first: no wake announces it,
+        // and the poll loop this replaces dispatched on its first pass.
+        while self.tick_dispatch(&job_tx) {}
         let mut last_drain = tokio::time::Instant::now();
 
         loop {
@@ -4259,15 +4262,49 @@ mod push_tests {
         ));
         scheduler.enable_push_dispatch();
         let (run, mut rx) = spawn_run(&scheduler);
+        // A woken job first, so the loop is past its start drain.
+        scheduler.storage().enqueue(ready_job("woken")).unwrap();
+        rx.recv().await.expect("run loop alive");
+        // Let that drain finish so it cannot sweep up the next job.
+        tokio::time::sleep(Duration::from_millis(300)).await;
 
         // The inherent SQLite enqueue skips the notify chokepoint.
         sqlite.enqueue(ready_job("unannounced")).unwrap();
+        let enqueued_at = tokio::time::Instant::now();
 
         let job = tokio::time::timeout(Duration::from_secs(5), rx.recv())
             .await
             .expect("the fallback timer must dispatch an unannounced job")
             .expect("run loop alive");
         assert_eq!(job.task_name, "unannounced");
+        // Proves the fallback, not a stray wake or drain, delivered it.
+        assert!(enqueued_at.elapsed() >= Duration::from_secs(1));
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
+    /// A backlog that predates `run` has no wake to announce it; the push loop
+    /// must drain it on start, as the poll loop's first pass did, not idle
+    /// until the 2 s fallback.
+    #[tokio::test]
+    async fn push_drains_a_backlog_on_start() {
+        let sqlite = crate::storage::sqlite::SqliteStorage::in_memory().unwrap();
+        // The inherent enqueue skips the notify, so only the start drain finds it.
+        sqlite.enqueue(ready_job("backlog")).unwrap();
+        let scheduler = Arc::new(Scheduler::new(
+            StorageBackend::Sqlite(sqlite),
+            vec!["default".to_string()],
+            SchedulerConfig::default(),
+            None,
+        ));
+        scheduler.enable_push_dispatch();
+        let (run, mut rx) = spawn_run(&scheduler);
+
+        let job = tokio::time::timeout(Duration::from_millis(1000), rx.recv())
+            .await
+            .expect("a pre-start backlog must dispatch before the fallback")
+            .expect("run loop alive");
+        assert_eq!(job.task_name, "backlog");
         scheduler.shutdown_handle().notify_one();
         run.await.unwrap();
     }
@@ -4491,6 +4528,38 @@ mod push_tests {
             .expect("run loop alive");
         assert_eq!(job.id, enqueued.id);
         eprintln!("redis enqueue-to-dispatch: {:?}", enqueue_started.elapsed());
+
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
+    /// Jobs enqueued before `run` published to no subscriber; a Redis push
+    /// scheduler must still dispatch them promptly on start, well inside the
+    /// 2 s fallback.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_push_dispatches_a_backlog_on_start() {
+        let Some(scheduler) = redis_scheduler("redis_push_dispatches_a_backlog_on_start") else {
+            return;
+        };
+        let first = scheduler.storage().enqueue(ready_job("before")).unwrap();
+        let second = scheduler.storage().enqueue(ready_job("before")).unwrap();
+        let scheduler = Arc::new(scheduler);
+
+        let started = tokio::time::Instant::now();
+        let (run, mut rx) = spawn_run(&scheduler);
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let job = tokio::time::timeout_at(started + Duration::from_millis(1500), rx.recv())
+                .await
+                .expect("a pre-start backlog must dispatch before the fallback")
+                .expect("run loop alive");
+            ids.push(job.id);
+        }
+        ids.sort();
+        let mut expected = vec![first.id, second.id];
+        expected.sort();
+        assert_eq!(ids, expected);
 
         scheduler.shutdown_handle().notify_one();
         run.await.unwrap();
