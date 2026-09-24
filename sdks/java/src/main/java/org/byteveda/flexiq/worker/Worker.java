@@ -140,8 +140,8 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
-     * Stop dispatching; in-flight jobs continue to drain. Starts the event-sink
-     * drain budget ({@link Builder#eventSinksDrain}), which {@link #close()} waits on.
+     * Stop dispatching; in-flight jobs continue to drain. Their events still go
+     * out; {@link #close()} waits for them.
      */
     public void stop() {
         control.stop();
@@ -272,9 +272,12 @@ public final class Worker implements AutoCloseable {
      * worker. Draining BEFORE {@code control.close()} is essential: a running
      * handler may still call back into the native worker
      * ({@code completeJob}/{@code failJob}), so the handle must outlive every
-     * handler task. With event sinks, returns once their buffered events are
-     * delivered or counted as dropped, within {@link Builder#eventSinksDrain}
-     * of the stop request. Idempotent.
+     * handler task.
+     *
+     * <p>With event sinks, every event is delivered or counted as dropped by the
+     * time this returns: it first waits for in-flight handlers (up to 30 seconds,
+     * then 30 more after interrupting them), then up to
+     * {@link Builder#eventSinksDrain} for the sinks. Idempotent.
      */
     @Override
     public synchronized void close() {
@@ -308,8 +311,8 @@ public final class Worker implements AutoCloseable {
             Thread.currentThread().interrupt();
             executor.shutdownNow();
         }
-        // After the handlers, so their outcomes' events are buffered first; the
-        // wait is bounded by the drain budget stop() started above.
+        // After the handler wait, and the budget starts here: events of handlers
+        // that finished during that wait still go out.
         drainEventSinks();
         // Safe even if a straggler survives: JniWorkerControl serializes close()
         // against in-flight native calls and rejects any call made afterwards.
@@ -704,11 +707,11 @@ public final class Worker implements AutoCloseable {
         }
 
         /**
-         * How long closing the worker waits for buffered events to go out;
-         * 5 seconds when unset. The budget starts at {@link Worker#stop()} (which
-         * {@link Worker#close()} calls first), so in-flight jobs spend it too and a
-         * job that never finishes cannot hold the close open past it. Whatever is
-         * still buffered then is counted as dropped.
+         * How long {@link Worker#close()} waits for buffered events to go out;
+         * 5 seconds when unset. The budget starts once {@code close()} has finished
+         * waiting for in-flight handlers, so their events are sent too, and
+         * {@code close()} takes at most that handler wait plus this budget.
+         * Whatever is still buffered then is counted as dropped.
          *
          * @param drain the budget; {@link Duration#ZERO} drops what is buffered at once
          * @return {@code this}, for chaining

@@ -100,8 +100,8 @@ public final class NativeWorker {
 
     /**
      * Block until a stopped worker's buffered events are delivered or counted as
-     * dropped, within the drain budget {@link #stop} started. Returns at once for
-     * a worker without sinks.
+     * dropped, for at most the worker's drain budget from this call. Returns at
+     * once for a worker without sinks.
      *
      * @param handle the worker handle from {@link NativeQueue#runWorker}
      */

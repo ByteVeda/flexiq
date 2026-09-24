@@ -19,6 +19,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 import org.byteveda.flexiq.FlexiQ;
@@ -195,6 +197,36 @@ class EventSinksTest {
             EventSinkStats stats = worker.eventSinkStats().get(0);
             assertEquals(2, stats.delivered());
             assertEquals(0, stats.queued());
+            assertEquals(0, stats.droppedShutdown());
+        }
+    }
+
+    /**
+     * The drain budget starts after close() has waited for in-flight handlers, so
+     * a handler that outlives the budget measured from the stop still has its
+     * outcome delivered.
+     */
+    @Test
+    @Timeout(60)
+    void aHandlerFinishingDuringCloseStillHasItsEventsDelivered(@TempDir Path dir) throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        try (FlexiQ queue = FlexiQ.builder().url(dir.resolve("e.db").toString()).open()) {
+            Worker worker = queue.worker()
+                    .handle(ECHO, payload -> {
+                        entered.countDown();
+                        Thread.sleep(500);
+                        return payload;
+                    })
+                    .eventSinks(httpSinks())
+                    .eventSinksDrain(Duration.ofMillis(200))
+                    .start();
+            String id = queue.enqueue(ECHO, "late");
+            assertTrue(entered.await(20, TimeUnit.SECONDS), "the handler never ran");
+            worker.close();
+
+            assertTrue(eventsFor(id).containsKey(COMPLETED), "job.completed was dropped: " + received);
+            EventSinkStats stats = worker.eventSinkStats().get(0);
+            assertEquals(2, stats.delivered());
             assertEquals(0, stats.droppedShutdown());
         }
     }

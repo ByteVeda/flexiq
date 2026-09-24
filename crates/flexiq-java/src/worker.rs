@@ -858,8 +858,7 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorker_cancelJob(
     })
 }
 
-/// `void stop(long workerHandle)` — stop the scheduler and heartbeat loops,
-/// and start the event drain budget.
+/// `void stop(long workerHandle)` — stop the scheduler and heartbeat loops.
 #[no_mangle]
 pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorker_stop(
     mut env: JNIEnv,
@@ -870,9 +869,6 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorker_stop(
         let worker = unsafe { borrow_worker(handle) };
         worker.shutdown.notify_one();
         worker.heartbeat_stop.notify_one();
-        if let Some(events) = &worker.events {
-            events.mark_stopping();
-        }
         // Signal the mesh node so its gossip + steal-server tasks exit instead of
         // lingering until the runtime drops.
         #[cfg(feature = "mesh")]

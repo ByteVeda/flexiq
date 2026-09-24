@@ -26,12 +26,14 @@ const ILLEGAL_ARGUMENT: &str = "java/lang/IllegalArgumentException";
 
 /// A worker's running hub and the deadline it drains by once stopped.
 ///
-/// The budget runs from `stop`, not from the last result: in-flight jobs spend
-/// it too, so a job that never settles cannot hold `close` open past it.
+/// The budget starts when `close` has finished waiting for in-flight handlers
+/// (`awaitEventDrain`), or when the result loop ends, whichever comes first.
+/// Starting it at `stop` would only drop the events of the handlers `close` is
+/// already waiting for, without making `close` any shorter.
 pub(crate) struct WorkerEvents {
     hub: Arc<EventHub>,
     drain: Duration,
-    /// Fixed by the first `stop`: when buffered events must be out.
+    /// Fixed once, by whichever of `drain` / `wait_drained` runs first.
     deadline: OnceLock<Instant>,
     /// Flips to `true` once the result-drain thread has drained the hub.
     drained: Mutex<bool>,
@@ -65,8 +67,8 @@ impl WorkerEvents {
         Arc::clone(&self.hub)
     }
 
-    /// Start the drain budget. Idempotent: a later `stop` keeps the first deadline.
-    pub(crate) fn mark_stopping(&self) -> Instant {
+    /// Start the drain budget. Idempotent: a later call keeps the first deadline.
+    fn mark_stopping(&self) -> Instant {
         *self.deadline.get_or_init(|| Instant::now() + self.drain)
     }
 
@@ -114,12 +116,12 @@ impl Drop for WorkerEvents {
 struct SinkStatsWire {
     name: String,
     kind: &'static str,
-    delivered: u64,
-    dropped_buffer_full: u64,
-    dropped_rejected: u64,
-    dropped_failed: u64,
-    dropped_shutdown: u64,
-    queued: u64,
+    delivered: i64,
+    dropped_buffer_full: i64,
+    dropped_rejected: i64,
+    dropped_failed: i64,
+    dropped_shutdown: i64,
+    queued: i64,
 }
 
 impl From<SinkStats> for SinkStatsWire {
@@ -127,14 +129,19 @@ impl From<SinkStats> for SinkStatsWire {
         Self {
             name: stats.name,
             kind: stats.kind,
-            delivered: stats.delivered,
-            dropped_buffer_full: stats.dropped_buffer_full,
-            dropped_rejected: stats.dropped_rejected,
-            dropped_failed: stats.dropped_failed,
-            dropped_shutdown: stats.dropped_shutdown,
-            queued: stats.queued,
+            delivered: saturating(stats.delivered),
+            dropped_buffer_full: saturating(stats.dropped_buffer_full),
+            dropped_rejected: saturating(stats.dropped_rejected),
+            dropped_failed: saturating(stats.dropped_failed),
+            dropped_shutdown: saturating(stats.dropped_shutdown),
+            queued: saturating(stats.queued),
         }
     }
+}
+
+/// Java has no `u64`; a counter past `i64::MAX` is unreachable in practice.
+fn saturating(count: u64) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
 }
 
 /// `String eventSinkStats(long workerHandle)` — a JSON array of each sink's
@@ -162,8 +169,8 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorker_eventSinkS
 }
 
 /// `void awaitEventDrain(long workerHandle)` — block until a stopped worker's
-/// buffered events are delivered or counted as dropped, within the drain
-/// budget `stop` started. Returns at once for a worker without sinks.
+/// buffered events are delivered or counted as dropped, for at most the drain
+/// budget from this call. Returns at once for a worker without sinks.
 #[no_mangle]
 pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorker_awaitEventDrain<'local>(
     mut env: JNIEnv<'local>,

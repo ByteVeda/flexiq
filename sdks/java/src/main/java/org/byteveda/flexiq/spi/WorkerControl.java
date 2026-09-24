@@ -126,7 +126,7 @@ public interface WorkerControl extends AutoCloseable {
 
     /**
      * Block until a stopped worker's buffered events are delivered or counted as
-     * dropped, within the drain budget {@link #stop()} started. The default
+     * dropped, for at most the worker's drain budget from this call. The default
      * returns at once, as there is nothing buffered to wait for.
      */
     default void awaitEventDrain() {}
