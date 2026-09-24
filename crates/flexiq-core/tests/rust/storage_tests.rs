@@ -5126,13 +5126,13 @@ fn redis_select_and_claim_is_one_round_trip(s: &flexiq_core::RedisStorage) {
     assert_eq!(grown[3], 0, "eval");
 }
 
-/// The ready-job channel for `queue` under `s`'s prefix, computed the same
-/// way `RedisStorage::notify_channel` builds it (`notify_channel` itself is
-/// `pub(crate)`, so an external integration test rebuilds it from the public
-/// `prefix()` instead of reaching into the crate).
+/// The default-namespace ready-job channel for `queue` under `s`'s prefix,
+/// computed the same way `RedisStorage::notify_channel` builds it
+/// (`notify_channel` itself is `pub(crate)`, so an external integration test
+/// rebuilds it from the public `prefix()`; `-` is the default namespace).
 #[cfg(all(feature = "redis", feature = "push-dispatch"))]
 fn redis_notify_channel(s: &flexiq_core::RedisStorage, queue: &str) -> String {
-    format!("{}notify:{}", s.prefix(), queue)
+    format!("{}notify:-:{}", s.prefix(), queue)
 }
 
 /// Subscribe to `channel` on a dedicated connection, run `action`, then count
