@@ -1,6 +1,7 @@
 //! [`EventHub`]: fan-out of job events to bounded, per-sink delivery threads.
 
 use std::fmt;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock, TryLockError};
@@ -51,7 +52,9 @@ pub struct SinkStats {
     pub dropped_failed: u64,
     /// Events dropped because the hub was shutting down.
     pub dropped_shutdown: u64,
-    /// Events accepted but not yet delivered or dropped.
+    /// Events accepted but not yet delivered or dropped. Approximate while
+    /// events are in motion: each counter is read separately, not as one
+    /// snapshot.
     pub queued: u64,
 }
 
@@ -190,7 +193,8 @@ impl EventHub {
     /// No attempt starts and no backoff sleeps past the deadline. Whatever is
     /// still buffered or in flight then is counted as dropped for `shutdown`,
     /// and a sink thread still blocked in its destination is left behind
-    /// rather than waited on. Idempotent.
+    /// rather than waited on. Idempotent: a second call, even one racing the
+    /// first, returns at once without waiting for the first call's drain.
     pub fn shutdown(&self, budget: Duration) {
         if self.shut_down.swap(true, Ordering::SeqCst) {
             return;
@@ -214,7 +218,9 @@ impl EventHub {
 
 impl Drop for EventHub {
     /// Closes the channels without waiting: each sink thread delivers what it
-    /// already holds, then exits.
+    /// already holds, then exits. Without a prior [`shutdown`](Self::shutdown)
+    /// no deadline is set, so nothing bounds how long a thread keeps retrying
+    /// that remainder.
     fn drop(&mut self) {
         self.close();
     }
@@ -309,7 +315,8 @@ impl Sink {
                 counters.queued.fetch_sub(1, Ordering::Relaxed);
                 counters.buffer_full.fetch_add(1, Ordering::Relaxed);
             }
-            // The thread is gone (a backend panicked); nothing will drain it.
+            // The thread is gone (a backend panic is caught, so this is a
+            // panic in the hub's own loop); nothing will drain it.
             Err(TrySendError::Disconnected(_)) => {
                 counters.queued.fetch_sub(1, Ordering::Relaxed);
                 counters.shutdown.fetch_add(1, Ordering::Relaxed);
@@ -460,7 +467,7 @@ impl Worker {
                 self.drop_batch(Outcome::Shutdown, n, "shutdown deadline reached");
                 return false;
             }
-            match self.backend.deliver(batch) {
+            match self.attempt(batch) {
                 DeliveryResult::Delivered => {
                     self.counters.settle(Outcome::Delivered, n);
                     return true;
@@ -484,6 +491,19 @@ impl Worker {
             }
         }
         true
+    }
+
+    /// One delivery attempt, with a panicking backend read as a rejection.
+    ///
+    /// Caught so one bad batch cannot kill the sink: an unwinding thread would
+    /// drop the receiver, freeze `queued` and misfile every later event as a
+    /// shutdown drop. Rejected, not retried, because a panic on a batch is most
+    /// likely to repeat on it. The panic message is not logged: the backend
+    /// may have formatted an event or a credential into it.
+    fn attempt(&mut self, batch: &[Arc<JobEvent>]) -> DeliveryResult {
+        let backend = &mut self.backend;
+        catch_unwind(AssertUnwindSafe(|| backend.deliver(batch)))
+            .unwrap_or_else(|_| DeliveryResult::Reject("the sink backend panicked".into()))
     }
 
     /// Count everything left in the (closed) buffer as dropped for shutdown.
@@ -785,6 +805,47 @@ mod tests {
         assert_eq!(
             (stats.delivered, stats.dropped_rejected, stats.queued),
             (0, 1, 0)
+        );
+    }
+
+    /// Panics on its first attempt, delivers after.
+    struct PanicsOnce {
+        panicked: bool,
+        delivered: Attempts,
+    }
+
+    impl SinkBackend for PanicsOnce {
+        fn deliver(&mut self, batch: &[Arc<JobEvent>]) -> DeliveryResult {
+            if !self.panicked {
+                self.panicked = true;
+                panic!("backend blew up");
+            }
+            lock(&self.delivered).push(batch.to_vec());
+            DeliveryResult::Delivered
+        }
+    }
+
+    #[test]
+    fn a_panicking_backend_rejects_the_batch_and_the_sink_lives_on() {
+        let delivered = Attempts::default();
+        let backend = PanicsOnce {
+            panicked: false,
+            delivered: Arc::clone(&delivered),
+        };
+        let hub = hub(vec![(sink("s", ""), Box::new(backend))]);
+        hub.emit(event(EventType::JobDead, "a", "q"));
+        hub.emit(event(EventType::JobDead, "b", "q"));
+        hub.shutdown(WAIT);
+        assert_eq!(ids(&delivered), ["b"]);
+        let stats = &hub.stats()[0];
+        assert_eq!(
+            (
+                stats.delivered,
+                stats.dropped_rejected,
+                stats.dropped_shutdown,
+                stats.queued
+            ),
+            (1, 1, 0, 0)
         );
     }
 
