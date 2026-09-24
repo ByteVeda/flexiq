@@ -533,11 +533,12 @@ pub struct Scheduler {
     /// push (Redis) on the poll loop.
     #[cfg(feature = "push-dispatch")]
     push_opted_out: std::sync::atomic::AtomicBool,
-    /// Earliest `scheduled_at` of any delayed job seen at enqueue time, so the
-    /// push loop can arm a timer for the next delayed job rather than waking
-    /// immediately. Milliseconds; `i64::MAX` means "nothing scheduled".
+    /// Future `scheduled_at`s (ms) this scheduler has heard of — its own
+    /// retries, sleeps and gate deferrals — so the push loop arms a timer for
+    /// each rather than waiting out the fallback. A set, not a single
+    /// minimum: once the earliest fires, the next is known.
     #[cfg(feature = "push-dispatch")]
-    next_scheduled_at: std::sync::atomic::AtomicI64,
+    delayed_deadlines: Mutex<std::collections::BTreeSet<i64>>,
 }
 
 /// Counters for tick-based scheduling of periodic maintenance tasks.
@@ -591,7 +592,7 @@ impl Scheduler {
             #[cfg(feature = "push-dispatch")]
             push_opted_out: std::sync::atomic::AtomicBool::new(false),
             #[cfg(feature = "push-dispatch")]
-            next_scheduled_at: std::sync::atomic::AtomicI64::new(i64::MAX),
+            delayed_deadlines: Mutex::new(std::collections::BTreeSet::new()),
         }
     }
 
@@ -1063,41 +1064,42 @@ impl Scheduler {
         }
     }
 
-    /// Record the earliest delayed-job schedule so the loop can arm a timer.
-    /// Ready jobs (`scheduled_at <= now`) wake immediately and don't update
-    /// this. Safe to call from any thread.
+    /// Deadlines tracked at once. Past it the latest are dropped, and those
+    /// jobs wait for the fallback timer instead.
+    const MAX_DELAYED_DEADLINES: usize = 1024;
+
+    /// Record a delayed job's `scheduled_at` so the loop arms a timer for it.
+    /// Safe to call from any thread.
     pub fn note_scheduled_at(&self, scheduled_at: i64) {
-        use std::sync::atomic::Ordering;
-        let mut current = self.next_scheduled_at.load(Ordering::Relaxed);
-        while scheduled_at < current {
-            match self.next_scheduled_at.compare_exchange_weak(
-                current,
-                scheduled_at,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(observed) => current = observed,
-            }
+        let mut deadlines = self.lock_deadlines();
+        deadlines.insert(scheduled_at);
+        if deadlines.len() > Self::MAX_DELAYED_DEADLINES {
+            deadlines.pop_last();
         }
     }
 
-    /// Duration until the next delayed job is due, capped at the fallback
-    /// interval. Resets the tracker once the time has passed so a stale value
-    /// can't pin the timer low forever.
+    fn lock_deadlines(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeSet<i64>> {
+        self.delayed_deadlines
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Duration until the next tracked deadline, capped at the fallback
+    /// interval; zero once one is due. Read-only: a deadline is dropped only
+    /// by the drain that serves it (`clear_due_deadlines`), so a `select!`
+    /// that picks another branch cannot lose it.
     fn next_delayed_timer(&self) -> Duration {
-        use std::sync::atomic::Ordering;
-        let next = self.next_scheduled_at.load(Ordering::Relaxed);
-        if next == i64::MAX {
+        let Some(next) = self.lock_deadlines().first().copied() else {
             return Self::PUSH_FALLBACK_INTERVAL;
-        }
-        let now = crate::job::now_millis();
-        if next <= now {
-            // The delayed job is due; clear the tracker and dispatch now.
-            self.next_scheduled_at.store(i64::MAX, Ordering::Relaxed);
-            return Duration::ZERO;
-        }
-        Duration::from_millis((next - now) as u64).min(Self::PUSH_FALLBACK_INTERVAL)
+        };
+        let wait = next.saturating_sub(crate::job::now_millis()).max(0);
+        Duration::from_millis(wait.unsigned_abs()).min(Self::PUSH_FALLBACK_INTERVAL)
+    }
+
+    /// Forget every deadline a drain that started at `drained_at` could claim.
+    fn clear_due_deadlines(&self, drained_at: i64) {
+        let mut deadlines = self.lock_deadlines();
+        *deadlines = deadlines.split_off(&drained_at.saturating_add(1));
     }
 
     /// Event-driven dispatch loop. Dispatches on a wake signal, on the
@@ -1130,7 +1132,9 @@ impl Scheduler {
             };
             if drain {
                 // Drain dispatch fully so a single wake clears the queue.
+                let drained_at = crate::job::now_millis();
                 while self.tick_dispatch(&job_tx) {}
+                self.clear_due_deadlines(drained_at);
                 last_drain = tokio::time::Instant::now();
             }
         }
@@ -2013,6 +2017,40 @@ mod tests {
             dispatched += 1;
         }
         dispatched
+    }
+
+    /// A gate deferral arms the push loop's timer for the job's new deadline
+    /// (the ~1-1.5 s rate-limit delay) on both claim paths. No enqueue
+    /// announces a deferral, so otherwise only the 2 s fallback would find it.
+    #[cfg(feature = "push-dispatch")]
+    #[test]
+    fn test_gate_deferral_arms_the_push_timer() {
+        for batch_size in [1, 4] {
+            let scheduler = rate_limited_scheduler(shed::OnExcess::Defer, batch_size);
+            scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+            scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+            assert_eq!(
+                scheduler.next_delayed_timer(),
+                Scheduler::PUSH_FALLBACK_INTERVAL,
+                "nothing deferred yet"
+            );
+
+            let (tx, mut rx) = make_channel(16);
+            let mut counters = TickCounters::default();
+            scheduler.tick(&tx, &mut counters);
+            scheduler.tick(&tx, &mut counters);
+            assert_eq!(
+                drain_dispatched(&mut rx),
+                1,
+                "one job admitted, one deferred"
+            );
+
+            let timer = scheduler.next_delayed_timer();
+            assert!(
+                timer >= Duration::from_millis(900) && timer < Scheduler::PUSH_FALLBACK_INTERVAL,
+                "batch_size {batch_size}: the timer must land on the deferral, got {timer:?}"
+            );
+        }
     }
 
     #[test]

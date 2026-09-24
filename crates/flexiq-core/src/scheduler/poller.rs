@@ -306,11 +306,7 @@ impl Scheduler {
         match self.check_pre_claim_gates(&job)? {
             GateDecision::Proceed => {}
             GateDecision::Defer(delay_ms) => {
-                self.storage.reschedule(
-                    &job.id,
-                    now + desync_delay(delay_ms),
-                    self.namespace.as_deref(),
-                )?;
+                self.reschedule_deferred(&job.id, now + desync_delay(delay_ms))?;
                 counts.release(&job.task_name, &job.queue);
                 return Ok(false);
             }
@@ -646,7 +642,17 @@ impl Scheduler {
         // the poller will come back to it.
         self.storage
             .complete_execution(job_id, self.namespace.as_deref())?;
+        self.reschedule_deferred(job_id, next_at)
+    }
+
+    /// Put a job this scheduler deferred back on the queue at `next_at`, and
+    /// arm the push loop's timer for it: no enqueue announces a deferral, so
+    /// otherwise it would wait out the fallback interval.
+    fn reschedule_deferred(&self, job_id: &str, next_at: i64) -> Result<()> {
         self.storage
-            .reschedule(job_id, next_at, self.namespace.as_deref())
+            .reschedule(job_id, next_at, self.namespace.as_deref())?;
+        #[cfg(feature = "push-dispatch")]
+        self.note_scheduled_at(next_at);
+        Ok(())
     }
 }
