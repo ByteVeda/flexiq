@@ -19,6 +19,7 @@ mod workers;
 #[doc(hidden)]
 pub mod listener;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::error::{QueueError, Result};
@@ -30,6 +31,9 @@ pub use pool::RedisConnection;
 pub struct RedisStorage {
     pool: Arc<pool::ConnectionPool>,
     prefix: String,
+    /// Set once an enqueue's wake `PUBLISH` has been refused and warned about,
+    /// so a denied channel warns once per storage, not once per enqueue.
+    wake_refusal_warned: Arc<AtomicBool>,
 }
 
 impl RedisStorage {
@@ -54,6 +58,7 @@ impl RedisStorage {
         Ok(Self {
             pool: pool::ConnectionPool::new(client, conn),
             prefix: prefix.to_string(),
+            wake_refusal_warned: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -126,8 +131,11 @@ impl RedisStorage {
     /// `notify_job_ready`'s own connection checkout + round trip (see
     /// `jobs/enqueue.rs`). The payload is the job's `scheduled_at` in ms: a
     /// listener drains when it is due and arms a timer for it otherwise.
-    /// `PUBLISH` cannot fail for type reasons, so this is safe to fold into an
-    /// atomic (`MULTI`/`EXEC`) pipe too — no current caller uses one.
+    ///
+    /// Run the pipe with [`exec_enqueue_pipe`](Self::exec_enqueue_pipe), and
+    /// never fold into an atomic (`MULTI`/`EXEC`) pipe: an ACL that denies the
+    /// channel rejects the `PUBLISH` at queue time, and `EXEC` then discards
+    /// the whole transaction — a lost wake would become a lost enqueue.
     #[cfg(feature = "push-dispatch")]
     pub(crate) fn fold_notify(
         &self,
@@ -139,6 +147,55 @@ impl RedisStorage {
         pipe.publish(self.notify_channel(namespace, queue), scheduled_at)
             .ignore();
     }
+
+    /// Run a non-atomic enqueue `pipe`, treating an error reply on a folded
+    /// wake `PUBLISH` as a lost wake rather than a failed enqueue.
+    ///
+    /// Redis runs every command of a plain pipeline, so when only `PUBLISH`
+    /// slots failed (say, an ACL user without channel permissions) the writes
+    /// are committed and reporting `Err` would invite a duplicating retry. The
+    /// wake is best-effort: the scheduler's fallback poll still finds the job.
+    pub(crate) fn exec_enqueue_pipe(
+        &self,
+        pipe: &redis::Pipeline,
+        conn: &mut RedisConnection,
+    ) -> Result<()> {
+        let err = match pipe.query::<()>(conn) {
+            Ok(()) => return Ok(()),
+            Err(err) => err,
+        };
+        // redis-rs reports every failing slot by its index in `pipe`, ignored
+        // slots included, so a write's error can never hide behind a wake's.
+        let only_wakes_failed = !pipe.is_transaction()
+            && err.clone().into_server_errors().is_some_and(|failed| {
+                !failed.is_empty() && failed.iter().all(|(slot, _)| is_publish(pipe, *slot))
+            });
+        if !only_wakes_failed {
+            return Err(map_err(err));
+        }
+        if self.wake_refusal_warned.swap(true, Ordering::Relaxed) {
+            log::debug!("push-dispatch: enqueue wake PUBLISH refused: {err}");
+        } else {
+            log::warn!(
+                "push-dispatch: enqueue wake PUBLISH refused ({err}); jobs are still \
+                 enqueued and dispatch on the fallback poll. Grant the connection's \
+                 ACL user PUBLISH on the notify channels to restore push latency; \
+                 further refusals log at debug"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Whether command `slot` of `pipe` is a `PUBLISH` — the only command an
+/// enqueue pipe carries that is not a write.
+fn is_publish(pipe: &redis::Pipeline, slot: usize) -> bool {
+    pipe.cmd_iter()
+        .nth(slot)
+        .and_then(|cmd| cmd.args_iter().next())
+        .is_some_and(
+            |name| matches!(name, redis::Arg::Simple(n) if n.eq_ignore_ascii_case(b"PUBLISH")),
+        )
 }
 
 #[cfg(feature = "push-dispatch")]
@@ -267,4 +324,74 @@ fn zset_keyset_page(
     }
 
     Ok(page)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A storage over the hosted test Redis under a fresh prefix, or `None`
+    /// (with a skip line) when none is configured.
+    fn test_storage() -> Option<RedisStorage> {
+        let Ok(url) = std::env::var("FLEXIQ_REDIS_TEST_URL") else {
+            eprintln!("Skipping: FLEXIQ_REDIS_TEST_URL unset");
+            return None;
+        };
+        let prefix = format!("flexiq-wake-test-{}:", uuid::Uuid::now_v7());
+        Some(RedisStorage::with_prefix(&url, &prefix).unwrap())
+    }
+
+    /// A malformed `PUBLISH` (wrong arity) stands in for an ACL-denied one:
+    /// both are an error reply on the wake's slot after the writes ran.
+    fn failing_wake(pipe: &mut redis::Pipeline) {
+        pipe.cmd("PUBLISH").arg("only-a-channel").ignore();
+    }
+
+    #[test]
+    fn a_refused_wake_does_not_fail_the_enqueue_pipe() {
+        let Some(s) = test_storage() else { return };
+        let key = s.key(&["written"]);
+        let mut conn = s.conn().unwrap();
+        let pipe = &mut redis::pipe();
+        pipe.set(&key, "v");
+        failing_wake(pipe);
+
+        s.exec_enqueue_pipe(pipe, &mut conn).unwrap();
+        let written: Option<String> = redis::Commands::get(&mut conn, &key).unwrap();
+        let _: () = redis::Commands::del(&mut conn, &key).unwrap();
+        assert_eq!(written.as_deref(), Some("v"), "the write must land");
+        assert!(s.wake_refusal_warned.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_failed_write_still_fails_the_enqueue_pipe() {
+        let Some(s) = test_storage() else { return };
+        let key = s.key(&["a-string"]);
+        let mut conn = s.conn().unwrap();
+        let pipe = &mut redis::pipe();
+        pipe.set(&key, "v").ignore();
+        // WRONGTYPE on an ignored write, beside a failing wake: still an error.
+        pipe.sadd(&key, "member").ignore();
+        failing_wake(pipe);
+
+        let result = s.exec_enqueue_pipe(pipe, &mut conn);
+        let _: () = redis::Commands::del(&mut conn, &key).unwrap();
+        assert!(result.is_err(), "a write's error must surface");
+    }
+
+    #[test]
+    fn a_transaction_never_hides_its_wake_failure() {
+        let Some(s) = test_storage() else { return };
+        let key = s.key(&["in-multi"]);
+        let mut conn = s.conn().unwrap();
+        let pipe = &mut redis::pipe();
+        pipe.atomic().set(&key, "v");
+        failing_wake(pipe);
+
+        // A queue-time rejection aborts the EXEC, so nothing was written and
+        // the error is the honest answer.
+        assert!(s.exec_enqueue_pipe(pipe, &mut conn).is_err());
+        let written: Option<String> = redis::Commands::get(&mut conn, &key).unwrap();
+        assert_eq!(written, None, "EXECABORT discards the whole transaction");
+    }
 }

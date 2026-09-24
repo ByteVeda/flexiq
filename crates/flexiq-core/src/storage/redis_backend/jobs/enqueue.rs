@@ -125,13 +125,13 @@ const DEBOUNCE_INSERT_BODY: &str = r#"
     -- triple — notify channel, then the job's scheduled_at as the payload —
     -- present only when this build folds the notify into the write (see
     -- insert_debounced). Absent on a feature-off build, so the channel read
-    -- below is nil and this never fires there. A script call is atomic like
-    -- MULTI/EXEC — one failing redis.call aborts the whole insert — but
-    -- PUBLISH cannot fail for type reasons, so it can never be what trips
-    -- that abort.
+    -- below is nil and this never fires there. pcall, because a failing
+    -- redis.call ends the script with an error but does not roll back the
+    -- writes above (an ACL denying the channel would do it): the wake is
+    -- best-effort, and a committed insert must not report failure.
     local notify_argv = dep_args_base + num_deps * 3
     if ARGV[notify_argv] then
-        redis.call('PUBLISH', ARGV[notify_argv], ARGV[notify_argv + 1])
+        redis.pcall('PUBLISH', ARGV[notify_argv], ARGV[notify_argv + 1])
     end
 
     return nil
@@ -156,11 +156,11 @@ const DEBOUNCE_SLIDE: &str = r#"
     redis.call('ZADD', KEYS[2], ARGV[4], ARGV[1])
     -- push-dispatch (optional): ARGV[5]/[6] are present only on a build that
     -- folds the notify into the write (see slide_debounce_target); nil
-    -- otherwise, so this never fires there. PUBLISH cannot fail for type
-    -- reasons, so it can never be what turns this script's atomic commit
-    -- into an abort.
+    -- otherwise, so this never fires there. pcall: a denied PUBLISH would
+    -- error the script after the slide above is already written, and the
+    -- wake is best-effort — see DEBOUNCE_INSERT_BODY.
     if ARGV[5] then
-        redis.call('PUBLISH', ARGV[5], ARGV[6])
+        redis.pcall('PUBLISH', ARGV[5], ARGV[6])
     end
     return 1
 "#;
@@ -324,7 +324,7 @@ impl RedisStorage {
         #[cfg(feature = "push-dispatch")]
         self.fold_notify(pipe, job.namespace.as_deref(), &job.queue, job.scheduled_at);
 
-        pipe.query::<()>(&mut conn).map_err(map_err)?;
+        self.exec_enqueue_pipe(pipe, &mut conn)?;
 
         Ok(job)
     }
@@ -398,7 +398,7 @@ impl RedisStorage {
             }
         }
 
-        pipe.query::<()>(&mut conn).map_err(map_err)?;
+        self.exec_enqueue_pipe(pipe, &mut conn)?;
         Ok(jobs)
     }
 
@@ -782,12 +782,12 @@ impl RedisStorage {
                 -- dependency triple — channel, then scheduled_at as the
                 -- payload — present only on a build that folds the notify
                 -- into this write. Absent otherwise, so the channel read below
-                -- is nil and this never fires there. PUBLISH cannot fail for
-                -- type reasons, so it can never be what turns this script's
-                -- atomic store into an abort.
+                -- is nil and this never fires there. pcall: a denied PUBLISH
+                -- would error the script after the store above is written
+                -- (scripts do not roll back), and the wake is best-effort.
                 local notify_argv = dep_args_base + num_deps * 3
                 if ARGV[notify_argv] then
-                    redis.call('PUBLISH', ARGV[notify_argv], ARGV[notify_argv + 1])
+                    redis.pcall('PUBLISH', ARGV[notify_argv], ARGV[notify_argv + 1])
                 end
 
                 return nil
