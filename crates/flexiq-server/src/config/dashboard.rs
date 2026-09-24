@@ -106,8 +106,8 @@ fn admin_bootstrap(env: &Env) -> Option<(String, String)> {
 }
 
 /// Drop the bootstrap password from the live environment once it has been
-/// read, so it cannot be harvested later from `/proc/<pid>/environ`, `ps`, or a
-/// crash reporter. Mirrors what the SDK dashboards do at startup.
+/// read, so no later in-process read or child process sees it; the initial
+/// block `/proc/<pid>/environ` shows keeps it. Mirrors the SDK dashboards.
 pub fn scrub_bootstrap_password() {
     // Called once from `main`, before any thread that reads the environment
     // has been spawned.

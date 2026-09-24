@@ -480,8 +480,7 @@ def bootstrap_admin_from_env(queue: Queue) -> User | None:
     startup — does nothing if the user already exists.
 
     The password is removed from ``os.environ`` immediately after it is read so
-    it cannot later be harvested via ``/proc/<pid>/environ``, ``ps``, or a
-    crash reporter.
+    no later in-process read or child process sees it.
     """
     username = os.environ.get("FLEXIQ_DASHBOARD_ADMIN_USER")
     password = os.environ.pop("FLEXIQ_DASHBOARD_ADMIN_PASSWORD", None)

@@ -114,7 +114,8 @@ An attach connection receives jobs, which makes it a code-dispatch path rather
 than a data one. **A non-loopback TCP bind refuses to start without a token** —
 bind loopback, use a Unix socket, or set one. A Unix socket is exempt because
 the filesystem is already the boundary. The token is read once and then removed
-from the process environment, so a crash dump cannot hand it back.
+from the process environment, so nothing later in the process reads it back
+and no child process inherits it.
 
 `FLEXIQ_LISTEN_TLS_CERT` and `FLEXIQ_LISTEN_TLS_KEY` are **rejected at boot**,
 not ignored: this listener terminates no TLS, and a variable that looks like it

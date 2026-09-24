@@ -618,8 +618,8 @@ fn parse_aws_source(env: &Env) -> Result<PushAwsSource> {
 }
 
 /// Remove push-target secrets from the process environment once they are
-/// parsed, so neither a bearer token nor an HMAC secret survives into
-/// `/proc/<pid>/environ`, `ps`, or a crash dump. Mirrors
+/// parsed, so no later in-process read or child process sees a bearer token
+/// or an HMAC secret. Mirrors
 /// `listen::scrub_attach_token` — one `remove_var` per secret rather than a
 /// shared `fn scrub_vars(names: &[&str])`: two literal calls already read as
 /// clearly as a loop over a two-element array would, and keeping this
