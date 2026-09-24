@@ -125,7 +125,10 @@ const DEBOUNCE_INSERT_BODY: &str = r#"
     -- triple — notify channel, then a '1'/'0' ready flag — present only when
     -- this build folds the ready-notify into the write (see
     -- insert_debounced). Absent on a feature-off build, so the ready-flag
-    -- read below is nil and this never fires there.
+    -- read below is nil and this never fires there. A script call is
+    -- atomic like MULTI/EXEC — one failing redis.call aborts the whole
+    -- insert — but PUBLISH cannot fail for type reasons, so it can never be
+    -- what trips that abort.
     local notify_argv = dep_args_base + num_deps * 3
     if ARGV[notify_argv + 1] == '1' then
         redis.call('PUBLISH', ARGV[notify_argv], 1)
@@ -153,7 +156,9 @@ const DEBOUNCE_SLIDE: &str = r#"
     redis.call('ZADD', KEYS[2], ARGV[4], ARGV[1])
     -- push-dispatch (optional): ARGV[5]/[6] are present only on a build that
     -- folds the ready-notify into the write (see slide_debounce_target); nil
-    -- otherwise, so this never fires there.
+    -- otherwise, so this never fires there. PUBLISH cannot fail for type
+    -- reasons, so it can never be what turns this script's atomic commit
+    -- into an abort.
     if ARGV[6] == '1' then
         redis.call('PUBLISH', ARGV[5], 1)
     end
@@ -756,6 +761,8 @@ impl RedisStorage {
                 -- dependency triple, present only on a build that folds the
                 -- ready-notify into this write. Absent otherwise, so the
                 -- ready-flag read below is nil and this never fires there.
+                -- PUBLISH cannot fail for type reasons, so it can never be
+                -- what turns this script's atomic store into an abort.
                 local notify_argv = dep_args_base + num_deps * 3
                 if ARGV[notify_argv + 1] == '1' then
                     redis.call('PUBLISH', ARGV[notify_argv], 1)
