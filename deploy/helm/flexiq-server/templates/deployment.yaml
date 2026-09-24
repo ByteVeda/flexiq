@@ -80,13 +80,15 @@ spec:
       terminationGracePeriodSeconds: {{ add (add (mul 2 (.Values.push.drain | int64)) 10) $eventsDrain }}
       {{- else if .Values.events.enabled }}
       # Unset, no push, but events.enabled still drains the hub once every
-      # role has stopped — the same reason push.enabled computes a default
-      # above, minus the "spent twice" part push's own settle/abandon cycle
-      # needs. Computed instead of left absent: events.drain plus the same
-      # 10s teardown margin (SIGTERM delivery, the tokio runtime unwinding,
-      # the container runtime's own stop overhead). An explicit value above
+      # other role has stopped — attach's own handshake teardown, the
+      # dashboard's graceful shutdown (unbounded by any drain config here),
+      # and only then events.drain. events.drain + 10 undercuts Kubernetes'
+      # own 30s default at the chart's stock events.drain of 5 (would be 15),
+      # and nothing here bounds the roles-stop phase that runs before the
+      # hub even starts draining — so the floor is 30, never lower than what
+      # this workload already got with events off. An explicit value above
       # always wins over this.
-      terminationGracePeriodSeconds: {{ add (.Values.events.drain | int64) 10 }}
+      terminationGracePeriodSeconds: {{ max 30 (add (.Values.events.drain | int64) 10) }}
       {{- end }}
       {{- with .Values.pullSecrets }}
       imagePullSecrets:

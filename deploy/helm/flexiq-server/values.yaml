@@ -279,8 +279,9 @@ events:
   # dropping it. The events hub drains last, once every role has already
   # stopped, so this is spent on top of any other role's own shutdown budget
   # — see terminationGracePeriodSeconds below, which folds this in whenever
-  # it computes a default, push.enabled or not. Whole seconds; the server
-  # refuses 0 at boot, same as FLEXIQ_EVENTS_DRAIN.
+  # it computes a default, push.enabled or not, and never below Kubernetes'
+  # own 30s floor. Whole seconds; the server refuses 0 at boot, same as
+  # FLEXIQ_EVENTS_DRAIN.
   drain: 5
   # The secrets the document names through *_env fields, each from a Secret
   # you own:
@@ -338,9 +339,15 @@ podLabels: {}
 # default of 30, or 75s with events left at its own default of 5.
 #
 # With events.enabled alone (no push), empty is computed as events.drain
-# plus the same 10s teardown margin — 15s at the chart's events.drain
-# default of 5. Without either push or events enabled, nothing here spends
-# time beyond the pod's own teardown, so the field stays absent.
+# plus the same 10s teardown margin — but never below Kubernetes' own 30s
+# default, because the events hub only starts draining after every other
+# role has already stopped (attach's own handshake teardown, the
+# dashboard's graceful shutdown, none of it bounded by events.drain), and
+# events.drain + 10 undercuts what this workload already got with events
+# off at the chart's events.drain default of 5. That is 30s at the default,
+# 30s through events.drain=20, and events.drain + 10 above that. Without
+# either push or events enabled, nothing here spends time beyond the pod's
+# own teardown, so the field stays absent.
 #
 # An explicit value always wins over the computed one, 0 included — a
 # deliberate "kill immediately, no grace". Any other explicit value is

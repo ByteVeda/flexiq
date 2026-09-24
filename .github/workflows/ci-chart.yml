@@ -282,9 +282,11 @@ jobs:
           events_json='{"sinks":[{"kind":"http","name":"w","url":"https://e.example.com/in","allow":["e.example.com"]}]}'
           push_and_events="$(grace --set events.enabled=true --set-json "events.config=$events_json")"
           push_and_events_drain20="$(grace --set events.enabled=true --set events.drain=20 --set-json "events.config=$events_json")"
-          # events.enabled alone, with no push at all: the hub still drains
-          # once every role has stopped, so this must compute its own
-          # default too rather than leave Kubernetes' 30s to cover it.
+          # events.enabled alone, with no push at all: the hub only starts
+          # draining once every other role has already stopped, none of it
+          # bounded by events.drain, so events.drain + 10 alone can undercut
+          # what this workload already got with events off — the computed
+          # default must never drop below Kubernetes' own 30s.
           events_only() {
             helm template t "$CHART" --set storage.dsn=postgres://u:p@db/x \
               --set attach.token="$TOKEN" --set events.enabled=true \
@@ -298,8 +300,9 @@ jobs:
           '
           }
           events_only_default="$(events_only)"
+          events_only_drain20="$(events_only --set events.drain=20)"
           events_only_drain25="$(events_only --set events.drain=25)"
-          echo "no push, unset: $no_push_unset / push, unset: $computed_default / drain=10, unset: $computed_follows_drain / 0: $zero / 75: $seventy_five / push+events default: $push_and_events / push+events drain=20: $push_and_events_drain20 / events only default: $events_only_default / events only drain=25: $events_only_drain25"
+          echo "no push, unset: $no_push_unset / push, unset: $computed_default / drain=10, unset: $computed_follows_drain / 0: $zero / 75: $seventy_five / push+events default: $push_and_events / push+events drain=20: $push_and_events_drain20 / events only default: $events_only_default / events only drain=20: $events_only_drain20 / events only drain=25: $events_only_drain25"
           [ "$no_push_unset" = "ABSENT" ] \
             || { echo "::error::unset without push.enabled must leave the field off so Kubernetes' own default applies"; exit 1; }
           [ "$computed_default" = "70" ] \
@@ -314,10 +317,12 @@ jobs:
             || { echo "::error::push+events, unset must add events.drain (5) onto push's computed 70"; exit 1; }
           [ "$push_and_events_drain20" = "90" ] \
             || { echo "::error::the computed default must track events.drain, not the chart's default of it"; exit 1; }
-          [ "$events_only_default" = "15" ] \
-            || { echo "::error::events.enabled alone, unset must compute events.drain (5) plus the 10s teardown margin"; exit 1; }
+          [ "$events_only_default" = "30" ] \
+            || { echo "::error::events.enabled alone, unset must floor at Kubernetes' own 30s — events.drain (5) + 10 undercuts what this workload already got with events off"; exit 1; }
+          [ "$events_only_drain20" = "30" ] \
+            || { echo "::error::events.drain=20 + 10 = 30 is the boundary — must still floor at 30, not compute 30 by coincidence and then drop below it either side"; exit 1; }
           [ "$events_only_drain25" = "35" ] \
-            || { echo "::error::events-only computed default must track events.drain, not the chart's default of it"; exit 1; }
+            || { echo "::error::once events.drain + 10 clears the 30s floor, the computed default must track events.drain, not stay pinned at 30"; exit 1; }
 
           # A positive value that does not clear 2 x push.drain (60 at the
           # chart's default) is refused, not rendered — Kubernetes could
