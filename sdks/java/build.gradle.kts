@@ -216,7 +216,7 @@ val nativePlatforms = listOf("linux-x86_64", "linux-aarch64", "osx-x86_64", "osx
 // Build the native library for the local platform.
 val cargoBuild = tasks.register<Exec>("cargoBuild") {
     workingDir = crateDir.asFile
-    commandLine("cargo", "build", "--release", "--features", "postgres,redis,workflows,mesh,push-dispatch")
+    commandLine("cargo", "build", "--release", "--features", "postgres,redis,workflows,mesh,push-dispatch,events-http")
 }
 
 // Stage the built library under its platform-classifier resource path.

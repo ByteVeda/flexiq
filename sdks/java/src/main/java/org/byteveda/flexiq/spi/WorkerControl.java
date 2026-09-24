@@ -114,6 +114,23 @@ public interface WorkerControl extends AutoCloseable {
         return Optional.empty();
     }
 
+    /**
+     * Each event sink's counters as a JSON array, in configuration order. The
+     * default reports no sinks: a control that starts none has nothing to count.
+     *
+     * @return the counters as JSON, {@code []} when the worker has no sinks
+     */
+    default String eventSinkStatsJson() {
+        return "[]";
+    }
+
+    /**
+     * Block until a stopped worker's buffered events are delivered or counted as
+     * dropped, within the drain budget {@link #stop()} started. The default
+     * returns at once, as there is nothing buffered to wait for.
+     */
+    default void awaitEventDrain() {}
+
     @Override
     void close();
 }

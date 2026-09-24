@@ -30,6 +30,7 @@ use crate::convert::{
     parse_json, QueueConfigSpec, SubscriptionSpec, TaskRetryConfig, WorkerOptions,
 };
 use crate::dispatcher::{JavaDispatcher, Registry, TaskOutcome};
+use crate::event_sinks::WorkerEvents;
 use crate::ffi::{guard, read_bytes, read_string};
 use crate::handle::{self, drop_handle, into_handle};
 use crate::jvm;
@@ -54,6 +55,9 @@ pub struct WorkerHandle {
     pub(crate) storage: StorageBackend,
     pub(crate) namespace: Option<String>,
     pub(crate) worker_id: String,
+    /// This worker's event hub, kept for `eventSinkStats` and the close-time
+    /// drain. The result-drain thread drains it once the last result is handled.
+    pub(crate) events: Option<Arc<WorkerEvents>>,
     /// The mesh node, when mesh scheduling is enabled. Held so `stop` can signal
     /// its gossip + steal-server tasks and `meshClusterInfo` can read its state.
     #[cfg(feature = "mesh")]
@@ -120,6 +124,9 @@ fn start_worker(
     // the writes below would leave a worker row and its subscriptions behind
     // with no handle to run the lifecycle loop that cleans them up.
     let task_policies = build_task_policies(options.task_configs)?;
+    // Same reason: a bad events document must fail before any row is written.
+    // A later failure drops the hub, which closes its sinks at once.
+    let events = WorkerEvents::start(options.events.as_deref(), options.events_drain_ms)?;
 
     // Create the live worker row before its ephemeral subscriptions exist:
     // the reaper only spares owned rows whose owner is registered, so this
@@ -170,6 +177,9 @@ fn start_worker(
                 flexiq_core::storage::DispatchOrder::Lifo,
             );
         }
+    }
+    if let Some(events) = &events {
+        scheduler.set_events(events.hub());
     }
     let scheduler = Arc::new(scheduler);
     // Push-dispatch: swap polling for enqueue-driven wakeups before any loop
@@ -236,11 +246,16 @@ fn start_worker(
 
     // Result-drain loop: apply outcomes and surface them to Java. crossbeam
     // `recv` is blocking, so it runs on a blocking thread; it exits when the
-    // result sender has dropped (dispatcher done).
+    // result sender has dropped (dispatcher done). The event drain follows it,
+    // on every exit, so it comes after the worker's last emit.
     let drain_scheduler = scheduler;
     let drain_callbacks = callbacks.clone();
+    let drain_events = events.clone();
     runtime.spawn_blocking(move || {
-        drain_results(result_rx, drain_scheduler, drain_callbacks, capacity)
+        drain_results(result_rx, drain_scheduler, drain_callbacks, capacity);
+        if let Some(events) = drain_events {
+            events.drain();
+        }
     });
 
     // Lifecycle loop: heartbeat until stopped, then unregister.
@@ -263,6 +278,7 @@ fn start_worker(
         storage: step_storage,
         namespace: step_namespace,
         worker_id: step_worker_id,
+        events,
         #[cfg(feature = "mesh")]
         mesh,
     })
@@ -842,7 +858,8 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorker_cancelJob(
     })
 }
 
-/// `void stop(long workerHandle)` — stop the scheduler and heartbeat loops.
+/// `void stop(long workerHandle)` — stop the scheduler and heartbeat loops,
+/// and start the event drain budget.
 #[no_mangle]
 pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorker_stop(
     mut env: JNIEnv,
@@ -853,6 +870,9 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorker_stop(
         let worker = unsafe { borrow_worker(handle) };
         worker.shutdown.notify_one();
         worker.heartbeat_stop.notify_one();
+        if let Some(events) = &worker.events {
+            events.mark_stopping();
+        }
         // Signal the mesh node so its gossip + steal-server tasks exit instead of
         // lingering until the runtime drops.
         #[cfg(feature = "mesh")]

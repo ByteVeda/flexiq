@@ -485,6 +485,10 @@ pub struct WorkerOptions {
     /// unset lets the backend choose (on for Redis). Builds without the
     /// `push-dispatch` cargo feature always poll.
     pub push_dispatch: Option<bool>,
+    /// The event-sinks configuration document, as JSON. Absent → no sinks.
+    pub events: Option<String>,
+    /// How long a stopping worker waits for buffered events; 5 s when unset.
+    pub events_drain_ms: Option<u64>,
 }
 
 /// Per-queue scheduler config. Only queues with a value here are registered; an

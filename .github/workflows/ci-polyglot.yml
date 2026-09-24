@@ -81,7 +81,7 @@ jobs:
         uses: ./.github/actions/provision-gradle
 
       - name: Build the JNI cdylib
-        run: cargo build --release --features postgres,redis,workflows,mesh,push-dispatch -p flexiq-java
+        run: cargo build --release --features postgres,redis,workflows,mesh,push-dispatch,events-http -p flexiq-java
 
       # The example resolves org.byteveda:flexiq from mavenLocal(), so this
       # tree's build has to land there. -x cargoBuild reuses the cdylib above;

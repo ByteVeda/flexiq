@@ -88,6 +88,20 @@ public final class JniWorkerControl implements WorkerControl {
         return withOpenHandle(() -> Optional.ofNullable(NativeWorker.meshClusterInfo(handle)));
     }
 
+    @Override
+    public String eventSinkStatsJson() {
+        return withOpenHandle(() -> NativeWorker.eventSinkStats(handle));
+    }
+
+    /** Holds only the read lock, so stats stay readable while the drain waits. */
+    @Override
+    public void awaitEventDrain() {
+        withOpenHandle(() -> {
+            NativeWorker.awaitEventDrain(handle);
+            return null;
+        });
+    }
+
     /** Idempotent: frees the native worker handle exactly once, after in-flight calls drain. */
     @Override
     public void close() {

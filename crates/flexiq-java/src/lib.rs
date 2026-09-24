@@ -14,6 +14,7 @@ mod backend;
 mod convert;
 mod dispatcher;
 mod error;
+mod event_sinks;
 mod executor;
 mod ffi;
 mod ffi_c;
