@@ -2245,8 +2245,9 @@ widely for one to mean anything. As a starting point:
 
 - CPU-bound bodies: size `num_workers(n)` near the core count
 - I/O-bound bodies: raise `num_workers`, and raise
-  `SchedulerConfig::batch_size` with it — the default of `1` claims one job per
-  round trip and will be the ceiling before the pool is
+  `SchedulerConfig::batch_size` with it — unset, it defaults to `1` on
+  SQLite/Postgres (one job per round trip, the ceiling before the pool is) and
+  `8` on Redis
 - Set `SchedulerConfig::max_in_flight` to the pool size, so one process never
   claims a backlog its peers could have shared
 - Once SQLite write contention shows up, move to

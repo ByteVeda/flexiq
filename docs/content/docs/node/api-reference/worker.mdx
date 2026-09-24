@@ -15,10 +15,10 @@ Starts a background worker over the Rust core and returns a handle.
 |---|---|---|---|
 | `queues` | `string[]` | `["default"]` | Queue names to serve. |
 | `channelCapacity` | `number` | `128` | In-flight dispatch channel capacity. |
-| `batchSize` | `number` | `1` | Jobs claimed per scheduler poll. |
+| `batchSize` | `number` | Redis: `8`; else `1` | Jobs claimed per scheduler poll. |
 | `advanceWorkflows` | `boolean` | `true` | Drive workflow bookkeeping. |
 | `mesh` | `MeshWorkerConfig` | — | Join a [mesh](/node/modules/mesh). |
-| `pushDispatch` | `boolean` | `false` | Wake the scheduler on enqueue instead of polling. Needs an addon built with the `push-dispatch` cargo feature; ignored otherwise. |
+| `pushDispatch` | `boolean` | Redis: `true`; else `false` | Wake the scheduler on enqueue instead of polling. Opt out on Redis with `pushDispatch: false`. |
 
 ## `MeshWorkerConfig`
 

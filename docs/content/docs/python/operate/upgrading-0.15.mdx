@@ -72,8 +72,9 @@ change.
 ## 3. Batch dequeue — `scheduler_batch_size`
 
 **What changed.** A new optional `scheduler_batch_size` kwarg on `Queue()`
-controls how many jobs the scheduler claims per round-trip. The **default is 1**,
-which preserves existing behaviour exactly.
+controls how many jobs the scheduler claims per round-trip. Left unset, it
+defaults to `1` on SQLite/Postgres (preserving pre-0.15 behaviour exactly) and
+`8` on Redis.
 
 ```python
 # Higher throughput under sustained load:
@@ -102,15 +103,10 @@ queue = Queue(
 )
 ```
 
-**Off by default.** Push dispatch is gated behind a `push-dispatch` cargo
-feature and is **not included in the default wheel**. To use it you must build
-the extension with that feature enabled:
-
-```bash
-maturin develop --features push-dispatch
-# or, for a release wheel:
-maturin build --release --features push-dispatch
-```
+**Ships in the published wheel; on by default for Redis.** No custom build is
+needed. A Redis-backed `Queue` gets event-driven dispatch automatically; pass
+`push_dispatch=False` to opt back out to polling. SQLite and Postgres keep
+polling unless you pass `push_dispatch=True`.
 
 Backend support:
 
@@ -120,8 +116,8 @@ Backend support:
 | Redis | Fully event-driven via `BLPOP` |
 | Postgres | Falls back to a faster poll — native `LISTEN` listener pending |
 
-Polling remains the default and the safety-net fallback. There is no
-correctness difference between the two modes.
+Polling remains the default on SQLite/Postgres, and the safety-net fallback
+everywhere. There is no correctness difference between the two modes.
 
 **Breaking:** no.
 
@@ -161,8 +157,10 @@ needed — this is kept only as history). Redis was never affected.
 - [ ] **Idempotent tasks:** drain idempotent work before upgrading, or accept
   at-least-once delivery during the upgrade window.
 - [ ] **Batch dequeue:** decide on a `scheduler_batch_size` for your workload.
-  Default of 1 is safe; raise it if you regularly see a backlog.
-- [ ] **Push dispatch:** optionally enable `push_dispatch=True` if you build
-  the extension with `--features push-dispatch`. Not required for correctness.
+  Unset is backend-chosen (1 on SQLite/Postgres, 8 on Redis) and safe; raise it
+  if you regularly see a backlog.
+- [ ] **Push dispatch:** on by default for Redis; pass `push_dispatch=True` to
+  opt in on SQLite/Postgres too, or `push_dispatch=False` to opt out on Redis.
+  Not required for correctness.
 - [ ] **Downgrade floor:** after upgrading any database to 0.15, do not run
   pre-0.15 binaries against it.

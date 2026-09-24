@@ -967,10 +967,10 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
 
 **Possible causes and fixes**:
 
-1. **Batch size too small**: `SchedulerConfig::batch_size` defaults to `1` —
-   one job per round trip. Raise it, and set `max_in_flight` to the worker's
-   own parallelism so a deep backlog isn't claimed by one process and starved
-   from its peers.
+1. **Batch size too small**: unset, `SchedulerConfig::batch_size` defaults to
+   `8` on Redis and `1` — one job per round trip — on SQLite/Postgres. Set it
+   explicitly, and set `max_in_flight` to the worker's own parallelism so a
+   deep backlog isn't claimed by one process and starved from its peers.
 
    ```rust
    use flexiq::SchedulerConfig;
@@ -980,7 +980,7 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
        .register::<process_data>()
        .num_workers(8)
        .scheduler_config(SchedulerConfig {
-           batch_size: 16,
+           batch_size: Some(16),
            max_in_flight: Some(8),
            ..SchedulerConfig::default()
        })

@@ -39,10 +39,10 @@ fn charge(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
 
 | Feature | Effect |
 | --- | --- |
-| *(default)* | SQLite storage. Nothing to enable — `libsqlite3` is bundled and built from source. |
+| *(default)* | SQLite storage, plus `push-dispatch`. Nothing to enable — `libsqlite3` is bundled and built from source. |
 | `postgres` | PostgreSQL storage. |
 | `redis` | Redis storage. |
-| `push-dispatch` | Event-driven scheduler wakeups instead of polling. |
+| `push-dispatch` | Event-driven scheduler wakeups instead of polling — on by default for a Redis worker, opt-in elsewhere. |
 | `workflows` | DAG workflows at `flexiq::workflows`. |
 | `mesh` | Decentralized mesh scheduling at `flexiq::mesh`. |
 

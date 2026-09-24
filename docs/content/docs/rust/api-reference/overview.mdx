@@ -107,10 +107,10 @@ flexiq = { version = "2", features = ["postgres"] }
 
 | Feature | Effect |
 |---|---|
-| *(default)* | SQLite storage. |
+| *(default)* | SQLite storage, plus `push-dispatch`. |
 | `postgres` | PostgreSQL storage. Forwards to the same feature on `flexiq-core`. |
 | `redis` | Redis storage. Forwards likewise. |
-| `push-dispatch` | Event-driven scheduler wakeups instead of polling. |
+| `push-dispatch` | Event-driven scheduler wakeups instead of polling — on by default for a Redis worker, opt-in elsewhere. |
 | `workflows` | DAG workflows at `flexiq::workflows`. |
 | `mesh` | Decentralized mesh scheduling at `flexiq::mesh`. |
 
