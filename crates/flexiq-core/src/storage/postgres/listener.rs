@@ -33,13 +33,13 @@ pub const LISTEN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// The `_storage` handle is retained for the eventual libpq-backed
 /// implementation (it carries [`PostgresStorage::database_url`]); the current
 /// stub does not open a dedicated connection.
-pub fn spawn(_storage: PostgresStorage) -> mpsc::Receiver<()> {
+pub fn spawn(_storage: PostgresStorage) -> mpsc::Receiver<Option<i64>> {
     let (tx, rx) = mpsc::channel(1);
     tokio::task::spawn_blocking(move || loop {
         std::thread::sleep(LISTEN_POLL_INTERVAL);
         // A full channel already has a pending wake — dropping this one is
         // fine. A closed channel means the scheduler is gone; stop.
-        match tx.try_send(()) {
+        match tx.try_send(None) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {}
             Err(mpsc::error::TrySendError::Closed(_)) => break,

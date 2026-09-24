@@ -4258,12 +4258,12 @@ fn redis_storage_tests() {
     redis_storage_reuses_pooled_connections(&storage);
     redis_failed_transaction_returns_a_clean_connection(&storage);
 
-    // The ready-notify fold only exists on a `push-dispatch` build (#4).
+    // The enqueue-notify fold only exists on a `push-dispatch` build (#4).
     #[cfg(feature = "push-dispatch")]
     {
         redis_enqueue_ready_job_publishes_once(&storage);
-        redis_enqueue_future_job_does_not_publish(&storage);
-        redis_enqueue_batch_publishes_once_per_ready_queue(&storage);
+        redis_enqueue_future_job_announces_its_deadline(&storage);
+        redis_enqueue_batch_publishes_once_per_queue_and_deadline(&storage);
         redis_enqueue_unique_publishes_ready_job_once(&storage);
     }
 }
@@ -5195,38 +5195,38 @@ fn redis_notify_channel(s: &flexiq_core::RedisStorage, queue: &str) -> String {
     format!("{}notify:-:{}", s.prefix(), queue)
 }
 
-/// Subscribe to `channel` on a dedicated connection, run `action`, then count
-/// every message that arrives within `timeout` after the subscribe
-/// acknowledgement (so nothing `action` publishes can race the SUBSCRIBE).
-/// Reading stops at the first timed-out `get_message`, which — on a
-/// `push-dispatch` build — is exactly the round trip a fold-in must not add:
+/// Subscribe to `channel` on a dedicated connection, run `action`, then return
+/// the payload of every message that arrives within `timeout` after the
+/// subscribe acknowledgement (so nothing `action` publishes can race the
+/// SUBSCRIBE). Reading stops at the first timed-out `get_message`, which — on
+/// a `push-dispatch` build — is exactly the round trip a fold-in must not add:
 /// `INFO commandstats` counts a scripted or pipelined command the same as a
 /// standalone one, so it cannot show a saved round trip; this instead proves
 /// the *count* of publishes is exactly what folding promises (no drop, no
-/// double-publish from `notify_if_ready`'s Redis arm still firing).
+/// double-publish from `notify_enqueued`'s Redis arm still firing).
 #[cfg(all(feature = "redis", feature = "push-dispatch"))]
-fn redis_publish_count(
+fn redis_published_payloads(
     client: &redis::Client,
     channel: &str,
     timeout: std::time::Duration,
     action: impl FnOnce(),
-) -> usize {
+) -> Vec<String> {
     let mut conn = client.get_connection().unwrap();
     let mut pubsub = conn.as_pubsub();
     pubsub.subscribe(channel).unwrap();
     action();
     pubsub.set_read_timeout(Some(timeout)).unwrap();
-    let mut count = 0;
-    while pubsub.get_message().is_ok() {
-        count += 1;
+    let mut payloads = Vec::new();
+    while let Ok(msg) = pubsub.get_message() {
+        payloads.push(msg.get_payload::<String>().unwrap());
     }
-    count
+    payloads
 }
 
 /// #4: a ready `enqueue` publishes exactly once through the full
 /// `StorageBackend` wrapper — proving both that the pipeline fold fires and
-/// that `notify_if_ready`'s Redis arm (now a no-op) does not also fire and
-/// double-publish.
+/// that `notify_enqueued`'s Redis arm (a no-op) does not also fire and
+/// double-publish. The payload is the job's `scheduled_at`.
 #[cfg(all(feature = "redis", feature = "push-dispatch"))]
 fn redis_enqueue_ready_job_publishes_once(s: &flexiq_core::RedisStorage) {
     use flexiq_core::storage::{Storage, StorageBackend};
@@ -5234,21 +5234,28 @@ fn redis_enqueue_ready_job_publishes_once(s: &flexiq_core::RedisStorage) {
     drain_queue(s, q);
     let channel = redis_notify_channel(s, q);
     let backend = StorageBackend::Redis(s.clone());
-    let count = redis_publish_count(
+    let job = make_job(q, "notify_ready");
+    let scheduled_at = job.scheduled_at;
+    let payloads = redis_published_payloads(
         s.client(),
         &channel,
         std::time::Duration::from_secs(5),
         || {
-            backend.enqueue(make_job(q, "notify_ready")).unwrap();
+            backend.enqueue(job).unwrap();
         },
     );
-    assert_eq!(count, 1, "a ready enqueue must publish exactly once");
+    assert_eq!(
+        payloads,
+        vec![scheduled_at.to_string()],
+        "a ready enqueue must publish exactly once"
+    );
 }
 
-/// #4: a future-scheduled `enqueue` never publishes — `notify_if_ready`'s own
-/// `scheduled_at > now` guard, mirrored inside the folded pipeline.
+/// A future-scheduled `enqueue` publishes its deadline once, in the same
+/// pipeline, so a scheduler in another process arms a timer for it instead
+/// of waiting out its fallback.
 #[cfg(all(feature = "redis", feature = "push-dispatch"))]
-fn redis_enqueue_future_job_does_not_publish(s: &flexiq_core::RedisStorage) {
+fn redis_enqueue_future_job_announces_its_deadline(s: &flexiq_core::RedisStorage) {
     use flexiq_core::storage::{Storage, StorageBackend};
     let q = "q-notify-future";
     drain_queue(s, q);
@@ -5256,7 +5263,8 @@ fn redis_enqueue_future_job_does_not_publish(s: &flexiq_core::RedisStorage) {
     let backend = StorageBackend::Redis(s.clone());
     let mut job = make_job(q, "notify_future");
     job.scheduled_at = now_millis() + 60_000;
-    let count = redis_publish_count(
+    let scheduled_at = job.scheduled_at;
+    let payloads = redis_published_payloads(
         s.client(),
         &channel,
         std::time::Duration::from_secs(2),
@@ -5264,14 +5272,17 @@ fn redis_enqueue_future_job_does_not_publish(s: &flexiq_core::RedisStorage) {
             backend.enqueue(job).unwrap();
         },
     );
-    assert_eq!(count, 0, "a future-scheduled enqueue must not publish");
+    assert_eq!(
+        payloads,
+        vec![scheduled_at.to_string()],
+        "a future-scheduled enqueue announces its deadline exactly once"
+    );
 }
 
-/// #4: `enqueue_batch` publishes once per distinct *ready* queue, not once
-/// per job — a queue holding only a future job stays silent even though the
-/// batch also touches a queue with a ready job.
+/// #4: `enqueue_batch` publishes per queue, not per job: once if any job is
+/// ready, plus once per distinct delayed deadline — duplicates collapse.
 #[cfg(all(feature = "redis", feature = "push-dispatch"))]
-fn redis_enqueue_batch_publishes_once_per_ready_queue(s: &flexiq_core::RedisStorage) {
+fn redis_enqueue_batch_publishes_once_per_queue_and_deadline(s: &flexiq_core::RedisStorage) {
     use flexiq_core::storage::{Storage, StorageBackend};
     let q_ready = "q-notify-batch-ready";
     let q_future = "q-notify-batch-future";
@@ -5288,33 +5299,52 @@ fn redis_enqueue_batch_publishes_once_per_ready_queue(s: &flexiq_core::RedisStor
         .unwrap();
 
     let ready_job = make_job(q_ready, "notify_batch_ready");
-    let mut ready_queue_future_job = make_job(q_ready, "notify_batch_ready_future");
-    ready_queue_future_job.scheduled_at = now_millis() + 60_000;
+    let mut second_ready_job = make_job(q_ready, "notify_batch_ready_2");
+    second_ready_job.scheduled_at = ready_job.scheduled_at - 5;
+    let later = now_millis() + 60_000;
+    let mut ready_queue_future_jobs = [
+        make_job(q_ready, "notify_batch_ready_future"),
+        make_job(q_ready, "notify_batch_ready_future_2"),
+    ];
+    for job in &mut ready_queue_future_jobs {
+        job.scheduled_at = later;
+    }
     let mut future_job = make_job(q_future, "notify_batch_future");
-    future_job.scheduled_at = now_millis() + 60_000;
+    future_job.scheduled_at = later + 1;
+    let earliest_ready = second_ready_job.scheduled_at;
 
+    let [first_future, second_future] = ready_queue_future_jobs;
     backend
-        .enqueue_batch(vec![ready_job, ready_queue_future_job, future_job])
+        .enqueue_batch(vec![
+            ready_job,
+            second_ready_job,
+            first_future,
+            second_future,
+            future_job,
+        ])
         .unwrap();
 
     pubsub
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .unwrap();
-    let (mut ready_count, mut future_count) = (0, 0);
+    let (mut on_ready, mut on_future) = (Vec::new(), Vec::new());
     while let Ok(msg) = pubsub.get_message() {
+        let payload: String = msg.get_payload().unwrap();
         match msg.get_channel_name() {
-            c if c == chan_ready => ready_count += 1,
-            c if c == chan_future => future_count += 1,
+            c if c == chan_ready => on_ready.push(payload),
+            c if c == chan_future => on_future.push(payload),
             other => panic!("unexpected channel: {other}"),
         }
     }
     assert_eq!(
-        ready_count, 1,
-        "one publish for the whole batch on the ready queue"
+        on_ready,
+        vec![earliest_ready.to_string(), later.to_string()],
+        "one ready publish for the queue, then its one distinct deadline"
     );
     assert_eq!(
-        future_count, 0,
-        "a queue with only a future job stays silent"
+        on_future,
+        vec![(later + 1).to_string()],
+        "a queue holding only a delayed job announces its deadline"
     );
 }
 
@@ -5330,7 +5360,8 @@ fn redis_enqueue_unique_publishes_ready_job_once(s: &flexiq_core::RedisStorage) 
     let backend = StorageBackend::Redis(s.clone());
     let mut job = make_job(q, "notify_unique");
     job.unique_key = Some(format!("notify-unique-{}", uuid::Uuid::now_v7()));
-    let count = redis_publish_count(
+    let scheduled_at = job.scheduled_at;
+    let payloads = redis_published_payloads(
         s.client(),
         &channel,
         std::time::Duration::from_secs(5),
@@ -5339,7 +5370,8 @@ fn redis_enqueue_unique_publishes_ready_job_once(s: &flexiq_core::RedisStorage) 
         },
     );
     assert_eq!(
-        count, 1,
+        payloads,
+        vec![scheduled_at.to_string()],
         "a ready enqueue_unique insert must publish exactly once"
     );
 }

@@ -533,10 +533,10 @@ pub struct Scheduler {
     /// push (Redis) on the poll loop.
     #[cfg(feature = "push-dispatch")]
     push_opted_out: std::sync::atomic::AtomicBool,
-    /// Future `scheduled_at`s (ms) this scheduler has heard of — its own
-    /// retries, sleeps and gate deferrals — so the push loop arms a timer for
-    /// each rather than waiting out the fallback. A set, not a single
-    /// minimum: once the earliest fires, the next is known.
+    /// Future `scheduled_at`s (ms) this scheduler has heard of — announced
+    /// delayed enqueues, its own retries, sleeps and gate deferrals — so the
+    /// push loop arms a timer for each rather than waiting out the fallback.
+    /// A set, not a single minimum: once the earliest fires, the next is known.
     #[cfg(feature = "push-dispatch")]
     delayed_deadlines: Mutex<std::collections::BTreeSet<i64>>,
 }
@@ -1102,6 +1102,15 @@ impl Scheduler {
         *deadlines = deadlines.split_off(&drained_at.saturating_add(1));
     }
 
+    /// Arm a timer for each deadline `heard` announced; true when it asks
+    /// for a drain.
+    fn absorb_wake(&self, heard: wake::Wake) -> bool {
+        for scheduled_at in heard.delayed {
+            self.note_scheduled_at(scheduled_at);
+        }
+        heard.ready
+    }
+
     /// Event-driven dispatch loop. Dispatches on a wake signal, on the
     /// fallback timer, or when a delayed job comes due. Maintenance runs on
     /// its own ticker so its cadence is independent of dispatch.
@@ -1122,7 +1131,8 @@ impl Scheduler {
                 .min(tokio::time::Instant::now() + self.next_delayed_timer());
             let drain = tokio::select! {
                 _ = self.shutdown.notified() => break,
-                _ = wake.wait() => true,
+                // A delayed job's announcement only re-arms the timer above.
+                heard = wake.wait() => self.absorb_wake(heard),
                 // A finished job freed an in-flight slot — refill now, as the
                 // poll loop does, instead of idling to the next wake.
                 _ = self.dispatch_wake.notified() => true,
@@ -4212,25 +4222,62 @@ mod push_tests {
         });
     }
 
-    /// A delayed job must NOT wake immediately — the Notify stays unsignaled.
-    #[test]
-    fn test_delayed_job_does_not_wake() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let (scheduler, sqlite) = push_scheduler_with_sqlite();
-            let notify = sqlite.notify_handle().clone();
+    /// A delayed enqueue announces its deadline with the wake, and the loop's
+    /// timer lands on it — 1 s out, strictly inside the 2 s fallback, so the
+    /// fallback alone cannot satisfy this.
+    #[tokio::test]
+    async fn test_delayed_job_arms_the_timer() {
+        let scheduler = push_scheduler();
+        scheduler.enable_push_dispatch();
+        let mut wake = scheduler
+            .take_wake_source()
+            .expect("enable_push_dispatch must install a wake source");
 
-            let mut delayed = ready_job("later_task");
-            delayed.scheduled_at = now_millis() + 60_000; // 1 minute out
-            scheduler.storage().enqueue(delayed).unwrap();
+        let due = now_millis() + 1_000;
+        let mut delayed = ready_job("later_task");
+        delayed.scheduled_at = due;
+        scheduler.storage().enqueue(delayed).unwrap();
 
-            let woke = tokio::time::timeout(Duration::from_millis(50), notify.notified()).await;
-            assert!(woke.is_err(), "a delayed job must not wake immediately");
+        let heard = tokio::time::timeout(Duration::from_millis(50), wake.wait())
+            .await
+            .expect("a delayed enqueue must announce its deadline");
+        assert_eq!(heard.delayed, vec![due]);
+        scheduler.absorb_wake(heard);
 
-            // It should instead arm the delayed timer.
-            let timer = scheduler.next_delayed_timer();
-            assert!(timer > Duration::ZERO && timer <= Scheduler::PUSH_FALLBACK_INTERVAL);
-        });
+        let timer = scheduler.next_delayed_timer();
+        assert!(
+            timer > Duration::from_millis(500) && timer < Scheduler::PUSH_FALLBACK_INTERVAL,
+            "the timer must land on the 1 s deadline, got {timer:?}"
+        );
+    }
+
+    /// End to end on the run loop: a job enqueued 1 s out dispatches at its
+    /// deadline. The enqueue's wake re-anchors the 2 s fallback, so without
+    /// the announced deadline it could not dispatch before ~2 s.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn push_dispatches_a_delayed_job_at_its_deadline() {
+        let scheduler = Arc::new(push_scheduler());
+        scheduler.enable_push_dispatch();
+        let (run, mut rx) = spawn_run(&scheduler);
+
+        let enqueued_at = tokio::time::Instant::now();
+        let mut delayed = ready_job("delayed_task");
+        delayed.scheduled_at = now_millis() + 1_000;
+        let enqueued = scheduler.storage().enqueue(delayed).unwrap();
+
+        let job = tokio::time::timeout_at(enqueued_at + Duration::from_millis(1500), rx.recv())
+            .await
+            .expect("a delayed job must dispatch at its deadline, not the fallback")
+            .expect("run loop alive");
+        assert_eq!(job.id, enqueued.id);
+        assert!(
+            enqueued_at.elapsed() >= Duration::from_millis(900),
+            "dispatched before its deadline: {:?}",
+            enqueued_at.elapsed()
+        );
+
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
     }
 
     /// With no wake delivered, the fallback timer still dispatches a job.
@@ -4644,6 +4691,51 @@ mod push_tests {
             .expect("run loop alive");
         assert_eq!(job.id, enqueued.id);
         eprintln!("redis enqueue-to-dispatch: {:?}", enqueue_started.elapsed());
+
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
+    /// A job enqueued 1 s out by another process (a separate storage handle,
+    /// so nothing in-process can arm the timer) dispatches at its deadline.
+    /// The warm-up right before the enqueue re-anchors the 2 s fallback, so
+    /// dispatching within 1.75 s of the enqueue can only be the announced
+    /// deadline; the margin over 1 s absorbs the hosted Redis's claim latency.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_delayed_enqueue_elsewhere_dispatches_at_its_deadline() {
+        let Some(storage) =
+            redis_storage("redis_delayed_enqueue_elsewhere_dispatches_at_its_deadline")
+        else {
+            return;
+        };
+        let url = std::env::var("FLEXIQ_REDIS_TEST_URL").unwrap();
+        let producer = StorageBackend::Redis(
+            crate::RedisStorage::with_prefix(&url, storage.prefix()).unwrap(),
+        );
+        let scheduler = Arc::new(redis_scheduler_on(&storage, "default"));
+        let (run, mut rx) = spawn_run(&scheduler);
+        warm_up(scheduler.storage(), "default", &mut rx).await;
+
+        let enqueued_at = tokio::time::Instant::now();
+        let mut delayed = ready_job("delayed_elsewhere");
+        delayed.scheduled_at = now_millis() + 1_000;
+        let enqueued = producer.enqueue(delayed).unwrap();
+
+        let job = tokio::time::timeout_at(enqueued_at + Duration::from_millis(1750), rx.recv())
+            .await
+            .expect("a delayed job enqueued elsewhere must dispatch at its deadline")
+            .expect("run loop alive");
+        assert_eq!(job.id, enqueued.id);
+        assert!(
+            enqueued_at.elapsed() >= Duration::from_millis(900),
+            "dispatched before its deadline: {:?}",
+            enqueued_at.elapsed()
+        );
+        eprintln!(
+            "redis delayed enqueue-to-dispatch: {:?}",
+            enqueued_at.elapsed()
+        );
 
         scheduler.shutdown_handle().notify_one();
         run.await.unwrap();

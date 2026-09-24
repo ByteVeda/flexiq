@@ -80,7 +80,7 @@ static DEBOUNCE_RESOLVE: LazyLock<redis::Script> =
 /// ARGV (after the scan's four): job id, job JSON, queue score, `created_at`,
 /// dependency count, the admission cap (negative = uncapped), then one
 /// `(depends_on_key, dep_id, dependents_key)` triple per dependency, then —
-/// `push-dispatch` builds only — the notify channel and a '1'/'0' ready flag.
+/// `push-dispatch` builds only — the notify channel and the job's `scheduled_at`.
 static DEBOUNCE_INSERT: LazyLock<redis::Script> =
     LazyLock::new(|| redis::Script::new(&format!("{DEBOUNCE_SCAN}{DEBOUNCE_INSERT_BODY}")));
 
@@ -122,16 +122,16 @@ const DEBOUNCE_INSERT_BODY: &str = r#"
     end
 
     -- push-dispatch (optional): trailing ARGV past the last dependency
-    -- triple — notify channel, then a '1'/'0' ready flag — present only when
-    -- this build folds the ready-notify into the write (see
-    -- insert_debounced). Absent on a feature-off build, so the ready-flag
-    -- read below is nil and this never fires there. A script call is
-    -- atomic like MULTI/EXEC — one failing redis.call aborts the whole
-    -- insert — but PUBLISH cannot fail for type reasons, so it can never be
-    -- what trips that abort.
+    -- triple — notify channel, then the job's scheduled_at as the payload —
+    -- present only when this build folds the notify into the write (see
+    -- insert_debounced). Absent on a feature-off build, so the channel read
+    -- below is nil and this never fires there. A script call is atomic like
+    -- MULTI/EXEC — one failing redis.call aborts the whole insert — but
+    -- PUBLISH cannot fail for type reasons, so it can never be what trips
+    -- that abort.
     local notify_argv = dep_args_base + num_deps * 3
-    if ARGV[notify_argv + 1] == '1' then
-        redis.call('PUBLISH', ARGV[notify_argv], 1)
+    if ARGV[notify_argv] then
+        redis.call('PUBLISH', ARGV[notify_argv], ARGV[notify_argv + 1])
     end
 
     return nil
@@ -148,19 +148,19 @@ const DEBOUNCE_INSERT_BODY: &str = r#"
 ///
 /// KEYS: job, queue zset, execution claim. ARGV: job id, document as read,
 /// document to write, new queue score, then — `push-dispatch` builds only —
-/// the notify channel and a '1'/'0' ready flag.
+/// the notify channel and the slid `scheduled_at`.
 const DEBOUNCE_SLIDE: &str = r#"
     if redis.call('GET', KEYS[1]) ~= ARGV[2] then return 0 end
     if redis.call('EXISTS', KEYS[3]) == 1 then return 0 end
     redis.call('SET', KEYS[1], ARGV[3])
     redis.call('ZADD', KEYS[2], ARGV[4], ARGV[1])
     -- push-dispatch (optional): ARGV[5]/[6] are present only on a build that
-    -- folds the ready-notify into the write (see slide_debounce_target); nil
+    -- folds the notify into the write (see slide_debounce_target); nil
     -- otherwise, so this never fires there. PUBLISH cannot fail for type
     -- reasons, so it can never be what turns this script's atomic commit
     -- into an abort.
-    if ARGV[6] == '1' then
-        redis.call('PUBLISH', ARGV[5], 1)
+    if ARGV[5] then
+        redis.call('PUBLISH', ARGV[5], ARGV[6])
     end
     return 1
 "#;
@@ -170,6 +170,40 @@ const DEBOUNCE_SLIDE: &str = r#"
 /// surfaces as an error rather than a second job or a phantom one. Mirrors
 /// `MAX_ENQUEUE_ATTEMPTS` in [`RedisStorage::enqueue_unique`].
 const MAX_DEBOUNCE_ATTEMPTS: usize = 3;
+
+/// Distinct delayed deadlines a batch announces per queue. Bounds the publishes
+/// one large staggered batch folds in; later deadlines wait for the fallback.
+#[cfg(feature = "push-dispatch")]
+const MAX_ANNOUNCED_DEADLINES: usize = 16;
+
+/// The `scheduled_at` payloads a batch publishes per `(namespace, queue)`: the
+/// earliest ready one, if any job is ready, then the earliest
+/// [`MAX_ANNOUNCED_DEADLINES`] distinct delayed ones.
+#[cfg(feature = "push-dispatch")]
+fn notify_targets(
+    jobs: &[Job],
+    now: i64,
+) -> std::collections::BTreeMap<(Option<&str>, &str), Vec<i64>> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut per_queue: BTreeMap<(Option<&str>, &str), BTreeSet<i64>> = BTreeMap::new();
+    for job in jobs {
+        per_queue
+            .entry((job.namespace.as_deref(), job.queue.as_str()))
+            .or_default()
+            .insert(job.scheduled_at);
+    }
+    per_queue
+        .into_iter()
+        .map(|(target, deadlines)| {
+            let ready = deadlines.iter().copied().find(|&at| at <= now);
+            let delayed = deadlines
+                .range(now.saturating_add(1)..)
+                .copied()
+                .take(MAX_ANNOUNCED_DEADLINES);
+            (target, ready.into_iter().chain(delayed).collect())
+        })
+        .collect()
+}
 
 /// What [`DEBOUNCE_INSERT`] wrote. Refusing the insert for the admission cap is
 /// not a variant here: it is the error the caller returns either way, and the
@@ -284,12 +318,11 @@ impl RedisStorage {
         // (no-op for ordinary jobs). Same pipe as the job's own indices.
         self.push_pubsub_transition(pipe, &job, JobStatus::Pending);
 
-        // Wake this queue's schedulers in the same round trip as the write —
-        // `StorageBackend::notify_if_ready` skips Redis for this reason.
+        // Announce the job to this queue's schedulers in the same round trip
+        // as the write: they drain a ready one and arm a timer for a delayed
+        // one. `StorageBackend::notify_enqueued` skips Redis for this reason.
         #[cfg(feature = "push-dispatch")]
-        if job.scheduled_at <= now_millis() {
-            self.fold_ready_notify(pipe, job.namespace.as_deref(), &job.queue);
-        }
+        self.fold_notify(pipe, job.namespace.as_deref(), &job.queue, job.scheduled_at);
 
         pipe.query::<()>(&mut conn).map_err(map_err)?;
 
@@ -354,19 +387,14 @@ impl RedisStorage {
             self.push_pubsub_transition(pipe, job, JobStatus::Pending);
         }
 
-        // One publish per distinct ready (namespace, queue), not per job — a
-        // burst onto the same queue wakes its schedulers once, still in this
-        // round trip.
+        // Announce per (namespace, queue), not per job, still in this round
+        // trip: one publish if any job is ready, plus the earliest distinct
+        // delayed deadlines so a burst of delayed jobs arms timers without
+        // one publish per job.
         #[cfg(feature = "push-dispatch")]
-        {
-            let now = now_millis();
-            let ready: std::collections::BTreeSet<(Option<&str>, &str)> = jobs
-                .iter()
-                .filter(|j| j.scheduled_at <= now)
-                .map(|j| (j.namespace.as_deref(), j.queue.as_str()))
-                .collect();
-            for (namespace, queue) in ready {
-                self.fold_ready_notify(pipe, namespace, queue);
+        for ((namespace, queue), deadlines) in notify_targets(&jobs, now_millis()) {
+            for scheduled_at in deadlines {
+                self.fold_notify(pipe, namespace, queue, scheduled_at);
             }
         }
 
@@ -461,16 +489,12 @@ impl RedisStorage {
             .arg(target_json)
             .arg(&new_json)
             .arg(dequeue_score(target.priority, target.scheduled_at));
-        // Wake this queue's schedulers in the same round trip when the slide
-        // lands the job in the ready window — see DEBOUNCE_SLIDE.
+        // Announce the slid deadline to this queue's schedulers in the same
+        // round trip — see DEBOUNCE_SLIDE.
         #[cfg(feature = "push-dispatch")]
         invocation
             .arg(self.notify_channel(target.namespace.as_deref(), &target.queue))
-            .arg(if target.scheduled_at <= now_millis() {
-                "1"
-            } else {
-                "0"
-            });
+            .arg(target.scheduled_at);
         let applied: i32 = invocation.invoke(conn).map_err(map_err)?;
 
         Ok((applied == 1).then_some(target))
@@ -519,17 +543,12 @@ impl RedisStorage {
                 .arg(dep_id)
                 .arg(self.key(&["job", dep_id, "dependents"]));
         }
-        // Wake this queue's schedulers in the same round trip when the fresh
-        // window opens ready (rare — usually `window_ms` pushes it into the
-        // future) — see DEBOUNCE_INSERT_BODY.
+        // Announce the fresh window's deadline to this queue's schedulers in
+        // the same round trip — see DEBOUNCE_INSERT_BODY.
         #[cfg(feature = "push-dispatch")]
         invocation
             .arg(self.notify_channel(job.namespace.as_deref(), &job.queue))
-            .arg(if job.scheduled_at <= now_millis() {
-                "1"
-            } else {
-                "0"
-            });
+            .arg(job.scheduled_at);
 
         match (max_pending, invocation.invoke(conn).map_err(map_err)?) {
             (_, redis::Value::Nil) => Ok(DebounceInsert::Opened),
@@ -690,7 +709,7 @@ impl RedisStorage {
             // single-sourced in `JobStatus::wire_name()`. ARGV[9] names the
             // KEYS slot holding the debounce index, and dependency triples
             // start at ARGV[10]. `push-dispatch` builds append the notify
-            // channel and a '1'/'0' ready flag after the last triple.
+            // channel and the job's `scheduled_at` after the last triple.
             let store_script = redis::Script::new(
                 r#"
                 local unique_key = KEYS[1]
@@ -760,14 +779,15 @@ impl RedisStorage {
                 end
 
                 -- push-dispatch (optional): trailing ARGV past the last
-                -- dependency triple, present only on a build that folds the
-                -- ready-notify into this write. Absent otherwise, so the
-                -- ready-flag read below is nil and this never fires there.
-                -- PUBLISH cannot fail for type reasons, so it can never be
-                -- what turns this script's atomic store into an abort.
+                -- dependency triple — channel, then scheduled_at as the
+                -- payload — present only on a build that folds the notify
+                -- into this write. Absent otherwise, so the channel read below
+                -- is nil and this never fires there. PUBLISH cannot fail for
+                -- type reasons, so it can never be what turns this script's
+                -- atomic store into an abort.
                 local notify_argv = dep_args_base + num_deps * 3
-                if ARGV[notify_argv + 1] == '1' then
-                    redis.call('PUBLISH', ARGV[notify_argv], 1)
+                if ARGV[notify_argv] then
+                    redis.call('PUBLISH', ARGV[notify_argv], ARGV[notify_argv + 1])
                 end
 
                 return nil
@@ -828,19 +848,12 @@ impl RedisStorage {
                 args.push(dep_id.clone());
                 args.push(self.key(&["job", dep_id, "dependents"]));
             }
-            // Wake this queue's schedulers in the same round trip as the
-            // write — see the trailing ARGV read in store_script above.
+            // Announce the job to this queue's schedulers in the same round
+            // trip as the write — see the trailing ARGV read in store_script.
             #[cfg(feature = "push-dispatch")]
             {
                 args.push(self.notify_channel(job.namespace.as_deref(), &job.queue));
-                args.push(
-                    if job.scheduled_at <= now_millis() {
-                        "1"
-                    } else {
-                        "0"
-                    }
-                    .to_string(),
-                );
+                args.push(job.scheduled_at.to_string());
             }
 
             let mut invocation = store_script.prepare_invoke();

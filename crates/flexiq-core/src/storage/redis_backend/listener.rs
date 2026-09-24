@@ -4,8 +4,10 @@
 //! build never compiles this module.
 //!
 //! A dedicated blocking connection `SUBSCRIBE`s to the notify channel of every
-//! queue the scheduler serves, in its namespace; each message forwards a unit wake into the
-//! scheduler's [`crate::scheduler::wake::WakeSource::Channel`]. Pub/sub is a
+//! queue the scheduler serves, in its namespace; each message forwards its
+//! payload — the enqueued job's `scheduled_at` in ms, `None` when it does not
+//! parse — into the scheduler's
+//! [`crate::scheduler::wake::WakeSource::Channel`]. Pub/sub is a
 //! broadcast, so every scheduler serving a queue wakes — a consumed signal
 //! (a list pop) would wake one, possibly one that cannot take the job. A read
 //! timeout bounds each wait so the loop re-checks the forward channel and
@@ -42,6 +44,11 @@ const SHUTDOWN_CHECK: Duration = Duration::from_millis(250);
 /// TCP timeout (minutes).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Messages buffered for the push loop, which folds all of them into one wake.
+/// Deep enough that a delayed job's deadline survives a burst of ready wakes;
+/// one dropped when full only waits for the fallback timer.
+const FORWARD_BACKLOG: usize = 64;
+
 /// Spawn the Redis wake listener for `queues` in `namespace` and return the
 /// receiver end for the scheduler's [`crate::scheduler::wake::WakeSource::Channel`].
 ///
@@ -51,8 +58,8 @@ pub fn spawn(
     storage: RedisStorage,
     namespace: Option<&str>,
     queues: &[String],
-) -> mpsc::Receiver<()> {
-    let (tx, rx) = mpsc::channel(1);
+) -> mpsc::Receiver<Option<i64>> {
+    let (tx, rx) = mpsc::channel(FORWARD_BACKLOG);
     let channels: Vec<String> = queues
         .iter()
         .map(|q| storage.notify_channel(namespace, q))
@@ -77,11 +84,11 @@ pub fn spawn(
             // Pub/sub keeps nothing for an absent subscriber: wake once so a
             // publish before this (re)subscribe — startup or a reconnect gap —
             // is still drained now rather than at the fallback.
-            let _ = tx.try_send(());
+            let _ = tx.try_send(None);
 
             while !tx.is_closed() {
                 match pubsub.get_message() {
-                    Ok(_) => match tx.try_send(()) {
+                    Ok(msg) => match tx.try_send(announced_at(&msg)) {
                         Ok(()) => {}
                         Err(mpsc::error::TrySendError::Full(_)) => {}
                         Err(mpsc::error::TrySendError::Closed(_)) => return,
@@ -98,6 +105,12 @@ pub fn spawn(
     });
 
     rx
+}
+
+/// The `scheduled_at` a notify message carries. Anything that is not a decimal
+/// `i64` — a foreign publisher, an older build's payload — is a plain wake.
+fn announced_at(msg: &redis::Msg) -> Option<i64> {
+    msg.get_payload::<String>().ok()?.trim().parse().ok()
 }
 
 /// Open the listener's dedicated connection with both deadlines set.
@@ -130,7 +143,7 @@ impl Backoff {
     }
 
     /// Record a failed `step`, then sleep out the current delay.
-    fn fail(&mut self, step: &str, err: &redis::RedisError, tx: &mpsc::Sender<()>) {
+    fn fail(&mut self, step: &str, err: &redis::RedisError, tx: &mpsc::Sender<Option<i64>>) {
         if self.reported {
             log::debug!("push-dispatch: redis listener {step} failed again: {err}");
         } else {
@@ -157,7 +170,7 @@ impl Backoff {
 
 /// Sleep `total` in [`SHUTDOWN_CHECK`] slices, returning early once the push
 /// loop is gone so a failing Redis cannot stretch shutdown by a backoff.
-fn sleep_unless_closed(total: Duration, tx: &mpsc::Sender<()>) {
+fn sleep_unless_closed(total: Duration, tx: &mpsc::Sender<Option<i64>>) {
     let deadline = std::time::Instant::now() + total;
     while !tx.is_closed() {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
@@ -171,6 +184,30 @@ fn sleep_unless_closed(total: Duration, tx: &mpsc::Sender<()>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn message(payload: &[u8]) -> redis::Msg {
+        let value = redis::Value::Array(vec![
+            redis::Value::BulkString(b"message".to_vec()),
+            redis::Value::BulkString(b"chan".to_vec()),
+            redis::Value::BulkString(payload.to_vec()),
+        ]);
+        redis::Msg::from_owned_value(value).unwrap()
+    }
+
+    /// A deadline payload is forwarded; anything else is a plain wake, never
+    /// an error or a dropped signal.
+    #[test]
+    fn announced_at_parses_deadlines_and_tolerates_junk() {
+        assert_eq!(
+            announced_at(&message(b"1790000000000")),
+            Some(1_790_000_000_000)
+        );
+        assert_eq!(announced_at(&message(b"-5")), Some(-5));
+        assert_eq!(announced_at(&message(b"")), None);
+        assert_eq!(announced_at(&message(b"ready")), None);
+        assert_eq!(announced_at(&message(b"99999999999999999999999")), None);
+        assert_eq!(announced_at(&message(&[0xff, 0xfe])), None);
+    }
 
     #[test]
     fn backoff_doubles_to_the_cap_and_resets() {
@@ -186,7 +223,7 @@ mod tests {
 
     #[test]
     fn a_max_backoff_sleep_ends_when_the_push_loop_goes() {
-        let (tx, rx) = mpsc::channel::<()>(1);
+        let (tx, rx) = mpsc::channel::<Option<i64>>(1);
         let dropper = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(100));
             drop(rx);

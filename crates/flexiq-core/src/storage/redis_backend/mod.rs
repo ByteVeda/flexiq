@@ -120,27 +120,30 @@ impl RedisStorage {
         self.pool.client()
     }
 
-    /// Append `PUBLISH <notify-channel>` for `(namespace, queue)` onto `pipe`, `.ignore()`d
-    /// so it never changes the pipe's reply shape. Every enqueue write path
-    /// folds its ready-notify in here instead of paying `notify_job_ready`'s
-    /// own connection checkout + round trip (see `jobs/enqueue.rs`).
+    /// Append `PUBLISH <notify-channel> <scheduled_at>` for `(namespace, queue)`
+    /// onto `pipe`, `.ignore()`d so it never changes the pipe's reply shape.
+    /// Every enqueue write path folds its notify in here instead of paying
+    /// `notify_job_ready`'s own connection checkout + round trip (see
+    /// `jobs/enqueue.rs`). The payload is the job's `scheduled_at` in ms: a
+    /// listener drains when it is due and arms a timer for it otherwise.
     /// `PUBLISH` cannot fail for type reasons, so this is safe to fold into an
     /// atomic (`MULTI`/`EXEC`) pipe too — no current caller uses one.
     #[cfg(feature = "push-dispatch")]
-    pub(crate) fn fold_ready_notify(
+    pub(crate) fn fold_notify(
         &self,
         pipe: &mut redis::Pipeline,
         namespace: Option<&str>,
         queue: &str,
+        scheduled_at: i64,
     ) {
-        pipe.publish(self.notify_channel(namespace, queue), 1)
+        pipe.publish(self.notify_channel(namespace, queue), scheduled_at)
             .ignore();
     }
 }
 
 #[cfg(feature = "push-dispatch")]
 impl crate::storage::notify::StorageNotifier for RedisStorage {
-    fn notify_job_ready(&self, namespace: Option<&str>, queue: &str, _scheduled_at: i64) {
+    fn notify_job_ready(&self, namespace: Option<&str>, queue: &str, scheduled_at: i64) {
         // Best-effort PUBLISH: a broadcast, so every scheduler serving `queue`
         // wakes, not whichever popped a shared signal first. A failure only
         // costs the latency improvement — the fallback poll still dispatches.
@@ -153,7 +156,7 @@ impl crate::storage::notify::StorageNotifier for RedisStorage {
         };
         let res: redis::RedisResult<()> = redis::cmd("PUBLISH")
             .arg(self.notify_channel(namespace, queue))
-            .arg(1)
+            .arg(scheduled_at)
             .query(&mut conn);
         if let Err(e) = res {
             log::warn!("push-dispatch: redis PUBLISH notify failed: {e}");
