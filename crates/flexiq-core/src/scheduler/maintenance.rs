@@ -202,7 +202,13 @@ impl Scheduler {
                     // rescue is a new claim, so the dead owner's executor —
                     // which may still be on its way to reporting — is fenced
                     // out by the same value that authorizes this result.
-                    self.track_in_flight(&job.id, &job.task_name, job.retry_count, Some(epoch));
+                    self.track_in_flight(
+                        &job.id,
+                        &job.task_name,
+                        &job.queue,
+                        job.retry_count,
+                        Some(epoch),
+                    );
                     let error = format!("worker {dead_owner} died; recovering in-flight job");
                     if let Err(e) = self.handle_result(JobResult::Failure {
                         job_id: job.id.clone(),

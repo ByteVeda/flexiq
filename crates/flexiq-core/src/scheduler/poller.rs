@@ -274,6 +274,7 @@ impl Scheduler {
                 );
                 self.storage
                     .shed_to_dlq(&job, &reason, Some("{\"codel\":true}"))?;
+                self.emit_shed(&job, &reason);
                 warn!(
                     "codel shed {} on queue '{}' (sojourn {sojourn}ms)",
                     job.id, job.queue
@@ -419,9 +420,14 @@ impl Scheduler {
         // owner alone cannot separate two runs of the same job. The epoch is
         // the third, and separates two claims that `requeue_stuck` produced
         // from one attempt — where neither of the other two moves.
-        self.track_in_flight(&job_id, &task_name, job.retry_count, epoch);
+        self.track_in_flight(&job_id, &task_name, &job.queue, job.retry_count, epoch);
+        // Built before the send moves the job, emitted only once it succeeded.
+        let started = self.started_event(&job, epoch);
         match job_tx.try_send(job) {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                self.emit_event(started);
+                Ok(true)
+            }
             Err(TrySendError::Full(job)) => {
                 warn!("worker channel full; rescheduling job {job_id} (worker pool is behind)",);
                 self.untrack_in_flight(&job_id);
@@ -539,6 +545,7 @@ impl Scheduler {
         }
         self.storage
             .shed_to_dlq(job, reason, Some(shed::RATE_LIMIT_SHED_METADATA))?;
+        self.emit_shed(job, reason);
         warn!(
             "rate-limit shed {} on queue '{}' (task '{}')",
             job.id, job.queue, job.task_name

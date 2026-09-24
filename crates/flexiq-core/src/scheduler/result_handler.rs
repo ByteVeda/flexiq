@@ -5,6 +5,7 @@ use crate::job::JobCompletion;
 use crate::storage::records::AttemptFence;
 use crate::storage::Storage;
 
+use super::events::failure_attempt;
 use super::{JobResult, ResultOutcome, Scheduler};
 
 /// Dead-letter metadata marking a job the retry budget refused. `ResultOutcome`
@@ -83,7 +84,17 @@ impl Scheduler {
     ///
     /// Returns a [`ResultOutcome`] describing the action taken, so the
     /// caller (the binding) can dispatch its middleware hooks and events.
+    /// With an event hub set, the outcome's lifecycle events are emitted too.
     pub fn handle_result(&self, result: JobResult) -> Result<ResultOutcome> {
+        let fallback_attempt = failure_attempt(&result);
+        let outcome = self.settle_result(result)?;
+        self.emit_outcome(&outcome, fallback_attempt);
+        Ok(outcome)
+    }
+
+    /// [`Self::handle_result`] without the events, so the batch path can emit
+    /// once per outcome at its end whichever route the result took.
+    fn settle_result(&self, result: JobResult) -> Result<ResultOutcome> {
         // A sleep skips the fence, and deliberately. `sleep_job` already left
         // the job `Pending` with no claim — that is what a sleep *is* — so
         // asking whether the attempt still owns it reads a correctly slept job
@@ -307,6 +318,12 @@ impl Scheduler {
     pub fn handle_results(&self, results: Vec<JobResult>) -> Vec<Result<ResultOutcome>> {
         let mut outcomes: Vec<Option<Result<ResultOutcome>>> =
             (0..results.len()).map(|_| None).collect();
+        // Read before the results move; only an events hub ever needs them.
+        let fallback_attempts: Vec<Option<i32>> = if self.events.is_some() {
+            results.iter().map(failure_attempt).collect()
+        } else {
+            Vec::new()
+        };
         let mut completions: Vec<JobCompletion> = Vec::new();
         let mut success_idx: Vec<usize> = Vec::new();
 
@@ -339,7 +356,7 @@ impl Scheduler {
                 }
                 // Failures and cancellations branch (retry vs DLQ, queue
                 // lookups); batching them buys little, so keep the per-result path.
-                other => outcomes[i] = Some(self.handle_result(other)),
+                other => outcomes[i] = Some(self.settle_result(other)),
             }
         }
 
@@ -370,10 +387,18 @@ impl Scheduler {
         }
 
         // Every slot was filled — non-success inline, success in the batch step.
-        outcomes
+        let outcomes: Vec<Result<ResultOutcome>> = outcomes
             .into_iter()
             .map(|o| o.expect("every result yields an outcome"))
-            .collect()
+            .collect();
+        // One pass over the settled outcomes, so each emits exactly once
+        // whether it settled inline, in the batch, or in the per-job fallback.
+        for (outcome, fallback_attempt) in outcomes.iter().zip(fallback_attempts) {
+            if let Ok(outcome) = outcome {
+                self.emit_outcome(outcome, fallback_attempt);
+            }
+        }
+        outcomes
     }
 
     /// Release the slot a slept attempt held, and report where its job went.

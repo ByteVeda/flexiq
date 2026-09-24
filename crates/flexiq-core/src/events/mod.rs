@@ -33,3 +33,6 @@ pub use config::{
 };
 pub use event::{EventType, JobEvent, CLOUDEVENTS_TYPE_PREFIX, DEFAULT_SOURCE};
 pub use hub::{EventHub, SinkStats};
+
+#[cfg(test)]
+pub(crate) use hub::test_support;

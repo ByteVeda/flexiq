@@ -99,15 +99,20 @@ this tree and the one the gRPC structured-arguments door encodes through.
 ## Dispatch call sequence
 1. Shell constructs `Storage` (SQLite default; `postgres`/`redis` features) — `storage/traits.rs`.
 2. Shell constructs `Scheduler::new(storage, queues, SchedulerConfig, namespace)` — `scheduler/mod.rs`.
-3. Shell implements `WorkerDispatcher` — `worker/mod.rs`.
-4. `Scheduler.run(job_tx)` polls + claims jobs and sends each `Job` over a
+3. Optionally, before sharing the scheduler, the shell passes an `EventHub`
+   (`EventHub::start` / `from_json`) to `Scheduler::set_events`; the scheduler
+   then emits every dispatch, outcome and shed itself — `scheduler/events.rs`.
+   The shell owns the hub and MUST call `EventHub::shutdown(budget)` after the
+   scheduler has stopped and its last results are handled.
+4. Shell implements `WorkerDispatcher` — `worker/mod.rs`.
+5. `Scheduler.run(job_tx)` polls + claims jobs and sends each `Job` over a
    `tokio::sync::mpsc::Sender<Job>` — `scheduler/poller.rs`, `scheduler/mod.rs`.
-5. `WorkerDispatcher::run(job_rx, result_tx)` receives the `Job`, deserializes
+6. `WorkerDispatcher::run(job_rx, result_tx)` receives the `Job`, deserializes
    `job.payload`, looks the task up by `job.task_name`, runs it, and sends a
    `JobResult` back over a `crossbeam_channel::Sender<JobResult>`.
-6. `Scheduler.handle_result(JobResult)` records the outcome in storage and returns a
+7. `Scheduler.handle_result(JobResult)` records the outcome in storage and returns a
    `ResultOutcome` — `scheduler/result_handler.rs`.
-7. Shell maps `ResultOutcome` to its own events/middleware (Python: `py_queue/worker.rs`).
+8. Shell maps `ResultOutcome` to its own events/middleware (Python: `py_queue/worker.rs`).
 
 ```
 Storage ─▶ Scheduler.run ──tokio::mpsc<Job>──▶ WorkerDispatcher.run

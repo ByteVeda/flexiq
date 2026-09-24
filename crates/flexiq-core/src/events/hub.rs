@@ -629,6 +629,31 @@ fn escape_label(value: &str) -> String {
         .replace('\n', "\\n")
 }
 
+/// The recording fake below, for tests outside this module that need a hub.
+#[cfg(test)]
+pub(crate) mod test_support {
+    pub(crate) use super::tests::Attempts;
+    use super::tests::{fake, hub, sink};
+    use super::*;
+
+    /// A started hub over one sink that records every delivered event.
+    /// `extra` is appended to the sink's config, e.g. `,"include_payload":true`.
+    pub(crate) fn recording_hub(extra: &str) -> (Arc<EventHub>, Attempts) {
+        let (backend, attempts) = fake(vec![], DeliveryResult::Delivered);
+        (Arc::new(hub(vec![(sink("rec", extra), backend)])), attempts)
+    }
+
+    /// Shut `hub` down, then everything it delivered, in delivery order.
+    pub(crate) fn delivered(hub: &EventHub, attempts: &Attempts) -> Vec<JobEvent> {
+        hub.shutdown(Duration::from_secs(10));
+        lock(attempts)
+            .iter()
+            .flatten()
+            .map(|event| JobEvent::clone(event))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -658,7 +683,7 @@ mod tests {
 
     /// Records every attempt's batch and answers from a script, then with
     /// `fallback`. With a gate, every attempt waits for it to open.
-    struct Fake {
+    pub(super) struct Fake {
         attempts: Arc<Mutex<Vec<Vec<Arc<JobEvent>>>>>,
         script: VecDeque<DeliveryResult>,
         fallback: DeliveryResult,
@@ -676,9 +701,12 @@ mod tests {
         }
     }
 
-    type Attempts = Arc<Mutex<Vec<Vec<Arc<JobEvent>>>>>;
+    pub(crate) type Attempts = Arc<Mutex<Vec<Vec<Arc<JobEvent>>>>>;
 
-    fn fake(script: Vec<DeliveryResult>, fallback: DeliveryResult) -> (Box<Fake>, Attempts) {
+    pub(super) fn fake(
+        script: Vec<DeliveryResult>,
+        fallback: DeliveryResult,
+    ) -> (Box<Fake>, Attempts) {
         let attempts = Attempts::default();
         let backend = Fake {
             attempts: Arc::clone(&attempts),
@@ -698,14 +726,14 @@ mod tests {
     }
 
     /// A Redis Streams sink config: the kind needs no URL to parse.
-    fn sink(name: &str, extra: &str) -> SinkConfig {
+    pub(super) fn sink(name: &str, extra: &str) -> SinkConfig {
         let doc = format!(
             r#"{{"sinks":[{{"kind":"redis_streams","name":"{name}","url_env":"U","stream":"s"{extra}}}]}}"#
         );
         EventsConfig::parse(&doc).unwrap().sinks.remove(0)
     }
 
-    fn hub(sinks: Vec<(SinkConfig, Box<dyn SinkBackend>)>) -> EventHub {
+    pub(super) fn hub(sinks: Vec<(SinkConfig, Box<dyn SinkBackend>)>) -> EventHub {
         EventHub::with_backends("/flexiq".into(), sinks).unwrap()
     }
 
