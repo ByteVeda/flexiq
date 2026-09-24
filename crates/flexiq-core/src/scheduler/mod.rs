@@ -4533,6 +4533,23 @@ mod push_tests {
         run.await.unwrap();
     }
 
+    /// A fresh subscription wakes the loop once with nothing published, so a
+    /// publish that raced the SUBSCRIBE (startup, reconnect) is still drained.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_listener_wakes_once_subscribed() {
+        let Some(scheduler) = redis_scheduler("redis_listener_wakes_once_subscribed") else {
+            return;
+        };
+        let Some(wake::WakeSource::Channel(mut rx)) = scheduler.resolve_wake_source() else {
+            panic!("Redis defaults to a listener channel");
+        };
+        tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("a completed subscribe must forward one wake")
+            .expect("listener alive");
+    }
+
     /// Jobs enqueued before `run` published to no subscriber; a Redis push
     /// scheduler must still dispatch them promptly on start, well inside the
     /// 2 s fallback.
@@ -4605,7 +4622,9 @@ mod push_tests {
         let (run, mut rx) = rt.block_on(async { spawn_run(&scheduler) });
 
         // Prove the listener is live (a woken dispatch) before stopping it.
+        // The warm-up re-anchors the fallback, so 1.5 s can only be the wake.
         rt.block_on(async {
+            warm_up(scheduler.storage(), "default", &mut rx).await;
             scheduler.storage().enqueue(ready_job("live")).unwrap();
             tokio::time::timeout(Duration::from_millis(1500), rx.recv())
                 .await

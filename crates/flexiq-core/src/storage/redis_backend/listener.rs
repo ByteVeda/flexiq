@@ -10,7 +10,8 @@
 //! (a list pop) would wake one, possibly one that cannot take the job. A read
 //! timeout bounds each wait so the loop re-checks the forward channel and
 //! stops promptly on shutdown. Connection errors back off, then reconnect and
-//! resubscribe; a message missed meanwhile is covered by the fallback timer.
+//! resubscribe. Every successful subscribe forwards one wake, so a message
+//! published while no subscription existed is drained on arrival anyway.
 
 use std::time::Duration;
 
@@ -55,6 +56,10 @@ pub fn spawn(storage: RedisStorage, queues: &[String]) -> mpsc::Receiver<()> {
                 backoff(&tx);
                 continue;
             }
+            // Pub/sub keeps nothing for an absent subscriber: wake once so a
+            // publish before this (re)subscribe — startup or a reconnect gap —
+            // is still drained now rather than at the fallback.
+            let _ = tx.try_send(());
 
             while !tx.is_closed() {
                 match pubsub.get_message() {
