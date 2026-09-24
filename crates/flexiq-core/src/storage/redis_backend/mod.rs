@@ -94,11 +94,11 @@ impl RedisStorage {
         &self.prefix
     }
 
-    /// The single list key push-dispatch uses to signal ready jobs. The
-    /// enqueue side `LPUSH`es a sentinel here; the listener `BLPOP`s it.
+    /// The pub/sub channel push-dispatch signals `queue`'s ready jobs on. The
+    /// enqueue side `PUBLISH`es here; every scheduler serving `queue` listens.
     #[cfg(feature = "push-dispatch")]
-    pub(crate) fn notify_key(&self) -> String {
-        self.key(&["notify", "_ready"])
+    pub(crate) fn notify_channel(&self, queue: &str) -> String {
+        self.key(&["notify", queue])
     }
 
     /// A raw client clone, for the listener's dedicated blocking connection.
@@ -110,8 +110,9 @@ impl RedisStorage {
 
 #[cfg(feature = "push-dispatch")]
 impl crate::storage::notify::StorageNotifier for RedisStorage {
-    fn notify_job_ready(&self, _queue: &str, _scheduled_at: i64) {
-        // Best-effort LPUSH of a sentinel onto the notify list. A failure only
+    fn notify_job_ready(&self, queue: &str, _scheduled_at: i64) {
+        // Best-effort PUBLISH: a broadcast, so every scheduler serving `queue`
+        // wakes, not whichever popped a shared signal first. A failure only
         // costs the latency improvement — the fallback poll still dispatches.
         let mut conn = match self.conn() {
             Ok(c) => c,
@@ -120,15 +121,12 @@ impl crate::storage::notify::StorageNotifier for RedisStorage {
                 return;
             }
         };
-        let key = self.notify_key();
-        // Keep the list short — a single pending sentinel is enough to wake the
-        // listener; trim so it can't grow unbounded under bursty enqueues.
-        let res: redis::RedisResult<()> = redis::pipe()
-            .lpush(&key, 1)
-            .ltrim(&key, 0, 15)
+        let res: redis::RedisResult<()> = redis::cmd("PUBLISH")
+            .arg(self.notify_channel(queue))
+            .arg(1)
             .query(&mut conn);
         if let Err(e) = res {
-            log::warn!("push-dispatch: redis LPUSH notify failed: {e}");
+            log::warn!("push-dispatch: redis PUBLISH notify failed: {e}");
         }
     }
 }

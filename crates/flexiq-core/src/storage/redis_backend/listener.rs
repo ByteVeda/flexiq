@@ -1,13 +1,16 @@
-//! Redis `BLPOP`-based wake listener for push-dispatch.
+//! Redis pub/sub wake listener for push-dispatch.
 //!
 //! Entirely behind the `push-dispatch` feature. The default (feature-off)
 //! build never compiles this module.
 //!
-//! A dedicated blocking connection loops on `BLPOP <notify-key> 1`. The 1s
-//! timeout keeps shutdown responsive (the loop re-checks the forward channel
-//! between blocks). Each popped sentinel forwards a unit wake into the
-//! scheduler's [`crate::scheduler::wake::WakeSource::Channel`]. Connection
-//! errors back off before reconnecting.
+//! A dedicated blocking connection `SUBSCRIBE`s to the notify channel of every
+//! queue the scheduler serves; each message forwards a unit wake into the
+//! scheduler's [`crate::scheduler::wake::WakeSource::Channel`]. Pub/sub is a
+//! broadcast, so every scheduler serving a queue wakes — a consumed signal
+//! (a list pop) would wake one, possibly one that cannot take the job. A read
+//! timeout bounds each wait so the loop re-checks the forward channel and
+//! stops promptly on shutdown. Connection errors back off, then reconnect and
+//! resubscribe; a message missed meanwhile is covered by the fallback timer.
 
 use std::time::Duration;
 
@@ -15,9 +18,9 @@ use tokio::sync::mpsc;
 
 use super::RedisStorage;
 
-/// `BLPOP` block timeout. Short enough to notice a dropped forward channel and
-/// stop promptly on shutdown.
-const BLPOP_TIMEOUT_SECS: f64 = 1.0;
+/// Socket read deadline, and so the cadence at which an idle listener notices
+/// a dropped forward channel. Also bounds a half-dead connection's read.
+const READ_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Backoff after a connection error before reconnecting.
 const RECONNECT_BACKOFF: Duration = Duration::from_millis(500);
@@ -27,19 +30,14 @@ const RECONNECT_BACKOFF: Duration = Duration::from_millis(500);
 /// TCP timeout (minutes).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Socket read deadline: the `BLPOP` block plus grace for a slow reply. Without
-/// it a half-dead connection blocks `BLPOP` forever and shutdown never returns.
-const READ_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// Spawn the Redis wake listener and return the receiver end for the
-/// scheduler's [`crate::scheduler::wake::WakeSource::Channel`].
+/// Spawn the Redis wake listener for `queues` and return the receiver end for
+/// the scheduler's [`crate::scheduler::wake::WakeSource::Channel`].
 ///
 /// The task ends once that receiver is dropped (the push loop returned),
-/// within one `BLPOP` block; every other wait in the loop is bounded too, so
-/// shutdown never waits on Redis for longer than `READ_TIMEOUT`.
-pub fn spawn(storage: RedisStorage) -> mpsc::Receiver<()> {
+/// within one read timeout; every other wait in the loop is bounded too.
+pub fn spawn(storage: RedisStorage, queues: &[String]) -> mpsc::Receiver<()> {
     let (tx, rx) = mpsc::channel(1);
-    let key = storage.notify_key();
+    let channels: Vec<String> = queues.iter().map(|q| storage.notify_channel(q)).collect();
 
     tokio::task::spawn_blocking(move || {
         while !tx.is_closed() {
@@ -51,25 +49,26 @@ pub fn spawn(storage: RedisStorage) -> mpsc::Receiver<()> {
                     continue;
                 }
             };
+            let mut pubsub = conn.as_pubsub();
+            if let Err(e) = pubsub.subscribe(&channels) {
+                log::warn!("push-dispatch: redis SUBSCRIBE failed: {e}");
+                backoff(&tx);
+                continue;
+            }
 
             while !tx.is_closed() {
-                let popped: redis::RedisResult<Option<(String, i64)>> = redis::cmd("BLPOP")
-                    .arg(&key)
-                    .arg(BLPOP_TIMEOUT_SECS)
-                    .query(&mut conn);
-
-                match popped {
-                    // Timed out with no element — just re-check shutdown.
-                    Ok(None) => {}
-                    Ok(Some(_)) => match tx.try_send(()) {
+                match pubsub.get_message() {
+                    Ok(_) => match tx.try_send(()) {
                         Ok(()) => {}
                         Err(mpsc::error::TrySendError::Full(_)) => {}
                         Err(mpsc::error::TrySendError::Closed(_)) => return,
                     },
+                    // Idle past the read deadline — just re-check shutdown.
+                    Err(e) if e.is_timeout() => {}
                     Err(e) => {
-                        log::warn!("push-dispatch: redis BLPOP failed: {e}");
+                        log::warn!("push-dispatch: redis pub/sub read failed: {e}");
                         backoff(&tx);
-                        break; // reconnect
+                        break; // reconnect and resubscribe
                     }
                 }
             }

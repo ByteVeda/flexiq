@@ -1578,19 +1578,34 @@ impl StorageBackend {
     /// Signal the scheduler that a ready job was enqueued, so it can dispatch
     /// immediately instead of waiting for the next poll. No-op for delayed
     /// jobs (`scheduled_at > now`) — those rely on the fallback timer — and a
-    /// no-op entirely when `push-dispatch` is off.
+    /// no-op entirely when `push-dispatch` is off. `queue` routes the signal:
+    /// Redis wakes only the schedulers serving it.
     #[cfg(feature = "push-dispatch")]
-    fn notify_if_ready(&self, scheduled_at: i64) {
+    pub(crate) fn notify_if_ready(&self, queue: &str, scheduled_at: i64) {
         use crate::storage::notify::StorageNotifier;
         if scheduled_at > crate::job::now_millis() {
             return;
         }
         match self {
-            StorageBackend::Sqlite(s) => s.notify_job_ready("", scheduled_at),
+            StorageBackend::Sqlite(s) => s.notify_job_ready(queue, scheduled_at),
             #[cfg(feature = "postgres")]
-            StorageBackend::Postgres(s) => s.notify_job_ready("", scheduled_at),
+            StorageBackend::Postgres(s) => s.notify_job_ready(queue, scheduled_at),
             #[cfg(feature = "redis")]
-            StorageBackend::Redis(s) => s.notify_job_ready("", scheduled_at),
+            StorageBackend::Redis(s) => s.notify_job_ready(queue, scheduled_at),
+        }
+    }
+
+    /// Notify once per distinct queue holding a ready job in a batch, so each
+    /// queue's schedulers hear about it without one signal per job.
+    #[cfg(feature = "push-dispatch")]
+    fn notify_ready_queues<'a>(&self, jobs: impl Iterator<Item = &'a Job>) {
+        let now = crate::job::now_millis();
+        let queues: std::collections::BTreeSet<&str> = jobs
+            .filter(|j| j.scheduled_at <= now)
+            .map(|j| j.queue.as_str())
+            .collect();
+        for queue in queues {
+            self.notify_if_ready(queue, now);
         }
     }
 }
@@ -1599,18 +1614,13 @@ impl Storage for StorageBackend {
     fn enqueue(&self, new_job: NewJob) -> Result<Job> {
         let job = delegate!(self, enqueue, new_job)?;
         #[cfg(feature = "push-dispatch")]
-        self.notify_if_ready(job.scheduled_at);
+        self.notify_if_ready(&job.queue, job.scheduled_at);
         Ok(job)
     }
     fn enqueue_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
         let jobs = delegate!(self, enqueue_batch, new_jobs)?;
         #[cfg(feature = "push-dispatch")]
-        if jobs
-            .iter()
-            .any(|j| j.scheduled_at <= crate::job::now_millis())
-        {
-            self.notify_if_ready(0);
-        }
+        self.notify_ready_queues(jobs.iter());
         Ok(jobs)
     }
     fn enqueue_unique(&self, new_job: NewJob) -> Result<Job> {
@@ -1619,13 +1629,13 @@ impl Storage for StorageBackend {
     fn enqueue_unique_reporting(&self, new_job: NewJob) -> Result<(Job, bool)> {
         let (job, deduplicated) = delegate!(self, enqueue_unique_reporting, new_job)?;
         #[cfg(feature = "push-dispatch")]
-        self.notify_if_ready(job.scheduled_at);
+        self.notify_if_ready(&job.queue, job.scheduled_at);
         Ok((job, deduplicated))
     }
     fn enqueue_debounced(&self, new_job: NewJob, options: records::DebounceOptions) -> Result<Job> {
         let job = delegate!(self, enqueue_debounced, new_job, options)?;
         #[cfg(feature = "push-dispatch")]
-        self.notify_if_ready(job.scheduled_at);
+        self.notify_if_ready(&job.queue, job.scheduled_at);
         Ok(job)
     }
     fn enqueue_unique_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
@@ -1638,12 +1648,7 @@ impl Storage for StorageBackend {
     fn enqueue_unique_batch_reporting(&self, new_jobs: Vec<NewJob>) -> Result<Vec<(Job, bool)>> {
         let jobs = delegate!(self, enqueue_unique_batch_reporting, new_jobs)?;
         #[cfg(feature = "push-dispatch")]
-        if jobs
-            .iter()
-            .any(|(j, _)| j.scheduled_at <= crate::job::now_millis())
-        {
-            self.notify_if_ready(0);
-        }
+        self.notify_ready_queues(jobs.iter().map(|(job, _)| job));
         Ok(jobs)
     }
     fn dequeue(&self, queue_name: &str, now: i64, namespace: Option<&str>) -> Result<Option<Job>> {

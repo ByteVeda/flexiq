@@ -991,7 +991,7 @@ impl Scheduler {
     /// and degrade to polling. Redis needs no call: [`Self::run`] installs its
     /// source by default.
     pub fn enable_push_dispatch(&self) {
-        self.set_wake_source(wake::WakeSource::for_storage(&self.storage));
+        self.set_wake_source(wake::WakeSource::for_storage(&self.storage, &self.queues));
     }
 
     /// Keep this scheduler polling, opting out of the Redis push default and
@@ -1018,7 +1018,9 @@ impl Scheduler {
         }
         match &self.storage {
             #[cfg(feature = "redis")]
-            StorageBackend::Redis(_) => Some(wake::WakeSource::for_storage(&self.storage)),
+            StorageBackend::Redis(_) => {
+                Some(wake::WakeSource::for_storage(&self.storage, &self.queues))
+            }
             _ => None,
         }
     }
@@ -1039,20 +1041,13 @@ impl Scheduler {
             .take()
     }
 
-    /// Bridge a (re)scheduled job into the push loop: wake immediately if it
-    /// is ready now, otherwise arm the delayed timer. Used by the retry and
-    /// periodic-enqueue paths, which run on the scheduler and already hold a
-    /// storage handle.
-    pub(crate) fn signal_scheduled(&self, scheduled_at: i64) {
-        use crate::storage::notify::StorageNotifier;
+    /// Bridge a (re)scheduled job on `queue` into the push loop: wake that
+    /// queue's schedulers if it is ready now, otherwise arm the delayed timer.
+    /// Used by the retry and step-sleep paths, which reschedule without an
+    /// enqueue and so bypass the storage-side notify.
+    pub(crate) fn signal_scheduled(&self, queue: &str, scheduled_at: i64) {
         if scheduled_at <= crate::job::now_millis() {
-            match &self.storage {
-                StorageBackend::Sqlite(s) => s.notify_job_ready("", scheduled_at),
-                #[cfg(feature = "postgres")]
-                StorageBackend::Postgres(s) => s.notify_job_ready("", scheduled_at),
-                #[cfg(feature = "redis")]
-                StorageBackend::Redis(s) => s.notify_job_ready("", scheduled_at),
-            }
+            self.storage.notify_if_ready(queue, scheduled_at);
         } else {
             self.note_scheduled_at(scheduled_at);
         }
@@ -4339,27 +4334,138 @@ mod push_tests {
         assert!(scheduler.resolve_wake_source().is_none());
     }
 
-    /// A scheduler over a uniquely prefixed Redis keyspace, or `None` (skip)
-    /// when no hosted Redis is configured.
+    /// A uniquely prefixed Redis keyspace, or `None` (skip) when no hosted
+    /// Redis is configured.
     #[cfg(feature = "redis")]
-    fn redis_scheduler(test: &str) -> Option<Scheduler> {
+    fn redis_storage(test: &str) -> Option<crate::RedisStorage> {
         let Ok(url) = std::env::var("FLEXIQ_REDIS_TEST_URL") else {
             eprintln!("Skipping (FLEXIQ_REDIS_TEST_URL not set): {test}");
             return None;
         };
         let prefix = format!("push_test_{}:", uuid::Uuid::now_v7().simple());
         match crate::RedisStorage::with_prefix(&url, &prefix) {
-            Ok(storage) => Some(Scheduler::new(
-                StorageBackend::Redis(storage),
-                vec!["default".to_string()],
-                SchedulerConfig::default(),
-                None,
-            )),
+            Ok(storage) => Some(storage),
             Err(e) => {
                 eprintln!("Skipping Redis test (cannot connect): {e}");
                 None
             }
         }
+    }
+
+    /// A scheduler serving only `queue` over `storage`.
+    #[cfg(feature = "redis")]
+    fn redis_scheduler_on(storage: &crate::RedisStorage, queue: &str) -> Scheduler {
+        Scheduler::new(
+            StorageBackend::Redis(storage.clone()),
+            vec![queue.to_string()],
+            SchedulerConfig::default(),
+            None,
+        )
+    }
+
+    /// A scheduler serving `default` over a fresh Redis keyspace.
+    #[cfg(feature = "redis")]
+    fn redis_scheduler(test: &str) -> Option<Scheduler> {
+        redis_storage(test).map(|storage| redis_scheduler_on(&storage, "default"))
+    }
+
+    /// Enqueue a job on `queue` and wait (by wake or fallback) for `rx` to get
+    /// it: warms the connections and re-anchors the scheduler's fallback.
+    #[cfg(feature = "redis")]
+    async fn warm_up(
+        storage: &StorageBackend,
+        queue: &str,
+        rx: &mut tokio::sync::mpsc::Receiver<Job>,
+    ) {
+        storage
+            .enqueue(NewJob {
+                queue: queue.to_string(),
+                ..ready_job("warm")
+            })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("the warm-up job dispatches by wake or fallback")
+            .expect("run loop alive");
+    }
+
+    /// Two schedulers on one keyspace serving different queues: an enqueue to
+    /// B wakes B promptly while A runs. A consumed signal (the old list pop)
+    /// let A swallow it, leaving B to its 2 s fallback.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_wake_reaches_the_queues_own_scheduler() {
+        let Some(storage) = redis_storage("redis_wake_reaches_the_queues_own_scheduler") else {
+            return;
+        };
+        let a = Arc::new(redis_scheduler_on(&storage, "queue_a"));
+        let b = Arc::new(redis_scheduler_on(&storage, "queue_b"));
+        let (run_a, _rx_a) = spawn_run(&a);
+        let (run_b, mut rx_b) = spawn_run(&b);
+        warm_up(b.storage(), "queue_b", &mut rx_b).await;
+
+        let enqueue_started = tokio::time::Instant::now();
+        let enqueued = b
+            .storage()
+            .enqueue(NewJob {
+                queue: "queue_b".to_string(),
+                ..ready_job("woken")
+            })
+            .unwrap();
+        let deadline = enqueue_started + Duration::from_millis(1500);
+        let job = tokio::time::timeout_at(deadline, rx_b.recv())
+            .await
+            .expect("queue B's scheduler must wake before its fallback")
+            .expect("run loop alive");
+        assert_eq!(job.id, enqueued.id);
+
+        for (scheduler, run) in [(a, run_a), (b, run_b)] {
+            scheduler.shutdown_handle().notify_one();
+            run.await.unwrap();
+        }
+    }
+
+    /// Two schedulers serving the same queue both hear one signal — a
+    /// broadcast, not a single consumable token. Observed on the wake
+    /// channels themselves, after a subscribe handshake drains them.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_wake_reaches_every_scheduler_on_the_queue() {
+        use crate::storage::notify::StorageNotifier;
+        let Some(storage) = redis_storage("redis_wake_reaches_every_scheduler_on_the_queue") else {
+            return;
+        };
+        let channel = |scheduler: &Scheduler| match scheduler.resolve_wake_source() {
+            Some(wake::WakeSource::Channel(rx)) => rx,
+            _ => panic!("Redis defaults to a listener channel"),
+        };
+        let mut first = channel(&redis_scheduler_on(&storage, "shared"));
+        let mut second = channel(&redis_scheduler_on(&storage, "shared"));
+
+        // Handshake: signal until both listeners have subscribed and heard one.
+        let handshake = async {
+            let (mut got_first, mut got_second) = (false, false);
+            while !(got_first && got_second) {
+                storage.notify_job_ready("shared", 0);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                got_first |= first.try_recv().is_ok();
+                got_second |= second.try_recv().is_ok();
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), handshake)
+            .await
+            .expect("both listeners subscribe");
+        // Let in-flight handshake signals land, then start from empty channels.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        while first.try_recv().is_ok() {}
+        while second.try_recv().is_ok() {}
+
+        storage.notify_job_ready("shared", 0);
+        let both = async { tokio::join!(first.recv(), second.recv()) };
+        let (a, b) = tokio::time::timeout(Duration::from_secs(5), both)
+            .await
+            .expect("one signal must wake every scheduler on the queue");
+        assert!(a.is_some() && b.is_some(), "listeners alive");
     }
 
     /// #961: on Redis `run` wakes on enqueue with no explicit opt-in. A first
@@ -4374,12 +4480,7 @@ mod push_tests {
         };
         let scheduler = Arc::new(scheduler);
         let (run, mut rx) = spawn_run(&scheduler);
-
-        scheduler.storage().enqueue(ready_job("warm")).unwrap();
-        tokio::time::timeout(Duration::from_secs(10), rx.recv())
-            .await
-            .expect("the warm-up job dispatches by wake or fallback")
-            .expect("run loop alive");
+        warm_up(scheduler.storage(), "default", &mut rx).await;
 
         let enqueue_started = tokio::time::Instant::now();
         let enqueued = scheduler.storage().enqueue(ready_job("woken")).unwrap();

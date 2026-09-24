@@ -22,7 +22,7 @@ pub enum WakeSource {
     /// SQLite, single-process: an in-memory [`Notify`] shared with the
     /// storage layer. Enqueue calls `notify_one()` on the same handle.
     InProcess(Arc<Notify>),
-    /// Postgres `LISTEN` / Redis `BLPOP`: a background listener forwards a
+    /// Postgres `LISTEN` / Redis pub/sub: a background listener forwards a
     /// unit value per notification into this channel.
     Channel(mpsc::Receiver<()>),
     /// Feature compiled in but no wake source available — behaves like the
@@ -33,23 +33,28 @@ pub enum WakeSource {
 impl WakeSource {
     /// Build the wake source that matches `storage`'s backend: SQLite shares
     /// the storage's in-process [`Notify`], Postgres and Redis each spawn their
-    /// listener and take its channel.
+    /// listener and take its channel. `queues` are the queues the scheduler
+    /// serves: Redis subscribes to exactly their channels; the others ignore it.
     ///
     /// Must be called from inside a Tokio runtime context — the Postgres and
     /// Redis arms spawn a listener task. SQLite needs no runtime, but every
     /// binding shell installs wakeups through this one entry point so the
     /// backend mapping lives in a single place.
-    pub fn for_storage(storage: &StorageBackend) -> Self {
+    #[cfg_attr(not(feature = "redis"), allow(unused_variables))]
+    pub fn for_storage(storage: &StorageBackend, queues: &[String]) -> Self {
         match storage {
             StorageBackend::Sqlite(s) => WakeSource::InProcess(s.notify_handle().clone()),
             #[cfg(feature = "postgres")]
             StorageBackend::Postgres(s) => {
                 WakeSource::Channel(crate::storage::postgres::listener::spawn(s.clone()))
             }
+            // No queues means no channel to subscribe to (SUBSCRIBE needs one).
             #[cfg(feature = "redis")]
-            StorageBackend::Redis(s) => {
-                WakeSource::Channel(crate::storage::redis_backend::listener::spawn(s.clone()))
-            }
+            StorageBackend::Redis(_) if queues.is_empty() => WakeSource::Polling,
+            #[cfg(feature = "redis")]
+            StorageBackend::Redis(s) => WakeSource::Channel(
+                crate::storage::redis_backend::listener::spawn(s.clone(), queues),
+            ),
         }
     }
 
@@ -85,7 +90,7 @@ mod tests {
     fn sqlite_source_shares_the_storage_notify_handle() {
         let sqlite = SqliteStorage::in_memory().unwrap();
         let notify = sqlite.notify_handle().clone();
-        match WakeSource::for_storage(&StorageBackend::Sqlite(sqlite)) {
+        match WakeSource::for_storage(&StorageBackend::Sqlite(sqlite), &[]) {
             WakeSource::InProcess(handle) => assert!(Arc::ptr_eq(&handle, &notify)),
             _ => panic!("sqlite must wake in-process"),
         }

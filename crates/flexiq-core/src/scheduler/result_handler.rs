@@ -227,7 +227,7 @@ impl Scheduler {
                     self.storage
                         .retry(&job_id, next_at, self.namespace.as_deref())?;
                     #[cfg(feature = "push-dispatch")]
-                    self.signal_scheduled(next_at);
+                    self.signal_scheduled(&queue, next_at);
                     Ok(ResultOutcome::Retry {
                         job_id,
                         task_name,
@@ -407,7 +407,7 @@ impl Scheduler {
         // The job is scheduled, not running: tell the poller when to come back,
         // exactly as a retry does.
         #[cfg(feature = "push-dispatch")]
-        self.signal_scheduled(wake_at);
+        self.signal_scheduled(&queue, wake_at);
         Ok(ResultOutcome::Slept {
             job_id,
             task_name,

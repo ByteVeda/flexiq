@@ -9,10 +9,15 @@
 //! dispatch it immediately instead of waiting for the next poll. Delayed jobs
 //! (`scheduled_at > now`) deliberately do NOT notify — the scheduler relies on
 //! its fallback timer to pick those up at the right time.
+//!
+//! Signals carry the job's queue. Redis publishes on that queue's pub/sub
+//! channel, reaching every scheduler serving it; SQLite (one in-process
+//! handle) and Postgres (one `NOTIFY` channel) wake regardless of queue.
 
 #![cfg(feature = "push-dispatch")]
 
-/// Emit a "job ready" signal for `queue`. Implementations must be cheap and
+/// Emit a "job ready" signal for `queue` (the job's real queue, never a
+/// placeholder — Redis routes on it). Implementations must be cheap and
 /// must never panic or propagate errors into the enqueue path — a failed
 /// notification only costs the dispatch-latency improvement, never
 /// correctness (the fallback poll still finds the job).
