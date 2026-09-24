@@ -78,6 +78,15 @@ spec:
       {{- $eventsDrain = .Values.events.drain | int64 }}
       {{- end }}
       terminationGracePeriodSeconds: {{ add (add (mul 2 (.Values.push.drain | int64)) 10) $eventsDrain }}
+      {{- else if .Values.events.enabled }}
+      # Unset, no push, but events.enabled still drains the hub once every
+      # role has stopped — the same reason push.enabled computes a default
+      # above, minus the "spent twice" part push's own settle/abandon cycle
+      # needs. Computed instead of left absent: events.drain plus the same
+      # 10s teardown margin (SIGTERM delivery, the tokio runtime unwinding,
+      # the container runtime's own stop overhead). An explicit value above
+      # always wins over this.
+      terminationGracePeriodSeconds: {{ add (.Values.events.drain | int64) 10 }}
       {{- end }}
       {{- with .Values.pullSecrets }}
       imagePullSecrets:
