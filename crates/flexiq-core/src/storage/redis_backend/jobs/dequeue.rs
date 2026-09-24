@@ -67,7 +67,9 @@ const SELECT_AND_CLAIM_BODY: &str = r#"
     local claimed, expired, deferred = {}, {}, {}
     local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', '+inf', 'LIMIT', 0, ARGV[11])
     for _, id in ipairs(ids) do
-        if #claimed >= max then break end
+        -- Deferred docs spend the budget too: Rust claims them from what is
+        -- left, so a head-of-queue deferred job is never starved by plain ones.
+        if #claimed + #deferred >= max then break end
         local doc = redis.call('GET', job_key_prefix .. id)
         if not doc then
             -- Stale entry: the job is gone, so drop it from the queue.

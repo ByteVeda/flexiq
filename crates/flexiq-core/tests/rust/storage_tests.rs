@@ -4234,6 +4234,7 @@ fn redis_storage_tests() {
     redis_mutators_reject_archived_jobs(&storage);
     redis_purge_preserves_reused_unique_key(&storage);
     redis_claim_skips_job_dropped_from_pending_set(&storage);
+    redis_deferred_claim_is_not_starved(&storage);
     redis_retry_keeps_job_dequeuable(&storage);
     redis_complete_preserves_reused_unique_key(&storage);
     redis_update_progress_never_resurrects_archived(&storage);
@@ -4456,6 +4457,43 @@ fn drain_queue(s: &flexiq_core::RedisStorage, q: &str) {
         .unwrap()
         .is_some()
     {}
+}
+
+/// A document the claim script cannot patch in place is deferred to Rust, and
+/// it must count against the batch: at the head of the queue with `max` plain
+/// jobs behind it, it still gets claimed rather than losing every batch to them.
+#[cfg(feature = "redis")]
+fn redis_deferred_claim_is_not_starved(s: &flexiq_core::RedisStorage) {
+    use redis::Commands;
+    let q = "q-redis-deferred-head";
+    drain_queue(s, q);
+    let now = now_millis();
+    let mut head = make_job(q, "deferred_head");
+    head.scheduled_at = now - 10_000;
+    let head = s.enqueue(head).unwrap();
+    for i in 0..2 {
+        let mut plain = make_job(q, &format!("plain_{i}"));
+        plain.scheduled_at = now - 5_000;
+        s.enqueue(plain).unwrap();
+    }
+
+    // Valid JSON serde still reads, but no exact `"started_at":null` token for
+    // the script to swap — the shape that sends a doc down the deferred path.
+    let mut conn = s.conn().unwrap();
+    let job_key = rkey(s, &["job", &head.id]);
+    let doc: String = conn.get(&job_key).unwrap();
+    let respaced = doc.replacen("\"started_at\":null", "\"started_at\": null", 1);
+    assert_ne!(respaced, doc, "the document carries a null started_at");
+    let _: () = conn.set(&job_key, respaced).unwrap();
+
+    let claimed = s.dequeue_batch(q, now_millis(), None, 2).unwrap();
+    assert!(
+        claimed.iter().any(|j| j.id == head.id),
+        "the deferred head must be claimed, got {:?}",
+        claimed.iter().map(|j| &j.task_name).collect::<Vec<_>>()
+    );
+    assert_eq!(claimed.len(), 2);
+    drain_queue(s, q);
 }
 
 /// The atomic claim must refuse a candidate that a concurrent cancel/expire
