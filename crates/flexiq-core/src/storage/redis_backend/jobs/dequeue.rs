@@ -13,6 +13,9 @@ use crate::storage::redis_backend::{map_err, RedisConnection, RedisStorage};
 /// is never resurrected, and Redis's atomic script execution rules out a
 /// double claim between schedulers.
 ///
+/// A candidate is decoded only once raw-token checks say it could be claimed
+/// (Pending, due, this namespace), so a scan past future, finished or
+/// foreign-namespace jobs costs string searches, not full JSON decodes.
 /// The document is decoded but never re-encoded — `lua-cjson` rewrites an empty
 /// `[]` payload as `{}` — so the claim patches it by swapping the exact
 /// `status` and `started_at` tokens, each of which must occur exactly once.
@@ -64,6 +67,26 @@ const SELECT_AND_CLAIM_BODY: &str = r#"
         return true
     end
 
+    -- Raw-token prefilter, so a candidate that cannot be claimed (not
+    -- Pending, not yet due, another namespace) is skipped without decoding its
+    -- whole document on the Redis thread. The `Job` document is one flat serde
+    -- object, and serde escapes every `"` inside a string, so an unescaped
+    -- `"key":` is always a top-level key, never text inside a value. It only
+    -- ever skips; the decoded checks below stay the authority.
+    local pending_token = '"status":"' .. pending_status .. '"'
+    local function worth_decoding(doc)
+        if not string.find(doc, pending_token, 1, true) then return false end
+        local scheduled_at = tonumber(string.match(doc, '"scheduled_at":(%-?%d+)'))
+        if scheduled_at and scheduled_at > now then return false end
+        -- A namespaced scheduler never claims a default-namespace job, and the
+        -- default one never claims a namespaced job. A missing key falls
+        -- through to the decode, which reads it as no namespace.
+        if want_namespace then
+            return not string.find(doc, '"namespace":null', 1, true)
+        end
+        return not string.find(doc, '"namespace":"', 1, true)
+    end
+
     local claimed, expired, deferred = {}, {}, {}
     local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', '+inf', 'LIMIT', 0, ARGV[11])
     for _, id in ipairs(ids) do
@@ -74,7 +97,7 @@ const SELECT_AND_CLAIM_BODY: &str = r#"
         if not doc then
             -- Stale entry: the job is gone, so drop it from the queue.
             redis.call('ZREM', KEYS[1], id)
-        else
+        elseif worth_decoding(doc) then
             local job = cjson.decode(doc)
             local job_ns = job.namespace
             if not present(job_ns) then job_ns = nil end

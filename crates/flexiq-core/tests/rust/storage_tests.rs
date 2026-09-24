@@ -4252,6 +4252,7 @@ fn redis_storage_tests() {
     redis_claim_preserves_empty_payload(&storage);
     redis_claim_respects_priority_then_schedule_order(&storage);
     redis_claim_skips_future_and_foreign_namespace(&storage);
+    redis_claim_prefilter_reaches_the_ready_job_behind_the_head(&storage);
     redis_claim_waits_for_dependencies(&storage);
     redis_claim_does_not_starve_ready_dependents(&storage);
     redis_select_and_claim_is_one_round_trip(&storage);
@@ -5046,6 +5047,59 @@ fn redis_claim_skips_future_and_foreign_namespace(s: &flexiq_core::RedisStorage)
     assert_eq!(pending(&future, None), JobStatus::Pending);
     assert_eq!(pending(&other_plain, None), JobStatus::Pending);
     assert_eq!(pending(&tenant_b, Some("tenant-b")), JobStatus::Pending);
+}
+
+/// The claim script's raw-token prefilter skips a head of future and
+/// foreign-namespace jobs without touching them, still claims the ready job
+/// behind it, and is not fooled by the same tokens quoted inside a string.
+#[cfg(feature = "redis")]
+fn redis_claim_prefilter_reaches_the_ready_job_behind_the_head(s: &flexiq_core::RedisStorage) {
+    use redis::Commands;
+    let q = "q-redis-claim-prefilter";
+    drain_queue(s, q);
+    let later = now_millis() + 60_000;
+    // Priority puts every skipped job ahead of the target in score order.
+    let head_job = || {
+        let mut job = make_job(q, "prefilter_head");
+        job.priority = 10;
+        job
+    };
+    let mut skipped = Vec::new();
+    for _ in 0..30 {
+        let mut future = head_job();
+        future.scheduled_at = later;
+        skipped.push((s.enqueue(future).unwrap().id, None));
+        let mut foreign = head_job();
+        foreign.namespace = Some("tenant-prefilter".to_string());
+        skipped.push((s.enqueue(foreign).unwrap().id, Some("tenant-prefilter")));
+    }
+    // Every prefilter token, quoted inside a value: escaped, so still ready.
+    let mut target = make_job(q, "prefilter_target");
+    target.metadata =
+        Some(r#"{"status":"Running","scheduled_at":99999999999999,"namespace":"x"}"#.to_string());
+    let target = s.enqueue(target).unwrap().id;
+
+    let mut conn = s.conn().unwrap();
+    let raw = |conn: &mut flexiq_core::RedisConnection, id: &str| -> String {
+        conn.get(format!("{}job:{id}", s.prefix())).unwrap()
+    };
+    let before: Vec<String> = skipped.iter().map(|(id, _)| raw(&mut conn, id)).collect();
+
+    // Taken after the enqueues: 61 remote round trips can outlast any margin.
+    let claimed = s.dequeue_batch(q, now_millis(), None, 1).unwrap();
+    assert_eq!(
+        claimed.iter().map(|j| &j.id).collect::<Vec<_>>(),
+        vec![&target],
+        "the ready job behind 60 skipped candidates is claimed"
+    );
+
+    for ((id, ns), doc) in skipped.iter().zip(before) {
+        assert_eq!(raw(&mut conn, id), doc, "a skipped document is untouched");
+        assert_eq!(
+            s.get_job(id, *ns).unwrap().unwrap().status,
+            JobStatus::Pending
+        );
+    }
 }
 
 /// A job with an incomplete dependency is left Pending; once the dependency
