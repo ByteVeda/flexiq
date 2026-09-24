@@ -525,7 +525,8 @@ pub struct Scheduler {
     /// informative. Per-instance (`Scheduler` is not `Clone`).
     retention_announced: std::sync::Once,
     /// Wake source for push-dispatch, installed before `run()`. Taken (moved
-    /// out) once when the loop starts. `None` means the loop polls as today.
+    /// out) once when the loop starts. `None` defers to the backend default
+    /// (see `resolve_wake_source`): push on Redis, polling elsewhere.
     #[cfg(feature = "push-dispatch")]
     wake_source: Mutex<Option<wake::WakeSource>>,
     /// Set by [`Self::disable_push_dispatch`]: keeps a backend whose default is
@@ -1026,7 +1027,8 @@ impl Scheduler {
     }
 
     /// Install the wake source the push loop should consume. Call before
-    /// `run()`. With no wake source installed, `run()` keeps polling.
+    /// `run()`. With none installed, `run()` falls back to the backend default
+    /// (see `resolve_wake_source`): push on Redis, polling elsewhere.
     pub fn set_wake_source(&self, source: wake::WakeSource) {
         let mut guard = self.wake_source.lock().unwrap_or_else(|p| p.into_inner());
         *guard = Some(source);
