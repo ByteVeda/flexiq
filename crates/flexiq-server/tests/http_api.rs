@@ -10,6 +10,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use flexiq_core::{now_millis, NewJob, Storage};
 use serde_json::{json, Value};
+use tower::ServiceExt;
 
 use flexiq_server::config::dashboard::AuthMode;
 use flexiq_server::dashboard::static_assets::StaticAssets;
@@ -760,4 +761,57 @@ async fn the_auth_endpoints_are_absent_when_auth_is_off() {
     let (status, _, body) = call(&state, get("/api/auth/whoami")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], json!("auth_disabled"));
+}
+
+/// The whole `/metrics` body, which `call` does not keep because it is not JSON.
+async fn scrape(state: &flexiq_server::dashboard::state::SharedState) -> String {
+    let response = flexiq_server::dashboard::router(state.clone())
+        .oneshot(get("/metrics"))
+        .await
+        .expect("the router is infallible");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("read the body");
+    String::from_utf8(bytes.to_vec()).expect("UTF-8 exposition")
+}
+
+#[tokio::test]
+async fn metrics_carry_no_event_series_without_events() {
+    let storage = temp_storage("http-metrics-no-events");
+    let state = dashboard_state(&storage, AuthMode::Open);
+    let body = scrape(&state).await;
+    assert!(!body.contains("flexiq_events_"), "{body}");
+}
+
+#[cfg(feature = "events-http")]
+#[tokio::test]
+async fn metrics_carry_the_event_hub_series() {
+    let storage = temp_storage("http-metrics-events");
+    let hub = Arc::new(
+        flexiq_core::EventHub::from_json(
+            r#"{"sinks": [{"kind": "http", "name": "warehouse",
+                "url": "https://events.example.com/in", "allow": ["events.example.com"]}]}"#,
+        )
+        .expect("the hub starts"),
+    );
+    let mut state = dashboard_state(&storage, AuthMode::Open);
+    Arc::get_mut(&mut state)
+        .expect("sole owner before any request clones it")
+        .events = Some(Arc::clone(&hub));
+
+    let body = scrape(&state).await;
+    assert!(
+        body.contains("flexiq_events_delivered_total{sink=\"warehouse\"} 0"),
+        "{body}"
+    );
+    assert!(
+        body.contains("flexiq_events_dropped_total{sink=\"warehouse\",reason=\"shutdown\"} 0"),
+        "{body}"
+    );
+    assert!(
+        body.contains("flexiq_events_queued{sink=\"warehouse\"} 0"),
+        "{body}"
+    );
+    hub.shutdown(std::time::Duration::from_millis(10));
 }

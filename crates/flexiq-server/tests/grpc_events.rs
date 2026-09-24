@@ -1,5 +1,5 @@
 //! End to end: the gRPC producer door's job events, delivered to a loopback
-//! HTTP sink.
+//! HTTP sink, and the hub's counters on the same listener's `/metrics`.
 //!
 //! The door owns two events — `job.enqueued` for a row it wrote, and
 //! `job.cancelled` for a pending job it cancelled. Everything later is the
@@ -37,6 +37,8 @@ struct Harness {
     client: ProducerServiceClient<InterceptedService<Channel, Bearer>>,
     receiver: WebhookReceiver,
     hub: Arc<EventHub>,
+    base: String,
+    token: String,
     _storage: TempStorage,
     shutdown: Shutdown,
     served: tokio::task::JoinHandle<anyhow::Result<()>>,
@@ -86,6 +88,8 @@ impl Harness {
             client: ProducerServiceClient::with_interceptor(channel, Bearer::new(&token)),
             receiver,
             hub,
+            base: format!("http://{addr}"),
+            token,
             _storage: storage,
             shutdown,
             served,
@@ -124,6 +128,29 @@ impl Harness {
                 tokio::time::Instant::now() < deadline,
                 "expected {count} events, got {received:?}"
             );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Scrape until `series` appears, or give up and return the last body.
+    ///
+    /// Polled because a delivery counter moves once the sink reads the reply,
+    /// a moment after the receiver has recorded the request.
+    async fn scrape_until(&self, series: &str) -> String {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let body = reqwest::Client::new()
+                .get(format!("{}/metrics", self.base))
+                .bearer_auth(&self.token)
+                .send()
+                .await
+                .expect("the listener must answer")
+                .text()
+                .await
+                .expect("a body");
+            if body.contains(series) || tokio::time::Instant::now() >= deadline {
+                return body;
+            }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
@@ -230,6 +257,26 @@ async fn cancelling_a_pending_job_emits_cancelled_once() {
     assert_eq!(events[1]["type"], "org.byteveda.flexiq.job.cancelled");
     assert_eq!(events[1]["id"], format!("{job_id}:0:-:job.cancelled"));
     assert_eq!(events[2]["subject"], marker.as_str());
+
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn metrics_count_what_the_sink_delivered() {
+    let mut harness = Harness::start("events-metrics").await;
+    harness.enqueue("send_email", keyed("one")).await;
+    harness.enqueue("send_email", keyed("two")).await;
+    harness.events(2).await;
+
+    let delivered = format!("flexiq_events_delivered_total{{sink=\"{SINK}\"}} 2");
+    let body = harness.scrape_until(&delivered).await;
+    assert!(body.contains(&delivered), "{body}");
+    for reason in ["buffer_full", "rejected", "failed", "shutdown"] {
+        let dropped =
+            format!("flexiq_events_dropped_total{{sink=\"{SINK}\",reason=\"{reason}\"}} 0");
+        assert!(body.contains(&dropped), "{body}");
+    }
+    assert!(body.contains("# TYPE flexiq_events_queued gauge"), "{body}");
 
     harness.stop().await;
 }

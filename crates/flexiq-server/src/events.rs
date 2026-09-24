@@ -48,6 +48,12 @@ pub fn cancelled(hub: Option<&EventHub>, job: &Job) {
     hub.emit(event);
 }
 
+/// The hub's metrics in Prometheus text, or nothing when events are off, so a
+/// deployment without them exposes no empty `flexiq_events_*` families.
+pub fn render_metrics(hub: Option<&EventHub>) -> String {
+    hub.map(EventHub::render_prometheus).unwrap_or_default()
+}
+
 fn door_event(event_type: EventType, job: &Job) -> JobEvent {
     JobEvent::new(
         event_type,

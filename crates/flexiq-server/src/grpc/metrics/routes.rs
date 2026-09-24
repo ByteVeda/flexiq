@@ -18,6 +18,7 @@ use axum::Router;
 use flexiq_core::{Storage, StorageBackend};
 
 use super::registry::RpcMetrics;
+use crate::events::Events;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::executor::ExecutorDoor;
 use crate::grpc::facade::error;
@@ -31,6 +32,8 @@ pub struct MetricsState {
     /// executor gauges are then omitted rather than reported as zero.
     door: Option<ExecutorDoor>,
     metrics: Arc<RpcMetrics>,
+    /// Absent when no events are configured, and then so are its series.
+    events: Events,
 }
 
 /// The `/metrics` route.
@@ -39,6 +42,7 @@ pub fn router(
     namespace: String,
     door: Option<ExecutorDoor>,
     metrics: Arc<RpcMetrics>,
+    events: Events,
 ) -> Router {
     Router::new()
         .route(super::METRICS_PATH, get(scrape))
@@ -47,6 +51,7 @@ pub fn router(
             namespace,
             door,
             metrics,
+            events,
         })
 }
 
@@ -78,6 +83,7 @@ async fn scrape(State(state): State<MetricsState>) -> Response {
     );
     body.push_str(&state.metrics.render());
     body.push_str(&crate::trigger::metrics::render());
+    body.push_str(&crate::events::render_metrics(state.events.as_deref()));
 
     (
         [("content-type", crate::metrics::EXPOSITION_CONTENT_TYPE)],

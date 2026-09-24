@@ -169,6 +169,7 @@ impl Listener {
             self.config.namespace.clone(),
             executor.clone(),
             Arc::clone(&rpc_metrics),
+            self.events.clone(),
         )
         .merge(facade::router(producer.clone(), admin.clone()));
 
