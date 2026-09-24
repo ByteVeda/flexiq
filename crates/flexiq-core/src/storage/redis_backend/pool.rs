@@ -235,6 +235,17 @@ impl ConnectionLike for RedisConnection {
     }
 }
 
+/// Only the pooling state: the connection itself carries the server address
+/// and possibly credentials, and prints nothing useful besides.
+impl std::fmt::Debug for RedisConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedisConnection")
+            .field("pooled", &self.pool.is_some())
+            .field("poisoned", &self.poisoned)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Drop for RedisConnection {
     fn drop(&mut self) {
         let Some(conn) = self.conn.take() else {
