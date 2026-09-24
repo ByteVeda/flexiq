@@ -38,8 +38,9 @@ native library — no extra build step.
 </Callout>
 
 <Callout type="info">
-  Push-dispatch's wake channel is scoped by `prefix`, not by Redis database
-  number. Two deployments on the same server and the same prefix but
-  different `SELECT`ed databases will cross-wake each other — harmless (a
+  Push-dispatch's wake channel is scoped by `prefix`, namespace and queue, not
+  by Redis database number. Two deployments on the same server with the same
+  prefix and namespace but different `SELECT`ed databases will cross-wake each
+  other — harmless (a
   spurious empty dequeue), but worth a distinct `.prefix(...)` per deployment.
 </Callout>

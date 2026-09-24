@@ -186,7 +186,7 @@ impl SqliteStorage {
 
 #[cfg(feature = "push-dispatch")]
 impl crate::storage::notify::StorageNotifier for SqliteStorage {
-    fn notify_job_ready(&self, _queue: &str, _scheduled_at: i64) {
+    fn notify_job_ready(&self, _namespace: Option<&str>, _queue: &str, _scheduled_at: i64) {
         // Single-process: wake the in-memory scheduler loop directly.
         self.notify.notify_one();
     }

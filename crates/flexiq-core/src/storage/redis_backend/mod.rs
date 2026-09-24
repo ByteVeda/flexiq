@@ -94,11 +94,13 @@ impl RedisStorage {
         &self.prefix
     }
 
-    /// The pub/sub channel push-dispatch signals `queue`'s ready jobs on. The
-    /// enqueue side `PUBLISH`es here; every scheduler serving `queue` listens.
+    /// The pub/sub channel push-dispatch signals ready jobs of `(namespace,
+    /// queue)` on. The enqueue side `PUBLISH`es here; every scheduler serving
+    /// that queue in that namespace listens. A scheduler only claims its own
+    /// namespace's jobs, so a shared channel would wake it for nothing.
     #[cfg(feature = "push-dispatch")]
-    pub(crate) fn notify_channel(&self, queue: &str) -> String {
-        self.key(&["notify", queue])
+    pub(crate) fn notify_channel(&self, namespace: Option<&str>, queue: &str) -> String {
+        self.key(&["notify", &Self::namespace_segment(namespace), queue])
     }
 
     /// A raw client clone, for the listener's dedicated blocking connection.
@@ -107,21 +109,27 @@ impl RedisStorage {
         &self.client
     }
 
-    /// Append `PUBLISH <notify-channel>` for `queue` onto `pipe`, `.ignore()`d
+    /// Append `PUBLISH <notify-channel>` for `(namespace, queue)` onto `pipe`, `.ignore()`d
     /// so it never changes the pipe's reply shape. Every enqueue write path
     /// folds its ready-notify in here instead of paying `notify_job_ready`'s
     /// own connection checkout + round trip (see `jobs/enqueue.rs`).
     /// `PUBLISH` cannot fail for type reasons, so this is safe to fold into an
     /// atomic (`MULTI`/`EXEC`) pipe too — no current caller uses one.
     #[cfg(feature = "push-dispatch")]
-    pub(crate) fn fold_ready_notify(&self, pipe: &mut redis::Pipeline, queue: &str) {
-        pipe.publish(self.notify_channel(queue), 1).ignore();
+    pub(crate) fn fold_ready_notify(
+        &self,
+        pipe: &mut redis::Pipeline,
+        namespace: Option<&str>,
+        queue: &str,
+    ) {
+        pipe.publish(self.notify_channel(namespace, queue), 1)
+            .ignore();
     }
 }
 
 #[cfg(feature = "push-dispatch")]
 impl crate::storage::notify::StorageNotifier for RedisStorage {
-    fn notify_job_ready(&self, queue: &str, _scheduled_at: i64) {
+    fn notify_job_ready(&self, namespace: Option<&str>, queue: &str, _scheduled_at: i64) {
         // Best-effort PUBLISH: a broadcast, so every scheduler serving `queue`
         // wakes, not whichever popped a shared signal first. A failure only
         // costs the latency improvement — the fallback poll still dispatches.
@@ -133,7 +141,7 @@ impl crate::storage::notify::StorageNotifier for RedisStorage {
             }
         };
         let res: redis::RedisResult<()> = redis::cmd("PUBLISH")
-            .arg(self.notify_channel(queue))
+            .arg(self.notify_channel(namespace, queue))
             .arg(1)
             .query(&mut conn);
         if let Err(e) = res {

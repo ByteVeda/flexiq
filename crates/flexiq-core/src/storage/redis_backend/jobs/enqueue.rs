@@ -288,7 +288,7 @@ impl RedisStorage {
         // `StorageBackend::notify_if_ready` skips Redis for this reason.
         #[cfg(feature = "push-dispatch")]
         if job.scheduled_at <= now_millis() {
-            self.fold_ready_notify(pipe, &job.queue);
+            self.fold_ready_notify(pipe, job.namespace.as_deref(), &job.queue);
         }
 
         pipe.query::<()>(&mut conn).map_err(map_err)?;
@@ -354,18 +354,19 @@ impl RedisStorage {
             self.push_pubsub_transition(pipe, job, JobStatus::Pending);
         }
 
-        // One publish per distinct ready queue, not per job — a burst onto
-        // the same queue wakes its schedulers once, still in this round trip.
+        // One publish per distinct ready (namespace, queue), not per job — a
+        // burst onto the same queue wakes its schedulers once, still in this
+        // round trip.
         #[cfg(feature = "push-dispatch")]
         {
             let now = now_millis();
-            let ready_queues: std::collections::BTreeSet<&str> = jobs
+            let ready: std::collections::BTreeSet<(Option<&str>, &str)> = jobs
                 .iter()
                 .filter(|j| j.scheduled_at <= now)
-                .map(|j| j.queue.as_str())
+                .map(|j| (j.namespace.as_deref(), j.queue.as_str()))
                 .collect();
-            for queue in ready_queues {
-                self.fold_ready_notify(pipe, queue);
+            for (namespace, queue) in ready {
+                self.fold_ready_notify(pipe, namespace, queue);
             }
         }
 
@@ -463,13 +464,13 @@ impl RedisStorage {
         // Wake this queue's schedulers in the same round trip when the slide
         // lands the job in the ready window — see DEBOUNCE_SLIDE.
         #[cfg(feature = "push-dispatch")]
-        invocation.arg(self.notify_channel(&target.queue)).arg(
-            if target.scheduled_at <= now_millis() {
+        invocation
+            .arg(self.notify_channel(target.namespace.as_deref(), &target.queue))
+            .arg(if target.scheduled_at <= now_millis() {
                 "1"
             } else {
                 "0"
-            },
-        );
+            });
         let applied: i32 = invocation.invoke(conn).map_err(map_err)?;
 
         Ok((applied == 1).then_some(target))
@@ -523,7 +524,7 @@ impl RedisStorage {
         // future) — see DEBOUNCE_INSERT_BODY.
         #[cfg(feature = "push-dispatch")]
         invocation
-            .arg(self.notify_channel(&job.queue))
+            .arg(self.notify_channel(job.namespace.as_deref(), &job.queue))
             .arg(if job.scheduled_at <= now_millis() {
                 "1"
             } else {
@@ -830,7 +831,7 @@ impl RedisStorage {
             // write — see the trailing ARGV read in store_script above.
             #[cfg(feature = "push-dispatch")]
             {
-                args.push(self.notify_channel(&job.queue));
+                args.push(self.notify_channel(job.namespace.as_deref(), &job.queue));
                 args.push(
                     if job.scheduled_at <= now_millis() {
                         "1"

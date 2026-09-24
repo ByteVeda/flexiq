@@ -85,9 +85,10 @@ construction, so a bad URL or a dead server fails here and not on the first
 enqueue.
 
 <Callout type="info">
-  Push-dispatch's wake channel is scoped by key prefix, not by Redis database
-  number. Two deployments on the same server and the same prefix but
-  different `SELECT`ed databases will cross-wake each other — harmless (a
+  Push-dispatch's wake channel is scoped by key prefix, namespace and queue,
+  not by Redis database number. Two deployments on the same server with the
+  same prefix and namespace but different `SELECT`ed databases will cross-wake
+  each other — harmless (a
   spurious empty dequeue), but worth a distinct `with_prefix` per deployment.
 </Callout>
 

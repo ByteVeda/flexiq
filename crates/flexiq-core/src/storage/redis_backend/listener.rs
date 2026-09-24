@@ -4,7 +4,7 @@
 //! build never compiles this module.
 //!
 //! A dedicated blocking connection `SUBSCRIBE`s to the notify channel of every
-//! queue the scheduler serves; each message forwards a unit wake into the
+//! queue the scheduler serves, in its namespace; each message forwards a unit wake into the
 //! scheduler's [`crate::scheduler::wake::WakeSource::Channel`]. Pub/sub is a
 //! broadcast, so every scheduler serving a queue wakes — a consumed signal
 //! (a list pop) would wake one, possibly one that cannot take the job. A read
@@ -42,14 +42,21 @@ const SHUTDOWN_CHECK: Duration = Duration::from_millis(250);
 /// TCP timeout (minutes).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Spawn the Redis wake listener for `queues` and return the receiver end for
-/// the scheduler's [`crate::scheduler::wake::WakeSource::Channel`].
+/// Spawn the Redis wake listener for `queues` in `namespace` and return the
+/// receiver end for the scheduler's [`crate::scheduler::wake::WakeSource::Channel`].
 ///
 /// The task ends once that receiver is dropped (the push loop returned),
 /// within one read timeout; every other wait in the loop is bounded too.
-pub fn spawn(storage: RedisStorage, queues: &[String]) -> mpsc::Receiver<()> {
+pub fn spawn(
+    storage: RedisStorage,
+    namespace: Option<&str>,
+    queues: &[String],
+) -> mpsc::Receiver<()> {
     let (tx, rx) = mpsc::channel(1);
-    let channels: Vec<String> = queues.iter().map(|q| storage.notify_channel(q)).collect();
+    let channels: Vec<String> = queues
+        .iter()
+        .map(|q| storage.notify_channel(namespace, q))
+        .collect();
 
     tokio::task::spawn_blocking(move || {
         let mut backoff = Backoff::new();

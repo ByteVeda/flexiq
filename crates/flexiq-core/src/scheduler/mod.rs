@@ -992,7 +992,12 @@ impl Scheduler {
     /// and degrade to polling. Redis needs no call: [`Self::run`] installs its
     /// source by default.
     pub fn enable_push_dispatch(&self) {
-        self.set_wake_source(wake::WakeSource::for_storage(&self.storage, &self.queues));
+        self.set_wake_source(self.backend_wake_source());
+    }
+
+    /// The backend's wake source for exactly what this scheduler serves.
+    fn backend_wake_source(&self) -> wake::WakeSource {
+        wake::WakeSource::for_storage(&self.storage, self.namespace.as_deref(), &self.queues)
     }
 
     /// Keep this scheduler polling, opting out of the Redis push default and
@@ -1020,9 +1025,7 @@ impl Scheduler {
         }
         match &self.storage {
             #[cfg(feature = "redis")]
-            StorageBackend::Redis(_) => {
-                Some(wake::WakeSource::for_storage(&self.storage, &self.queues))
-            }
+            StorageBackend::Redis(_) => Some(self.backend_wake_source()),
             _ => None,
         }
     }
@@ -1047,12 +1050,14 @@ impl Scheduler {
     /// Bridge a (re)scheduled job on `queue` into the push loop: wake that
     /// queue's schedulers if it is ready now, otherwise arm the delayed timer.
     /// Used by the retry and step-sleep paths, which reschedule without an
-    /// enqueue and so bypass the storage-side notify.
+    /// enqueue and so bypass the storage-side notify. The job was claimed by
+    /// this scheduler, so its namespace is this scheduler's.
     pub(crate) fn signal_scheduled(&self, queue: &str, scheduled_at: i64) {
         if scheduled_at <= crate::job::now_millis() {
             // Not an enqueue write, so nothing already published — always
             // call the backend's own notify (see `notify_rescheduled`).
-            self.storage.notify_rescheduled(queue, scheduled_at);
+            self.storage
+                .notify_rescheduled(self.namespace.as_deref(), queue, scheduled_at);
         } else {
             self.note_scheduled_at(scheduled_at);
         }
@@ -4488,7 +4493,7 @@ mod push_tests {
         let handshake = async {
             let (mut got_first, mut got_second) = (false, false);
             while !(got_first && got_second) {
-                storage.notify_job_ready("shared", 0);
+                storage.notify_job_ready(None, "shared", 0);
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 got_first |= first.try_recv().is_ok();
                 got_second |= second.try_recv().is_ok();
@@ -4502,12 +4507,85 @@ mod push_tests {
         while first.try_recv().is_ok() {}
         while second.try_recv().is_ok() {}
 
-        storage.notify_job_ready("shared", 0);
+        storage.notify_job_ready(None, "shared", 0);
         let both = async { tokio::join!(first.recv(), second.recv()) };
         let (a, b) = tokio::time::timeout(Duration::from_secs(5), both)
             .await
             .expect("one signal must wake every scheduler on the queue");
         assert!(a.is_some() && b.is_some(), "listeners alive");
+    }
+
+    /// A ready job in namespace `a` wakes `a`'s scheduler and not `b`'s on the
+    /// same queue name: `b` could never claim it, so the wake would be spurious.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_wake_stays_in_its_namespace() {
+        use crate::storage::notify::StorageNotifier;
+        let Some(storage) = redis_storage("redis_wake_stays_in_its_namespace") else {
+            return;
+        };
+        let channel = |namespace: &str| {
+            let scheduler = Scheduler::new(
+                StorageBackend::Redis(storage.clone()),
+                vec!["shared".to_string()],
+                SchedulerConfig::default(),
+                Some(namespace.to_string()),
+            );
+            match scheduler.resolve_wake_source() {
+                Some(wake::WakeSource::Channel(rx)) => rx,
+                _ => panic!("Redis defaults to a listener channel"),
+            }
+        };
+        let mut a = channel("a");
+        let mut b = channel("b");
+
+        // Handshake each listener on its own namespace's channel.
+        let handshake = async {
+            let (mut got_a, mut got_b) = (false, false);
+            while !(got_a && got_b) {
+                storage.notify_job_ready(Some("a"), "shared", 0);
+                storage.notify_job_ready(Some("b"), "shared", 0);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                got_a |= a.try_recv().is_ok();
+                got_b |= b.try_recv().is_ok();
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), handshake)
+            .await
+            .expect("both listeners subscribe");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        while a.try_recv().is_ok() {}
+        while b.try_recv().is_ok() {}
+
+        storage.notify_job_ready(Some("a"), "shared", 0);
+        tokio::time::timeout(Duration::from_secs(5), a.recv())
+            .await
+            .expect("namespace a's scheduler must wake")
+            .expect("listener alive");
+        // `a` heard it, so it was delivered; give `b` the same chance.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(
+            b.try_recv().is_err(),
+            "namespace b's scheduler must not wake for namespace a's job"
+        );
+
+        // Same for the PUBLISH folded into an enqueue's own pipeline.
+        StorageBackend::Redis(storage.clone())
+            .enqueue(NewJob {
+                queue: "shared".to_string(),
+                namespace: Some("a".to_string()),
+                ..ready_job("ns_a")
+            })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), a.recv())
+            .await
+            .expect("namespace a's enqueue must wake a")
+            .expect("listener alive");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(
+            b.try_recv().is_err(),
+            "namespace a's enqueue must not wake b"
+        );
     }
 
     /// #961: on Redis `run` wakes on enqueue with no explicit opt-in. A first

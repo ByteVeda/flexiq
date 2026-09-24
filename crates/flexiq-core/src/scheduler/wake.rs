@@ -33,15 +33,20 @@ pub enum WakeSource {
 impl WakeSource {
     /// Build the wake source that matches `storage`'s backend: SQLite shares
     /// the storage's in-process [`Notify`], Postgres and Redis each spawn their
-    /// listener and take its channel. `queues` are the queues the scheduler
-    /// serves: Redis subscribes to exactly their channels; the others ignore it.
+    /// listener and take its channel. `namespace` and `queues` are what the
+    /// scheduler serves: Redis subscribes to exactly those `(namespace, queue)`
+    /// channels; the others ignore both.
     ///
     /// Must be called from inside a Tokio runtime context — the Postgres and
     /// Redis arms spawn a listener task. SQLite needs no runtime, but every
     /// binding shell installs wakeups through this one entry point so the
     /// backend mapping lives in a single place.
     #[cfg_attr(not(feature = "redis"), allow(unused_variables))]
-    pub fn for_storage(storage: &StorageBackend, queues: &[String]) -> Self {
+    pub fn for_storage(
+        storage: &StorageBackend,
+        namespace: Option<&str>,
+        queues: &[String],
+    ) -> Self {
         match storage {
             StorageBackend::Sqlite(s) => WakeSource::InProcess(s.notify_handle().clone()),
             #[cfg(feature = "postgres")]
@@ -53,7 +58,7 @@ impl WakeSource {
             StorageBackend::Redis(_) if queues.is_empty() => WakeSource::Polling,
             #[cfg(feature = "redis")]
             StorageBackend::Redis(s) => WakeSource::Channel(
-                crate::storage::redis_backend::listener::spawn(s.clone(), queues),
+                crate::storage::redis_backend::listener::spawn(s.clone(), namespace, queues),
             ),
         }
     }
@@ -90,7 +95,7 @@ mod tests {
     fn sqlite_source_shares_the_storage_notify_handle() {
         let sqlite = SqliteStorage::in_memory().unwrap();
         let notify = sqlite.notify_handle().clone();
-        match WakeSource::for_storage(&StorageBackend::Sqlite(sqlite), &[]) {
+        match WakeSource::for_storage(&StorageBackend::Sqlite(sqlite), None, &[]) {
             WakeSource::InProcess(handle) => assert!(Arc::ptr_eq(&handle, &notify)),
             _ => panic!("sqlite must wake in-process"),
         }

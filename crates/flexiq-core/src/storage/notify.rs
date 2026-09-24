@@ -10,18 +10,18 @@
 //! (`scheduled_at > now`) deliberately do NOT notify — the scheduler relies on
 //! its fallback timer to pick those up at the right time.
 //!
-//! Signals carry the job's queue. Redis publishes on that queue's pub/sub
-//! channel, reaching every scheduler serving it; SQLite (one in-process
+//! Signals carry the job's namespace and queue. Redis publishes on that pair's
+//! pub/sub channel, reaching every scheduler serving it; SQLite (one in-process
 //! handle) wakes regardless of queue. Postgres implements no notifier: its
 //! listener is a stub that ticks on a timer and never reads a `NOTIFY`.
 
 #![cfg(feature = "push-dispatch")]
 
-/// Emit a "job ready" signal for `queue` (the job's real queue, never a
-/// placeholder — Redis routes on it). Implementations must be cheap and
+/// Emit a "job ready" signal for `queue` in `namespace` (the job's real ones,
+/// never placeholders — Redis routes on both). Implementations must be cheap and
 /// must never panic or propagate errors into the enqueue path — a failed
 /// notification only costs the dispatch-latency improvement, never
 /// correctness (the fallback poll still finds the job).
 pub trait StorageNotifier: Send + Sync {
-    fn notify_job_ready(&self, queue: &str, scheduled_at: i64);
+    fn notify_job_ready(&self, namespace: Option<&str>, queue: &str, scheduled_at: i64);
 }
