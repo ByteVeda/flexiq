@@ -99,7 +99,7 @@ class PyQueue:
         scheduler_cleanup_interval: int = 1200,
         scheduler_batch_size: int | None = None,
         namespace: str | None = None,
-        push_dispatch: bool = False,
+        push_dispatch: bool | None = None,
         dlq_auto_retry_delay: int | None = None,
         dlq_auto_retry_max: int = 1,
         retention: dict[str, int] | None = None,

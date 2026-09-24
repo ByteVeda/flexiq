@@ -164,7 +164,7 @@ class Queue(
         scheduler_cleanup_interval: int = 1200,
         scheduler_batch_size: int | None = None,
         namespace: str | None = None,
-        push_dispatch: bool = False,
+        push_dispatch: bool | None = None,
         dlq_auto_retry_delay: int | None = None,
         dlq_auto_retry_max: int = 1,
         retention: Retention | None = None,
@@ -243,11 +243,12 @@ class Queue(
                 8 on Redis (one selection round trip already serves several
                 claims), 1 elsewhere (unchanged behavior). An explicit value
                 is always honored, clamped to at least 1.
-            push_dispatch: Opt into event-driven dispatch, where an enqueue
-                wakes the scheduler immediately instead of waiting for the next
-                poll. Honored only when the native module was built with the
-                ``push-dispatch`` cargo feature; otherwise accepted and ignored
-                (polling is kept). Defaults to ``False``.
+            push_dispatch: Event-driven dispatch, where an enqueue wakes the
+                scheduler immediately instead of waiting for the next poll.
+                ``None`` (default) lets the backend choose: on for Redis, where
+                every poll is a network round trip; off for SQLite and
+                Postgres. ``True`` opts in, ``False`` keeps polling. Builds
+                without the ``push-dispatch`` cargo feature always poll.
             dlq_auto_retry_delay: Minimum age in seconds before a DLQ entry
                 is automatically retried. ``None`` disables auto-retry.
             dlq_auto_retry_max: Maximum number of DLQ auto-retries per entry

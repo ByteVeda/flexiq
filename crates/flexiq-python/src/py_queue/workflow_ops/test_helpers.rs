@@ -59,7 +59,7 @@ pub(crate) fn make_test_pyqueue() -> PyQueue {
         dlq_auto_retry_max: 1,
         auto_migrate: true,
         namespace: None,
-        push_dispatch: false,
+        push_dispatch: None,
         dispatcher: Arc::new(Mutex::new(None)),
         workflow_storage,
     }
