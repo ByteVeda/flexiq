@@ -7,6 +7,7 @@
 
 pub mod backend;
 pub mod dashboard;
+pub mod events;
 pub mod grpc;
 pub mod listen;
 pub mod push;
@@ -18,6 +19,7 @@ use std::collections::HashMap;
 use anyhow::{bail, Context, Result};
 
 use crate::config::dashboard::DashboardConfig;
+use crate::config::events::EventsSettings;
 use crate::config::grpc::GrpcConfig;
 use crate::config::listen::AttachConfig;
 use crate::config::push::PushTargetConfig;
@@ -63,6 +65,9 @@ pub struct Config {
     /// Where inbound triggers are answered, and the definitions they follow.
     /// `None` disables the listener.
     pub triggers: Option<TriggerConfig>,
+    /// Where job lifecycle events are sent. `None` sends none. Not a role:
+    /// it rides on whichever roles are running.
+    pub events: Option<EventsSettings>,
     /// Whether opening storage applies pending schema changes. Off for a
     /// deployment whose database credentials do not permit DDL at runtime; the
     /// schema must then be applied out of band before the server starts.
@@ -96,6 +101,7 @@ impl Config {
             grpc: grpc::from_env(env, namespace.as_deref())?,
             push: push::from_env(env)?,
             triggers: trigger::from_env(env, namespace.as_deref())?,
+            events: events::from_env(env)?,
             namespace,
         };
 

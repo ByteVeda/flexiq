@@ -283,6 +283,7 @@ impl Deployment {
                     workers,
                     maintenance: false,
                     push_dispatch: None,
+                    events: None,
                 },
             )),
         }

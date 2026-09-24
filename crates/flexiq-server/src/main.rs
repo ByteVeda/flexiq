@@ -128,6 +128,13 @@ Configuration (environment only):
   FLEXIQ_TRIGGERS_FILE          JSON file of trigger definitions; required with
                                  FLEXIQ_TRIGGER_LISTEN. Each definition names
                                  the variable its secret is read from
+  FLEXIQ_EVENTS_FILE            JSON document of sinks job lifecycle events are
+                                 sent to as CloudEvents (default: off). Not a
+                                 role: it rides on the ones above. An `http`
+                                 sink needs a build with the `events-http`
+                                 cargo feature, a `redis_streams` one `redis`
+  FLEXIQ_EVENTS_DRAIN           seconds shutdown spends delivering buffered
+                                 events before dropping them (default: 5)
 
 At least one of FLEXIQ_LISTEN, FLEXIQ_DASHBOARD, FLEXIQ_WEBHOOK_LISTEN,
 FLEXIQ_GRPC_LISTEN, FLEXIQ_PUSH_TARGET_URL or FLEXIQ_TRIGGER_LISTEN must be

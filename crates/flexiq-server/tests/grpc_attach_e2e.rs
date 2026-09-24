@@ -154,6 +154,7 @@ impl Harness {
                 workers: Some(2),
                 maintenance: false,
                 push_dispatch: None,
+                events: None,
             },
         ));
         let shutdown = Shutdown::default();

@@ -470,14 +470,20 @@ fn allow(env: &Env) -> Result<Allowlist> {
 
 /// Read a whole number of seconds, or `default` when the variable is unset.
 ///
-/// Zero is refused for every caller. None of these three is a "no limit"
-/// switch — each is a deadline, and a deadline of zero has already passed by
-/// the time anything is measured against it, so it does not disable the
-/// budget, it fails every use of it. `zero_means` says what that failure
-/// would look like, because the failure itself carries no explanation: a
-/// dispatch that times out instantly looks exactly like a target that never
-/// answered.
-fn seconds(env: &Env, key: &str, default: Duration, zero_means: &str) -> Result<Duration> {
+/// Zero is refused for every caller. None of these is a "no limit" switch —
+/// each is a deadline, and a deadline of zero has already passed by the time
+/// anything is measured against it, so it does not disable the budget, it
+/// fails every use of it. `zero_means` says what that failure would look
+/// like, because the failure itself carries no explanation: a dispatch that
+/// times out instantly looks exactly like a target that never answered.
+///
+/// Shared with the events drain, so every drain variable reads the same way.
+pub(crate) fn seconds(
+    env: &Env,
+    key: &str,
+    default: Duration,
+    zero_means: &str,
+) -> Result<Duration> {
     let Some(raw) = value(env, key) else {
         return Ok(default);
     };

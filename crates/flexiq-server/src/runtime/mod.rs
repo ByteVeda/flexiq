@@ -9,11 +9,12 @@ pub mod upkeep;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use flexiq_core::{EventHub, RemoteConfig, RemoteDispatcher, StorageSideChannel};
 #[cfg(feature = "http-target")]
 use flexiq_core::{HttpDispatchTarget, HttpTargetConfig, StorageBackend};
-use flexiq_core::{RemoteConfig, RemoteDispatcher, StorageSideChannel};
 
 use crate::config::dashboard::{AuthMode, DashboardConfig};
+use crate::config::events::EventsSettings;
 #[cfg(feature = "http-target")]
 use crate::config::push::PushTargetConfig;
 use crate::config::{backend, Config};
@@ -93,6 +94,27 @@ pub fn push_target(
         .context("the push target named by FLEXIQ_PUSH_TARGET_URL could not be built")
 }
 
+/// Start the event hub the environment asked for.
+///
+/// Every sink is built here, so one that cannot deliver — a kind this binary
+/// was built without, a secret variable that is unset — stops the boot with
+/// the file named, instead of dropping every event from the first one on.
+pub fn start_events(settings: &EventsSettings) -> Result<Arc<EventHub>> {
+    let hub = EventHub::start(settings.config.clone()).with_context(|| {
+        format!(
+            "{}={} could not start its sinks",
+            crate::config::events::FILE_VAR,
+            settings.file.display()
+        )
+    })?;
+    log::info!(
+        "[flexiq] job events go to {} sink(s) from {}",
+        hub.stats().len(),
+        settings.file.display()
+    );
+    Ok(Arc::new(hub))
+}
+
 /// Wait for every serving role, returning the first failure.
 ///
 /// Triggering shutdown as soon as one role stops is what lets the others wind
@@ -120,6 +142,10 @@ async fn drain(mut roles: tokio::task::JoinSet<Result<()>>, shutdown: &Shutdown)
 
 /// Run until SIGINT/SIGTERM, then drain and exit.
 pub fn run(config: Config) -> Result<()> {
+    // First, so a sink that cannot be built stops the boot before storage is
+    // opened or migrated, let alone a role spawned.
+    let events = config.events.as_ref().map(start_events).transpose()?;
+
     // A webhook-only deployment rewrites pod specs and reads no jobs, so it
     // opens no storage. Config validation has already established that every
     // other role came with a DSN.
@@ -210,6 +236,7 @@ pub fn run(config: Config) -> Result<()> {
                 workers: config.workers,
                 maintenance: config.maintenance,
                 push_dispatch: config.push_dispatch,
+                events: events.clone(),
             },
         ))),
         _ => None,
@@ -412,5 +439,57 @@ pub fn run(config: Config) -> Result<()> {
     if let Some(upkeep) = upkeep {
         let _ = upkeep.join();
     }
+    // Last: the scheduler's final outcomes and the doors' last writes are
+    // already emitted, so the drain covers them. Called directly because the
+    // runtime is no longer driving anything this could stall.
+    if let (Some(hub), Some(settings)) = (&events, &config.events) {
+        hub.shutdown(settings.drain);
+    }
     served
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use flexiq_core::EventsConfig;
+
+    use super::*;
+
+    fn settings(document: &str) -> EventsSettings {
+        EventsSettings {
+            file: PathBuf::from("/etc/flexiq/events.json"),
+            config: EventsConfig::parse(document).expect("a valid document"),
+            drain: Duration::from_secs(1),
+        }
+    }
+
+    /// A document that parses but whose sink cannot be built is still a boot
+    /// failure, and it names the file. Without `events-http` the kind itself
+    /// is refused; with it, the unset secret variable is.
+    #[test]
+    fn a_sink_that_cannot_start_fails_the_boot_and_names_the_file() {
+        let document = r#"{"sinks": [{
+            "kind": "http", "name": "warehouse", "url": "https://events.example.com/in",
+            "allow": ["events.example.com"],
+            "bearer_token_env": "FLEXIQ_TEST_EVENTS_TOKEN_THAT_IS_NEVER_SET"
+        }]}"#;
+        let error = start_events(&settings(document)).expect_err("must refuse");
+        let message = format!("{error:#}");
+        assert!(message.contains("/etc/flexiq/events.json"), "{message}");
+        assert!(message.contains("warehouse"), "{message}");
+    }
+
+    #[cfg(feature = "events-http")]
+    #[test]
+    fn a_buildable_sink_starts() {
+        let document = r#"{"sinks": [{
+            "kind": "http", "name": "warehouse", "url": "https://events.example.com/in",
+            "allow": ["events.example.com"]
+        }]}"#;
+        let hub = start_events(&settings(document)).expect("starts");
+        assert_eq!(hub.stats().len(), 1);
+        hub.shutdown(Duration::from_millis(10));
+    }
 }
