@@ -95,6 +95,9 @@ Rust side (`dequeue_batch`):
   — the exact existing semantics. For each `deferred` doc (budget remaining): run the existing
   dependency check + `claim_pending` path (keep `claim_pending` and `CLAIM_JOB_SCRIPT` for this).
   Call `reindex_pubsub_best_effort(conn, &job, Running)` for every claimed job.
+- **Amended during execution:** the dependency check moved into the script too — leftover-budget
+  deferral starved a ready dependent behind ≥ `max` plain jobs. `deferred` now carries only
+  documents whose token swap does not match exactly once.
 - Preserve score order in the returned `Vec` for the fast path. Deferred (has_deps) claims are
   appended after fast-path claims — **Ruling: acceptable** (dependency jobs were never strictly
   ordered against peers; document it in a comment).
@@ -213,6 +216,9 @@ add `push-dispatch` where the artifact ships. Research map: `/tmp/redis-perf-fac
   shipped Dockerfile feature list. Turnkey `Worker` (runner.rs) needs no toggle — core default
   covers Redis.
 - Shipped builds compile `push-dispatch` (Python wheel, Node addon, Java native, server image).
+- **Amended during execution:** the Redis wake became `PUBLISH`/`SUBSCRIBE` on per-queue
+  channels (BLPOP consumed each signal, so one worker swallowed a wake its peers needed), and
+  `PUSH_MAINTENANCE_INTERVAL` dropped to 200 ms so maintenance keeps the poll loop's idle cadence.
 - **Bounded shutdown:** the listener must stop promptly when the scheduler stops. Keep the 1 s
   `BLPOP` backstop; `run_push` returning drops the receiver, the listener notices within one
   `BLPOP` timeout. Add a test proving it (below). If the reconnect-backoff branch can exceed the
@@ -250,36 +256,41 @@ Commits (split): `feat(scheduler): wake Redis workers on enqueue by default`,
 
 ## Task 4: Keep the ready-notify off the Redis enqueue critical path
 
+> Amended after Task 3's ruling: the Redis wake is `PUBLISH` on per-queue channels
+> (`<prefix>notify:<queue>`), not an `LPUSH` list.
+
 **Why:** with `push-dispatch` now compiled into shipped builds, every Redis enqueue calls
-`RedisStorage::notify_job_ready` (`redis_backend/mod.rs:110-128`), which checks out a connection
-and runs `LPUSH`+`LTRIM` as its own round trip — one extra network hop per enqueue that did not
-exist in shipped builds before. Enqueue throughput is a published number.
+`RedisStorage::notify_job_ready`, which checks out a connection and `PUBLISH`es as its own round
+trip — one extra network hop per enqueue that did not exist in shipped builds before. Enqueue
+throughput is a published number.
 
 **Files:** `crates/flexiq-core/src/storage/redis_backend/{mod.rs,jobs/enqueue.rs}`,
-`crates/flexiq-core/src/storage/mod.rs` (`notify_if_ready` ~:1575-1650).
+`crates/flexiq-core/src/storage/mod.rs` (`notify_if_ready` and its callers).
 
 ### Behaviour
 
-- Fold the `LPUSH <notify_key> 1` + `LTRIM <notify_key> 0 15` into the pipeline each Redis enqueue
-  path already sends (enqueue, enqueue_batch, unique/unique-batch reporting, debounced), only
-  when the job is ready now (`scheduled_at <= now`, same rule as `notify_if_ready`), so a Redis
-  enqueue costs the same number of round trips as before the feature was compiled in. Then make
-  `StorageBackend::notify_if_ready` skip the Redis arm (the enqueue already notified); retry /
-  sleep `signal_scheduled` keep calling `notify_job_ready` (those are not enqueue pipelines).
-- If an enqueue path does not use a pipeline/script where the push can ride along, leave that
+- Fold the `PUBLISH <prefix>notify:<queue>` into the pipeline each Redis enqueue path already
+  sends (enqueue, enqueue_batch, unique/unique-batch reporting, debounced), only for jobs ready
+  now (`scheduled_at <= now`, the same rule as `notify_if_ready`), one publish per distinct ready
+  queue, so a Redis enqueue costs the same number of round trips as before the feature was
+  compiled in. Then make `StorageBackend::notify_if_ready` skip the Redis arm (the enqueue already
+  notified); retry / sleep `signal_scheduled` keep calling `notify_job_ready` (not enqueue pipelines).
+- If an enqueue path does not use a pipeline/script where the publish can ride along, leave that
   path on `notify_job_ready` and list it in the report.
-- The notify stays best-effort: it must never turn a successful enqueue into an error. Inside a
-  `MULTI` pipeline an `LPUSH` on a list key cannot fail for type reasons unless the key is
-  corrupted — note this in a comment.
+- The notify stays best-effort: it must never turn a successful enqueue into an error, and it
+  must not be inside a `MULTI` whose failure would abort the enqueue (`PUBLISH` cannot fail for
+  type reasons; say so in a comment if it rides inside `MULTI`).
+- The pipeline addition is `#[cfg(feature = "push-dispatch")]` — the feature-off build is unchanged.
 
 ### Tests
 
-- Redis (hosted URL, unique prefix): after `enqueue` of a ready job the notify list has length
-  ≥ 1; after `enqueue` of a future job it is unchanged; `enqueue_batch` with one ready job
-  pushes. Existing Redis suite passes.
+- Redis (hosted URL, unique prefix): subscribe to the queue's channel on a separate connection,
+  then: `enqueue` of a ready job publishes; `enqueue` of a future job does not; `enqueue_batch`
+  with one ready job publishes once for that queue. Prove the round-trip count did not grow
+  (e.g. `INFO commandstats` `cmdstat_publish` grows while no extra client round trip happens —
+  or assert structurally that the publish rides the enqueue pipeline). Existing Redis suite passes.
 - `cargo test -j1 -p flexiq-core --features push-dispatch,redis --test rust redis_storage_tests`,
-  `cargo check -j1 -p flexiq-core --features redis` (feature off must still compile — the
-  pipeline addition is `#[cfg(feature = "push-dispatch")]`).
+  `cargo check -j1 -p flexiq-core --features redis` (feature off still compiles).
 
 Commit: `perf(redis): notify workers inside the enqueue pipeline`.
 
