@@ -103,7 +103,7 @@ jobs:
         uses: PyO3/maturin-action@v1.51.0
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features extension-module,postgres,redis,native-async,workflows,push-dispatch --interpreter 3.10 3.11 3.12 3.13 3.14
+          args: --release --out dist --features extension-module,postgres,redis,native-async,workflows,push-dispatch,events-http --interpreter 3.10 3.11 3.12 3.13 3.14
           manylinux: 2_28
           maturin-version: v1.13.3
           working-directory: sdks/python
@@ -137,7 +137,7 @@ jobs:
         uses: PyO3/maturin-action@v1.51.0
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features extension-module,postgres,redis,native-async,workflows,push-dispatch --interpreter 3.10 3.11 3.12 3.13 3.14
+          args: --release --out dist --features extension-module,postgres,redis,native-async,workflows,push-dispatch,events-http --interpreter 3.10 3.11 3.12 3.13 3.14
           manylinux: musllinux_1_2
           maturin-version: v1.13.3
           working-directory: sdks/python
@@ -194,7 +194,7 @@ jobs:
         uses: PyO3/maturin-action@v1.51.0
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features extension-module,postgres,redis,native-async,workflows,push-dispatch --interpreter 3.10 3.11 3.12 3.13 3.14
+          args: --release --out dist --features extension-module,postgres,redis,native-async,workflows,push-dispatch,events-http --interpreter 3.10 3.11 3.12 3.13 3.14
           maturin-version: v1.13.3
           working-directory: sdks/python
 
@@ -247,7 +247,7 @@ jobs:
         uses: PyO3/maturin-action@v1.51.0
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features extension-module,postgres,redis,native-async,workflows,push-dispatch --interpreter 3.10 3.11 3.12 3.13 3.14
+          args: --release --out dist --features extension-module,postgres,redis,native-async,workflows,push-dispatch,events-http --interpreter 3.10 3.11 3.12 3.13 3.14
           maturin-version: v1.13.3
           working-directory: sdks/python
 
