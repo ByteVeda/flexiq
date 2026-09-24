@@ -36,7 +36,10 @@ pub struct EventHub {
 }
 
 /// One sink's counters at one moment.
+///
+/// `#[non_exhaustive]`: a new drop reason adds a counter.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SinkStats {
     /// The sink's configured name.
     pub name: String,

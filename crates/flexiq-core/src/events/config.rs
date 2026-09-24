@@ -11,6 +11,10 @@ use serde::Deserialize;
 
 use super::event::{EventType, JobEvent, DEFAULT_SOURCE};
 
+// Every public type here is `#[non_exhaustive]`: new sink kinds and settings
+// are planned, and the document is built by `EventsConfig::parse`, never by a
+// struct literal outside this crate.
+
 /// Events a sink buffers before it starts dropping, when unset.
 pub const DEFAULT_BUFFER: usize = 10_000;
 /// Delivery attempts per batch, first included, when unset.
@@ -23,6 +27,7 @@ pub const MAX_BATCH: usize = 1_000;
 /// The whole document.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct EventsConfig {
     /// CloudEvents `source` stamped on every event.
     #[serde(default = "default_source")]
@@ -38,6 +43,7 @@ fn default_source() -> String {
 /// One destination.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SinkConfig {
     /// CloudEvents over HTTP.
     Http(HttpSinkConfig),
@@ -48,6 +54,7 @@ pub enum SinkConfig {
 /// Settings every sink kind shares.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Delivery {
     /// Events buffered before new ones are dropped.
     #[serde(default = "default_buffer")]
@@ -83,6 +90,7 @@ fn default_max_batch() -> usize {
 /// A CloudEvents HTTP sink.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct HttpSinkConfig {
     /// Metrics label and log name; unique in the document.
     pub name: String,
@@ -128,6 +136,7 @@ fn default_connect_timeout_ms() -> u64 {
 /// A Redis Streams sink.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct RedisSinkConfig {
     /// Metrics label and log name; unique in the document.
     pub name: String,
@@ -158,6 +167,7 @@ fn default_stream_max_len() -> u64 {
 /// one admits everything, and an event must pass all four.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Filter {
     /// Namespaces; `default` names the default namespace.
     #[serde(default)]
@@ -189,6 +199,7 @@ fn admits(set: &HashSet<String>, value: &str) -> bool {
 
 /// Why a configuration document was refused.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum EventsConfigError {
     /// Not JSON, or not this shape.
     #[error("events config is not valid: {0}")]
@@ -353,6 +364,19 @@ impl SinkConfig {
         match self {
             Self::Http(c) => &c.delivery,
             Self::RedisStreams(c) => &c.delivery,
+        }
+    }
+
+    /// Every environment variable the sink reads a secret from: a bearer
+    /// token, an HMAC secret, or a Redis URL, which can carry a password.
+    /// Here, not in a caller, so a new kind cannot forget to list its own.
+    pub fn secret_env_vars(&self) -> Vec<&str> {
+        match self {
+            Self::Http(c) => [c.bearer_token_env.as_deref(), c.hmac_secret_env.as_deref()]
+                .into_iter()
+                .flatten()
+                .collect(),
+            Self::RedisStreams(c) => vec![c.url_env.as_str()],
         }
     }
 }

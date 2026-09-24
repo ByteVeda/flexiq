@@ -20,7 +20,10 @@ pub const DEFAULT_SOURCE: &str = "/flexiq";
 /// a webhook subscription reads the same here. `job.started` is the one
 /// addition: in process it has no event, because the task body starting *is*
 /// the signal.
+///
+/// `#[non_exhaustive]`: closing a lifecycle coverage gap adds a type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum EventType {
     /// A job was written to the queue by one of the server's producer doors.
     JobEnqueued,
@@ -41,8 +44,9 @@ pub enum EventType {
 }
 
 impl EventType {
-    /// Every event type, in lifecycle order.
-    pub const ALL: [EventType; 8] = [
+    /// Every event type, in lifecycle order. A slice, so a new type does not
+    /// change its type.
+    pub const ALL: &[EventType] = &[
         Self::JobEnqueued,
         Self::JobStarted,
         Self::JobCompleted,
@@ -69,7 +73,7 @@ impl EventType {
 
     /// Parse a short name. `None` for anything this build does not emit.
     pub fn parse(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|t| t.as_str() == name)
+        Self::ALL.iter().copied().find(|t| t.as_str() == name)
     }
 }
 
@@ -78,7 +82,11 @@ impl EventType {
 /// Carries metadata only, plus the payload where the emitter already held it
 /// (enqueue and dispatch). Whether a sink sends that payload is the sink's
 /// `include_payload`, never the emitter's.
+///
+/// `#[non_exhaustive]` so a new attribute is not a breaking change: build one
+/// with [`JobEvent::new`], then set the public fields.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct JobEvent {
     /// What happened.
     pub event_type: EventType,
@@ -255,7 +263,7 @@ mod tests {
 
     #[test]
     fn every_type_round_trips_through_its_name() {
-        for t in EventType::ALL {
+        for &t in EventType::ALL {
             assert_eq!(EventType::parse(t.as_str()), Some(t));
         }
         assert_eq!(EventType::parse("job.exploded"), None);

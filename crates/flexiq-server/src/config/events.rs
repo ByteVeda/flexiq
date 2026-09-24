@@ -67,14 +67,7 @@ pub fn secret_vars(settings: &EventsSettings) -> Vec<&str> {
         .config
         .sinks
         .iter()
-        .flat_map(|sink| match sink {
-            SinkConfig::Http(http) => vec![
-                http.bearer_token_env.as_deref(),
-                http.hmac_secret_env.as_deref(),
-            ],
-            SinkConfig::RedisStreams(redis) => vec![Some(redis.url_env.as_str())],
-        })
-        .flatten()
+        .flat_map(SinkConfig::secret_env_vars)
         .collect()
 }
 
