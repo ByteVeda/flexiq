@@ -911,12 +911,13 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
    ```
 
 4. **Redis push-dispatch fallback window**: on Redis, push-dispatch is on by
-   default. Every enqueue, delayed ones included, and the worker's own
-   retries and rate-limit deferrals are announced, so they dispatch on time.
-   Work nothing announces — a resumed queue, a delayed job enqueued before
-   the worker started — waits on a 2s fallback timer rather than an
-   immediate wake, longer than the ≤200ms polling ceiling it replaced.
-   `push_dispatch=False` restores polling.
+   default. Enqueues are announced, delayed ones included, and the worker's
+   own retries and deferrals (rate limit, concurrency, circuit breaker) arm
+   a local timer, so jobs usually dispatch on time. The rest — a resumed
+   queue, a delayed job enqueued before the worker started, a deadline past
+   what one large batch announces or the listener can buffer — falls back to
+   a 2s timer rather than an immediate wake, longer than the ≤200ms polling
+   ceiling it replaced. `push_dispatch=False` restores polling.
 
 5. **Database performance**: slow dequeue queries. Check SQLite WAL size or
    Postgres query plans.
@@ -942,12 +943,13 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
    `maxConcurrent` or [rate limit](/node/guides/reliability/rate-limiting).
 
 4. **Redis push-dispatch fallback window**: on Redis, push-dispatch is on by
-   default. Every enqueue, delayed ones included, and the worker's own
-   retries and rate-limit deferrals are announced, so they dispatch on time.
-   Work nothing announces — a resumed queue, a delayed job enqueued before
-   the worker started — waits on a 2s fallback timer rather than an
-   immediate wake, longer than the ≤200ms polling ceiling it replaced.
-   `pushDispatch: false` restores polling.
+   default. Enqueues are announced, delayed ones included, and the worker's
+   own retries and deferrals (rate limit, concurrency, circuit breaker) arm
+   a local timer, so jobs usually dispatch on time. The rest — a resumed
+   queue, a delayed job enqueued before the worker started, a deadline past
+   what one large batch announces or the listener can buffer — falls back to
+   a 2s timer rather than an immediate wake, longer than the ≤200ms polling
+   ceiling it replaced. `pushDispatch: false` restores polling.
 
 5. **Database performance**: slow dequeue queries. Check SQLite WAL size or
    Postgres query plans.
@@ -975,12 +977,13 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
    task; see [Rate Limiting](/java/guides/reliability/rate-limiting).
 
 5. **Redis push-dispatch fallback window**: on Redis, push-dispatch is on by
-   default. Every enqueue, delayed ones included, and the worker's own
-   retries and rate-limit deferrals are announced, so they dispatch on time.
-   Work nothing announces — a resumed queue, a delayed job enqueued before
-   the worker started — waits on a 2s fallback timer rather than an
-   immediate wake, longer than the ≤200ms polling ceiling it replaced.
-   `pushDispatch(false)` restores polling.
+   default. Enqueues are announced, delayed ones included, and the worker's
+   own retries and deferrals (rate limit, concurrency, circuit breaker) arm
+   a local timer, so jobs usually dispatch on time. The rest — a resumed
+   queue, a delayed job enqueued before the worker started, a deadline past
+   what one large batch announces or the listener can buffer — falls back to
+   a 2s timer rather than an immediate wake, longer than the ≤200ms polling
+   ceiling it replaced. `pushDispatch(false)` restores polling.
 
 6. **Database performance**: slow dequeue queries. Check SQLite WAL size or
    Postgres query plans.
@@ -1024,12 +1027,14 @@ println!("Pending: {}, Running: {}", stats.pending, stats.running);
    run.
 
 5. **Redis push-dispatch fallback window**: on Redis, push-dispatch is on by
-   default. Every enqueue, delayed ones included, and the worker's own
-   retries and rate-limit deferrals are announced, so they dispatch on time.
-   Work nothing announces — a resumed queue, a delayed job enqueued before
-   the worker started — waits on a 2s fallback timer rather than an
-   immediate wake, longer than the ≤200ms polling ceiling it replaced.
-   `.push_dispatch(false)` on the worker builder restores polling.
+   default. Enqueues are announced, delayed ones included, and the worker's
+   own retries and deferrals (rate limit, concurrency, circuit breaker) arm
+   a local timer, so jobs usually dispatch on time. The rest — a resumed
+   queue, a delayed job enqueued before the worker started, a deadline past
+   what one large batch announces or the listener can buffer — falls back to
+   a 2s timer rather than an immediate wake, longer than the ≤200ms polling
+   ceiling it replaced. `.push_dispatch(false)` on the worker builder
+   restores polling.
 
 6. **Database performance**: slow dequeue queries. Check SQLite WAL size or
    Postgres query plans.
