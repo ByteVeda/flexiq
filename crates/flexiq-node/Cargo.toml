@@ -20,6 +20,9 @@ workflows = ["dep:flexiq-workflows"]
 # Event-driven scheduler wakeups. In the shipped addon's feature list; without
 # it the scheduler always polls and `pushDispatch` is ignored.
 push-dispatch = ["flexiq-core/push-dispatch"]
+# The `http` event sink. In the shipped addon's feature list; without it a
+# config naming an `http` sink is refused at worker start.
+events-http = ["flexiq-core/events-http"]
 
 [dependencies]
 flexiq-core = { workspace = true }

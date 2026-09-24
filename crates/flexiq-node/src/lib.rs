@@ -12,6 +12,7 @@ mod config;
 mod convert;
 mod dispatcher;
 mod error;
+mod event_sinks;
 mod executor;
 mod queue;
 mod steps;

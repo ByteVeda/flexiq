@@ -1,4 +1,5 @@
 import type { DebounceOptions } from "./debounce";
+import type { EventSinksConfig } from "./event-sinks";
 import type {
   CircuitBreakerInput,
   DetailedJobFilter,
@@ -424,6 +425,21 @@ export interface WorkerRunOptions {
    * Addon builds without the `push-dispatch` cargo feature always poll.
    */
   pushDispatch?: boolean;
+  /**
+   * Where this worker sends job lifecycle events as CloudEvents —
+   * `job.started`, `job.completed`, `job.failed` and the rest. The config
+   * object, or its JSON text. A bad document, or a sink kind this addon was
+   * built without, makes `runWorker` throw. Delivery is at-most-once overall
+   * and may repeat an event, so dedupe on the CloudEvents `id`. Job payloads
+   * are not sent unless a sink sets `include_payload`. Read the counters with
+   * {@link Worker.eventSinkStats}.
+   */
+  eventSinks?: EventSinksConfig | string;
+  /**
+   * How long a stopping worker waits for buffered events to be delivered
+   * before dropping them, in ms (default 5000).
+   */
+  eventSinksDrainMs?: number;
   /**
    * Heartbeat cadence override, in ms (default 5000). Exists so tests can
    * exercise heartbeat-driven behavior quickly.

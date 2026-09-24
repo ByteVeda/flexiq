@@ -6,7 +6,9 @@
 use std::sync::Arc;
 
 use flexiq_core::worker::{registry_fingerprint, WorkerDispatcher};
-use flexiq_core::{Scheduler, SchedulerConfig, Storage, StorageBackend, WorkerRegistration};
+use flexiq_core::{
+    EventHub, Scheduler, SchedulerConfig, Storage, StorageBackend, WorkerRegistration,
+};
 use napi::bindgen_prelude::{spawn, spawn_blocking, within_runtime_if_available, Result};
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi_derive::napi;
@@ -17,6 +19,7 @@ use crate::convert::outcome_to_js;
 use crate::dispatcher::{NodeDispatcher, TaskCallback};
 #[cfg(feature = "mesh")]
 use crate::error::invalid_arg;
+use crate::event_sinks::WorkerEvents;
 use crate::queue::OutcomeCallback;
 
 const DEFAULT_QUEUE: &str = "default";
@@ -33,6 +36,9 @@ pub struct JsWorker {
     /// started from one queue must not share one owner slot.
     pub(crate) storage: StorageBackend,
     pub(crate) namespace: Option<String>,
+    /// This worker's event hub, kept for `eventSinkStats`. The result-drain
+    /// thread drains it once the last result is handled.
+    pub(crate) events: Option<Arc<EventHub>>,
     shutdown: Arc<Notify>,
     lifecycle_stop: Arc<Notify>,
     #[cfg(feature = "mesh")]
@@ -154,6 +160,13 @@ pub fn start_worker(
         }
         scheduler.register_queue_config(input.name.clone(), crate::convert::queue_config(input)?);
     }
+    // Started last among the fallible steps, so a config error above leaves no
+    // sink threads behind; nothing after this point fails.
+    let events = WorkerEvents::start(options.events.as_deref(), options.events_drain_ms)?;
+    if let Some(events) = &events {
+        scheduler.set_events(Arc::clone(&events.hub));
+    }
+    let events_hub = events.as_ref().map(|events| Arc::clone(&events.hub));
     let scheduler = Arc::new(scheduler);
     // Push-dispatch: swap polling for enqueue-driven wakeups before any loop
     // below takes the source. We are on the JS thread here, so enter the napi
@@ -304,12 +317,18 @@ pub fn start_worker(
                 Err(_) => log::error!("[flexiq-node] result handling panicked; outcomes dropped"),
             }
         }
+        // Every sender is gone, so the scheduler has stopped and its last
+        // result is handled: nothing emits again. Drain here, off the JS thread.
+        if let Some(events) = &events {
+            events.drain();
+        }
     });
 
     Ok(JsWorker {
         worker_id,
         storage: steps_storage,
         namespace: steps_namespace,
+        events: events_hub,
         shutdown,
         lifecycle_stop,
         #[cfg(feature = "mesh")]

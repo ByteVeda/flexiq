@@ -58,6 +58,15 @@ export {
   TaskNotRegisteredError,
   WorkflowError,
 } from "./errors";
+export type {
+  EventSink,
+  EventSinkDelivery,
+  EventSinkFilter,
+  EventSinkStats,
+  EventSinksConfig,
+  HttpEventSink,
+  RedisStreamsEventSink,
+} from "./event-sinks";
 export {
   type EnqueuedEvent,
   EVENT_NAMES,

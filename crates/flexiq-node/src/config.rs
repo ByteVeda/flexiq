@@ -289,6 +289,12 @@ pub struct WorkerOptions {
     /// unset lets the backend choose (on for Redis). Builds without the
     /// `push-dispatch` cargo feature always poll.
     pub push_dispatch: Option<bool>,
+    /// Event sinks: the cross-SDK configuration document as JSON text. The
+    /// worker sends job lifecycle events to each sink as CloudEvents.
+    pub events: Option<String>,
+    /// How long a stopping worker waits for buffered events to be delivered
+    /// before dropping them, in ms (default 5000).
+    pub events_drain_ms: Option<u32>,
 }
 
 #[cfg(test)]

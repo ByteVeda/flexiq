@@ -5,6 +5,7 @@ import {
   middlewareKey,
   type OverridesStore,
 } from "./dashboard/stores";
+import { type EventSinkStats, eventSinksDocument } from "./event-sinks";
 import { type Emitter, OUTCOME_KIND_EVENTS, type OutcomeEvent } from "./events";
 import type { Middleware } from "./middleware";
 import type {
@@ -211,6 +212,8 @@ export class Worker {
       mesh: run?.mesh,
       retention: run?.retention,
       pushDispatch: run?.pushDispatch,
+      events: eventSinksDocument(run?.eventSinks),
+      eventsDrainMs: drainMs(run?.eventSinksDrainMs),
     };
     const native = queue.runWorker(taskCallback, outcomeCallback, nativeOptions);
     started = native;
@@ -327,6 +330,15 @@ export class Worker {
       params.onStopped,
     );
     return self;
+  }
+
+  /**
+   * Each event sink's counters, in configuration order. Empty when the worker
+   * was started without `eventSinks`. Still readable after {@link Worker.stop},
+   * where it settles on the final counts once buffered events have drained.
+   */
+  eventSinkStats(): EventSinkStats[] {
+    return this.native.eventSinkStats();
   }
 
   /**
@@ -470,6 +482,17 @@ async function drainLogConsumerBatch(
     await queue.ackTopicCursor(consumer.topic, consumer.name, lastAcked);
   }
   return retryFailure ? "retry-backoff" : "drained";
+}
+
+/** Largest drain the native `u32` option carries without wrapping. */
+const MAX_DRAIN_MS = 0xffff_ffff;
+
+/** Check `eventSinksDrainMs` here: the addon narrows it to `u32`, which would wrap a negative. */
+function drainMs(value: number | undefined): number | undefined {
+  if (value !== undefined && !(Number.isInteger(value) && value >= 0 && value <= MAX_DRAIN_MS)) {
+    throw new RangeError(`eventSinksDrainMs must be a non-negative integer, got ${value}`);
+  }
+  return value;
 }
 
 /** Collect per-task configs that actually set something. */
