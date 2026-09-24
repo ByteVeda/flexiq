@@ -6,9 +6,7 @@
 use std::sync::Arc;
 
 use flexiq_core::worker::{registry_fingerprint, WorkerDispatcher};
-use flexiq_core::{
-    EventHub, Scheduler, SchedulerConfig, Storage, StorageBackend, WorkerRegistration,
-};
+use flexiq_core::{Scheduler, SchedulerConfig, Storage, StorageBackend, WorkerRegistration};
 use napi::bindgen_prelude::{spawn, spawn_blocking, within_runtime_if_available, Result};
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi_derive::napi;
@@ -36,9 +34,9 @@ pub struct JsWorker {
     /// started from one queue must not share one owner slot.
     pub(crate) storage: StorageBackend,
     pub(crate) namespace: Option<String>,
-    /// This worker's event hub, kept for `eventSinkStats`. The result-drain
-    /// thread drains it once the last result is handled.
-    pub(crate) events: Option<Arc<EventHub>>,
+    /// This worker's event hub, kept for `eventSinkStats` and the stop-time
+    /// drain. The result-drain thread drains it once the last result is handled.
+    pub(crate) events: Option<Arc<WorkerEvents>>,
     shutdown: Arc<Notify>,
     lifecycle_stop: Arc<Notify>,
     #[cfg(feature = "mesh")]
@@ -56,13 +54,17 @@ impl JsWorker {
 
     /// Stop the worker: the scheduler stops dispatching, the lifecycle task
     /// unregisters, mesh gossip/steal tasks shut down, and the background
-    /// tasks exit once in-flight results drain.
+    /// tasks exit once in-flight results drain. Starts the event drain budget;
+    /// await `waitEventDrain` for the events to go out.
     #[napi]
     pub fn stop(&self) {
         // `notify_one` stores a permit if no waiter is parked yet, so the signal
         // is never lost between loop iterations.
         self.shutdown.notify_one();
         self.lifecycle_stop.notify_one();
+        if let Some(events) = &self.events {
+            events.mark_stopping();
+        }
         #[cfg(feature = "mesh")]
         self.mesh_shutdown.notify_one();
     }
@@ -164,9 +166,9 @@ pub fn start_worker(
     // sink threads behind; nothing after this point fails.
     let events = WorkerEvents::start(options.events.as_deref(), options.events_drain_ms)?;
     if let Some(events) = &events {
-        scheduler.set_events(Arc::clone(&events.hub));
+        scheduler.set_events(events.hub());
     }
-    let events_hub = events.as_ref().map(|events| Arc::clone(&events.hub));
+    let worker_events = events.clone();
     let scheduler = Arc::new(scheduler);
     // Push-dispatch: swap polling for enqueue-driven wakeups before any loop
     // below takes the source. We are on the JS thread here, so enter the napi
@@ -328,7 +330,7 @@ pub fn start_worker(
         worker_id,
         storage: steps_storage,
         namespace: steps_namespace,
-        events: events_hub,
+        events: worker_events,
         shutdown,
         lifecycle_stop,
         #[cfg(feature = "mesh")]

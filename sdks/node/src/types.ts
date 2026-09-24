@@ -437,7 +437,9 @@ export interface WorkerRunOptions {
   eventSinks?: EventSinksConfig | string;
   /**
    * How long a stopping worker waits for buffered events to be delivered
-   * before dropping them, in ms (default 5000).
+   * before dropping them, in ms (default 5000). The budget starts at
+   * {@link Worker.stop}, and in-flight jobs spend it too; the promise `stop`
+   * returns resolves once the events are out, or when the budget runs out.
    */
   eventSinksDrainMs?: number;
   /**
