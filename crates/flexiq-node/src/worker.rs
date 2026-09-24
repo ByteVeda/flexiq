@@ -158,9 +158,12 @@ pub fn start_worker(
     // Push-dispatch: swap polling for enqueue-driven wakeups before any loop
     // below takes the source. We are on the JS thread here, so enter the napi
     // runtime — the Postgres and Redis wake sources spawn a listener task.
-    // Without the `push-dispatch` build feature this logs and keeps polling.
-    if options.push_dispatch.unwrap_or(false) {
-        within_runtime_if_available(|| scheduler.enable_push_dispatch());
+    // Unset keeps the core default (on for Redis). Without the `push-dispatch`
+    // build feature both calls are no-ops and the scheduler polls.
+    match options.push_dispatch {
+        Some(true) => within_runtime_if_available(|| scheduler.enable_push_dispatch()),
+        Some(false) => scheduler.disable_push_dispatch(),
+        None => {}
     }
     let shutdown = scheduler.shutdown_handle();
 
