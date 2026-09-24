@@ -3,13 +3,13 @@
 //!
 //! Every helper is a no-op without a hub. With one, a transition costs a
 //! constant number of allocations and no storage read: the queue, attempt and
-//! epoch of a settled job come from its dispatch record, which is retired, not
-//! forgotten, once the slot is released.
+//! epoch of a settled job come from the dispatch record its result was settled
+//! against, carried out of the settle rather than looked up again.
 
 use crate::events::{EventHub, EventType, JobEvent};
 use crate::job::Job;
 
-use super::{JobResult, ResultOutcome, Scheduler};
+use super::{DispatchRecord, JobResult, ResultOutcome, Scheduler};
 
 /// The attempt a failure reports for itself — the retries already spent —
 /// used when no dispatch record names one (a reaper-recovered orphan).
@@ -59,7 +59,19 @@ impl Scheduler {
 
     /// The events one settled outcome stands for. `Superseded` emits nothing:
     /// the job is proceeding elsewhere, and that attempt's events are its own.
-    pub(super) fn emit_outcome(&self, outcome: &ResultOutcome, fallback_attempt: Option<i32>) {
+    ///
+    /// `record` is the dispatch the result was settled against, never a fresh
+    /// lookup: a retried or slept job may already be re-dispatched, and the new
+    /// record would stamp this attempt's events with the next one's id. With no
+    /// record (a job this scheduler never dispatched) the queue is the
+    /// outcome's own — empty for a `Success`, which carries none — and the
+    /// attempt is `fallback_attempt`.
+    pub(super) fn emit_outcome(
+        &self,
+        outcome: &ResultOutcome,
+        record: Option<&DispatchRecord>,
+        fallback_attempt: Option<i32>,
+    ) {
         let Some(hub) = &self.events else {
             return;
         };
@@ -123,11 +135,11 @@ impl Scheduler {
             ResultOutcome::Superseded { .. } => return,
         };
 
-        let mut event = match self.dispatch_context(job_id) {
-            Some((queue, attempt, epoch)) => {
-                let mut event = self.job_event(event_type, job_id, &queue, task_name);
-                event.attempt = Some(attempt);
-                event.epoch = epoch;
+        let mut event = match record {
+            Some(record) => {
+                let mut event = self.job_event(event_type, job_id, &record.queue, task_name);
+                event.attempt = Some(record.attempt);
+                event.epoch = record.epoch;
                 event
             }
             None => {
@@ -158,21 +170,12 @@ impl Scheduler {
     fn job_event(&self, event_type: EventType, job_id: &str, queue: &str, task: &str) -> JobEvent {
         JobEvent::new(event_type, job_id, self.namespace.clone(), queue, task)
     }
-
-    /// Queue, attempt and epoch of the job's last dispatch, live or retired.
-    /// Read in place rather than through `last_dispatch`, which clones the
-    /// whole record.
-    fn dispatch_context(&self, job_id: &str) -> Option<(String, i32, Option<i64>)> {
-        self.in_flight
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .last_dispatch(job_id)
-            .map(|record| (record.queue.clone(), record.attempt, record.epoch))
-    }
 }
 
 /// `job.failed`, then the transition it led to (`job.retrying` or `job.dead`).
 /// Both carry the error, so a sink filtering on the second alone still sees why.
+/// Both also name the attempt that failed: `job.retrying` is that attempt
+/// being rescheduled, not the next attempt, which has its own `job.started`.
 fn emit_failure(
     hub: &EventHub,
     mut failed: JobEvent,
@@ -196,6 +199,7 @@ mod tests {
     use crate::events::test_support::{delivered, recording_hub, Attempts};
     use crate::job::{now_millis, NewJob};
     use crate::resilience::rate_limiter::RateLimitConfig;
+    use crate::resilience::retry::RetryPolicy;
     use crate::scheduler::{shed, SchedulerConfig, TaskConfig};
     use crate::storage::sqlite::SqliteStorage;
     use crate::storage::{Storage, StorageBackend};
@@ -383,6 +387,70 @@ mod tests {
         assert!(matches!(outcome, ResultOutcome::Superseded { .. }));
 
         assert_eq!(types(&delivered(&hub, &rec)), ["job.started"]);
+    }
+
+    #[test]
+    fn a_retry_redispatched_before_its_emit_keeps_its_own_attempt_and_epoch() {
+        // A 0 ms retry delay makes the job due at once, so the poller can
+        // claim attempt 1 between the settle and the emit.
+        let mut scheduler = scheduler();
+        scheduler.register_task(
+            "flaky".to_string(),
+            TaskConfig {
+                retry_policy: RetryPolicy {
+                    custom_delays_ms: Some(vec![0]),
+                    ..RetryPolicy::default()
+                },
+                ..TaskConfig::default()
+            },
+        );
+        let (scheduler, hub, rec) = with_hub(scheduler, "");
+        let ch = channel();
+        let job = dispatch(&scheduler, &ch, "flaky", 3);
+
+        let (outcome, record) = scheduler.settle_result(failure(&job, 0, 3)).unwrap();
+        assert!(matches!(outcome, ResultOutcome::Retry { .. }));
+        assert!(
+            scheduler.try_dispatch(&ch.0).unwrap(),
+            "attempt 1 dispatched"
+        );
+        scheduler.emit_outcome(&outcome, record.as_ref(), None);
+
+        let events = delivered(&hub, &rec);
+        assert_eq!(
+            types(&events),
+            ["job.started", "job.started", "job.failed", "job.retrying"]
+        );
+        let (first, second) = (&events[0], &events[1]);
+        assert_eq!(second.attempt, Some(1));
+        assert_ne!(second.epoch, first.epoch, "the redispatch is a new claim");
+        for settled in &events[2..] {
+            assert_eq!(settled.attempt, Some(0), "{}", settled.id());
+            assert_eq!(settled.epoch, first.epoch, "{}", settled.id());
+        }
+    }
+
+    #[test]
+    fn a_sleep_keeps_its_own_dispatch_when_the_record_is_replaced() {
+        let (scheduler, hub, rec) = with_hub(scheduler(), "");
+        let ch = channel();
+        let job = dispatch(&scheduler, &ch, "napper", 3);
+        let (outcome, record) = scheduler
+            .settle_result(JobResult::Slept {
+                job_id: job.id.clone(),
+                task_name: "napper".to_string(),
+                wake_at: now_millis(),
+                wall_time_ns: 1,
+            })
+            .unwrap();
+        // What a wake-up dispatch would write before the emit runs.
+        scheduler.track_in_flight(&job.id, "napper", "other", 0, Some(i64::MAX));
+        scheduler.emit_outcome(&outcome, record.as_ref(), None);
+
+        let events = delivered(&hub, &rec);
+        assert_eq!(types(&events), ["job.started", "job.sleeping"]);
+        assert_eq!(events[1].epoch, events[0].epoch);
+        assert_eq!(events[1].queue, "default");
     }
 
     #[test]

@@ -6,18 +6,27 @@ use crate::storage::records::AttemptFence;
 use crate::storage::Storage;
 
 use super::events::failure_attempt;
-use super::{JobResult, ResultOutcome, Scheduler};
+use super::{DispatchRecord, JobResult, ResultOutcome, Scheduler};
 
 /// Dead-letter metadata marking a job the retry budget refused. `ResultOutcome`
 /// has no room to say *why* a job was dead-lettered, so this is what tells a
 /// budget kill apart from ordinary retry exhaustion when reading the DLQ.
 pub const RETRY_BUDGET_EXHAUSTED: &str = "retry_budget_exhausted";
 
+/// What the fence decided about a finished result.
+enum Finished {
+    /// The result speaks for the job. Carries the dispatch it was checked
+    /// against, `None` for a job this scheduler never dispatched.
+    Current(Option<DispatchRecord>),
+    /// The job has moved past the attempt that reported.
+    Superseded,
+}
+
 impl Scheduler {
     /// Free a finished job's in-flight slot and decide whether its result still
     /// speaks for the job.
     ///
-    /// `false` means superseded: the job is proceeding under another owner —
+    /// [`Finished::Superseded`]: the job is proceeding under another owner —
     /// after a reclaim, or a retry that already bumped the attempt — and the
     /// only correct contribution this attempt can make is none. Dropped with a
     /// warning rather than failed or retried, because failing it would kill a
@@ -33,12 +42,9 @@ impl Scheduler {
     /// then reports for real. Before the record was retired, that result found
     /// nothing to check itself against and was waved through onto a job that
     /// had since moved on.
-    fn authorize_finished(&self, job_id: &str) -> Result<bool> {
-        let Some(record) = self
-            .release_in_flight(job_id)
-            .or_else(|| self.last_dispatch(job_id))
-        else {
-            return Ok(true);
+    fn authorize_finished(&self, job_id: &str) -> Result<Finished> {
+        let Some(record) = self.release_dispatch(job_id) else {
+            return Ok(Finished::Current(None));
         };
         // The fence fails **open**, and deliberately. Propagating the error
         // would drop a result whose dispatch record has already been consumed,
@@ -75,9 +81,17 @@ impl Scheduler {
                  (owner {}, epoch {:?}): the job is proceeding under another claim",
                 record.attempt, record.owner, record.epoch
             );
-            return Ok(false);
+            return Ok(Finished::Superseded);
         }
-        Ok(true)
+        Ok(Finished::Current(Some(record)))
+    }
+
+    /// Free a finished job's slot and take the record it was dispatched under,
+    /// live or already retired. `None` only for an id this scheduler has no
+    /// memory of.
+    fn release_dispatch(&self, job_id: &str) -> Option<DispatchRecord> {
+        self.release_in_flight(job_id)
+            .or_else(|| self.last_dispatch(job_id))
     }
 
     /// Handle a completed or failed job result from a worker.
@@ -87,31 +101,49 @@ impl Scheduler {
     /// With an event hub set, the outcome's lifecycle events are emitted too.
     pub fn handle_result(&self, result: JobResult) -> Result<ResultOutcome> {
         let fallback_attempt = failure_attempt(&result);
-        let outcome = self.settle_result(result)?;
-        self.emit_outcome(&outcome, fallback_attempt);
+        let (outcome, record) = self.settle_result(result)?;
+        self.emit_outcome(&outcome, record.as_ref(), fallback_attempt);
         Ok(outcome)
     }
 
     /// [`Self::handle_result`] without the events, so the batch path can emit
     /// once per outcome at its end whichever route the result took.
-    fn settle_result(&self, result: JobResult) -> Result<ResultOutcome> {
-        // A sleep skips the fence, and deliberately. `sleep_job` already left
-        // the job `Pending` with no claim — that is what a sleep *is* — so
-        // asking whether the attempt still owns it reads a correctly slept job
-        // as superseded and drops the one outcome that explains where it went.
-        // The write was fenced where it happened; re-fencing the
-        // acknowledgement of it is the wrong question. `finalize_sleep` frees
-        // the in-flight slot itself.
-        let slept = matches!(result, JobResult::Slept { .. });
-        // A dispatched job finished — free its in-flight slot and take the
-        // token it was dispatched under. `None` for a job this scheduler never
-        // dispatched (a duplicate result, or a foreign id), which has nothing to
-        // validate against and is left to the transitions' own guards.
-        if !slept && !self.authorize_finished(result.job_id())? {
-            return Ok(ResultOutcome::Superseded {
-                job_id: result.job_id().to_string(),
-            });
-        }
+    ///
+    /// Returns the dispatch record the result was settled against, so events
+    /// are stamped from it rather than from a later lookup: once a retry or
+    /// sleep leaves the job `Pending`, the poller can re-dispatch it and
+    /// overwrite the live record before the events go out.
+    pub(super) fn settle_result(
+        &self,
+        result: JobResult,
+    ) -> Result<(ResultOutcome, Option<DispatchRecord>)> {
+        let record = if matches!(result, JobResult::Slept { .. }) {
+            // A sleep skips the fence, and deliberately. `sleep_job` already
+            // left the job `Pending` with no claim — that is what a sleep *is*
+            // — so asking whether the attempt still owns it reads a correctly
+            // slept job as superseded and drops the one outcome that explains
+            // where it went. The write was fenced where it happened;
+            // re-fencing the acknowledgement of it is the wrong question.
+            self.release_dispatch(result.job_id())
+        } else {
+            // A dispatched job finished — free its in-flight slot and take the
+            // token it was dispatched under. `None` for a job this scheduler
+            // never dispatched (a duplicate result, or a foreign id), which has
+            // nothing to validate against and is left to the transitions' own
+            // guards.
+            match self.authorize_finished(result.job_id())? {
+                Finished::Current(record) => record,
+                Finished::Superseded => {
+                    let job_id = result.job_id().to_string();
+                    return Ok((ResultOutcome::Superseded { job_id }, None));
+                }
+            }
+        };
+        Ok((self.transition(result)?, record))
+    }
+
+    /// Write the transition an authorized result asks for.
+    fn transition(&self, result: JobResult) -> Result<ResultOutcome> {
         match result {
             JobResult::Success {
                 job_id,
@@ -318,6 +350,9 @@ impl Scheduler {
     pub fn handle_results(&self, results: Vec<JobResult>) -> Vec<Result<ResultOutcome>> {
         let mut outcomes: Vec<Option<Result<ResultOutcome>>> =
             (0..results.len()).map(|_| None).collect();
+        // The record each result settled against, kept for the emit pass: by
+        // then a retried job may already be re-dispatched under a new record.
+        let mut records: Vec<Option<DispatchRecord>> = (0..results.len()).map(|_| None).collect();
         // Read before the results move; only an events hub ever needs them.
         let fallback_attempts: Vec<Option<i32>> = if self.events.is_some() {
             results.iter().map(failure_attempt).collect()
@@ -341,7 +376,8 @@ impl Scheduler {
                     // drain path, so skipping the fence here would leave it
                     // guarding nothing.
                     match self.authorize_finished(&job_id) {
-                        Ok(true) => {
+                        Ok(Finished::Current(record)) => {
+                            records[i] = record;
                             success_idx.push(i);
                             completions.push(JobCompletion {
                                 job_id,
@@ -350,13 +386,20 @@ impl Scheduler {
                                 wall_time_ns,
                             });
                         }
-                        Ok(false) => outcomes[i] = Some(Ok(ResultOutcome::Superseded { job_id })),
+                        Ok(Finished::Superseded) => {
+                            outcomes[i] = Some(Ok(ResultOutcome::Superseded { job_id }))
+                        }
                         Err(e) => outcomes[i] = Some(Err(e)),
                     }
                 }
                 // Failures and cancellations branch (retry vs DLQ, queue
                 // lookups); batching them buys little, so keep the per-result path.
-                other => outcomes[i] = Some(self.settle_result(other)),
+                other => {
+                    outcomes[i] = Some(self.settle_result(other).map(|(outcome, record)| {
+                        records[i] = record;
+                        outcome
+                    }))
+                }
             }
         }
 
@@ -393,15 +436,18 @@ impl Scheduler {
             .collect();
         // One pass over the settled outcomes, so each emits exactly once
         // whether it settled inline, in the batch, or in the per-job fallback.
-        for (outcome, fallback_attempt) in outcomes.iter().zip(fallback_attempts) {
+        for ((outcome, record), fallback_attempt) in
+            outcomes.iter().zip(&records).zip(fallback_attempts)
+        {
             if let Ok(outcome) = outcome {
-                self.emit_outcome(outcome, fallback_attempt);
+                self.emit_outcome(outcome, record.as_ref(), fallback_attempt);
             }
         }
         outcomes
     }
 
-    /// Release the slot a slept attempt held, and report where its job went.
+    /// Report where a slept job went. Its slot was already released by
+    /// [`Self::settle_result`], which keeps the record for the events.
     ///
     /// Writes nothing. The three writes a sleep needs — the step row, the claim
     /// revocation, the reschedule — were one transaction inside
@@ -422,7 +468,6 @@ impl Scheduler {
         wake_at: i64,
         wall_time_ns: i64,
     ) -> Result<ResultOutcome> {
-        self.release_in_flight(&job_id);
         let queue = self
             .storage
             .get_job(&job_id, self.namespace.as_deref())?
