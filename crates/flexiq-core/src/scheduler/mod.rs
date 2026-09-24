@@ -1070,6 +1070,9 @@ impl Scheduler {
             let drain = tokio::select! {
                 _ = self.shutdown.notified() => break,
                 _ = wake.wait() => true,
+                // A finished job freed an in-flight slot — refill now, as the
+                // poll loop does, instead of idling to the next wake.
+                _ = self.dispatch_wake.notified() => true,
                 _ = tokio::time::sleep_until(fallback_at) => true,
                 // Periodic enqueue may have produced ready work.
                 _ = maintenance.tick() => self.tick_maintenance(&mut counters),
@@ -4223,6 +4226,50 @@ mod push_tests {
             .expect("the fallback timer must dispatch an unannounced job")
             .expect("run loop alive");
         assert_eq!(job.task_name, "unannounced");
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
+    /// With the in-flight cap full, a finished job must refill its slot at
+    /// once, as the poll loop does — not idle until the next wake or fallback.
+    #[tokio::test]
+    async fn push_refills_a_freed_in_flight_slot() {
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let config = SchedulerConfig {
+            max_in_flight: Some(1),
+            ..SchedulerConfig::default()
+        };
+        let scheduler = Arc::new(Scheduler::new(
+            storage,
+            vec!["default".to_string()],
+            config,
+            None,
+        ));
+        scheduler.enable_push_dispatch();
+        scheduler.storage().enqueue(ready_job("capped")).unwrap();
+        scheduler.storage().enqueue(ready_job("capped")).unwrap();
+        let (run, mut rx) = spawn_run(&scheduler);
+
+        let first = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the enqueue wake dispatches the first job")
+            .expect("run loop alive");
+        scheduler
+            .handle_result(JobResult::Success {
+                job_id: first.id.clone(),
+                result: None,
+                task_name: "capped".to_string(),
+                wall_time_ns: 1,
+            })
+            .unwrap();
+
+        // Well inside the 2 s fallback, so only the slot wake can deliver it.
+        let second = tokio::time::timeout(Duration::from_millis(1000), rx.recv())
+            .await
+            .expect("a freed slot must refill before the fallback fires")
+            .expect("run loop alive");
+        assert_ne!(second.id, first.id);
         scheduler.shutdown_handle().notify_one();
         run.await.unwrap();
     }
