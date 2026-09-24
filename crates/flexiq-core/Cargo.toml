@@ -22,8 +22,9 @@ exclude = ["tests/wire_vectors.rs"]
 default = []
 postgres = ["diesel/postgres", "pq-sys", "openssl-sys", "sea-query/backend-postgres"]
 redis = ["dep:redis"]
-# Event-driven scheduler wakeups. OFF by default — the shipped wheel keeps
-# polling. Opt-in for source builds that want lower dispatch latency.
+# Event-driven scheduler wakeups. Off in this crate's defaults, but every
+# shipped artifact enables it: push is then on by default for Redis, opt-in on
+# SQLite/Postgres, and `push_dispatch = false` opts a scheduler out.
 push-dispatch = []
 # HTTP push dispatch (#843): the scheduler dials an operator-configured target
 # per job, for platforms that start a process from an inbound request. OFF by
