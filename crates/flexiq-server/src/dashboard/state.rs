@@ -9,6 +9,7 @@ use crate::config::dashboard::DashboardConfig;
 use crate::dashboard::auth::oauth::providers::OAuthRuntime;
 use crate::dashboard::auth::throttle::LoginThrottle;
 use crate::dashboard::static_assets::StaticAssets;
+use crate::events::Events;
 
 /// Everything the dashboard needs to answer a request.
 pub struct AppState {
@@ -33,6 +34,9 @@ pub struct AppState {
     pub queues: Vec<String>,
     /// Whether this process runs retention, which the retention views report.
     pub maintenance: bool,
+    /// Where the jobs this dashboard enqueues or cancels are announced.
+    /// `None` when no events are configured.
+    pub events: Events,
 }
 
 /// The state handle axum clones per request.

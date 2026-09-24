@@ -8,7 +8,7 @@
 
 use flexiq_core::job::{now_millis, Job, NewJob};
 use flexiq_core::storage::Storage;
-use flexiq_core::StorageBackend;
+use flexiq_core::{EventHub, StorageBackend};
 use tonic::{Response, Status};
 
 use super::convert::{self, Blobs};
@@ -24,8 +24,11 @@ pub(crate) async fn one(
     request: pb::EnqueueRequest,
 ) -> Result<Response<pb::EnqueueResponse>, Status> {
     let prepared = prepare(request, scoped.namespace())?;
-    let (job, deduplicated) =
-        on_storage(scoped.storage(), move |storage| prepared.submit(storage)).await?;
+    let events = scoped.events();
+    let (job, deduplicated) = on_storage(scoped.storage(), move |storage| {
+        prepared.submit(storage, events.as_deref())
+    })
+    .await?;
 
     Ok(Response::new(pb::EnqueueResponse {
         // A producer that just submitted a job already has the payload it sent,
@@ -78,11 +81,13 @@ pub(crate) async fn batch(
     }
 
     let atomic = batch_is_atomic(scoped.storage());
+    let events = scoped.events();
     let results = on_storage(scoped.storage(), move |storage| {
+        let events = events.as_deref();
         Ok(if atomic {
-            submit_atomically(storage, prepared)
+            submit_atomically(storage, prepared, events)
         } else {
-            submit_one_at_a_time(storage, prepared)
+            submit_one_at_a_time(storage, prepared, events)
         })
     })
     .await?;
@@ -116,6 +121,7 @@ fn batch_is_atomic(storage: &StorageBackend) -> bool {
 fn submit_atomically(
     storage: &StorageBackend,
     prepared: Vec<Prepared>,
+    events: Option<&EventHub>,
 ) -> Result<Vec<pb::EnqueueBatchItemResult>, WireError> {
     // One call, so one transaction. Debounce has no batch entry point, so a
     // debounced item is refused in `prepare` rather than quietly costing the
@@ -124,17 +130,25 @@ fn submit_atomically(
         .enqueue_unique_batch_reporting(prepared.into_iter().map(|item| item.job).collect())
         .map_err(|error| WireError::from_queue_error(&error))?;
 
+    // Only once the transaction has committed: a rolled-back batch wrote
+    // nothing, so it has nothing to announce.
+    for (job, deduplicated) in &jobs {
+        if !deduplicated {
+            crate::events::enqueued(events, job);
+        }
+    }
     Ok(jobs.into_iter().map(enqueued).collect())
 }
 
 fn submit_one_at_a_time(
     storage: &StorageBackend,
     prepared: Vec<Prepared>,
+    events: Option<&EventHub>,
 ) -> Result<Vec<pb::EnqueueBatchItemResult>, WireError> {
     Ok(prepared
         .into_iter()
         .enumerate()
-        .map(|(index, item)| match item.submit(storage) {
+        .map(|(index, item)| match item.submit(storage, events) {
             Ok(result) => enqueued(result),
             Err(error) => pb::EnqueueBatchItemResult {
                 outcome: Some(pb::enqueue_batch_item_result::Outcome::Error(
@@ -176,17 +190,36 @@ enum Dispatch {
 }
 
 impl Prepared {
-    fn submit(self, storage: &StorageBackend) -> flexiq_core::Result<(Job, bool)> {
-        match self.dispatch {
+    /// Write the job, announcing it on `events` only if this call inserted it.
+    fn submit(
+        self,
+        storage: &StorageBackend,
+        events: Option<&EventHub>,
+    ) -> flexiq_core::Result<(Job, bool)> {
+        let (job, deduplicated, inserted) = match self.dispatch {
             // A debounced enqueue can also answer with a job that already
             // existed, but that is a slid window and not a `unique_key` match,
             // and `deduplicated` says only the latter.
-            Dispatch::Debounced(options) => storage
-                .enqueue_debounced(self.job, options)
-                .map(|job| (job, false)),
-            Dispatch::Unique => storage.enqueue_unique_reporting(self.job),
-            Dispatch::Plain => storage.enqueue(self.job).map(|job| (job, false)),
+            Dispatch::Debounced(options) => {
+                let before = now_millis();
+                let job = storage.enqueue_debounced(self.job, options)?;
+                // Storage does not say which branch it took. A slid job was
+                // created before this call; one created during it is ours or
+                // a racing insert's, and a repeat of that job's event carries
+                // the same id, so a consumer dedupes it.
+                let inserted = job.created_at >= before;
+                (job, false, inserted)
+            }
+            Dispatch::Unique => {
+                let (job, deduplicated) = storage.enqueue_unique_reporting(self.job)?;
+                (job, deduplicated, !deduplicated)
+            }
+            Dispatch::Plain => (storage.enqueue(self.job)?, false, true),
+        };
+        if inserted {
+            crate::events::enqueued(events, &job);
         }
+        Ok((job, deduplicated))
     }
 }
 

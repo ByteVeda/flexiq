@@ -11,13 +11,15 @@ use axum::Router;
 use flexiq_core::StorageBackend;
 
 use crate::config::trigger::TriggerConfig;
+use crate::events::Events;
 use crate::runtime::shutdown::Shutdown;
 use crate::trigger::auth::KeyFetcher;
 use crate::trigger::handler::{receive, Role};
 
 /// The listener's routes, for `serve` and for a test that binds its own port.
-pub fn router(config: &TriggerConfig, storage: StorageBackend) -> Router {
-    router_with_keys(config, storage, KeyFetcher::default())
+/// Each job a trigger enqueues is announced on `events`.
+pub fn router(config: &TriggerConfig, storage: StorageBackend, events: Events) -> Router {
+    router_with_keys(config, storage, KeyFetcher::default(), events)
 }
 
 /// The same routes with the published-key fetches going through `keys` — for
@@ -26,12 +28,14 @@ pub fn router_with_keys(
     config: &TriggerConfig,
     storage: StorageBackend,
     keys: KeyFetcher,
+    events: Events,
 ) -> Router {
     let role = Arc::new(Role::new(
         storage,
         config.namespace.clone(),
         config.triggers.clone(),
         keys,
+        events,
     ));
     Router::new().fallback(receive).with_state(role)
 }
@@ -40,6 +44,7 @@ pub fn router_with_keys(
 pub async fn serve(
     config: TriggerConfig,
     storage: StorageBackend,
+    events: Events,
     shutdown: Shutdown,
 ) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(config.bind)
@@ -52,7 +57,7 @@ pub async fn serve(
         config.file.display(),
         config.namespace
     );
-    axum::serve(listener, router(&config, storage))
+    axum::serve(listener, router(&config, storage, events))
         .with_graceful_shutdown(async move { shutdown.wait().await })
         .await
         .with_context(|| format!("the trigger listener on {} stopped", config.bind))?;

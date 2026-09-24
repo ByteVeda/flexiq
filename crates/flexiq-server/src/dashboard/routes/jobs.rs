@@ -2,7 +2,7 @@
 
 use axum::extract::{Path, State};
 use axum::Json;
-use flexiq_core::Storage;
+use flexiq_core::{EventHub, Storage};
 use serde_json::{json, Value};
 
 use crate::dashboard::blocking::on_storage;
@@ -134,8 +134,17 @@ pub async fn cancel(
     Path(job_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let namespace = state.namespace.clone();
+    let events = state.events.clone();
     let cancelled = on_storage(&state, move |storage| {
-        storage.cancel_job(&job_id, namespace.as_deref())
+        let cancelled = storage.cancel_job(&job_id, namespace.as_deref())?;
+        // The row is read back only to announce it, so only when there is
+        // somewhere to announce it.
+        if let (true, Some(hub)) = (cancelled, events.as_deref()) {
+            if let Some(job) = storage.get_job(&job_id, namespace.as_deref())? {
+                crate::events::cancelled(Some(hub), &job);
+            }
+        }
+        Ok(cancelled)
     })
     .await?;
     Ok(Json(json!({ "cancelled": cancelled })))
@@ -147,8 +156,9 @@ pub async fn replay(
     Path(job_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let namespace = state.namespace.clone();
+    let events = state.events.clone();
     let replay_id = on_storage(&state, move |storage| {
-        replay_job(storage, &job_id, namespace.as_deref())
+        replay_job(storage, &job_id, namespace.as_deref(), events.as_deref())
     })
     .await??;
     Ok(Json(json!({ "replay_job_id": replay_id })))
@@ -158,11 +168,12 @@ pub async fn replay(
 ///
 /// The copy deliberately drops the unique key, dependencies, and expiry: it is
 /// a fresh attempt at the same work, not a resurrection of the original's
-/// scheduling constraints.
+/// scheduling constraints. It is announced on `events` as an enqueue.
 fn replay_job(
     storage: &impl Storage,
     job_id: &str,
     namespace: Option<&str>,
+    events: Option<&EventHub>,
 ) -> flexiq_core::Result<ApiResult<String>> {
     let Some(original) = storage.get_job(job_id, namespace)? else {
         return Ok(Err(ApiError::NotFound("Job not found".to_string())));
@@ -186,6 +197,7 @@ fn replay_job(
         debounce_key: None,
     };
     let enqueued = storage.enqueue(replay)?;
+    crate::events::enqueued(events, &enqueued);
 
     // Best-effort: the replay itself succeeded, and losing the audit pairing
     // must not turn that into a 500.

@@ -151,8 +151,11 @@ pub(crate) async fn trigger(
 ) -> Result<Response<pb::admin::TriggerPeriodicTaskResponse>, Status> {
     let name = require("name", request.name)?;
     let task = read(scoped, name).await?;
+    let events = scoped.events();
     let job = on_storage(scoped.storage(), move |storage| {
-        storage.enqueue(periodic_job(&task, now_millis(), None))
+        let job = storage.enqueue(periodic_job(&task, now_millis(), None))?;
+        crate::events::enqueued(events.as_deref(), &job);
+        Ok(job)
     })
     .await?;
     Ok(Response::new(pb::admin::TriggerPeriodicTaskResponse {

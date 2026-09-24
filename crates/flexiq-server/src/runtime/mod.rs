@@ -309,6 +309,7 @@ pub fn run(config: Config) -> Result<()> {
                     queues: config.queues.clone(),
                     maintenance: config.maintenance,
                     login_throttle: Default::default(),
+                    events: events.clone(),
                 });
                 Some(crate::dashboard::serve(state, shutdown.clone()))
             }
@@ -333,6 +334,7 @@ pub fn run(config: Config) -> Result<()> {
             roles.spawn(crate::trigger::serve(
                 triggers,
                 backend.storage.clone(),
+                events.clone(),
                 shutdown.clone(),
             ));
         }
@@ -384,6 +386,7 @@ pub fn run(config: Config) -> Result<()> {
                 backend.storage.clone(),
                 backend.workflows.clone(),
                 door,
+                events.clone(),
                 shutdown.clone(),
             ));
         }

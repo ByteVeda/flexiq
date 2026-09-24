@@ -219,6 +219,7 @@ pub fn dashboard_state_for(
         queues: vec!["default".to_string()],
         maintenance: true,
         login_throttle: Default::default(),
+        events: None,
     })
 }
 

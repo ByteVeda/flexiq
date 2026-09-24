@@ -5,7 +5,7 @@
 //! can choose what the task receives, never which task, queue or namespace
 //! receives it.
 
-use flexiq_core::{now_millis, Job, NewJob, Storage, StorageBackend};
+use flexiq_core::{now_millis, EventHub, Job, NewJob, Storage, StorageBackend};
 
 use crate::trigger::definition::Trigger;
 
@@ -65,7 +65,14 @@ pub fn new_job(trigger: &Trigger, namespace: &str, planned: Planned) -> NewJob {
 /// redelivers on failure, and with a keyed trigger the redelivery skips what
 /// already landed. A keyless one would duplicate — which is why the
 /// object-store triggers key on the event id by default.
-pub fn submit(storage: &StorageBackend, jobs: Vec<NewJob>) -> flexiq_core::Result<Vec<Enqueued>> {
+///
+/// Each job this call inserts is announced on `events` as it lands, so one
+/// that fails part-way still announces the jobs before it.
+pub fn submit(
+    storage: &StorageBackend,
+    jobs: Vec<NewJob>,
+    events: Option<&EventHub>,
+) -> flexiq_core::Result<Vec<Enqueued>> {
     jobs.into_iter()
         .map(|job| {
             let (stored, deduplicated): (Job, bool) = if job.unique_key.is_some() {
@@ -73,6 +80,9 @@ pub fn submit(storage: &StorageBackend, jobs: Vec<NewJob>) -> flexiq_core::Resul
             } else {
                 (storage.enqueue(job)?, false)
             };
+            if !deduplicated {
+                crate::events::enqueued(events, &stored);
+            }
             Ok(Enqueued {
                 id: stored.id,
                 deduplicated,

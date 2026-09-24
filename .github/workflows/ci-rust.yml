@@ -146,9 +146,10 @@ jobs:
 
       # The only run that compiles both dispatch paths, so it is the only one
       # where the test asserting push takes the gRPC executor door away can
-      # exist at all — it is `#[cfg(feature = "grpc")]`.
+      # exist at all — it is `#[cfg(feature = "grpc")]`. `events-http` rides
+      # along: the event egress e2e needs the gRPC door and the HTTP sink.
       - name: Run push dispatch against the gRPC door
-        run: cargo test -p flexiq-server --features http-target,grpc
+        run: cargo test -p flexiq-server --features http-target,grpc,events-http
 
       - name: Check http-target against the other backends
         run: cargo check --workspace --features http-target,postgres,redis

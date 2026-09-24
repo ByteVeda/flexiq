@@ -92,6 +92,7 @@ pub(crate) async fn replay(
     let id = require("dead_letter_id", request.dead_letter_id)?;
     let namespace = scoped.namespace_owned();
     let lookup = id.clone();
+    let events = scoped.events();
     let job = on_storage(scoped.storage(), move |storage| {
         // `retry_dead` answers an absent or foreign entry `JobNotFound` — about
         // the entry, not a job — so it is caught here and renamed rather than
@@ -100,7 +101,12 @@ pub(crate) async fn replay(
             Err(QueueError::JobNotFound(_)) => return Ok(None),
             other => other?,
         };
-        storage.get_job(&job_id, Some(&namespace))
+        let job = storage.get_job(&job_id, Some(&namespace))?;
+        // A replay is a fresh job, so it is announced as an enqueue.
+        if let Some(job) = &job {
+            crate::events::enqueued(events.as_deref(), job);
+        }
+        Ok(job)
     })
     .await?
     .ok_or_else(|| not_found(&id))?;
