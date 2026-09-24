@@ -8,10 +8,13 @@ use std::sync::Arc;
 use super::config::{EventsConfigError, SinkConfig};
 use super::event::JobEvent;
 
+#[cfg(feature = "events-http")]
+mod http;
+
 /// How one delivery attempt of one batch went.
-// Only feature-gated backends construct these; the hub matches on them in
-// every build, including one compiled with no sink kind at all.
-#[allow(dead_code)]
+// Only feature-gated backends construct the first two; the hub matches on
+// them in every build, including one compiled with no sink kind at all.
+#[cfg_attr(not(feature = "events-http"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DeliveryResult {
     /// The destination accepted the whole batch.
@@ -24,6 +27,9 @@ pub(crate) enum DeliveryResult {
 }
 
 /// A destination the hub's per-sink thread delivers to.
+///
+/// A panic is caught and read as a rejection, but the default panic hook
+/// still prints its message: never format event data or a secret into one.
 pub(crate) trait SinkBackend: Send + 'static {
     /// Blocking. Sends the whole batch or reports why not.
     fn deliver(&mut self, batch: &[Arc<JobEvent>]) -> DeliveryResult;
@@ -33,11 +39,15 @@ pub(crate) trait SinkBackend: Send + 'static {
 ///
 /// A kind this build was compiled without is refused here, at hub start, so a
 /// config that cannot deliver never looks healthy.
+#[cfg_attr(not(feature = "events-http"), allow(unused_variables))]
 pub(crate) fn build_backend(
     sink: &SinkConfig,
-    _source: &str,
+    source: &str,
 ) -> Result<Box<dyn SinkBackend>, EventsConfigError> {
     match sink {
+        #[cfg(feature = "events-http")]
+        SinkConfig::Http(config) => Ok(Box::new(http::HttpSink::new(config, source)?)),
+        #[cfg(not(feature = "events-http"))]
         SinkConfig::Http(_) => Err(not_compiled(sink, "events-http")),
         SinkConfig::RedisStreams(_) => Err(not_compiled(sink, "redis")),
     }

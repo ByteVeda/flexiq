@@ -14,7 +14,8 @@
 
 mod bearer;
 mod cache;
-mod digest;
+// Crate-visible so the events HTTP sink signs with the same digest code.
+pub(crate) mod digest;
 mod hmac;
 mod metadata;
 mod oidc;
