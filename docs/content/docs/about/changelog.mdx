@@ -19,6 +19,24 @@ their entries below keep that name.
 
 ### Added
 
+- **Event egress** (#848). Every job transition — `job.enqueued`, `job.started`,
+  `job.completed`, `job.failed`, `job.retrying`, `job.dead`, `job.cancelled`, `job.sleeping` —
+  can leave the process as a structured-mode CloudEvent, `POST`ed to an HTTP endpoint or
+  appended to a Redis stream, so a warehouse, an audit log or an alerting pipeline follows jobs
+  without polling storage. One JSON document configures it everywhere: `flexiq-server` reads
+  `FLEXIQ_EVENTS_FILE` (drain budget `FLEXIQ_EVENTS_DRAIN`, default 5 seconds) and emits
+  `job.enqueued` and pre-run `job.cancelled` from its doors; each SDK's worker takes the same
+  document as a worker option — `Queue(event_sinks=...)`, `runWorker({ eventSinks })`,
+  `Worker.Builder.eventSinks(...)`, `WorkerBuilder::events(...)` — and emits everything from
+  `job.started` on, never `job.enqueued`. Delivery is at-most-once overall and may repeat an
+  event, so consumers dedupe on the CloudEvents `id`; emitting never blocks the queue. The HTTP
+  sink goes through push dispatch's egress guard (a required allowlist, no proxy, no
+  redirects) and signs with `x-flexiq-event-signature` when given a secret; job payloads are
+  sent only by a sink that sets `include_payload`. Per-sink counters appear on the server's
+  `/metrics` as `flexiq_events_*` and on every worker's event-sink stats. The HTTP sink is
+  behind the `events-http` cargo feature, compiled into the published image and SDK builds; the
+  Helm chart gains `events.*`. The contract a consumer implements against is
+  [`contracts/EVENT_EGRESS_CONTRACT.md`](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md).
 - **The admin door** (#836). `flexiq.admin.v1.AdminService` puts the dashboard's operator
   actions on the gRPC listener, and as JSON under `/v1/admin/`: list, pause and resume queues;
   per-queue throughput over a window; list, read, replay, delete and purge dead letters; list and
