@@ -646,13 +646,15 @@ impl Scheduler {
     }
 
     /// Put a job this scheduler deferred back on the queue at `next_at`, and
-    /// arm the push loop's timer for it: no enqueue announces a deferral, so
-    /// otherwise it would wait out the fallback interval.
+    /// queue it for the push loop's timer: no enqueue announces a deferral, so
+    /// otherwise it would wait out the fallback interval. Only the pass's
+    /// earliest deferral is armed (`arm_deferrals`).
     fn reschedule_deferred(&self, job_id: &str, next_at: i64) -> Result<()> {
         self.storage
             .reschedule(job_id, next_at, self.namespace.as_deref())?;
         #[cfg(feature = "push-dispatch")]
-        self.note_scheduled_at(next_at);
+        self.deferred_floor
+            .fetch_min(next_at, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 }

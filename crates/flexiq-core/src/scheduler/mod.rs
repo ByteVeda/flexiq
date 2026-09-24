@@ -539,6 +539,11 @@ pub struct Scheduler {
     /// A set, not a single minimum: once the earliest fires, the next is known.
     #[cfg(feature = "push-dispatch")]
     delayed_deadlines: Mutex<std::collections::BTreeSet<i64>>,
+    /// Earliest deadline deferred during the current dispatch pass (ms,
+    /// `i64::MAX` = none), armed once when the pass ends. Arming each jittered
+    /// deferral would give every one its own drain, which defers the next batch.
+    #[cfg(feature = "push-dispatch")]
+    deferred_floor: std::sync::atomic::AtomicI64,
 }
 
 /// Counters for tick-based scheduling of periodic maintenance tasks.
@@ -593,6 +598,8 @@ impl Scheduler {
             push_opted_out: std::sync::atomic::AtomicBool::new(false),
             #[cfg(feature = "push-dispatch")]
             delayed_deadlines: Mutex::new(std::collections::BTreeSet::new()),
+            #[cfg(feature = "push-dispatch")]
+            deferred_floor: std::sync::atomic::AtomicI64::new(i64::MAX),
         }
     }
 
@@ -909,6 +916,8 @@ impl Scheduler {
         } else {
             self.try_dispatch(job_tx)
         };
+        #[cfg(feature = "push-dispatch")]
+        self.arm_deferrals();
         match dispatch_result {
             Ok(d) => d,
             Err(e) => {
@@ -1100,6 +1109,17 @@ impl Scheduler {
     fn clear_due_deadlines(&self, drained_at: i64) {
         let mut deadlines = self.lock_deadlines();
         *deadlines = deadlines.split_off(&drained_at.saturating_add(1));
+    }
+
+    /// Arm the timer for the earliest deferral this dispatch pass made, once.
+    /// The rest come due in drains that timer (or a later one) triggers.
+    fn arm_deferrals(&self) {
+        let floor = self
+            .deferred_floor
+            .swap(i64::MAX, std::sync::atomic::Ordering::Relaxed);
+        if floor != i64::MAX {
+            self.note_scheduled_at(floor);
+        }
     }
 
     /// Arm a timer for each deadline `heard` announced; true when it asks
@@ -2061,6 +2081,39 @@ mod tests {
                 "batch_size {batch_size}: the timer must land on the deferral, got {timer:?}"
             );
         }
+    }
+
+    /// A pass that defers a whole batch arms one deadline, not one per job:
+    /// eight jittered deadlines would each fire a drain that defers the next
+    /// eight, keeping a saturated limiter in a near-continuous drain loop.
+    #[cfg(feature = "push-dispatch")]
+    #[test]
+    fn test_a_deferred_batch_arms_one_deadline() {
+        let scheduler = rate_limited_scheduler(shed::OnExcess::Defer, 8);
+        for _ in 0..8 {
+            scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+        }
+        let (tx, mut rx) = make_channel(16);
+        let mut counters = TickCounters::default();
+        // One pass claims all eight: the token admits one, seven are deferred.
+        scheduler.tick(&tx, &mut counters);
+        assert_eq!(drain_dispatched(&mut rx), 1, "one admitted");
+
+        let deferred = scheduler
+            .storage
+            .list_jobs(Some(JobStatus::Pending as i32), None, None, 20, 0, None)
+            .unwrap();
+        assert_eq!(deferred.len(), 7);
+        let earliest = deferred.iter().map(|j| j.scheduled_at).min().unwrap();
+        assert_eq!(
+            scheduler
+                .lock_deadlines()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![earliest],
+            "only the pass's earliest deferral is armed"
+        );
     }
 
     #[test]
