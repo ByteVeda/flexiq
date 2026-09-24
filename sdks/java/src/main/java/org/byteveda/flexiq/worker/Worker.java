@@ -216,8 +216,9 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
-     * Wait out the event drain {@link #stop()} started, then keep the final
-     * counts. Never fails the close: the native handle still has to be freed.
+     * Drain the event sinks, starting the budget now, after {@link #close()}'s
+     * handler wait, then keep the final counts. Never fails the close: the
+     * native handle still has to be freed.
      */
     private void drainEventSinks() {
         try {
