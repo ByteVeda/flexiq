@@ -79,7 +79,8 @@ pub fn secret_vars(settings: &EventsSettings) -> Vec<&str> {
 }
 
 /// Remove every sink secret from the process environment once the hub has
-/// read it, so none survives into `/proc/<pid>/environ` or a crash dump.
+/// read it, so no later in-process read or child process sees it. The
+/// initial environment block, which `/proc/<pid>/environ` shows, keeps it.
 pub fn scrub_event_secrets(settings: &EventsSettings) {
     // Called once from `main`, after the hub has built its sinks and before
     // any role is spawned. The sink threads already exist, but they read the

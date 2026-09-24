@@ -127,7 +127,10 @@ carries its password). The document can then live in a ConfigMap.
 
 `flexiq-server` reads each variable once, while building the sinks, then
 **removes every one of them from its environment** before any role starts, so
-none survives into `/proc/<pid>/environ` or a crash dump. An embedded SDK
+nothing later in the process reads them back and no child process inherits
+them. The removal is not a memory wipe: the original environment block on the
+process stack, which `/proc/<pid>/environ` and a core dump expose, still holds
+the values. An embedded SDK
 runtime reads them each time a worker starts its hub and leaves them in place.
 
 ### Filters
