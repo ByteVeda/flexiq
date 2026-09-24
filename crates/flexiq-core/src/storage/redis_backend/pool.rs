@@ -151,11 +151,15 @@ impl Drop for RedisConnection {
 mod tests {
     use super::*;
 
-    /// A pool over the hosted test Redis, or `None` when none is configured.
+    /// A pool over the hosted test Redis, or `None` (with a skip line) when
+    /// none is configured. A configured Redis that cannot be reached fails.
     fn test_pool(owner_pid: u32) -> Option<Arc<ConnectionPool>> {
-        let url = std::env::var("FLEXIQ_REDIS_TEST_URL").ok()?;
-        let client = redis::Client::open(url).ok()?;
-        let warm = client.get_connection().ok()?;
+        let Ok(url) = std::env::var("FLEXIQ_REDIS_TEST_URL") else {
+            eprintln!("Skipping: FLEXIQ_REDIS_TEST_URL unset");
+            return None;
+        };
+        let client = redis::Client::open(url).unwrap();
+        let warm = client.get_connection().unwrap();
         Some(ConnectionPool::owned_by(client, warm, owner_pid))
     }
 
