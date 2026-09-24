@@ -1059,24 +1059,25 @@ impl Scheduler {
         let mut counters = TickCounters::default();
         let mut maintenance = tokio::time::interval(Self::PUSH_MAINTENANCE_INTERVAL);
         maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The fallback is anchored to the last drain, not re-armed each pass:
+        // the maintenance tick restarts the loop more often than the fallback
+        // interval, so a per-pass sleep would never fire.
+        let mut last_drain = tokio::time::Instant::now();
 
         loop {
-            let fallback = self.next_delayed_timer();
-            tokio::select! {
+            let fallback_at = (last_drain + Self::PUSH_FALLBACK_INTERVAL)
+                .min(tokio::time::Instant::now() + self.next_delayed_timer());
+            let drain = tokio::select! {
                 _ = self.shutdown.notified() => break,
-                _ = wake.wait() => {
-                    // Drain dispatch fully so a single wake clears the queue.
-                    while self.tick_dispatch(&job_tx) {}
-                }
-                _ = tokio::time::sleep(fallback) => {
-                    while self.tick_dispatch(&job_tx) {}
-                }
-                _ = maintenance.tick() => {
-                    if self.tick_maintenance(&mut counters) {
-                        // Periodic enqueue may have produced ready work.
-                        while self.tick_dispatch(&job_tx) {}
-                    }
-                }
+                _ = wake.wait() => true,
+                _ = tokio::time::sleep_until(fallback_at) => true,
+                // Periodic enqueue may have produced ready work.
+                _ = maintenance.tick() => self.tick_maintenance(&mut counters),
+            };
+            if drain {
+                // Drain dispatch fully so a single wake clears the queue.
+                while self.tick_dispatch(&job_tx) {}
+                last_drain = tokio::time::Instant::now();
             }
         }
     }
@@ -4185,6 +4186,45 @@ mod push_tests {
         tokio::time::timeout(Duration::from_secs(5), wake.wait())
             .await
             .expect("an enqueued ready job must wake the push loop");
+    }
+
+    /// Run `scheduler` on the current runtime, returning its dispatch channel.
+    fn spawn_run(
+        scheduler: &Arc<Scheduler>,
+    ) -> (
+        tokio::task::JoinHandle<()>,
+        tokio::sync::mpsc::Receiver<Job>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        let runner = Arc::clone(scheduler);
+        (tokio::spawn(async move { runner.run(tx).await }), rx)
+    }
+
+    /// A job no wake announces (another process's delayed enqueue, a missed
+    /// wake) must still dispatch on the fallback timer. The maintenance tick
+    /// restarts the loop every 500 ms, so a per-pass fallback never fired.
+    #[tokio::test]
+    async fn push_fallback_dispatches_an_unannounced_job() {
+        let sqlite = crate::storage::sqlite::SqliteStorage::in_memory().unwrap();
+        let scheduler = Arc::new(Scheduler::new(
+            StorageBackend::Sqlite(sqlite.clone()),
+            vec!["default".to_string()],
+            SchedulerConfig::default(),
+            None,
+        ));
+        scheduler.enable_push_dispatch();
+        let (run, mut rx) = spawn_run(&scheduler);
+
+        // The inherent SQLite enqueue skips the notify chokepoint.
+        sqlite.enqueue(ready_job("unannounced")).unwrap();
+
+        let job = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the fallback timer must dispatch an unannounced job")
+            .expect("run loop alive");
+        assert_eq!(job.task_name, "unannounced");
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
     }
 
     /// `note_scheduled_at` keeps the earliest schedule and clears once due.
