@@ -447,7 +447,7 @@ impl RedisStorage {
             let stored = self.stored_sleep(&mut conn, step)?;
             let deadline = stored.unwrap_or(wake_at);
 
-            let mut job = self.get_job_required_in(step.job_id, namespace)?;
+            let mut job = self.get_job_required_in(&mut conn, step.job_id, namespace)?;
             let old_status = job.status;
             job.status = JobStatus::Pending;
             job.scheduled_at = deadline;

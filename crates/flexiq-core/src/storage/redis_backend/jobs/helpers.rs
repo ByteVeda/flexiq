@@ -127,9 +127,11 @@ impl RedisStorage {
     /// directly without the archived fallback, so a mutator never operates on a
     /// terminal job that has already left the live indices (which would leave
     /// the reindex partial). Read paths must use `get_job` instead.
-    pub(super) fn get_job_required(&self, id: &str) -> Result<Job> {
-        let mut conn = self.conn()?;
-        self.load_job(&mut conn, id)?
+    ///
+    /// Reads on the caller's connection: a checkout while one is held cannot
+    /// reuse it, so it would cost a second connection.
+    pub(super) fn get_job_required(&self, conn: &mut redis::Connection, id: &str) -> Result<Job> {
+        self.load_job(conn, id)?
             .ok_or_else(|| QueueError::JobNotFound(id.to_string()))
     }
 
@@ -140,10 +142,11 @@ impl RedisStorage {
     /// trip. `None` addresses every namespace.
     pub(in crate::storage::redis_backend) fn get_job_required_in(
         &self,
+        conn: &mut redis::Connection,
         id: &str,
         namespace: Option<&str>,
     ) -> Result<Job> {
-        let job = self.get_job_required(id)?;
+        let job = self.get_job_required(conn, id)?;
         if namespace.is_some() && job.namespace.as_deref() != namespace {
             return Err(QueueError::JobNotFound(id.to_string()));
         }

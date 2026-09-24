@@ -627,9 +627,10 @@ impl RedisStorage {
     /// compare. The flag is what `EnqueueResponse.deduplicated` carries on the
     /// wire.
     pub fn enqueue_unique_reporting(&self, new_job: NewJob) -> Result<(Job, bool)> {
-        let mut conn = self.conn()?;
-
         if let Some(uk) = new_job.unique_key.clone() {
+            // Checked out here, not above: the keyless branch's `enqueue`
+            // takes its own, and holding ours across it would cost a second.
+            let mut conn = self.conn()?;
             let unique_key = self.unique_key_key(new_job.namespace.as_deref(), &uk);
 
             // Active-status comparison values are sourced from Rust via ARGV

@@ -479,7 +479,10 @@ impl RedisStorage {
             debounce_key: None,
         };
 
+        // `enqueue` checks out its own connection; release ours so it reuses it.
+        drop(conn);
         let job = self.enqueue(new_job)?;
+        let mut conn = self.conn()?;
 
         // Remove from DLQ, and drop it from its subscription's sub:dead index
         // so the dead count doesn't keep the retried delivery (no-op otherwise).
