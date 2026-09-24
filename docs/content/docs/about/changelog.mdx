@@ -19,7 +19,7 @@ their entries below keep that name.
 
 ### Added
 
-- **Event egress** (#848). Every job transition — `job.enqueued`, `job.started`,
+- **Event egress** (#848). Job lifecycle transitions — `job.enqueued`, `job.started`,
   `job.completed`, `job.failed`, `job.retrying`, `job.dead`, `job.cancelled`, `job.sleeping` —
   can leave the process as a structured-mode CloudEvent, `POST`ed to an HTTP endpoint or
   appended to a Redis stream, so a warehouse, an audit log or an alerting pipeline follows jobs
@@ -36,7 +36,10 @@ their entries below keep that name.
   `/metrics` as `flexiq_events_*` and on every worker's event-sink stats. The HTTP sink is
   behind the `events-http` cargo feature, compiled into the published image and SDK builds; the
   Helm chart gains `events.*`. The contract a consumer implements against is
-  [`contracts/EVENT_EGRESS_CONTRACT.md`](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md).
+  [`contracts/EVENT_EGRESS_CONTRACT.md`](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md);
+  the stream is not a complete audit, and its
+  [What is not seen](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md#what-is-not-seen)
+  section lists the transitions that emit nothing.
 - **The admin door** (#836). `flexiq.admin.v1.AdminService` puts the dashboard's operator
   actions on the gRPC listener, and as JSON under `/v1/admin/`: list, pause and resume queues;
   per-queue throughput over a window; list, read, replay, delete and purge dead letters; list and
