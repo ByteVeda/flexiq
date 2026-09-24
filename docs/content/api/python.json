@@ -189,7 +189,7 @@
       "owner": "PyQueue",
       "name": "__init__",
       "kind": "method",
-      "signature": "__init__(db_path: str = \".flexiq/flexiq.db\", workers: int = 0, default_retry: int = 3, default_timeout: int = 300, default_priority: int = 0, result_ttl: int | None = None, backend: str = \"sqlite\", db_url: str | None = None, schema: str = \"flexiq\", pool_size: int | None = None, scheduler_poll_interval_ms: int = 50, scheduler_reap_interval: int = 100, scheduler_cleanup_interval: int = 1200, scheduler_batch_size: int | None = None, namespace: str | None = None, push_dispatch: bool | None = None, dlq_auto_retry_delay: int | None = None, dlq_auto_retry_max: int = 1, retention: dict[str, int] | None = None, auto_migrate: bool = True) -> None",
+      "signature": "__init__(db_path: str = \".flexiq/flexiq.db\", workers: int = 0, default_retry: int = 3, default_timeout: int = 300, default_priority: int = 0, result_ttl: int | None = None, backend: str = \"sqlite\", db_url: str | None = None, schema: str = \"flexiq\", pool_size: int | None = None, scheduler_poll_interval_ms: int = 50, scheduler_reap_interval: int = 100, scheduler_cleanup_interval: int = 1200, scheduler_batch_size: int | None = None, namespace: str | None = None, push_dispatch: bool | None = None, dlq_auto_retry_delay: int | None = None, dlq_auto_retry_max: int = 1, retention: dict[str, int] | None = None, auto_migrate: bool = True, event_sinks: str | None = None, event_sinks_drain: float = 5.0) -> None",
       "params": [
         {
           "name": "db_path",
@@ -290,6 +290,16 @@
           "name": "auto_migrate",
           "type": "bool",
           "default": "True"
+        },
+        {
+          "name": "event_sinks",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "event_sinks_drain",
+          "type": "float",
+          "default": "5.0"
         }
       ],
       "returns": "None"
@@ -823,6 +833,14 @@
         }
       ],
       "returns": "list[PyJob]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "event_sink_stats",
+      "kind": "method",
+      "signature": "event_sink_stats() -> list[dict[str, Any]]",
+      "params": [],
+      "returns": "list[dict[str, Any]]"
     },
     {
       "owner": "PyQueue",

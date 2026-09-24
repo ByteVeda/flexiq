@@ -61,6 +61,12 @@ Task::run_encoded(job: &Job) -> Outcome<Option<Vec<u8>>>
 
 ## WorkerBuilder
 
+### `worker.events()`
+
+```rust
+worker.events(hub: Arc<EventHub>) -> Self
+```
+
 ### `worker.num_workers()`
 
 ```rust
