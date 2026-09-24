@@ -528,6 +528,10 @@ pub struct Scheduler {
     /// out) once when the loop starts. `None` means the loop polls as today.
     #[cfg(feature = "push-dispatch")]
     wake_source: Mutex<Option<wake::WakeSource>>,
+    /// Set by [`Self::disable_push_dispatch`]: keeps a backend whose default is
+    /// push (Redis) on the poll loop.
+    #[cfg(feature = "push-dispatch")]
+    push_opted_out: std::sync::atomic::AtomicBool,
     /// Earliest `scheduled_at` of any delayed job seen at enqueue time, so the
     /// push loop can arm a timer for the next delayed job rather than waking
     /// immediately. Milliseconds; `i64::MAX` means "nothing scheduled".
@@ -583,6 +587,8 @@ impl Scheduler {
             retention_announced: std::sync::Once::new(),
             #[cfg(feature = "push-dispatch")]
             wake_source: Mutex::new(None),
+            #[cfg(feature = "push-dispatch")]
+            push_opted_out: std::sync::atomic::AtomicBool::new(false),
             #[cfg(feature = "push-dispatch")]
             next_scheduled_at: std::sync::atomic::AtomicI64::new(i64::MAX),
         }
@@ -832,12 +838,17 @@ impl Scheduler {
     /// exponentially (up to `max_interval`, 200ms) when no jobs are found,
     /// resets immediately when a job is dispatched. Each wake drains all ready
     /// work before sleeping again.
+    ///
+    /// With the `push-dispatch` feature the loop is event-driven instead when
+    /// a wake source was installed, or by default on Redis unless
+    /// [`Self::disable_push_dispatch`] was called. Call from inside a Tokio
+    /// runtime: the Redis default spawns its listener here.
     pub async fn run(&self, job_tx: tokio::sync::mpsc::Sender<Job>) {
-        // Push-dispatch: if a wake source was configured, run the event-driven
-        // loop. Otherwise (and always when the feature is off) fall through to
-        // the unchanged adaptive-poll loop below.
+        // Push-dispatch: if a wake source was configured (or the backend
+        // defaults to one), run the event-driven loop. Otherwise (and always
+        // when the feature is off) fall through to the adaptive-poll loop below.
         #[cfg(feature = "push-dispatch")]
-        if let Some(wake) = self.take_wake_source() {
+        if let Some(wake) = self.resolve_wake_source() {
             self.run_push(job_tx, wake).await;
             return;
         }
@@ -975,9 +986,39 @@ impl Scheduler {
     /// This is the entry point binding shells call for their `push_dispatch`
     /// option. It also exists — as a logged no-op — in builds without the
     /// `push-dispatch` feature, so a shell can offer the option unconditionally
-    /// and degrade to polling.
+    /// and degrade to polling. Redis needs no call: [`Self::run`] installs its
+    /// source by default.
     pub fn enable_push_dispatch(&self) {
         self.set_wake_source(wake::WakeSource::for_storage(&self.storage));
+    }
+
+    /// Keep this scheduler polling, opting out of the Redis push default and
+    /// dropping any wake source already installed. Whichever of this and
+    /// [`Self::enable_push_dispatch`] is called last wins.
+    pub fn disable_push_dispatch(&self) {
+        self.push_opted_out
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.take_wake_source();
+    }
+
+    /// The wake source `run` should use: an explicitly installed one, else the
+    /// backend default — push on Redis (#961), where each poll is a network
+    /// round trip, and polling on SQLite/Postgres.
+    fn resolve_wake_source(&self) -> Option<wake::WakeSource> {
+        if let Some(wake) = self.take_wake_source() {
+            return Some(wake);
+        }
+        if self
+            .push_opted_out
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return None;
+        }
+        match &self.storage {
+            #[cfg(feature = "redis")]
+            StorageBackend::Redis(_) => Some(wake::WakeSource::for_storage(&self.storage)),
+            _ => None,
+        }
     }
 
     /// Install the wake source the push loop should consume. Call before
@@ -1098,6 +1139,10 @@ impl Scheduler {
              feature; falling back to polling"
         );
     }
+
+    /// Stand-in for the push-dispatch build's opt-out. Without the feature the
+    /// scheduler always polls, so there is nothing to opt out of.
+    pub fn disable_push_dispatch(&self) {}
 }
 
 #[cfg(test)]
@@ -4272,6 +4317,144 @@ mod push_tests {
         assert_ne!(second.id, first.id);
         scheduler.shutdown_handle().notify_one();
         run.await.unwrap();
+    }
+
+    /// #961: SQLite keeps polling unless a shell opts in — no source after
+    /// construction, and none resolved by default.
+    #[test]
+    fn sqlite_default_stays_polling() {
+        let scheduler = push_scheduler();
+        assert!(scheduler.take_wake_source().is_none());
+        assert!(scheduler.resolve_wake_source().is_none());
+    }
+
+    /// `disable_push_dispatch` drops a source a shell already installed.
+    #[test]
+    fn disable_push_dispatch_drops_an_installed_source() {
+        let scheduler = push_scheduler();
+        scheduler.enable_push_dispatch();
+        scheduler.disable_push_dispatch();
+        assert!(scheduler.resolve_wake_source().is_none());
+    }
+
+    /// A scheduler over a uniquely prefixed Redis keyspace, or `None` (skip)
+    /// when no hosted Redis is configured.
+    #[cfg(feature = "redis")]
+    fn redis_scheduler(test: &str) -> Option<Scheduler> {
+        let Ok(url) = std::env::var("FLEXIQ_REDIS_TEST_URL") else {
+            eprintln!("Skipping (FLEXIQ_REDIS_TEST_URL not set): {test}");
+            return None;
+        };
+        let prefix = format!("push_test_{}:", uuid::Uuid::now_v7().simple());
+        match crate::RedisStorage::with_prefix(&url, &prefix) {
+            Ok(storage) => Some(Scheduler::new(
+                StorageBackend::Redis(storage),
+                vec!["default".to_string()],
+                SchedulerConfig::default(),
+                None,
+            )),
+            Err(e) => {
+                eprintln!("Skipping Redis test (cannot connect): {e}");
+                None
+            }
+        }
+    }
+
+    /// #961: on Redis `run` wakes on enqueue with no explicit opt-in. A first
+    /// job warms the connections and, being drained, re-anchors the 2 s
+    /// fallback no earlier than its receipt — so a second job dispatched
+    /// within 1.5 s of its enqueue can only be the wake path.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_worker_wakes_on_enqueue_by_default() {
+        let Some(scheduler) = redis_scheduler("redis_worker_wakes_on_enqueue_by_default") else {
+            return;
+        };
+        let scheduler = Arc::new(scheduler);
+        let (run, mut rx) = spawn_run(&scheduler);
+
+        scheduler.storage().enqueue(ready_job("warm")).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("the warm-up job dispatches by wake or fallback")
+            .expect("run loop alive");
+
+        let enqueue_started = tokio::time::Instant::now();
+        let enqueued = scheduler.storage().enqueue(ready_job("woken")).unwrap();
+        let deadline = enqueue_started + Duration::from_millis(1500);
+        let job = tokio::time::timeout_at(deadline, rx.recv())
+            .await
+            .expect("a Redis enqueue must wake the scheduler before the fallback")
+            .expect("run loop alive");
+        assert_eq!(job.id, enqueued.id);
+        eprintln!("redis enqueue-to-dispatch: {:?}", enqueue_started.elapsed());
+
+        scheduler.shutdown_handle().notify_one();
+        run.await.unwrap();
+    }
+
+    /// `disable_push_dispatch` keeps a Redis scheduler on the poll loop: no
+    /// wake source resolves, while the same scheduler without it gets one.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_push_opt_out_keeps_polling() {
+        let Some(scheduler) = redis_scheduler("redis_push_opt_out_keeps_polling") else {
+            return;
+        };
+        assert!(
+            matches!(
+                scheduler.resolve_wake_source(),
+                Some(wake::WakeSource::Channel(_))
+            ),
+            "Redis defaults to push"
+        );
+        scheduler.disable_push_dispatch();
+        assert!(
+            scheduler.resolve_wake_source().is_none(),
+            "an opted-out Redis scheduler must poll"
+        );
+    }
+
+    /// Stopping a push scheduler on Redis and dropping its runtime must finish
+    /// promptly: `Runtime::drop` waits on the listener's blocking task, which
+    /// only ends once it notices the push loop is gone.
+    #[cfg(feature = "redis")]
+    #[test]
+    fn redis_listener_shutdown_is_bounded() {
+        let Some(scheduler) = redis_scheduler("redis_listener_shutdown_is_bounded") else {
+            return;
+        };
+        let scheduler = Arc::new(scheduler);
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (run, mut rx) = rt.block_on(async { spawn_run(&scheduler) });
+
+        // Prove the listener is live (a woken dispatch) before stopping it.
+        rt.block_on(async {
+            scheduler.storage().enqueue(ready_job("live")).unwrap();
+            tokio::time::timeout(Duration::from_millis(1500), rx.recv())
+                .await
+                .expect("push must be active before the shutdown is measured")
+                .expect("run loop alive");
+        });
+
+        let started = std::time::Instant::now();
+        let shutdown = scheduler.shutdown_handle();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        // Stop and drop off-thread so a hang fails the deadline, not the suite.
+        std::thread::spawn(move || {
+            shutdown.notify_one();
+            let _ = rt.block_on(run);
+            drop(rt);
+            let _ = done_tx.send(());
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("scheduler stop + runtime drop must finish within 3 s");
+        eprintln!("redis stop + runtime drop: {:?}", started.elapsed());
     }
 
     /// `note_scheduled_at` keeps the earliest schedule and clears once due.
