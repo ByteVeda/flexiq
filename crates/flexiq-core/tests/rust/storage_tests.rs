@@ -4243,6 +4243,7 @@ fn redis_storage_tests() {
     redis_keyset_pages_a_large_tie_bucket(&storage);
     redis_backfills_expiry_for_preupgrade_rows(&storage);
     redis_debounce_index_never_outlives_its_job(&storage);
+    redis_namespaced_debounce_claim_clears_its_index(&storage);
     redis_debounce_coalesces_onto_a_plainly_enqueued_job(&storage);
     redis_debounce_slides_an_empty_payload(&storage);
     redis_purge_metrics_drains_across_batches(&storage);
@@ -4696,16 +4697,75 @@ fn redis_purge_preserves_reused_unique_key(s: &flexiq_core::RedisStorage) {
     );
 }
 
-/// Members of the debounce index of a default-namespace key. The index is an
-/// implementation detail of the Redis backend, so the key is rebuilt here from
-/// the same shape `debounce_index_key` writes (`-` is the default namespace).
+/// Members of the debounce index of a default-namespace key.
 #[cfg(feature = "redis")]
 fn redis_debounce_index_size(s: &flexiq_core::RedisStorage, debounce_key: &str) -> i64 {
+    redis_debounce_index_size_in(s, None, debounce_key)
+}
+
+/// Members of the debounce index of `(namespace, debounce_key)`. The index is
+/// an implementation detail of the Redis backend, so the key is rebuilt here
+/// from the same shape `debounce_index_key` writes: `-` for the default
+/// namespace, `<len>:<ns>` otherwise.
+#[cfg(feature = "redis")]
+fn redis_debounce_index_size_in(
+    s: &flexiq_core::RedisStorage,
+    namespace: Option<&str>,
+    debounce_key: &str,
+) -> i64 {
+    let segment = match namespace {
+        Some(ns) => format!("{}:{ns}", ns.len()),
+        None => "-".to_string(),
+    };
     let mut conn = s.conn().unwrap();
     redis::cmd("ZCARD")
-        .arg(format!("{}jobs:debounce:-:{debounce_key}", s.prefix()))
+        .arg(format!(
+            "{}jobs:debounce:{segment}:{debounce_key}",
+            s.prefix()
+        ))
         .query(&mut conn)
         .unwrap()
+}
+
+/// The claim script drops a namespaced job's debounce entry too: it rebuilds
+/// the index key from the job's namespace in Lua, which must match
+/// `namespace_segment` byte for byte or the entry would outlive the claim.
+#[cfg(feature = "redis")]
+fn redis_namespaced_debounce_claim_clears_its_index(s: &flexiq_core::RedisStorage) {
+    let q = "q-redis-debounce-ns";
+    let ns = Some("t");
+    let in_ns = |key: &str| {
+        let mut job = debounced(q, key);
+        job.namespace = ns.map(str::to_string);
+        job
+    };
+
+    let single = s
+        .enqueue_debounced(in_ns("ns-single"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_eq!(redis_debounce_index_size_in(s, ns, "ns-single"), 1);
+    let claimed = s.dequeue(q, now_millis() + 10_000, ns).unwrap().unwrap();
+    assert_eq!(claimed.id, single.id);
+    assert_eq!(
+        redis_debounce_index_size_in(s, ns, "ns-single"),
+        0,
+        "dequeue must close a namespaced window"
+    );
+
+    let batched = s
+        .enqueue_debounced(in_ns("ns-batch"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_eq!(redis_debounce_index_size_in(s, ns, "ns-batch"), 1);
+    let claimed = s.dequeue_batch(q, now_millis() + 10_000, ns, 8).unwrap();
+    assert_eq!(
+        claimed.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(),
+        vec![batched.id.as_str()]
+    );
+    assert_eq!(
+        redis_debounce_index_size_in(s, ns, "ns-batch"),
+        0,
+        "dequeue_batch must close a namespaced window"
+    );
 }
 
 /// The index entry cannot outlive the job it points at: claiming drops it, and
