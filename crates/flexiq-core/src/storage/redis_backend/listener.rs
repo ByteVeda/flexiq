@@ -10,7 +10,7 @@
 //! (a list pop) would wake one, possibly one that cannot take the job. A read
 //! timeout bounds each wait so the loop re-checks the forward channel and
 //! stops promptly on shutdown. Errors back off exponentially (capped at
-//! [`MAX_BACKOFF`]), then reconnect and resubscribe; a Redis that never lets
+//! 30 s), then reconnect and resubscribe; a Redis that never lets
 //! the listener subscribe (ACL without `@pubsub`, a pub/sub-less proxy) logs
 //! one `error!` per failure streak, not one per retry, while dispatch runs on
 //! the fallback poll. Every successful subscribe forwards one wake, so a
