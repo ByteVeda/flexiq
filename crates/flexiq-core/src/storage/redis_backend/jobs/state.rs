@@ -74,6 +74,9 @@ impl RedisStorage {
         job.status = JobStatus::Complete;
         job.completed_at = Some(now_millis());
         job.result = result_bytes;
+        #[cfg(feature = "push-dispatch")]
+        let dependents = self.archive_reading_dependents(&mut conn, &job, old_status)?;
+        #[cfg(not(feature = "push-dispatch"))]
         self.archive_job_immediately(&mut conn, &job, old_status)?;
 
         // Release the unique-key pointer only if it still points at THIS job —
@@ -83,6 +86,9 @@ impl RedisStorage {
         if let Some(ref uk) = job.unique_key {
             self.release_unique_key(&mut conn, job.namespace.as_deref(), uk, id)?;
         }
+
+        #[cfg(feature = "push-dispatch")]
+        self.wake_dependents(&mut conn, &dependents);
 
         Ok(())
     }

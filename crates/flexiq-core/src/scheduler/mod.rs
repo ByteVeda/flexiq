@@ -4664,6 +4664,66 @@ mod push_tests {
         }
     }
 
+    /// A dependent on another scheduler's queue dispatches promptly once its
+    /// parent completes. Its own enqueue wake drained B while the parent ran,
+    /// re-anchoring B's 2 s fallback, so 1.5 s after the completion can only be
+    /// the completion's wake — B's scheduler is not the one that finished it.
+    #[cfg(feature = "redis")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_completion_wakes_a_dependent_on_another_queue() {
+        let Some(storage) = redis_storage("redis_completion_wakes_a_dependent_on_another_queue")
+        else {
+            return;
+        };
+        let a = Arc::new(redis_scheduler_on(&storage, "queue_a"));
+        let b = Arc::new(redis_scheduler_on(&storage, "queue_b"));
+        let (run_a, mut rx_a) = spawn_run(&a);
+        let (run_b, mut rx_b) = spawn_run(&b);
+        warm_up(b.storage(), "queue_b", &mut rx_b).await;
+
+        let parent = a
+            .storage()
+            .enqueue(NewJob {
+                queue: "queue_a".to_string(),
+                ..ready_job("parent")
+            })
+            .unwrap();
+        let running = tokio::time::timeout(Duration::from_secs(10), rx_a.recv())
+            .await
+            .expect("the parent dispatches")
+            .expect("run loop alive");
+        assert_eq!(running.id, parent.id);
+
+        let dependent = b
+            .storage()
+            .enqueue(NewJob {
+                queue: "queue_b".to_string(),
+                depends_on: vec![parent.id.clone()],
+                ..ready_job("dependent")
+            })
+            .unwrap();
+        // Let B's enqueue-wake drain run and skip the still-blocked dependent.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(rx_b.try_recv().is_err(), "blocked while the parent runs");
+
+        let completed_at = tokio::time::Instant::now();
+        a.storage().complete(&parent.id, None, None).unwrap();
+        let job = tokio::time::timeout_at(completed_at + Duration::from_millis(1500), rx_b.recv())
+            .await
+            .expect("the parent's completion must wake the dependent's scheduler")
+            .expect("run loop alive");
+        assert_eq!(job.id, dependent.id);
+        eprintln!(
+            "redis completion-to-dependent dispatch: {:?}",
+            completed_at.elapsed()
+        );
+
+        for (scheduler, run) in [(a, run_a), (b, run_b)] {
+            scheduler.shutdown_handle().notify_one();
+            run.await.unwrap();
+        }
+    }
+
     /// Two schedulers serving the same queue both hear one signal — a
     /// broadcast, not a single consumable token. Observed on the wake
     /// channels themselves, after a subscribe handshake drains them.

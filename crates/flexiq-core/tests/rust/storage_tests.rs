@@ -4267,6 +4267,7 @@ fn redis_storage_tests() {
         redis_enqueue_batch_publishes_once_per_queue_and_deadline(&storage);
         redis_enqueue_unique_publishes_ready_job_once(&storage);
         redis_enqueue_survives_a_denied_wake(&storage, &url);
+        redis_complete_wakes_each_dependent_queue_once(&storage);
     }
 }
 
@@ -5431,6 +5432,87 @@ fn redis_enqueue_unique_publishes_ready_job_once(s: &flexiq_core::RedisStorage) 
     );
 }
 
+/// Every `(channel, payload)` published on any notify channel under `s`'s
+/// prefix within `timeout` of running `action`, as [`redis_published_payloads`].
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_notify_messages(
+    s: &flexiq_core::RedisStorage,
+    timeout: std::time::Duration,
+    action: impl FnOnce(),
+) -> Vec<(String, String)> {
+    let mut conn = s.client().get_connection().unwrap();
+    let mut pubsub = conn.as_pubsub();
+    pubsub
+        .psubscribe(format!("{}notify:*", s.prefix()))
+        .unwrap();
+    action();
+    pubsub.set_read_timeout(Some(timeout)).unwrap();
+    let mut messages = Vec::new();
+    while let Ok(msg) = pubsub.get_message() {
+        messages.push((
+            msg.get_channel_name().to_string(),
+            msg.get_payload::<String>().unwrap(),
+        ));
+    }
+    messages
+}
+
+/// Completing a parent wakes each distinct queue holding a pending dependent
+/// once, with its earliest `scheduled_at`: the scheduler that finished the
+/// parent may not serve them. A job without dependents publishes nothing.
+#[cfg(all(feature = "redis", feature = "push-dispatch"))]
+fn redis_complete_wakes_each_dependent_queue_once(s: &flexiq_core::RedisStorage) {
+    let (q_parent, q_a, q_b) = ("q-depwake-parent", "q-depwake-a", "q-depwake-b");
+    for q in [q_parent, q_a, q_b] {
+        drain_queue(s, q);
+    }
+    let parent = s.enqueue(make_job(q_parent, "depwake_parent")).unwrap();
+    let dependent = |queue: &str, scheduled_at: i64| {
+        let mut job = make_job(queue, "depwake_child");
+        job.depends_on = vec![parent.id.clone()];
+        job.scheduled_at = scheduled_at;
+        s.enqueue(job).unwrap()
+    };
+    let now = now_millis();
+    let early_a = dependent(q_a, now - 1_000);
+    dependent(q_a, now);
+    let only_b = dependent(q_b, now);
+    let claimed = s.dequeue(q_parent, now_millis(), None).unwrap().unwrap();
+    assert_eq!(claimed.id, parent.id);
+
+    let mut messages = redis_notify_messages(s, std::time::Duration::from_secs(2), || {
+        s.complete(&parent.id, None, None).unwrap();
+    });
+    messages.sort();
+    let mut expected = vec![
+        (
+            redis_notify_channel(s, q_a),
+            early_a.scheduled_at.to_string(),
+        ),
+        (
+            redis_notify_channel(s, q_b),
+            only_b.scheduled_at.to_string(),
+        ),
+    ];
+    expected.sort();
+    assert_eq!(messages, expected, "one wake per dependent queue");
+
+    let lone = s.enqueue(make_job(q_parent, "depwake_lone")).unwrap();
+    let claimed = s.dequeue(q_parent, now_millis(), None).unwrap().unwrap();
+    assert_eq!(claimed.id, lone.id);
+    let messages = redis_notify_messages(s, std::time::Duration::from_secs(2), || {
+        s.complete(&lone.id, None, None).unwrap();
+    });
+    assert!(
+        messages.is_empty(),
+        "a job without dependents must publish nothing: {messages:?}"
+    );
+
+    for q in [q_a, q_b] {
+        drain_queue(s, q);
+    }
+}
+
 /// `url` with its userinfo replaced by `user:password`.
 #[cfg(all(feature = "redis", feature = "push-dispatch"))]
 fn redis_url_as(url: &str, user: &str, password: &str) -> String {
@@ -5551,6 +5633,17 @@ fn redis_enqueue_survives_a_denied_wake(admin: &flexiq_core::RedisStorage, url: 
         stored.scheduled_at, slid.scheduled_at,
         "the slide must commit"
     );
+
+    // A completion's dependent wake is best-effort too.
+    let dq = "q-nowake-dep";
+    let parent = s.enqueue(make_job(dq, "nowake_parent")).unwrap();
+    let mut child = make_job(dq, "nowake_child");
+    child.depends_on = vec![parent.id.clone()];
+    s.enqueue(child).unwrap();
+    let claimed = s.dequeue(dq, now_millis(), None).unwrap().unwrap();
+    assert_eq!(claimed.id, parent.id);
+    s.complete(&parent.id, None, None)
+        .expect("a completion must commit despite a denied dependent wake");
 }
 
 #[cfg(feature = "postgres")]
