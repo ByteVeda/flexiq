@@ -976,7 +976,9 @@ impl Scheduler {
     const PUSH_FALLBACK_INTERVAL: Duration = Duration::from_secs(2);
 
     /// Cadence of the dedicated maintenance ticker, decoupled from dispatch.
-    const PUSH_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(500);
+    /// Matches the poll loop's idle backoff ceiling, so the tick-counted reap,
+    /// periodic, DLQ-retry and cleanup intervals keep their idle-poll timing.
+    const PUSH_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(200);
 
     /// Switch this scheduler from polling to event-driven dispatch, using the
     /// wake source that matches its storage backend. Call before [`Self::run`],
@@ -4250,7 +4252,7 @@ mod push_tests {
 
     /// A job no wake announces (another process's delayed enqueue, a missed
     /// wake) must still dispatch on the fallback timer. The maintenance tick
-    /// restarts the loop every 500 ms, so a per-pass fallback never fired.
+    /// restarts the loop well inside the fallback, so a per-pass one never fired.
     #[tokio::test]
     async fn push_fallback_dispatches_an_unannounced_job() {
         let sqlite = crate::storage::sqlite::SqliteStorage::in_memory().unwrap();
