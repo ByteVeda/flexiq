@@ -314,7 +314,7 @@ public final class Worker implements AutoCloseable {
         private @Nullable AutoscaleOptions autoscale;
         private @Nullable MeshOptions mesh;
         private @Nullable Retention retention;
-        private boolean pushDispatch;
+        private @Nullable Boolean pushDispatch;
         private long middlewareTimeoutMillis = HookDeadline.DEFAULT_TIMEOUT_MILLIS;
         private @Nullable Emitter hub;
         private @Nullable WorkerLifecycle lifecycle;
@@ -585,13 +585,15 @@ public final class Worker implements AutoCloseable {
         }
 
         /**
-         * Opt into event-driven dispatch: an enqueue wakes the scheduler
-         * immediately instead of it waiting for the next poll, removing the
-         * dispatch latency floor and the idle database load of polling.
-         * Requires the native library to be built with the {@code push-dispatch}
-         * cargo feature; otherwise accepted and ignored (polling is kept).
+         * Event-driven dispatch: an enqueue wakes the scheduler immediately
+         * instead of it waiting for the next poll, removing the dispatch
+         * latency floor and the idle database load of polling. Left unset, the
+         * backend chooses: on for Redis, off for SQLite and Postgres. Native
+         * libraries built without the {@code push-dispatch} cargo feature
+         * always poll.
          *
-         * @param pushDispatch {@code true} to wake the scheduler on enqueue rather than poll
+         * @param pushDispatch {@code true} to wake the scheduler on enqueue,
+         *     {@code false} to keep polling
          * @return {@code this}, for chaining
          */
         public Builder pushDispatch(boolean pushDispatch) {
@@ -885,11 +887,11 @@ public final class Worker implements AutoCloseable {
             if (retention != null) {
                 options.put("retention", retention.toMap());
             }
-            // Only when asked: the binding's default is polling, so omitting the
-            // key keeps the wire shape unchanged for every worker that never
-            // touches this knob.
-            if (pushDispatch) {
-                options.put("pushDispatch", true);
+            // Only when set: an absent key leaves the backend default (on for
+            // Redis), and keeps the wire shape unchanged for every worker that
+            // never touches this knob.
+            if (pushDispatch != null) {
+                options.put("pushDispatch", pushDispatch);
             }
             try {
                 return JSON.writeValueAsString(options);

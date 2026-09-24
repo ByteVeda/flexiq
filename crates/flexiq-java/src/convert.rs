@@ -480,10 +480,10 @@ pub struct WorkerOptions {
     /// Per-queue config registered with the scheduler at start. Carries opt-in
     /// CoDel load shedding and dispatch order.
     pub queue_configs: Option<Vec<QueueConfigSpec>>,
-    /// Opt into event-driven dispatch: an enqueue wakes the scheduler right
-    /// away instead of it waiting for the next poll. Requires the library to be
-    /// built with the `push-dispatch` cargo feature; otherwise accepted and
-    /// ignored (polling is kept).
+    /// Event-driven dispatch: an enqueue wakes the scheduler right away instead
+    /// of it waiting for the next poll. `true` opts in, `false` keeps polling,
+    /// unset lets the backend choose (on for Redis). Builds without the
+    /// `push-dispatch` cargo feature always poll.
     pub push_dispatch: Option<bool>,
 }
 

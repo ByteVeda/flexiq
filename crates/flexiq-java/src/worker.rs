@@ -175,10 +175,15 @@ fn start_worker(
     // Push-dispatch: swap polling for enqueue-driven wakeups before any loop
     // below takes the source. We are on the JNI thread here, so enter the
     // runtime — the Postgres and Redis wake sources spawn a listener task.
-    // Without the `push-dispatch` build feature this logs and keeps polling.
-    if options.push_dispatch.unwrap_or(false) {
-        let _guard = runtime.enter();
-        scheduler.enable_push_dispatch();
+    // Unset keeps the core default (on for Redis). Without the `push-dispatch`
+    // build feature both calls are no-ops and the scheduler polls.
+    match options.push_dispatch {
+        Some(true) => {
+            let _guard = runtime.enter();
+            scheduler.enable_push_dispatch();
+        }
+        Some(false) => scheduler.disable_push_dispatch(),
+        None => {}
     }
     let shutdown = scheduler.shutdown_handle();
     let heartbeat_stop = Arc::new(Notify::new());
