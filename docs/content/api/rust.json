@@ -854,6 +854,20 @@
     },
     {
       "owner": "WorkerBuilder",
+      "name": "push_dispatch",
+      "kind": "method",
+      "signature": "fn push_dispatch(enabled: bool) -> Self",
+      "params": [
+        {
+          "name": "enabled",
+          "type": "bool",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "WorkerBuilder",
       "name": "queues",
       "kind": "method",
       "signature": "fn queues(queues: impl IntoIterator<Item = impl Into<String>>) -> Self",
