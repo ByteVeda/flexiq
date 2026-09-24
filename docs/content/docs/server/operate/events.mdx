@@ -134,7 +134,10 @@ One `XADD <stream> MAXLEN ~ <max_len> *` per event, pipelined per batch. Each
 entry carries `id`, `type`, `source`, `time`, `namespace`, `queue` and `task`
 as fields of their own, so a consumer group can route without parsing JSON,
 plus the whole CloudEvent as `event`. `url_env` names the variable holding the
-`redis://` URL, since it carries the password.
+`redis://` URL, since it carries the password. A connection failure and the
+replies a restart or failover produces — `LOADING`, `TRYAGAIN`, `MASTERDOWN`,
+`CLUSTERDOWN`, `READONLY` — are retried; any other error reply, `BUSY`
+included, drops the batch at once.
 
 `MAXLEN ~` trims: a consumer that falls more than about `max_len` entries
 behind (100000 by default) loses the oldest. Size it for the longest outage a

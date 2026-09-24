@@ -162,15 +162,17 @@ fn fields(event: &JobEvent, source: &str, include_payload: bool) -> Vec<(&'stati
     ]
 }
 
-/// Connection/IO trouble is transient; anything else is a reply the server
-/// actually sent (a bad argument count, WRONGTYPE, an ACL refusal) and
-/// retrying cannot help. Built from the error's kind/category, never its
-/// `Display`: a connection failure's message can carry the URL.
+/// Defers to the client's own `retry_method`, so the replies a restart or
+/// failover produces (LOADING, TRYAGAIN, MASTERDOWN, CLUSTERDOWN, READONLY)
+/// retry alongside connection trouble; only `NoRetry` (WRONGTYPE, NOPERM,
+/// an unknown code such as BUSY) is final. Built from the error's category,
+/// never its `Display`: a connection failure's message can carry the URL.
 fn classify(error: &redis::RedisError) -> DeliveryResult {
-    if error.is_io_error() {
-        DeliveryResult::Retry(format!("redis connection error: {}", error.category()))
-    } else {
-        DeliveryResult::Reject(format!("redis refused the batch: {}", error.category()))
+    match error.retry_method() {
+        redis::RetryMethod::NoRetry => {
+            DeliveryResult::Reject(format!("redis refused the batch: {}", error.category()))
+        }
+        _ => DeliveryResult::Retry(format!("redis unavailable: {}", error.category())),
     }
 }
 
@@ -254,6 +256,52 @@ mod tests {
             Err(other) => panic!("unexpected error: {other:?}"),
             Ok(_) => panic!("a malformed url was accepted"),
         }
+    }
+
+    fn server_error(kind: redis::ServerErrorKind) -> redis::RedisError {
+        (redis::ErrorKind::Server(kind), "test reply").into()
+    }
+
+    #[test]
+    fn restart_and_failover_replies_retry() {
+        for kind in [
+            redis::ServerErrorKind::BusyLoading,
+            redis::ServerErrorKind::TryAgain,
+            redis::ServerErrorKind::MasterDown,
+            redis::ServerErrorKind::ClusterDown,
+            redis::ServerErrorKind::ReadOnly,
+        ] {
+            let result = classify(&server_error(kind));
+            assert!(
+                matches!(result, DeliveryResult::Retry(_)),
+                "{kind:?}: {result:?}"
+            );
+        }
+        let io = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
+        assert!(matches!(classify(&io.into()), DeliveryResult::Retry(_)));
+        let timeout = std::io::Error::new(std::io::ErrorKind::TimedOut, "slow");
+        assert!(matches!(
+            classify(&timeout.into()),
+            DeliveryResult::Retry(_)
+        ));
+    }
+
+    #[test]
+    fn replies_retrying_cannot_fix_are_rejected() {
+        for kind in [
+            redis::ServerErrorKind::ResponseError,
+            redis::ServerErrorKind::NoPerm,
+            redis::ServerErrorKind::CrossSlot,
+        ] {
+            let result = classify(&server_error(kind));
+            assert!(
+                matches!(result, DeliveryResult::Reject(_)),
+                "{kind:?}: {result:?}"
+            );
+        }
+        // BUSY has no known kind, so the client files it as an extension.
+        let busy = redis::make_extension_error("BUSY".to_string(), None);
+        assert!(matches!(classify(&busy), DeliveryResult::Reject(_)));
     }
 
     /// Only runs against a real Redis, the way the rest of this crate's

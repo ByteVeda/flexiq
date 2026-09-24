@@ -492,10 +492,19 @@ event     = {"data":{"attempt":3,"job_id":"0195","namespace":"default","queue":"
 - **`MAXLEN ~` trims the stream.** A consumer that falls more than roughly
   `max_len` entries behind loses the oldest; size `max_len` for the longest
   outage a consumer group must survive.
-- A connection or I/O error is retried (the connection is dropped and
-  re-dialled); any error reply from the server — `WRONGTYPE`, an ACL refusal,
-  and also transient replies such as `LOADING` — rejects the batch. Connect,
-  read and write each time out after 5 seconds.
+- Every failure drops the connection, and the next attempt re-dials. The
+  Redis client's retry classification decides the outcome:
+  - **Retried**: connection and I/O errors (refused, reset, timed out), a
+    failed handshake or authentication, an unparseable reply, and the replies
+    a restart or failover produces — `LOADING`, `TRYAGAIN`, `MASTERDOWN`,
+    `CLUSTERDOWN` and `READONLY` (a write that reached a demoted primary),
+    plus the cluster redirects `MOVED` and `ASK`.
+  - **Rejected**: every other error reply — `ERR`, `WRONGTYPE`, `NOPERM`,
+    `CROSSSLOT`, `EXECABORT`, `NOSCRIPT` — and any code the client does not
+    recognise, including `BUSY`; plus I/O errors of kind permission denied or
+    unsupported.
+
+  Connect, read and write each time out after 5 seconds.
 - A pipeline that failed part-way is retried whole, so entries that already
   landed appear again under the same `id`.
 
