@@ -84,8 +84,10 @@ push. That is the number you want unless you have measured otherwise:
 `max_in_flight` derives from it, and a value above the available slots claims
 work nothing has room to run.
 
-On Redis the scheduler subscribes to a pub/sub channel so an enqueue wakes it at
-once. Set `FLEXIQ_PUSH_DISPATCH=off` when the Redis in front of it refuses
+On Redis the scheduler subscribes to one pub/sub channel per queue in its
+namespace, so an enqueue wakes it at once only when the job's namespace matches
+`FLEXIQ_NAMESPACE` exactly — a job enqueued with an empty-string namespace does
+not wake a scheduler whose namespace is unset. Set `FLEXIQ_PUSH_DISPATCH=off` when the Redis in front of it refuses
 `SUBSCRIBE` — an ACL without `@pubsub`, or a proxy without pub/sub. Jobs still
 dispatch without it, on the scheduler's poll. An empty value keeps the backend
 default here, so write `off` explicitly; unlike `FLEXIQ_MAINTENANCE`, a value
