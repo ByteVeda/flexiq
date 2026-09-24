@@ -132,6 +132,18 @@ rows" to a dequeue, and neither is a thing to put on a network port.
 {{- fail "flexiq-server: triggers.ingress.enabled needs triggers.enabled." -}}
 {{- end -}}
 
+{{/*
+Mirrors config/events.rs: the core parser refuses a document naming no
+sinks, so a chart-rendered one would CrashLoopBackOff on the same check at
+boot. Events are not a role — this only guards the document shape, not
+whether any role is on.
+*/}}
+{{- if .Values.events.enabled -}}
+{{- if not (and .Values.events.config .Values.events.config.sinks) -}}
+{{- fail "flexiq-server: events.enabled requires events.config.sinks — a document naming no sinks is refused at boot." -}}
+{{- end -}}
+{{- end -}}
+
 {{- if and .Values.webhook.enabled .Values.webhook.certManager.enabled (not (.Capabilities.APIVersions.Has "cert-manager.io/v1")) -}}
 {{- fail "flexiq-server: webhook.certManager.enabled is set but cert-manager.io/v1 is not installed in this cluster. Install cert-manager, or leave it false to use a chart-generated certificate." -}}
 {{- end -}}

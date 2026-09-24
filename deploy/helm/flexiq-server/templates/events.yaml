@@ -1,0 +1,14 @@
+{{- $fullname := include "flexiq-server.fullname" . -}}
+{{- if .Values.events.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # The document only: every sink secret a document names through *_env
+  # arrives through events.secretEnv, so this object is safe to read and to
+  # diff.
+  name: {{ $fullname }}-events
+  labels:
+    {{- include "flexiq-server.labels" . | nindent 4 }}
+data:
+  events.json: {{ .Values.events.config | toJson | quote }}
+{{- end }}

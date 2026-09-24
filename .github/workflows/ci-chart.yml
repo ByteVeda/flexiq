@@ -48,6 +48,9 @@ jobs:
           render --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
             --set dashboard.enabled=false --set namespace=prod --set triggers.enabled=true \
             --set triggers.existingConfigMap=hooks --set triggers.ingress.enabled=true
+          render --set storage.dsn=postgres://u:p@db/x --set attach.token="$TOKEN" \
+            --set events.enabled=true \
+            --set-json 'events.config={"sinks":[{"kind":"http","name":"w","url":"https://events.example.com/in","allow":["events.example.com"]}]}'
 
       - name: Invalid combinations are refused, not rendered
         run: |
@@ -95,6 +98,10 @@ jobs:
             --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
             --set namespace=prod --set triggers.enabled=true --set triggers.existingConfigMap=hooks \
             --set-json 'triggers.definitions=[{"name":"a"}]'
+          # Mirrors config/events.rs: the core parser refuses a document
+          # naming no sinks, same as an events.config left at its zero value.
+          refuses "events enabled with no sinks" \
+            --set storage.dsn=postgres://u:p@db/x --set attach.token="$TOKEN" --set events.enabled=true
 
       # The definitions reach the server as the file it reads, and each secret
       # a verifier names reaches it as the variable it names.
@@ -123,6 +130,41 @@ jobs:
           assert mount["mountPath"] == "/etc/flexiq/triggers", mount
           assert container["readinessProbe"]["httpGet"]["path"] == "/healthz"
           print("definitions, secret and mount all reach the container")
+          '
+
+      # The document reaches the server as the file it reads, each sink
+      # secret reaches it as the variable it names, and no Service or port
+      # comes with it — events are not a role.
+      - name: Events document renders into the file the server reads
+        run: |
+          set -euo pipefail
+          helm template t "$CHART" --set storage.dsn=postgres://u:p@db/x \
+            --set attach.token="$TOKEN" --set events.enabled=true --set events.drain=12 \
+            --set-json 'events.config={"source":"/flexiq","sinks":[{"kind":"http","name":"w","url":"https://events.example.com/in","allow":["events.example.com"],"bearer_token_env":"EVT_TOKEN"}]}' \
+            --set-json 'events.secretEnv=[{"name":"EVT_TOKEN","secretName":"event-secrets","key":"warehouse-token"}]' \
+            | python3 -c '
+          import json, sys, yaml
+          docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+          config = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("-events"))
+          document = json.loads(config["data"]["events.json"])
+          assert document["sinks"][0]["bearer_token_env"] == "EVT_TOKEN", document
+          assert not any(k.endswith("token") for k in document["sinks"][0] if k != "bearer_token_env"), \
+              "a secret value leaked into the ConfigMap"
+          assert not any(d["kind"] == "Service" and "events" in d["metadata"]["name"] for d in docs), \
+              "events is not a role — it must add no Service"
+          template = next(d for d in docs if d["kind"] == "Deployment")["spec"]["template"]
+          # Read once at boot, so an edited sink must roll the pods.
+          assert "checksum/events" in template["metadata"]["annotations"]
+          container = template["spec"]["containers"][0]
+          env = {e["name"]: e for e in container["env"]}
+          assert env["FLEXIQ_EVENTS_FILE"]["value"] == "/etc/flexiq/events/events.json"
+          assert env["FLEXIQ_EVENTS_DRAIN"]["value"] == "12"
+          assert env["EVT_TOKEN"]["valueFrom"]["secretKeyRef"] == {"name": "event-secrets", "key": "warehouse-token"}
+          assert not any(p.get("name") == "events" for p in container.get("ports", [])), \
+              "events is not a role — it must open no port"
+          mount = next(m for m in container["volumeMounts"] if m["name"] == "events")
+          assert mount["mountPath"] == "/etc/flexiq/events", mount
+          print("document, secret, checksum and mount all reach the container, with no Service or port")
           '
 
       # A readiness probe that 401s leaves the pod NotReady forever, and the
@@ -234,7 +276,13 @@ jobs:
           computed_follows_drain="$(grace --set push.drain=10)"
           zero="$(grace --set terminationGracePeriodSeconds=0)"
           seventy_five="$(grace --set terminationGracePeriodSeconds=75)"
-          echo "no push, unset: $no_push_unset / push, unset: $computed_default / drain=10, unset: $computed_follows_drain / 0: $zero / 75: $seventy_five"
+          # The events hub drains last, after every role including push has
+          # stopped, so its own drain is added on top of push's budget here —
+          # not left for Kubernetes' default to absorb.
+          events_json='{"sinks":[{"kind":"http","name":"w","url":"https://e.example.com/in","allow":["e.example.com"]}]}'
+          push_and_events="$(grace --set events.enabled=true --set-json "events.config=$events_json")"
+          push_and_events_drain20="$(grace --set events.enabled=true --set events.drain=20 --set-json "events.config=$events_json")"
+          echo "no push, unset: $no_push_unset / push, unset: $computed_default / drain=10, unset: $computed_follows_drain / 0: $zero / 75: $seventy_five / push+events default: $push_and_events / push+events drain=20: $push_and_events_drain20"
           [ "$no_push_unset" = "ABSENT" ] \
             || { echo "::error::unset without push.enabled must leave the field off so Kubernetes' own default applies"; exit 1; }
           [ "$computed_default" = "70" ] \
@@ -245,6 +293,10 @@ jobs:
             || { echo "::error::terminationGracePeriodSeconds=0 must render, not fall back to the default or be refused"; exit 1; }
           [ "$seventy_five" = "75" ] \
             || { echo "::error::terminationGracePeriodSeconds must reach the pod spec"; exit 1; }
+          [ "$push_and_events" = "75" ] \
+            || { echo "::error::push+events, unset must add events.drain (5) onto push's computed 70"; exit 1; }
+          [ "$push_and_events_drain20" = "90" ] \
+            || { echo "::error::the computed default must track events.drain, not the chart's default of it"; exit 1; }
 
           # A positive value that does not clear 2 x push.drain (60 at the
           # chart's default) is refused, not rendered — Kubernetes could

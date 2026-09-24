@@ -43,6 +43,11 @@ spec:
         {{- if and .Values.triggers.enabled .Values.triggers.definitions }}
         checksum/triggers: {{ dict "triggers" .Values.triggers.definitions | toJson | sha256sum }}
         {{- end }}
+        # Same reason, for the events document: it is read once at boot, so
+        # hashing it is what makes an edited sink take effect.
+        {{- if .Values.events.enabled }}
+        checksum/events: {{ .Values.events.config | toJson | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -63,9 +68,16 @@ spec:
       # SIGKILL. Computed instead of left absent: 2 × push.drain plus a 10s
       # margin for the pod's own teardown the two drains don't cover (SIGTERM
       # delivery, the tokio runtime unwinding after the second drain
-      # returns, the container runtime's own stop overhead). An explicit
-      # value above always wins over this.
-      terminationGracePeriodSeconds: {{ add (mul 2 (.Values.push.drain | int64)) 10 }}
+      # returns, the container runtime's own stop overhead), plus
+      # events.drain when events.enabled — the events hub drains last, once
+      # every role including push has already stopped, so its budget is
+      # spent on top rather than inside the 2 × push.drain above. An
+      # explicit value above always wins over this.
+      {{- $eventsDrain := 0 }}
+      {{- if .Values.events.enabled }}
+      {{- $eventsDrain = .Values.events.drain | int64 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ add (add (mul 2 (.Values.push.drain | int64)) 10) $eventsDrain }}
       {{- end }}
       {{- with .Values.pullSecrets }}
       imagePullSecrets:
@@ -202,6 +214,19 @@ spec:
                   key: {{ .key }}
             {{- end }}
             {{- end }}
+            {{- if .Values.events.enabled }}
+            - name: FLEXIQ_EVENTS_FILE
+              value: /etc/flexiq/events/events.json
+            - name: FLEXIQ_EVENTS_DRAIN
+              value: {{ .Values.events.drain | int64 | quote }}
+            {{- range .Values.events.secretEnv }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .key }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.push.enabled }}
             - name: FLEXIQ_PUSH_TARGET_URL
               value: {{ .Values.push.url | quote }}
@@ -330,7 +355,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.webhook.enabled .Values.triggers.enabled }}
+          {{- if or .Values.webhook.enabled .Values.triggers.enabled .Values.events.enabled }}
           volumeMounts:
             {{- if .Values.webhook.enabled }}
             - name: webhook-tls
@@ -342,8 +367,13 @@ spec:
               mountPath: /etc/flexiq/triggers
               readOnly: true
             {{- end }}
+            {{- if .Values.events.enabled }}
+            - name: events
+              mountPath: /etc/flexiq/events
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if or .Values.webhook.enabled .Values.triggers.enabled }}
+      {{- if or .Values.webhook.enabled .Values.triggers.enabled .Values.events.enabled }}
       volumes:
         {{- if .Values.webhook.enabled }}
         - name: webhook-tls
@@ -357,6 +387,14 @@ spec:
             items:
               - key: {{ ternary .Values.triggers.existingConfigMapKey "triggers.json" (not (empty .Values.triggers.existingConfigMap)) }}
                 path: triggers.json
+        {{- end }}
+        {{- if .Values.events.enabled }}
+        - name: events
+          configMap:
+            name: {{ $fullname }}-events
+            items:
+              - key: events.json
+                path: events.json
         {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
