@@ -162,12 +162,14 @@ The CloudEvents `type` is `org.byteveda.flexiq.` followed by the short name.
 - **`job.enqueued`** — only from `flexiq-server`'s producer doors, and only
   for a row the call actually wrote: gRPC `Enqueue` and `EnqueueBatch` (and
   the JSON facade, which calls them), triggers, the admin trigger-now of a
-  periodic task, and dead-letter replays from the admin service and the
-  dashboard (a replay is a new job, so it is announced as an enqueue). The
-  dashboard's job replay also emits it. A unique or idempotent enqueue that
-  answered with an existing job emits nothing, and neither does a debounced
-  enqueue that slid an existing job's window. An atomic batch announces its
-  jobs only after its transaction commits.
+  periodic task, the two dead-letter retry routes (the admin service's
+  `ReplayDeadLetter` and the dashboard's `POST /api/dead-letters/{id}/retry`),
+  and the dashboard's replay of any job (`POST /api/jobs/{id}/replay`) — each
+  retry or replay writes a new job, so it is announced as an enqueue. A
+  unique or idempotent enqueue that answered with an existing job emits
+  nothing, and neither does a debounced enqueue that slid an existing job's
+  window. An atomic batch announces its jobs only after its transaction
+  commits.
 - **`job.started`** — when the scheduler has claimed a job and handed it to
   its worker pool (an in-process pool, an attached executor's dispatcher, or
   a push target's), after the hand-off succeeded. It means "claimed and on its
@@ -425,9 +427,10 @@ Recomputed independently:
 
 ```python
 import hashlib, hmac
-body = b'{"data":{"attempt":0,...,"type":"org.byteveda.flexiq.job.completed"}'  # the 402 bytes above
-hmac.new(b"whsec-example", b"1790287573410." + body, hashlib.sha256).hexdigest()
-# '015a8e23f5777f7b7f154c0c333245b6017e6f95a129ddae8072bc26bd3e6682'
+body = b'{"data":{"attempt":0,"job_id":"0192","namespace":"default","queue":"emails","task":"send_welcome","wall_time_ns":41250000},"datacontenttype":"application/json","flexiqnamespace":"default","flexiqqueue":"emails","flexiqtask":"send_welcome","id":"0192:0:3:job.completed","source":"/flexiq","specversion":"1.0","subject":"0192","time":"2026-01-01T00:00:00.123Z","type":"org.byteveda.flexiq.job.completed"}'
+assert len(body) == 402
+print(hmac.new(b"whsec-example", b"1790287573410." + body, hashlib.sha256).hexdigest())
+# 015a8e23f5777f7b7f154c0c333245b6017e6f95a129ddae8072bc26bd3e6682
 ```
 
 ### Egress guard
@@ -524,12 +527,21 @@ events accepted but not yet delivered or dropped; it is approximate while
 events are in motion. A sink's drops are also logged, naming the sink, the
 reason and a count — never an event's contents or a credential.
 
+The full rendering for one sink named `web`, as captured from
+`render_prometheus()`:
+
 ```
+# HELP flexiq_events_delivered_total Events a sink delivered.
+# TYPE flexiq_events_delivered_total counter
 flexiq_events_delivered_total{sink="web"} 0
+# HELP flexiq_events_dropped_total Events a sink dropped, by reason.
+# TYPE flexiq_events_dropped_total counter
 flexiq_events_dropped_total{sink="web",reason="buffer_full"} 0
 flexiq_events_dropped_total{sink="web",reason="rejected"} 0
 flexiq_events_dropped_total{sink="web",reason="failed"} 0
 flexiq_events_dropped_total{sink="web",reason="shutdown"} 0
+# HELP flexiq_events_queued Events a sink accepted but has not yet delivered or dropped.
+# TYPE flexiq_events_queued gauge
 flexiq_events_queued{sink="web"} 0
 ```
 
