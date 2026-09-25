@@ -1234,11 +1234,15 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Vec<String>> {
                 self.list_paused_queues(namespace)
             }
+            fn expire_pending_jobs(&self, now: i64) -> $crate::error::Result<u64> {
+                self.expire_pending_jobs(now)
+            }
             fn expire_pending_jobs_reporting(
                 &self,
                 now: i64,
-            ) -> $crate::error::Result<Vec<$crate::job::Job>> {
-                self.expire_pending_jobs_reporting(now)
+                on_batch: &mut dyn FnMut(Vec<$crate::job::Job>),
+            ) -> $crate::error::Result<u64> {
+                self.expire_pending_jobs_reporting(now, on_batch)
             }
             fn cancel_pending_by_queue(&self, queue: &str) -> $crate::error::Result<u64> {
                 self.cancel_pending_by_queue(queue)
@@ -2309,8 +2313,15 @@ impl Storage for StorageBackend {
     fn list_paused_queues(&self, namespace: Option<&str>) -> Result<Vec<String>> {
         delegate!(self, list_paused_queues, namespace)
     }
-    fn expire_pending_jobs_reporting(&self, now: i64) -> Result<Vec<Job>> {
-        delegate!(self, expire_pending_jobs_reporting, now)
+    fn expire_pending_jobs(&self, now: i64) -> Result<u64> {
+        delegate!(self, expire_pending_jobs, now)
+    }
+    fn expire_pending_jobs_reporting(
+        &self,
+        now: i64,
+        on_batch: &mut dyn FnMut(Vec<Job>),
+    ) -> Result<u64> {
+        delegate!(self, expire_pending_jobs_reporting, now, on_batch)
     }
     fn cancel_pending_by_queue(&self, queue: &str) -> Result<u64> {
         delegate!(self, cancel_pending_by_queue, queue)

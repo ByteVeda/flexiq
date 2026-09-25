@@ -1761,6 +1761,47 @@ fn test_cancel_pending_by_queue_drains_across_batches() {
         .is_empty());
 }
 
+#[test]
+fn test_expire_pending_jobs_reporting_hands_over_bounded_batches() {
+    // 1100 expired rows span three MASS_ARCHIVE_BATCH (500) batches: the
+    // reporting sweep must hand each over as committed, never all at once, so
+    // the reaper's memory stays bounded by one batch however large the backlog.
+    let storage = test_storage();
+    let now = now_millis();
+    for _ in 0..1100 {
+        let mut job = make_job("expire_batch");
+        job.expires_at = Some(now - 1_000);
+        storage.enqueue(job).unwrap();
+    }
+
+    let mut sizes = Vec::new();
+    let count = storage
+        .expire_pending_jobs_reporting(now, &mut |batch| sizes.push(batch.len()))
+        .unwrap();
+    assert_eq!(count, 1100);
+    assert_eq!(sizes, vec![500, 500, 100]);
+
+    // Nothing left: the follow-up sweep reports no batch at all.
+    let mut calls = 0;
+    let count = storage
+        .expire_pending_jobs_reporting(now, &mut |_| calls += 1)
+        .unwrap();
+    assert_eq!((count, calls), (0, 0));
+}
+
+#[test]
+fn test_expire_pending_jobs_counts_across_batches() {
+    // The plain sweep, which the reaper calls, drains the same backlog.
+    let storage = test_storage();
+    let now = now_millis();
+    for _ in 0..550 {
+        let mut job = make_job("expire_count");
+        job.expires_at = Some(now - 1_000);
+        storage.enqueue(job).unwrap();
+    }
+    assert_eq!(storage.expire_pending_jobs(now).unwrap(), 550);
+}
+
 // ── Immediate terminal-job archival ──────────────────────────────────
 
 /// Count rows in the live `jobs` table for a given id.

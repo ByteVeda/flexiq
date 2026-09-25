@@ -172,6 +172,13 @@ fn test_dequeue_reports_expired_jobs(s: &impl Storage) {
         let mut job = make_job(q, task);
         job.namespace = ns.map(str::to_string);
         job.expires_at = expires_at;
+        // The expired job must be scanned before the live one, or a one-job
+        // claim stops at the live job first. Enqueue order is not enough: a
+        // same-millisecond score tie breaks on member order, so it ranks
+        // ahead on priority instead.
+        if expires_at.is_some() {
+            job.priority = 10;
+        }
         job
     };
 
@@ -208,6 +215,16 @@ fn test_dequeue_reports_expired_jobs(s: &impl Storage) {
     assert!(batch.expired.is_empty());
 }
 
+/// Run the reporting sweep, collecting every batch it hands over.
+fn sweep_expired(s: &impl Storage, now: i64) -> Vec<flexiq_core::job::Job> {
+    let mut reported = Vec::new();
+    let count = s
+        .expire_pending_jobs_reporting(now, &mut |batch| reported.extend(batch))
+        .unwrap();
+    assert_eq!(count as usize, reported.len(), "the count matches the rows");
+    reported
+}
+
 /// The reaper sweep reports every job it expired, as archived.
 fn test_expire_pending_jobs_reports_rows(s: &impl Storage) {
     let q = "q-expire-report";
@@ -223,9 +240,7 @@ fn test_expire_pending_jobs_reports_rows(s: &impl Storage) {
     let kept = s.enqueue(make_job(q, "sweep_kept")).unwrap();
 
     // The store is shared across the suite, so keep only this queue's rows.
-    let reported: Vec<_> = s
-        .expire_pending_jobs_reporting(now)
-        .unwrap()
+    let reported: Vec<_> = sweep_expired(s, now)
         .into_iter()
         .filter(|job| job.queue == q)
         .collect();
@@ -239,11 +254,7 @@ fn test_expire_pending_jobs_reports_rows(s: &impl Storage) {
         s.get_job(&kept.id, None).unwrap().unwrap().status,
         JobStatus::Pending
     );
-    assert!(s
-        .expire_pending_jobs_reporting(now)
-        .unwrap()
-        .iter()
-        .all(|job| job.queue != q));
+    assert!(sweep_expired(s, now).iter().all(|job| job.queue != q));
 }
 
 /// A namespace-scoped cancel reports every dependent it cascaded into, down a

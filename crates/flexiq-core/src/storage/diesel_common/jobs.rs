@@ -2563,11 +2563,12 @@ macro_rules! impl_diesel_job_ops {
             /// Archive matching pending jobs in bounded batches. `select_batch`
             /// loads up to `limit` pending rows to cancel; each batch runs in
             /// its own txn, so cancelling a huge pending backlog never holds the
-            /// SQLite writer lock at once. The archive removes each row from
-            /// `jobs`, so the same filter drains toward empty across iterations.
+            /// SQLite writer lock (or the full row set in memory) at once. The
+            /// archive removes each row from `jobs`, so the same filter drains
+            /// toward empty across iterations.
             ///
-            /// Each committed batch's archived rows go to `on_batch`; a caller
-            /// that only counts drops them there, one batch at a time.
+            /// Each committed, non-empty batch's archived rows go to `on_batch`
+            /// and are dropped after it returns, so at most one batch is held.
             fn archive_pending_in_batches<S, F>(
                 &self,
                 now: i64,
@@ -2587,7 +2588,9 @@ macro_rules! impl_diesel_job_ops {
                     })?;
                     let archived = rows.len() as u64;
                     total += archived;
-                    on_batch(rows);
+                    if !rows.is_empty() {
+                        on_batch(rows);
+                    }
                     if archived < Self::MASS_ARCHIVE_BATCH as u64 {
                         break;
                     }
@@ -2597,13 +2600,29 @@ macro_rules! impl_diesel_job_ops {
 
             /// Expire pending jobs that have passed their expires_at.
             pub fn expire_pending_jobs(&self, now: i64) -> Result<u64> {
-                Ok(self.expire_pending_jobs_reporting(now)?.len() as u64)
+                self.expire_in_batches(now, drop)
             }
 
-            /// [`expire_pending_jobs`](Self::expire_pending_jobs), returning
-            /// every job it expired, as archived.
-            pub fn expire_pending_jobs_reporting(&self, now: i64) -> Result<Vec<Job>> {
-                let mut expired: Vec<Job> = Vec::new();
+            /// [`expire_pending_jobs`](Self::expire_pending_jobs), handing each
+            /// committed batch of expired jobs, as archived, to `on_batch`.
+            /// Returns the total count; memory stays bounded to one batch.
+            pub fn expire_pending_jobs_reporting(
+                &self,
+                now: i64,
+                on_batch: &mut dyn FnMut(Vec<Job>),
+            ) -> Result<u64> {
+                self.expire_in_batches(now, |rows| {
+                    on_batch(rows.into_iter().map(Job::from).collect())
+                })
+            }
+
+            /// Shared body of the two expiry sweeps; `on_batch` receives each
+            /// committed batch's archived rows.
+            fn expire_in_batches<F: FnMut(Vec<JobRow>)>(
+                &self,
+                now: i64,
+                on_batch: F,
+            ) -> Result<u64> {
                 self.archive_pending_in_batches(
                     now,
                     "expired",
@@ -2616,9 +2635,8 @@ macro_rules! impl_diesel_job_ops {
                             .limit(limit)
                             .load(conn)
                     },
-                    |rows| expired.extend(rows.into_iter().map(Job::from)),
-                )?;
-                Ok(expired)
+                    on_batch,
+                )
             }
 
             /// Cancel all pending jobs in a specific queue.

@@ -408,11 +408,12 @@ pub trait Storage: Send + Sync + Clone {
     /// [`shed_to_dlq`](Self::shed_to_dlq), returning the cascaded dependents
     /// like [`move_to_dlq_reporting`](Self::move_to_dlq_reporting).
     ///
-    /// Defaults to [`move_to_dlq_reporting`](Self::move_to_dlq_reporting) so an
-    /// out-of-tree backend keeps compiling. Such a backend records the entry as
-    /// an ordinary failure and leans on the sweep's reason-prefix guard,
-    /// exactly as every backend did before the `shed` flag existed. Override
-    /// this one, not `shed_to_dlq`: the plain method routes through it.
+    /// Defaults to [`move_to_dlq_reporting`](Self::move_to_dlq_reporting), so a
+    /// backend with no notion of a shed need not implement it. Such a backend
+    /// records the entry as an ordinary failure and leans on the sweep's
+    /// reason-prefix guard, exactly as every backend did before the `shed`
+    /// flag existed. Override this one, not `shed_to_dlq`: the plain method
+    /// routes through it.
     fn shed_to_dlq_reporting(
         &self,
         job: &Job,
@@ -812,20 +813,30 @@ pub trait Storage: Send + Sync + Clone {
     // ── Job expiry ───────────────────────────────────────────────
 
     /// Fail pending jobs whose `expires_at` has passed. Returns the count
-    /// expired: the length of
-    /// [`expire_pending_jobs_reporting`](Self::expire_pending_jobs_reporting).
-    fn expire_pending_jobs(&self, now: i64) -> Result<u64> {
-        Ok(self.expire_pending_jobs_reporting(now)?.len() as u64)
-    }
-    /// [`expire_pending_jobs`](Self::expire_pending_jobs), returning every job
-    /// it expired, across every namespace. Each is the archived row — status
-    /// `Cancelled`, `completed_at` set, error `"expired"` — payload included,
-    /// since archiving already loaded it.
+    /// expired.
     ///
-    /// The whole sweep's rows are held until it returns, where the plain
-    /// method held one batch at a time; a backlog that large is expired
-    /// either way, and reporting it is the point.
-    fn expire_pending_jobs_reporting(&self, now: i64) -> Result<Vec<Job>>;
+    /// Works in bounded batches: however large the expired backlog, at most
+    /// one batch of rows is in memory at once. Defaults to
+    /// [`expire_pending_jobs_reporting`](Self::expire_pending_jobs_reporting)
+    /// with a callback that drops each batch; every in-tree backend forwards
+    /// its own count-only sweep instead.
+    fn expire_pending_jobs(&self, now: i64) -> Result<u64> {
+        self.expire_pending_jobs_reporting(now, &mut drop::<Vec<Job>>)
+    }
+    /// [`expire_pending_jobs`](Self::expire_pending_jobs), handing every job it
+    /// expired, across every namespace, to `on_batch` one batch at a time.
+    /// Returns the total count.
+    ///
+    /// Each job is the archived row — status `Cancelled`, `completed_at` set,
+    /// error `"expired"` — payload included, since archiving already loaded
+    /// it. A batch is handed over only once committed and is never empty. The
+    /// plain sweep's bound holds as long as `on_batch` keeps nothing: storage
+    /// holds at most one batch (500 rows on every in-tree backend) at once.
+    fn expire_pending_jobs_reporting(
+        &self,
+        now: i64,
+        on_batch: &mut dyn FnMut(Vec<Job>),
+    ) -> Result<u64>;
 
     // ── Job revocation ───────────────────────────────────────────
 
