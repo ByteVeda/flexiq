@@ -107,9 +107,10 @@ impl Rotation {
 pub struct ExecutorDoor {
     /// `None` on a push deployment: nothing attaches.
     dispatcher: Option<RemoteDispatcher>,
-    /// `None` on an attach deployment: nothing was dialled out to.
+    /// Every push target that accepts a `202`. Empty on an attach
+    /// deployment, where nothing was dialled out to.
     #[cfg(feature = "http-target")]
-    target: Option<Arc<flexiq_core::HttpDispatchTarget>>,
+    targets: Vec<Arc<flexiq_core::HttpDispatchTarget>>,
     supervisor: Arc<SchedulerSupervisor>,
     sessions: Arc<SessionRegistry>,
     rotation: Rotation,
@@ -134,7 +135,7 @@ impl ExecutorDoor {
         Self {
             dispatcher: Some(dispatcher),
             #[cfg(feature = "http-target")]
-            target: None,
+            targets: Vec::new(),
             supervisor,
             sessions: Arc::new(SessionRegistry::default()),
             rotation,
@@ -147,14 +148,18 @@ impl ExecutorDoor {
     /// The door is the one inbound surface a push target has. Without it a job
     /// that answered `202 Accepted` would have nowhere to report, which is why
     /// turning settle callbacks on requires the gRPC listener.
+    ///
+    /// `targets` is every target that accepts a `202`, and a report is handed
+    /// to the one that made the dispatch it names — see
+    /// [`Self::target_for`].
     #[cfg(feature = "http-target")]
     pub fn settle_only(
-        target: Arc<flexiq_core::HttpDispatchTarget>,
+        targets: Vec<Arc<flexiq_core::HttpDispatchTarget>>,
         supervisor: Arc<SchedulerSupervisor>,
     ) -> Self {
         Self {
             dispatcher: None,
-            target: Some(target),
+            targets,
             supervisor,
             sessions: Arc::new(SessionRegistry::default()),
             // Nothing holds a stream, so there is nothing to rotate.
@@ -193,7 +198,37 @@ impl ExecutorDoor {
     /// operator reads per incident.
     #[cfg(feature = "http-target")]
     pub fn awaiting_settle(&self) -> Option<usize> {
-        self.target.as_ref().map(|target| target.awaiting_settle())
+        (!self.targets.is_empty()).then(|| {
+            self.targets
+                .iter()
+                .map(|target| target.awaiting_settle())
+                .sum()
+        })
+    }
+
+    /// Refuse a reporting RPC on a door with no target to report to.
+    #[cfg(feature = "http-target")]
+    fn require_targets(&self) -> Result<(), Status> {
+        if self.targets.is_empty() {
+            return Err(settle_disabled());
+        }
+        Ok(())
+    }
+
+    /// The target a report on `job_id` belongs to.
+    ///
+    /// The one holding the dispatch, or that recently ended it. When none has
+    /// heard of the job, the first answers: what it says about a job it never
+    /// dispatched is the same "not here" any of them would, and a report that
+    /// reached the wrong replica is told so rather than half-applied.
+    #[cfg(feature = "http-target")]
+    fn target_for(&self, job_id: &str) -> Result<Arc<flexiq_core::HttpDispatchTarget>, Status> {
+        self.targets
+            .iter()
+            .find(|target| target.holds(job_id))
+            .or_else(|| self.targets.first())
+            .cloned()
+            .ok_or_else(settle_disabled)
     }
 
     /// Without the push path there is no dispatch to accept, so there is
@@ -453,12 +488,12 @@ impl ExecutorService for ExecutorDoor {
     ) -> Result<Response<pb::SettleResponse>, Status> {
         #[cfg(feature = "http-target")]
         {
-            let target = self.target.as_ref().ok_or_else(settle_disabled)?;
+            self.require_targets()?;
             let (job_id, lease, outcome) = frames::settle_request(request.into_inner())?;
             // Blocking: the fence is a storage write, and this runtime also
             // carries the dispatch requests. The same reason the dashboard's
             // reads go through `blocking`.
-            let target = Arc::clone(target);
+            let target = self.target_for(&job_id)?;
             crate::grpc::blocking::run(move || {
                 target
                     .settle(&job_id, &lease, outcome)
@@ -480,13 +515,13 @@ impl ExecutorService for ExecutorDoor {
     ) -> Result<Response<pb::ExtendLeaseResponse>, Status> {
         #[cfg(feature = "http-target")]
         {
-            let target = self.target.as_ref().ok_or_else(settle_disabled)?;
+            self.require_targets()?;
             let request = request.into_inner();
             let lease = frames::lease_from_bytes(&request.lease)?;
             let extend_by = frames::extension_from_wire(request.extend_by)?;
             let job_id = request.job_id;
 
-            let target = Arc::clone(target);
+            let target = self.target_for(&job_id)?;
             let deadline = crate::grpc::blocking::run(move || {
                 target
                     .extend_lease(&job_id, &lease, extend_by)
@@ -510,14 +545,14 @@ impl ExecutorService for ExecutorDoor {
     ) -> Result<Response<pb::ReportProgressResponse>, Status> {
         #[cfg(feature = "http-target")]
         {
-            let target = self.target.as_ref().ok_or_else(settle_disabled)?;
+            self.require_targets()?;
             let frame = request
                 .into_inner()
                 .progress
                 .ok_or_else(|| Status::invalid_argument("a progress report carries no frame"))?;
             let lease = frames::lease_from_bytes(frame.lease.as_deref().unwrap_or_default())?;
 
-            let target = Arc::clone(target);
+            let target = self.target_for(&frame.job_id)?;
             // Fire and forget, like the frame it mirrors: an empty response
             // means the frame was taken, not that a row was written. A task
             // that only wanted to report progress must never block on us.
@@ -542,14 +577,14 @@ impl ExecutorService for ExecutorDoor {
     ) -> Result<Response<pb::WriteTaskLogResponse>, Status> {
         #[cfg(feature = "http-target")]
         {
-            let target = self.target.as_ref().ok_or_else(settle_disabled)?;
+            self.require_targets()?;
             let frame = request
                 .into_inner()
                 .task_log
                 .ok_or_else(|| Status::invalid_argument("a task log carries no frame"))?;
             let lease = frames::lease_from_bytes(frame.lease.as_deref().unwrap_or_default())?;
 
-            let target = Arc::clone(target);
+            let target = self.target_for(&frame.job_id)?;
             crate::grpc::blocking::run(move || {
                 // `extra` is pre-encoded JSON that is not guaranteed UTF-8 on
                 // the wire. The scheduler's existing rule is to drop an

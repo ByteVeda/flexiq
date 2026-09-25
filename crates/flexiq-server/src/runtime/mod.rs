@@ -2,6 +2,7 @@
 //! for, and stop them in an order that drains work instead of dropping it.
 
 pub mod listener;
+pub mod overrides;
 pub mod scheduler;
 pub mod shutdown;
 pub mod upkeep;
@@ -16,11 +17,11 @@ use flexiq_core::{HttpDispatchTarget, HttpTargetConfig, StorageBackend};
 use crate::config::dashboard::{AuthMode, DashboardConfig};
 use crate::config::events::EventsSettings;
 #[cfg(feature = "http-target")]
-use crate::config::push::PushTargetConfig;
+use crate::config::push::{NamedPushTarget, PushTargetConfig};
 use crate::config::{backend, Config};
 use crate::dashboard::state::AppState;
 use crate::dashboard::static_assets::StaticAssets;
-use crate::runtime::scheduler::{DispatchPath, SchedulerSettings, SchedulerSupervisor};
+use crate::runtime::scheduler::{DispatchPath, Lane, SchedulerSettings, SchedulerSupervisor};
 use crate::runtime::shutdown::{wait_for_signal, Shutdown};
 
 /// Create the configured admin, if the deployment asked for one.
@@ -89,9 +90,36 @@ pub fn push_target(
         );
     }
 
-    HttpDispatchTarget::new(target)
-        .map_err(anyhow::Error::from)
-        .context("the push target named by FLEXIQ_PUSH_TARGET_URL could not be built")
+    HttpDispatchTarget::new(target).map_err(anyhow::Error::from)
+}
+
+/// Build every push target this deployment dispatches through, in the order
+/// they were named. One that will not construct stops the boot with its name.
+#[cfg(feature = "http-target")]
+pub fn push_targets(
+    targets: &[NamedPushTarget],
+    storage: &StorageBackend,
+) -> Result<Vec<(NamedPushTarget, Arc<HttpDispatchTarget>)>> {
+    targets
+        .iter()
+        .map(|named| {
+            let built = push_target(&named.config, storage).with_context(|| match &named.name {
+                Some(name) => format!("push target {name} could not be built"),
+                None => {
+                    "the push target named by FLEXIQ_PUSH_TARGET_URL could not be built".to_string()
+                }
+            })?;
+            match &named.name {
+                Some(name) => log::info!(
+                    "[flexiq] push target {name} is {} for queues [{}]",
+                    built.target(),
+                    named.queues.as_deref().unwrap_or_default().join(", ")
+                ),
+                None => log::info!("[flexiq] push dispatch target is {}", built.target()),
+            }
+            Ok((named.clone(), Arc::new(built)))
+        })
+        .collect()
 }
 
 /// Start the event hub the environment asked for.
@@ -187,11 +215,7 @@ pub fn run(config: Config, events: Option<Arc<EventHub>>) -> Result<()> {
     // process here rather than dead-lettering every job it is handed.
     #[cfg(feature = "http-target")]
     let push = match (&config.push, &backend) {
-        (Some(push), Some(backend)) => {
-            let target = push_target(push, &backend.storage)?;
-            log::info!("[flexiq] push dispatch target is {}", target.target());
-            Some(Arc::new(target))
-        }
+        (Some(push), Some(backend)) => Some(push_targets(&push.targets, &backend.storage)?),
         _ => None,
     };
 
@@ -200,15 +224,47 @@ pub fn run(config: Config, events: Option<Arc<EventHub>>) -> Result<()> {
     // same target the scheduler dispatches through, because the waiting
     // attempt that a settle relieves lives inside it.
     #[cfg(feature = "http-target")]
-    let settle_target = push
-        .as_ref()
+    let settle_targets: Vec<Arc<HttpDispatchTarget>> = push
+        .iter()
+        .flatten()
+        .map(|(_, target)| target)
         .filter(|target| target.accepts_settle_callbacks())
-        .cloned();
+        .cloned()
+        .collect();
 
+    let settings = |queues: Vec<String>| SchedulerSettings {
+        queues,
+        namespace: config.namespace.clone(),
+        workers: config.workers,
+        maintenance: config.maintenance,
+        push_dispatch: config.push_dispatch,
+        events: events.clone(),
+    };
+
+    // One lane under attach and for a single push target; one per named
+    // target otherwise, each serving its own queues.
     #[cfg(feature = "http-target")]
-    let path = match (dispatcher.clone(), push) {
-        (Some(dispatcher), None) => Some(DispatchPath::Attach(dispatcher)),
-        (None, Some(target)) => Some(DispatchPath::Push(target)),
+    let lanes = match (dispatcher.clone(), push) {
+        (Some(dispatcher), None) => Some(vec![Lane {
+            name: None,
+            path: DispatchPath::Attach(dispatcher),
+            settings: settings(config.queues.clone()),
+        }]),
+        (None, Some(targets)) => Some(
+            targets
+                .into_iter()
+                .map(|(named, target)| Lane {
+                    settings: settings(
+                        named
+                            .queues
+                            .clone()
+                            .unwrap_or_else(|| config.queues.clone()),
+                    ),
+                    name: named.name,
+                    path: DispatchPath::Push(target),
+                })
+                .collect(),
+        ),
         (None, None) => None,
         // Unreachable while `executors_can_attach` gates the dispatcher on
         // `config.push.is_none()`, and an error rather than a silent
@@ -222,23 +278,23 @@ pub fn run(config: Config, events: Option<Arc<EventHub>>) -> Result<()> {
         ),
     };
     #[cfg(not(feature = "http-target"))]
-    let path = dispatcher.clone().map(DispatchPath::Attach);
+    let lanes = dispatcher.clone().map(|dispatcher| {
+        vec![Lane {
+            name: None,
+            path: DispatchPath::Attach(dispatcher),
+            settings: settings(config.queues.clone()),
+        }]
+    });
 
-    // Read before `path` moves into the supervisor.
-    let starts_eagerly = path.as_ref().is_some_and(DispatchPath::starts_eagerly);
+    // Read before the lanes move into the supervisor.
+    let starts_eagerly = lanes
+        .as_ref()
+        .is_some_and(|lanes| lanes.iter().all(|lane| lane.path.starts_eagerly()));
 
-    let supervisor = match (path, &backend) {
-        (Some(path), Some(backend)) => Some(Arc::new(SchedulerSupervisor::new(
+    let supervisor = match (lanes, &backend) {
+        (Some(lanes), Some(backend)) => Some(Arc::new(SchedulerSupervisor::with_lanes(
             backend.storage.clone(),
-            path,
-            SchedulerSettings {
-                queues: config.queues.clone(),
-                namespace: config.namespace.clone(),
-                workers: config.workers,
-                maintenance: config.maintenance,
-                push_dispatch: config.push_dispatch,
-                events: events.clone(),
-            },
+            lanes,
         ))),
         _ => None,
     };
@@ -375,11 +431,11 @@ pub fn run(config: Config, events: Option<Arc<EventHub>>) -> Result<()> {
             // the request it arrived on.
             #[cfg(feature = "http-target")]
             let door = door.or_else(|| {
-                settle_target
+                supervisor
                     .clone()
-                    .zip(supervisor.clone())
-                    .map(|(target, supervisor)| {
-                        crate::grpc::ExecutorDoor::settle_only(target, supervisor)
+                    .filter(|_| !settle_targets.is_empty())
+                    .map(|supervisor| {
+                        crate::grpc::ExecutorDoor::settle_only(settle_targets.clone(), supervisor)
                     })
             });
             roles.spawn(crate::grpc::serve(

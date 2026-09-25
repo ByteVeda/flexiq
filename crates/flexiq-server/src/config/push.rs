@@ -85,6 +85,19 @@ pub const AWS_REGION_VAR: &str = "FLEXIQ_PUSH_TARGET_AWS_REGION";
 /// Overrides the service SigV4 infers from the target URL.
 pub const AWS_SERVICE_VAR: &str = "FLEXIQ_PUSH_TARGET_AWS_SERVICE";
 
+/// Names the push targets of a process that pushes to more than one. Each
+/// name reads its settings from `FLEXIQ_PUSH_<NAME>_*`.
+pub const TARGETS_VAR: &str = "FLEXIQ_PUSH_TARGETS";
+
+/// The prefix every single-target setting is spelt with, and the fallback a
+/// named target reads a setting from when it does not set its own.
+const TARGET_PREFIX: &str = "FLEXIQ_PUSH_TARGET_";
+
+/// A name no target may take: `FLEXIQ_PUSH_TARGET_URL` is already the
+/// single-target variable, so a target called `target` could not be told
+/// from it.
+const RESERVED_TARGET_NAMES: [&str; 2] = ["TARGET", "TARGETS"];
+
 /// One minute.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Five seconds.
@@ -413,6 +426,173 @@ pub fn from_env(env: &Env) -> Result<Option<PushTargetConfig>> {
     }))
 }
 
+/// Every push target this process dispatches to.
+#[derive(Debug, Clone)]
+pub struct PushConfig {
+    /// One entry for the single-target shape, one per name otherwise.
+    pub targets: Vec<NamedPushTarget>,
+}
+
+impl PushConfig {
+    /// Whether any target accepts a `202` and waits for a settle callback.
+    pub fn settle_callbacks(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|target| target.config.settle_callbacks)
+    }
+
+    /// Whether the targets were named in [`TARGETS_VAR`], rather than being
+    /// the one `FLEXIQ_PUSH_TARGET_URL` describes.
+    pub fn is_named(&self) -> bool {
+        self.targets.iter().any(|target| target.name.is_some())
+    }
+
+    /// Every queue a named target serves, in declaration order. Empty for the
+    /// single-target shape, which serves `FLEXIQ_QUEUES`.
+    pub fn queues(&self) -> Vec<String> {
+        self.targets
+            .iter()
+            .flat_map(|target| target.queues.iter().flatten().cloned())
+            .collect()
+    }
+}
+
+/// One push target, and the queues it serves when there is more than one.
+#[derive(Debug, Clone)]
+pub struct NamedPushTarget {
+    /// The name from [`TARGETS_VAR`], lowercased. `None` for the single
+    /// target `FLEXIQ_PUSH_TARGET_URL` describes.
+    pub name: Option<String>,
+    /// The queues this target serves, from `FLEXIQ_PUSH_<NAME>_QUEUES`.
+    /// `None` for the single target, which serves `FLEXIQ_QUEUES`.
+    pub queues: Option<Vec<String>>,
+    /// Where, how and how much.
+    pub config: PushTargetConfig,
+}
+
+/// Read the push targets this process dispatches to: the single one
+/// `FLEXIQ_PUSH_TARGET_URL` names, or every one [`TARGETS_VAR`] names.
+///
+/// A named target reads each setting from `FLEXIQ_PUSH_<NAME>_<SETTING>` and
+/// falls back to `FLEXIQ_PUSH_TARGET_<SETTING>`, so what every target shares —
+/// an allowlist, a timeout, an auth scheme — is written once. It is parsed by
+/// [`from_env`] over that merged view, so a named target is validated exactly
+/// as the single one is, and refused with its name attached.
+pub fn targets_from_env(env: &Env) -> Result<Option<PushConfig>> {
+    let Some(raw) = value(env, TARGETS_VAR) else {
+        return Ok(from_env(env)?.map(|config| PushConfig {
+            targets: vec![NamedPushTarget {
+                name: None,
+                queues: None,
+                config,
+            }],
+        }));
+    };
+    if value(env, URL_VAR).is_some() {
+        bail!(
+            "{TARGETS_VAR} and {URL_VAR} cannot both be set — with named targets, each              one's URL is FLEXIQ_PUSH_<NAME>_URL. Move {URL_VAR} onto a named target, or              unset {TARGETS_VAR} for a single target."
+        );
+    }
+
+    let names = target_names(&raw)?;
+    let mut targets = Vec::with_capacity(names.len());
+    let mut owners: Vec<(String, String)> = Vec::new();
+    for name in names {
+        let prefix = format!("FLEXIQ_PUSH_{name}_");
+        let url_var = format!("{prefix}URL");
+        let queues_var = format!("{prefix}QUEUES");
+        let lower = name.to_ascii_lowercase();
+
+        if value(env, &url_var).is_none() {
+            bail!("{url_var} is required: {TARGETS_VAR} names a target called {lower}");
+        }
+        let queues = queue_list(env, &queues_var).with_context(|| {
+            format!(
+                "{queues_var} is required: each named target serves its own queues, so                  two targets never claim the same job"
+            )
+        })?;
+        for queue in &queues {
+            if let Some((_, other)) = owners.iter().find(|(owned, _)| owned == queue) {
+                bail!(
+                    "queue {queue} is served by both push target {other} and push target                      {lower}. A queue belongs to one target, or the two would race each                      other for its jobs."
+                );
+            }
+            owners.push((queue.clone(), lower.clone()));
+        }
+
+        let merged = target_view(env, &prefix);
+        let config = from_env(&merged)
+            .with_context(|| {
+                format!(
+                    "push target {lower} (read from {prefix}*, falling back to                      {TARGET_PREFIX}*)"
+                )
+            })?
+            .expect("the URL was checked above, so the target is configured");
+        targets.push(NamedPushTarget {
+            name: Some(lower),
+            queues: Some(queues),
+            config,
+        });
+    }
+    Ok(Some(PushConfig { targets }))
+}
+
+/// The names in [`TARGETS_VAR`], uppercased as their variables spell them.
+fn target_names(raw: &str) -> Result<Vec<String>> {
+    let mut names: Vec<String> = Vec::new();
+    for entry in raw
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        // Letters and digits only. An underscore would let two names spell the
+        // same variable: target `a` with setting `CONNECT_TIMEOUT` and target
+        // `a_connect` with setting `TIMEOUT` are both FLEXIQ_PUSH_A_CONNECT_TIMEOUT.
+        if !entry.chars().all(|c| c.is_ascii_alphanumeric()) {
+            bail!(
+                "{TARGETS_VAR}: '{entry}' is not a target name — use letters and digits                  only, since the name is spelt into FLEXIQ_PUSH_<NAME>_* variables"
+            );
+        }
+        let upper = entry.to_ascii_uppercase();
+        if RESERVED_TARGET_NAMES.contains(&upper.as_str()) {
+            bail!(
+                "{TARGETS_VAR}: '{entry}' is reserved — FLEXIQ_PUSH_{upper}_* is already                  the single-target spelling. Choose another name."
+            );
+        }
+        if names.contains(&upper) {
+            bail!("{TARGETS_VAR} names '{entry}' twice");
+        }
+        names.push(upper);
+    }
+    if names.is_empty() {
+        bail!("{TARGETS_VAR} is set but names no target");
+    }
+    Ok(names)
+}
+
+/// A comma-separated queue list, blanks dropped. `None` when unset or empty.
+fn queue_list(env: &Env, key: &str) -> Option<Vec<String>> {
+    let queues: Vec<String> = value(env, key)?
+        .split(',')
+        .map(str::trim)
+        .filter(|queue| !queue.is_empty())
+        .map(str::to_string)
+        .collect();
+    (!queues.is_empty()).then_some(queues)
+}
+
+/// The environment one named target is parsed from: every
+/// `FLEXIQ_PUSH_<NAME>_<SETTING>` copied over `FLEXIQ_PUSH_TARGET_<SETTING>`.
+fn target_view(env: &Env, prefix: &str) -> Env {
+    let mut merged = env.clone();
+    for (key, raw) in env {
+        if let Some(setting) = key.strip_prefix(prefix) {
+            merged.insert(format!("{TARGET_PREFIX}{setting}"), raw.clone());
+        }
+    }
+    merged
+}
+
 /// Read [`SETTLE_VAR`]: `off` (the default) or `grpc`.
 ///
 /// Spelled as a transport rather than a boolean because it names *where* a
@@ -630,6 +810,14 @@ pub fn scrub_push_target_secrets() {
     // has been spawned.
     std::env::remove_var(TOKEN_VAR);
     std::env::remove_var(HMAC_SECRET_VAR);
+    // A named target's secrets, which `targets_from_env` read the same way.
+    // A name that fails validation was refused before this runs.
+    let named = std::env::var(TARGETS_VAR).unwrap_or_default();
+    for name in named.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        let upper = name.to_ascii_uppercase();
+        std::env::remove_var(format!("FLEXIQ_PUSH_{upper}_TOKEN"));
+        std::env::remove_var(format!("FLEXIQ_PUSH_{upper}_HMAC_SECRET"));
+    }
 }
 
 #[cfg(test)]
@@ -990,6 +1178,155 @@ mod tests {
         scrub_push_target_secrets();
         assert!(std::env::var(TOKEN_VAR).is_err());
         assert!(std::env::var(HMAC_SECRET_VAR).is_err());
+    }
+
+    #[test]
+    fn a_named_target_scrubs_its_own_secrets_too() {
+        std::env::set_var(TARGETS_VAR, "scrubtest");
+        std::env::set_var("FLEXIQ_PUSH_SCRUBTEST_TOKEN", TOKEN);
+        std::env::set_var("FLEXIQ_PUSH_SCRUBTEST_HMAC_SECRET", TOKEN);
+        scrub_push_target_secrets();
+        assert!(std::env::var("FLEXIQ_PUSH_SCRUBTEST_TOKEN").is_err());
+        assert!(std::env::var("FLEXIQ_PUSH_SCRUBTEST_HMAC_SECRET").is_err());
+        std::env::remove_var(TARGETS_VAR);
+    }
+
+    /// Two named targets sharing an allowlist and an auth scheme, each with
+    /// its own URL, queues and audience.
+    fn two_targets() -> Vec<(&'static str, &'static str)> {
+        vec![
+            (TARGETS_VAR, "orders, Billing"),
+            ("FLEXIQ_PUSH_TARGET_ALLOW", ".run.app"),
+            ("FLEXIQ_PUSH_TARGET_CAPACITY", "10"),
+            ("FLEXIQ_PUSH_TARGET_AUTH", "oidc"),
+            ("FLEXIQ_PUSH_TARGET_OIDC_SOURCE", "google"),
+            ("FLEXIQ_PUSH_ORDERS_URL", "https://orders.run.app/flexiq"),
+            ("FLEXIQ_PUSH_ORDERS_QUEUES", "orders,refunds"),
+            ("FLEXIQ_PUSH_ORDERS_OIDC_AUDIENCE", "https://orders.run.app"),
+            ("FLEXIQ_PUSH_BILLING_URL", "https://billing.run.app/flexiq"),
+            ("FLEXIQ_PUSH_BILLING_QUEUES", "invoices"),
+            ("FLEXIQ_PUSH_BILLING_CAPACITY", "3"),
+            (
+                "FLEXIQ_PUSH_BILLING_OIDC_AUDIENCE",
+                "https://billing.run.app",
+            ),
+        ]
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn named_targets_read_their_own_settings_and_fall_back_to_the_shared_ones() {
+        let push = targets_from_env(&env(&two_targets()))
+            .expect("two named targets parse")
+            .expect("the section is on");
+        assert!(push.is_named());
+        assert_eq!(push.targets.len(), 2);
+
+        let orders = &push.targets[0];
+        assert_eq!(orders.name.as_deref(), Some("orders"));
+        assert_eq!(
+            orders.queues.as_deref(),
+            Some(&["orders".to_string(), "refunds".to_string()][..])
+        );
+        assert_eq!(orders.config.url, "https://orders.run.app/flexiq");
+        assert_eq!(orders.config.capacity, 10, "the shared capacity applies");
+
+        let billing = &push.targets[1];
+        assert_eq!(billing.name.as_deref(), Some("billing"));
+        assert_eq!(billing.config.capacity, 3, "its own capacity wins");
+        match &billing.config.auth {
+            PushAuthConfig::Oidc { audience, .. } => {
+                assert_eq!(audience, "https://billing.run.app")
+            }
+            other => panic!("expected oidc, got {other:?}"),
+        }
+
+        assert_eq!(push.queues(), vec!["orders", "refunds", "invoices"]);
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_single_target_is_one_unnamed_entry() {
+        let push = targets_from_env(&env(&[
+            (URL_VAR, "https://push.example.com/hook"),
+            (CAPACITY_VAR, "2"),
+            (ALLOW_VAR, "push.example.com"),
+        ]))
+        .expect("parses")
+        .expect("the section is on");
+        assert!(!push.is_named());
+        assert_eq!(push.targets.len(), 1);
+        assert!(push.targets[0].name.is_none() && push.targets[0].queues.is_none());
+        assert!(push.queues().is_empty());
+    }
+
+    fn refusal(pairs: &[(&str, &str)]) -> String {
+        format!(
+            "{:#}",
+            targets_from_env(&env(pairs)).expect_err("must refuse")
+        )
+    }
+
+    #[test]
+    fn named_targets_and_the_single_url_are_refused_together() {
+        let mut pairs = two_targets();
+        pairs.push((URL_VAR, "https://push.example.com/hook"));
+        let error = refusal(&pairs);
+        assert!(
+            error.contains(TARGETS_VAR) && error.contains(URL_VAR),
+            "{error}"
+        );
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_named_target_needs_its_url_and_its_queues() {
+        let without_url: Vec<_> = two_targets()
+            .into_iter()
+            .filter(|(key, _)| *key != "FLEXIQ_PUSH_BILLING_URL")
+            .collect();
+        assert!(refusal(&without_url).contains("FLEXIQ_PUSH_BILLING_URL"));
+
+        let without_queues: Vec<_> = two_targets()
+            .into_iter()
+            .filter(|(key, _)| *key != "FLEXIQ_PUSH_ORDERS_QUEUES")
+            .collect();
+        assert!(refusal(&without_queues).contains("FLEXIQ_PUSH_ORDERS_QUEUES"));
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_queue_belongs_to_one_target() {
+        let mut pairs = two_targets();
+        pairs.retain(|(key, _)| *key != "FLEXIQ_PUSH_BILLING_QUEUES");
+        pairs.push(("FLEXIQ_PUSH_BILLING_QUEUES", "invoices, refunds"));
+        let error = refusal(&pairs);
+        assert!(
+            error.contains("refunds") && error.contains("orders") && error.contains("billing"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_target_name_must_be_letters_and_digits_and_not_reserved() {
+        assert!(refusal(&[(TARGETS_VAR, "a_b")]).contains("letters and digits"));
+        assert!(refusal(&[(TARGETS_VAR, "target")]).contains("reserved"));
+        assert!(refusal(&[(TARGETS_VAR, "a, A")]).contains("twice"));
+        assert!(refusal(&[(TARGETS_VAR, " , ")]).contains("names no target"));
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_named_targets_bad_setting_is_refused_with_its_name() {
+        let mut pairs = two_targets();
+        pairs.push(("FLEXIQ_PUSH_BILLING_TIMEOUT", "0"));
+        let error = refusal(&pairs);
+        assert!(error.contains("push target billing"), "{error}");
+        // The refused variables are refused under a named target's spelling
+        // too, not only the shared one.
+        let mut pairs = two_targets();
+        pairs.push(("FLEXIQ_PUSH_ORDERS_PROXY", "http://proxy:3128"));
+        assert!(refusal(&pairs).contains("push target orders"));
     }
 
     /// Every sliding window of the secret is absent from the formatted

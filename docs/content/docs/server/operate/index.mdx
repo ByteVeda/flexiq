@@ -77,8 +77,8 @@ reads as unset, which is what makes `FOO=` in a Compose file mean "off".
 | `FLEXIQ_DSN` | — | Storage connection string. Required by every role but the webhook |
 | `FLEXIQ_BACKEND` | From the DSN scheme | `sqlite`, `postgres` or `redis`, when the scheme is not enough |
 | `FLEXIQ_NAMESPACE` | Unset | The tenant namespace this process schedules. Required by the gRPC and trigger roles |
-| `FLEXIQ_QUEUES` | `default` | Comma-separated queues to consume |
-| `FLEXIQ_WORKERS` | The dispatch path's slot count | Dispatch concurrency. Must be a positive integer |
+| `FLEXIQ_QUEUES` | `default` | Comma-separated queues to consume. Refused beside `FLEXIQ_PUSH_TARGETS`, where each target names its own |
+| `FLEXIQ_WORKERS` | The dispatch path's slot count | Dispatch concurrency. Must be a positive integer. Refused beside `FLEXIQ_PUSH_TARGETS`, where each target's capacity sizes its own |
 | `FLEXIQ_MAINTENANCE` | `on` | Whether this process runs retention sweeps |
 | `FLEXIQ_PUSH_DISPATCH` | `on` for Redis, `off` otherwise | Whether the scheduler wakes on enqueue instead of polling. Unrelated to `FLEXIQ_PUSH_TARGET_URL` |
 | `FLEXIQ_AUTO_MIGRATE` | `on` | Whether opening storage applies pending schema changes |
@@ -88,6 +88,11 @@ capacity attached executors advertise, or `FLEXIQ_PUSH_TARGET_CAPACITY` under
 push. That is the number you want unless you have measured otherwise:
 `max_in_flight` derives from it, and a value above the available slots claims
 work nothing has room to run.
+
+The scheduler applies the task and queue overrides set through
+[the admin door](/server/operate/admin#overrides), the dashboard or the CLI —
+backoff, rate limits and concurrency caps — read when it starts, as an SDK
+worker reads them.
 
 On Redis the scheduler subscribes to one pub/sub channel per queue in its
 namespace, so an enqueue wakes it at once only when the job's namespace matches

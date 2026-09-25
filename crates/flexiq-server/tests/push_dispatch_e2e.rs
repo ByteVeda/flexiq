@@ -32,7 +32,10 @@ use flexiq_core::{
 };
 use flexiq_server::config::push::SETTLE_VAR;
 use flexiq_server::config::{Config, Env};
-use flexiq_server::runtime::scheduler::{DispatchPath, SchedulerSettings, SchedulerSupervisor};
+use flexiq_server::dashboard::stores::overrides::{self, Scope};
+use flexiq_server::runtime::scheduler::{
+    DispatchPath, Lane, SchedulerSettings, SchedulerSupervisor,
+};
 
 use support::{poll_until, temp_storage};
 
@@ -601,7 +604,7 @@ fn a_push_deployment_refuses_to_start_with_a_bad_allowlist() {
     .map(|(key, value)| (key.to_string(), value.to_string()))
     .collect();
     let config = Config::from_map(&env).expect("the configuration itself is valid");
-    let push = config.push.as_ref().expect("a push section");
+    let push = &config.push.as_ref().expect("a push section").targets[0].config;
 
     // `HttpDispatchTarget` carries no `Debug` — it owns a client and a lease
     // book — so the `Ok` arm is unwrapped by hand rather than through
@@ -1240,4 +1243,197 @@ fn settle_callbacks_need_the_grpc_door() {
         refused.to_string().contains("carrier-pigeon"),
         "the refusal must echo the value it did not understand, got: {refused}"
     );
+}
+
+#[test]
+fn a_queue_override_caps_a_push_deployment() {
+    // Before overrides reached `flexiq-server`, a push deployment ran every
+    // job on the core defaults: this cap was set and nothing read it.
+    const CAPACITY: u32 = 4;
+    const JOBS: usize = 4;
+
+    let storage = temp_storage("push-override");
+    let cap = serde_json::json!({"max_concurrent": 1});
+    overrides::set(
+        Scope::Queue,
+        &*storage,
+        None,
+        "default",
+        cap.as_object().expect("an object"),
+    )
+    .expect("store the queue override");
+    for _ in 0..JOBS {
+        storage
+            .enqueue(new_job("greet"))
+            .expect("enqueue a job under test");
+    }
+
+    let stub = PushTarget::start(Reply::outcome("success").after(Duration::from_millis(250)));
+    let deployment = Deployment::start(&storage, target(&stub.url, CAPACITY, &storage), None);
+
+    poll_until(Duration::from_secs(30), || {
+        storage.stats(None).expect("read the queue stats").completed == JOBS as i64
+    })
+    .expect("every job must complete on the push target");
+
+    assert_eq!(
+        stub.peak_in_flight(),
+        1,
+        "the queue override's cap must bound the target below its own capacity"
+    );
+
+    deployment.stop();
+}
+
+#[test]
+fn each_named_target_receives_only_its_own_queues() {
+    let storage = temp_storage("push-named");
+    let mut orders = new_job("orders.process");
+    orders.queue = "orders".to_string();
+    let mut invoices = new_job("billing.invoice");
+    invoices.queue = "invoices".to_string();
+    storage.enqueue(orders).expect("enqueue an orders job");
+    storage.enqueue(invoices).expect("enqueue an invoices job");
+
+    let orders_stub = PushTarget::start(Reply::outcome("success"));
+    let billing_stub = PushTarget::start(Reply::outcome("success"));
+
+    let lane = |name: &str, url: &str, queue: &str| Lane {
+        name: Some(name.to_string()),
+        path: DispatchPath::Push(Arc::new(
+            HttpDispatchTarget::new(target(url, 1, &storage)).expect("the stub target builds"),
+        )),
+        settings: SchedulerSettings {
+            queues: vec![queue.to_string()],
+            namespace: None,
+            workers: None,
+            maintenance: false,
+            push_dispatch: None,
+            events: None,
+        },
+    };
+    let supervisor = SchedulerSupervisor::with_lanes(
+        storage.clone(),
+        vec![
+            lane("orders", &orders_stub.url, "orders"),
+            lane("billing", &billing_stub.url, "invoices"),
+        ],
+    );
+    supervisor
+        .ensure_started()
+        .expect("every lane starts at boot");
+    assert!(supervisor.is_running());
+
+    poll_until(Duration::from_secs(30), || {
+        storage.stats(None).expect("read the queue stats").completed == 2
+    })
+    .expect("both jobs must complete, each on its own target");
+
+    let queues = |stub: &PushTarget| -> Vec<String> {
+        stub.received()
+            .iter()
+            .map(|received| {
+                received
+                    .header("x-flexiq-queue")
+                    .expect("every dispatch names its queue")
+                    .to_string()
+            })
+            .collect()
+    };
+    assert_eq!(queues(&orders_stub), vec!["orders"]);
+    assert_eq!(queues(&billing_stub), vec!["invoices"]);
+
+    supervisor.shutdown();
+    assert!(!supervisor.is_running());
+}
+
+/// With several targets, the door must hand a settle to the one that made the
+/// dispatch: every other target has never heard of the job and would refuse
+/// it as a report that reached the wrong replica.
+#[cfg(feature = "grpc")]
+#[test]
+fn the_door_hands_a_settle_to_the_target_that_made_the_dispatch() {
+    use flexiq_server::grpc::pb::executor as pb;
+    use flexiq_server::grpc::pb::executor::executor_service_server::ExecutorService as _;
+    use flexiq_server::grpc::ExecutorDoor;
+
+    let storage = temp_storage("push-named-settle");
+    let mut job = new_job("billing.invoice");
+    job.queue = "invoices".to_string();
+    let job = storage.enqueue(job).expect("enqueue the job");
+
+    let orders_stub = PushTarget::start(Reply::outcome("success"));
+    let billing_stub = PushTarget::start(Reply::status(202));
+    let build = |url: &str| {
+        Arc::new(
+            HttpDispatchTarget::new(settle_target(url, 1, &storage))
+                .expect("the stub target builds"),
+        )
+    };
+    let orders = build(&orders_stub.url);
+    let billing = build(&billing_stub.url);
+
+    let lane = |name: &str, target: &Arc<HttpDispatchTarget>, queue: &str| Lane {
+        name: Some(name.to_string()),
+        path: DispatchPath::Push(Arc::clone(target)),
+        settings: SchedulerSettings {
+            queues: vec![queue.to_string()],
+            namespace: None,
+            workers: None,
+            maintenance: false,
+            push_dispatch: None,
+            events: None,
+        },
+    };
+    let supervisor = Arc::new(SchedulerSupervisor::with_lanes(
+        storage.clone(),
+        vec![
+            lane("orders", &orders, "orders"),
+            lane("billing", &billing, "invoices"),
+        ],
+    ));
+    supervisor.ensure_started().expect("every lane starts");
+
+    poll_until(Duration::from_secs(15), || billing.awaiting_settle() == 1)
+        .expect("the billing target must be waiting for a settle");
+    let lease = billing_stub
+        .received()
+        .first()
+        .and_then(|dispatch| dispatch.header(HDR_LEASE))
+        .expect("a dispatch carries a lease")
+        .as_bytes()
+        .to_vec();
+
+    // The target that does *not* hold the job is listed first, so a door that
+    // did not route would hand it the settle and have it refused.
+    let door = ExecutorDoor::settle_only(
+        vec![Arc::clone(&orders), Arc::clone(&billing)],
+        Arc::clone(&supervisor),
+    );
+    assert_eq!(door.awaiting_settle(), Some(1));
+
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime for the door");
+    runtime
+        .block_on(door.settle(tonic::Request::new(pb::SettleRequest {
+            outcome: Some(pb::settle_request::Outcome::Cancelled(pb::CancelledFrame {
+                job_id: job.id.clone(),
+                task_name: job.task_name.clone(),
+                wall_time: None,
+                lease: Some(lease),
+            })),
+        })))
+        .expect("the settle reaches the target holding the dispatch");
+
+    poll_until(Duration::from_secs(15), || {
+        storage
+            .get_job(&job.id, None)
+            .ok()
+            .flatten()
+            .is_some_and(|job| job.status == JobStatus::Cancelled)
+    })
+    .expect("the settled job must end as the settle said");
+    assert!(orders_stub.received().is_empty());
+
+    drop(runtime);
+    supervisor.shutdown();
 }

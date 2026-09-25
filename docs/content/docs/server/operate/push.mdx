@@ -62,6 +62,7 @@ are then required together.
 | `FLEXIQ_PUSH_TARGET_MAX_RESPONSE_BYTES` | `1048576` (1 MiB) | Ceiling on one response body read back |
 | `FLEXIQ_PUSH_TARGET_AUTH` | `none` | `none` \| `bearer` \| `hmac` \| `oidc` \| `sigv4` |
 | `FLEXIQ_PUSH_TARGET_SETTLE` | `off` | `off` \| `grpc` — whether a `202 Accepted` hands the job off to be settled later |
+| `FLEXIQ_PUSH_TARGETS` | Unset | Comma-separated names, for [more than one target](#more-than-one-target) |
 
 The three second-valued variables and the two byte caps each take a minimum of
 `1`. None of the five is a "no limit" switch. For a duration, `0` is a deadline
@@ -118,6 +119,66 @@ allowlist that defaulted to "permit whatever host the URL already names"
 would not be a guard at all, just the same value written twice under two
 names. Naming the destination separately, in its own variable, is what turns
 this into an actual check rather than an echo.
+
+## More than one target
+
+A process can dispatch to several targets — a service per queue, as a Cloud
+Tasks deployment often has. Name them in `FLEXIQ_PUSH_TARGETS`, and give each
+a URL and the queues it serves:
+
+```bash
+FLEXIQ_PUSH_TARGETS=orders,billing \
+FLEXIQ_PUSH_ORDERS_URL=https://orders-abc123-uc.a.run.app/flexiq \
+FLEXIQ_PUSH_ORDERS_QUEUES=orders,refunds \
+FLEXIQ_PUSH_ORDERS_OIDC_AUDIENCE=https://orders-abc123-uc.a.run.app \
+FLEXIQ_PUSH_BILLING_URL=https://billing-def456-uc.a.run.app/flexiq \
+FLEXIQ_PUSH_BILLING_QUEUES=invoices \
+FLEXIQ_PUSH_BILLING_CAPACITY=5 \
+FLEXIQ_PUSH_BILLING_OIDC_AUDIENCE=https://billing-def456-uc.a.run.app \
+FLEXIQ_PUSH_TARGET_CAPACITY=20 \
+FLEXIQ_PUSH_TARGET_ALLOW=.run.app \
+FLEXIQ_PUSH_TARGET_AUTH=oidc \
+FLEXIQ_PUSH_TARGET_OIDC_SOURCE=google \
+flexiq-server
+```
+
+Every setting in the tables above can be given per target by replacing
+`TARGET` with the target's name — `FLEXIQ_PUSH_BILLING_CAPACITY` for
+`FLEXIQ_PUSH_TARGET_CAPACITY`. A target that does not set one reads the
+`FLEXIQ_PUSH_TARGET_*` value, so what the targets share is written once. Each
+target is validated as a single one is, and a refusal names the target.
+
+- **`FLEXIQ_PUSH_<NAME>_URL` and `FLEXIQ_PUSH_<NAME>_QUEUES` are required**, and
+  `FLEXIQ_PUSH_TARGET_URL` is refused beside `FLEXIQ_PUSH_TARGETS`.
+- **A queue belongs to one target.** Two targets naming the same queue would
+  race for its jobs, so it is refused at boot.
+- **`FLEXIQ_QUEUES` and `FLEXIQ_WORKERS` are refused** beside named targets:
+  each target's queues and capacity already answer both.
+- **Names are letters and digits**, case-insensitive. `target` and `targets`
+  are reserved, since `FLEXIQ_PUSH_TARGET_*` is already the single-target
+  spelling.
+
+Each target runs its own scheduler in the process, claiming only its own
+queues and sized from its own capacity, so a full target never holds up
+another's jobs. Each registers as its own worker, and a shutdown drains them
+all at once, so the grace period below is the same for one target or several.
+A `Settle`, `ExtendLease` or report on the executor door reaches whichever
+target made the dispatch; the one-replica rule for settle callbacks still
+applies to the process as a whole.
+
+The Helm chart configures a single target; its `push` values have no named
+targets yet.
+
+## Retries, rate limits and overrides
+
+A push target is no different from an attached executor in how its jobs are
+retried and throttled: the scheduler applies the task and queue overrides set
+through [the admin door](/server/operate/admin#overrides), the dashboard or the
+CLI — `retryBackoff`, `rateLimit` and `maxConcurrent` — read when it starts. A
+queue's `rateLimit` is the dispatch rate of every target serving it;
+`FLEXIQ_PUSH_TARGET_CAPACITY` is the concurrency. With no override, a task
+retries on the default curve, a ceiling that starts at one second and doubles
+to five minutes.
 
 ## The egress guard
 
