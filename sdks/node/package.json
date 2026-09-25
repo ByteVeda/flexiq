@@ -90,7 +90,7 @@
   },
   "scripts": {
     "build": "pnpm run build:native && pnpm run build:ts",
-    "build:native": "napi build --platform --release --manifest-path ../../crates/flexiq-node/Cargo.toml --features postgres,redis,mesh,workflows,push-dispatch,events-http --output-dir native",
+    "build:native": "napi build --platform --release --manifest-path ../../crates/flexiq-node/Cargo.toml --features postgres,redis,mesh,workflows,push-dispatch,events-http,events-kafka,events-nats --output-dir native",
     "build:ts": "tsup",
     "build:dashboard": "pnpm -C ../../dashboard exec vite build --outDir ../sdks/node/static/dashboard --emptyOutDir",
     "prepack": "pnpm run build:dashboard",

@@ -62,7 +62,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
     FLEXIQ_DASHBOARD_ASSETS_DIR=/src/dashboard/dist \
     cargo build --release --locked -p flexiq-server -p flexiq-cli \
-      --features flexiq-server/postgres,flexiq-server/redis,flexiq-server/grpc,flexiq-server/http-target,flexiq-server/push-dispatch,flexiq-server/events-http \
+      --features flexiq-server/postgres,flexiq-server/redis,flexiq-server/grpc,flexiq-server/http-target,flexiq-server/push-dispatch,flexiq-server/events-http,flexiq-server/events-kafka,flexiq-server/events-nats \
     && cp target/release/flexiq-server /flexiq-server \
     && cp target/release/fq /fq \
     && for binary in /flexiq-server /fq; do \

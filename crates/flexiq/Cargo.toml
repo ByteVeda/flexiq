@@ -26,6 +26,9 @@ redis = ["flexiq-core/redis", "flexiq-workflows?/redis"]
 push-dispatch = ["flexiq-core/push-dispatch"]
 # The HTTP event sink; the Redis Streams sink rides on `redis`.
 events-http = ["flexiq-core/events-http"]
+# The Kafka and NATS event sinks.
+events-kafka = ["flexiq-core/events-kafka"]
+events-nats = ["flexiq-core/events-nats"]
 # The companion engines, off by default. The other SDKs ship them inside a single
 # compiled artifact; Rust resolves source crates, so the equivalent is an opt-in
 # dependency — no consumer pays for a DAG engine or a gossip mesh unasked.

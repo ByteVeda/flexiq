@@ -66,8 +66,63 @@ export interface RedisStreamsEventSink {
   delivery?: EventSinkDelivery;
 }
 
+/** Kafka SASL credentials, each named by the environment variable holding it. */
+export interface KafkaEventSinkSasl {
+  /** `"plain"` needs `tls`: it sends the password as is. */
+  mechanism: "plain" | "scram-sha-256" | "scram-sha-512";
+  /** Environment variable holding the username. */
+  username_env: string;
+  /** Environment variable holding the password. */
+  password_env: string;
+}
+
+/** Events produced to a Kafka topic, keyed by job id. */
+export interface KafkaEventSink {
+  kind: "kafka";
+  /** Metrics label and log name; unique in the document. */
+  name: string;
+  /** Bootstrap brokers, `host:port`. */
+  brokers: string[];
+  /** Topic records are produced to. */
+  topic: string;
+  /** Connect over TLS (default false). */
+  tls?: boolean;
+  /** PEM file of CA certificates to trust instead of the bundled web roots. Needs `tls`. */
+  ca_file?: string;
+  sasl?: KafkaEventSinkSasl;
+  /** Budget for one batch in ms, connecting included (default 10000). */
+  timeout_ms?: number;
+  filter?: EventSinkFilter;
+  /** Send job payloads. Off by default: arguments can be personal data. */
+  include_payload?: boolean;
+  delivery?: EventSinkDelivery;
+}
+
+/** Events published to a NATS subject. */
+export interface NatsEventSink {
+  kind: "nats";
+  /** Metrics label and log name; unique in the document. */
+  name: string;
+  /** Environment variable holding the server URL or a comma-separated list (it can carry credentials). */
+  url_env: string;
+  /** Environment variable holding the contents of a `.creds` file. */
+  credentials_env?: string;
+  /** PEM file of CA certificates to trust instead of the bundled web roots. */
+  ca_file?: string;
+  /** Subject template; may name `{namespace}`, `{queue}`, `{task}` and `{type}`. */
+  subject: string;
+  /** `"jetstream"` waits for the stream's ack (default); `"core"` publishes and flushes. */
+  mode?: "jetstream" | "core";
+  /** Budget for one batch in ms, connecting included (default 10000). */
+  timeout_ms?: number;
+  filter?: EventSinkFilter;
+  /** Send job payloads. Off by default: arguments can be personal data. */
+  include_payload?: boolean;
+  delivery?: EventSinkDelivery;
+}
+
 /** One event sink. */
-export type EventSink = HttpEventSink | RedisStreamsEventSink;
+export type EventSink = HttpEventSink | RedisStreamsEventSink | KafkaEventSink | NatsEventSink;
 
 /** The event-sinks configuration document. */
 export interface EventSinksConfig {

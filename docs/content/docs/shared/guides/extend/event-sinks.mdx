@@ -1,11 +1,12 @@
 ---
 title: Event sinks
-description: "Have a worker send its job lifecycle events out as CloudEvents — to an HTTP endpoint or a Redis stream — with the same configuration document the server reads."
+description: "Have a worker send its job lifecycle events out as CloudEvents — to an HTTP endpoint, a Redis stream, a Kafka topic or a NATS subject — with the same configuration document the server reads."
 ---
 
 A worker can send every job transition it observes out of the process as a
-[CloudEvent](https://cloudevents.io): `POST`ed to an HTTP endpoint, or appended
-to a Redis stream. A data warehouse, an audit log or an alerting pipeline then
+[CloudEvent](https://cloudevents.io): `POST`ed to an HTTP endpoint, appended
+to a Redis stream, produced to a Kafka topic, or published to a NATS subject.
+A data warehouse, an audit log or an alerting pipeline then
 follows jobs without polling storage, and without running any FlexiQ code of
 its own.
 
@@ -177,12 +178,12 @@ malformed document, an HTTP sink with an empty `allow`, a secret variable that
 is unset. A sink kind this build was compiled without is
 `EventsConfigError::NotCompiled`, which names the missing feature.
 
-The Redis Streams sink compiles under the `redis` feature. The HTTP sink needs
-the `events-http` feature:
+The Redis Streams sink compiles under the `redis` feature. The HTTP, Kafka and
+NATS sinks need `events-http`, `events-kafka` and `events-nats`:
 
 ```toml
 [dependencies]
-flexiq = { version = "2", features = ["events-http"] }
+flexiq = { version = "2", features = ["events-http", "events-kafka", "events-nats"] }
 ```
 
 </SdkOnly>

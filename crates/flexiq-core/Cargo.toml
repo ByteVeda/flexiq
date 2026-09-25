@@ -38,6 +38,11 @@ http-target = ["dep:url", "dep:reqwest", "dep:hmac", "dep:sha2", "dep:percent-en
 # guard and client, so enabling it compiles those. Every shipped SDK artifact
 # carries it; the Redis Streams sink rides the existing `redis` feature.
 events-http = ["http-target"]
+# Kafka event sink (#971). A pure-Rust client, so no artifact gains a C
+# toolchain (librdkafka) for it.
+events-kafka = ["dep:rskafka", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
+# NATS event sink (#971): core NATS or JetStream publish.
+events-nats = ["dep:async-nats", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
 
 [dependencies]
 diesel = { workspace = true }
@@ -79,6 +84,17 @@ sha2 = { version = "0.10", optional = true }
 # URI and query encode against the unreserved set and nothing else, which
 # `url`'s own encoder does not expose. Already compiled — `url` depends on it.
 percent-encoding = { version = "2", optional = true }
+# The Kafka sink's client. Default features off drops the compression codecs
+# (zstd and lz4 compile C); `transport-tls` is rustls over ring.
+rskafka = { version = "0.6", default-features = false, features = ["transport-tls"], optional = true }
+# The Kafka sink's TLS config. The workspace resolves rustls with both ring and
+# aws-lc-rs, so the provider is always named explicitly, never the default.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+rustls-pki-types = { version = "1", features = ["std"], optional = true }
+webpki-roots = { version = "1", optional = true }
+# The NATS sink's client. Default features off drops the KV, object store,
+# service and websocket APIs; `ring` for the same reason as `rustls` above.
+async-nats = { version = "0.50", default-features = false, features = ["ring", "jetstream", "nkeys"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"

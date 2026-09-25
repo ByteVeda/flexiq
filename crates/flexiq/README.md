@@ -144,6 +144,8 @@ otherwise.
 | `redis` | Redis storage |
 | `push-dispatch` | a Redis worker wakes on enqueue instead of polling |
 | `events-http` | the HTTP job event sink (the Redis Streams sink comes with `redis`) |
+| `events-kafka` | the Kafka job event sink |
+| `events-nats` | the NATS job event sink, core or JetStream |
 | `workflows` | DAG workflows at `flexiq::workflows` |
 | `mesh` | decentralized mesh scheduling at `flexiq::mesh` |
 

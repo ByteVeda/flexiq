@@ -19,6 +19,16 @@ their entries below keep that name.
 
 ### Added
 
+- **Kafka and NATS event sinks** (#971). Two more `kind`s for the event egress document.
+  `kafka` produces each event as a structured-mode CloudEvent record keyed by job id, placed
+  with Kafka's own murmur2 partitioner and acknowledged by every in-sync replica, over TLS and
+  SASL PLAIN or SCRAM when configured; its client is pure Rust, so no build gains librdkafka.
+  `nats` publishes to a subject templated from `{namespace}`, `{queue}`, `{task}` and `{type}`,
+  waiting for JetStream acknowledgements by default — with the CloudEvents `id` as
+  `Nats-Msg-Id`, so a stream drops retried duplicates — or plain core NATS with
+  `mode: "core"`. Each retries or drops by its client's own error taxonomy, names its secrets
+  by `*_env`, and sits behind a cargo feature (`events-kafka`, `events-nats`) compiled into
+  the published image and every SDK build; a build without one refuses a document naming it.
 - **Event egress** (#848). Job lifecycle transitions — `job.enqueued`, `job.started`,
   `job.completed`, `job.failed`, `job.retrying`, `job.dead`, `job.cancelled`, `job.sleeping` —
   can leave the process as a structured-mode CloudEvent, `POST`ed to an HTTP endpoint or

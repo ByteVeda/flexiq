@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use serde::Deserialize;
 
 use super::event::{EventType, JobEvent, DEFAULT_SOURCE};
+use super::subject::SubjectTemplate;
 
 // Every public type here is `#[non_exhaustive]`: new sink kinds and settings
 // are planned, and the document is built by `EventsConfig::parse`, never by a
@@ -49,6 +50,10 @@ pub enum SinkConfig {
     Http(HttpSinkConfig),
     /// `XADD` to a Redis stream.
     RedisStreams(RedisSinkConfig),
+    /// Records produced to a Kafka topic.
+    Kafka(KafkaSinkConfig),
+    /// Messages published to a NATS subject.
+    Nats(NatsSinkConfig),
 }
 
 /// Settings every sink kind shares.
@@ -161,6 +166,124 @@ pub struct RedisSinkConfig {
 
 fn default_stream_max_len() -> u64 {
     DEFAULT_STREAM_MAX_LEN
+}
+
+/// A Kafka sink. Each event is one record keyed by its job id, so a job's
+/// events share one partition.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct KafkaSinkConfig {
+    /// Metrics label and log name; unique in the document.
+    pub name: String,
+    /// Bootstrap brokers, `host:port`.
+    pub brokers: Vec<String>,
+    /// Topic records are produced to.
+    pub topic: String,
+    /// Connect to the brokers over TLS.
+    #[serde(default)]
+    pub tls: bool,
+    /// PEM file of CA certificates to trust instead of the bundled web roots.
+    /// Needs `tls`.
+    #[serde(default)]
+    pub ca_file: Option<String>,
+    /// SASL authentication.
+    #[serde(default)]
+    pub sasl: Option<KafkaSasl>,
+    /// Budget for one batch, connecting included, milliseconds.
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Which events this sink receives.
+    #[serde(default)]
+    pub filter: Filter,
+    /// Send job payloads. Off by default: arguments can be personal data.
+    #[serde(default)]
+    pub include_payload: bool,
+    /// Buffering, retries and batching.
+    #[serde(default)]
+    pub delivery: Delivery,
+}
+
+/// Kafka SASL credentials, each named by the environment variable holding it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct KafkaSasl {
+    /// The SASL mechanism.
+    pub mechanism: KafkaSaslMechanism,
+    /// Environment variable holding the username.
+    pub username_env: String,
+    /// Environment variable holding the password.
+    pub password_env: String,
+}
+
+/// A SASL mechanism the Kafka sink speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
+pub enum KafkaSaslMechanism {
+    /// `PLAIN`. Sends the password as is, so it needs `tls`.
+    #[serde(rename = "plain")]
+    Plain,
+    /// `SCRAM-SHA-256`.
+    #[serde(rename = "scram-sha-256")]
+    ScramSha256,
+    /// `SCRAM-SHA-512`.
+    #[serde(rename = "scram-sha-512")]
+    ScramSha512,
+}
+
+/// A NATS sink.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct NatsSinkConfig {
+    /// Metrics label and log name; unique in the document.
+    pub name: String,
+    /// Environment variable holding the server URL, e.g. `nats://host:4222`
+    /// or `tls://host:4222`, or a comma-separated list of them. An
+    /// environment variable, not a literal, because the URL can carry a user
+    /// and password or a token.
+    pub url_env: String,
+    /// Environment variable holding the contents of a `.creds` file (a user
+    /// JWT and its NKey seed).
+    #[serde(default)]
+    pub credentials_env: Option<String>,
+    /// PEM file of CA certificates to trust instead of the bundled web roots.
+    #[serde(default)]
+    pub ca_file: Option<String>,
+    /// Subject each event is published to. May name `{namespace}`, `{queue}`,
+    /// `{task}` and `{type}`.
+    pub subject: String,
+    /// Core NATS or a JetStream publish.
+    #[serde(default)]
+    pub mode: NatsMode,
+    /// Budget for one batch, connecting included, milliseconds.
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Which events this sink receives.
+    #[serde(default)]
+    pub filter: Filter,
+    /// Send job payloads. Off by default: arguments can be personal data.
+    #[serde(default)]
+    pub include_payload: bool,
+    /// Buffering, retries and batching.
+    #[serde(default)]
+    pub delivery: Delivery,
+}
+
+/// How a NATS sink publishes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum NatsMode {
+    /// Publish to JetStream and wait for the stream's acknowledgement. The
+    /// CloudEvents id goes out as `Nats-Msg-Id`, so the stream drops a
+    /// retried duplicate inside its dedupe window.
+    #[default]
+    Jetstream,
+    /// Core NATS: publish, then flush. Delivered means written to the
+    /// server, not that anyone was subscribed.
+    Core,
 }
 
 /// Which events a sink receives. Each list is an allowlist; an empty or absent
@@ -320,10 +443,68 @@ impl EventsConfig {
                         return Err(invalid("max_len must be at least 1"));
                     }
                 }
+                SinkConfig::Kafka(kafka) => validate_kafka(kafka).map_err(|m| invalid(&m))?,
+                SinkConfig::Nats(nats) => validate_nats(nats).map_err(|m| invalid(&m))?,
             }
         }
         Ok(())
     }
+}
+
+/// Kafka's own topic name rule: 1 to 249 of `[a-zA-Z0-9._-]`, and neither
+/// `.` nor `..`.
+fn valid_kafka_topic(topic: &str) -> bool {
+    !topic.is_empty()
+        && topic.len() <= 249
+        && topic != "."
+        && topic != ".."
+        && topic
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+fn validate_kafka(kafka: &KafkaSinkConfig) -> Result<(), String> {
+    if kafka.brokers.is_empty() || kafka.brokers.iter().any(|b| b.trim().is_empty()) {
+        return Err("brokers must name at least one host:port, none empty".into());
+    }
+    if !valid_kafka_topic(&kafka.topic) {
+        return Err("topic must be 1 to 249 of [a-zA-Z0-9._-], and not '.' or '..'".into());
+    }
+    if kafka.timeout_ms == 0 {
+        return Err("timeout_ms must be at least 1".into());
+    }
+    if kafka.ca_file.is_some() && !kafka.tls {
+        return Err("ca_file needs tls".into());
+    }
+    if let Some(sasl) = &kafka.sasl {
+        if sasl.username_env.trim().is_empty() || sasl.password_env.trim().is_empty() {
+            return Err("sasl username_env and password_env must not be empty".into());
+        }
+        // PLAIN puts the password on the wire as is; SCRAM never sends it.
+        if sasl.mechanism == KafkaSaslMechanism::Plain && !kafka.tls {
+            return Err(
+                "sasl mechanism 'plain' sends the password in clear, so it needs tls".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_nats(nats: &NatsSinkConfig) -> Result<(), String> {
+    if nats.url_env.trim().is_empty() {
+        return Err("url_env must not be empty".into());
+    }
+    if nats
+        .credentials_env
+        .as_deref()
+        .is_some_and(|name| name.trim().is_empty())
+    {
+        return Err("credentials_env must not be empty".into());
+    }
+    if nats.timeout_ms == 0 {
+        return Err("timeout_ms must be at least 1".into());
+    }
+    SubjectTemplate::parse(&nats.subject).map(drop)
 }
 
 impl SinkConfig {
@@ -332,6 +513,8 @@ impl SinkConfig {
         match self {
             Self::Http(_) => "http",
             Self::RedisStreams(_) => "redis_streams",
+            Self::Kafka(_) => "kafka",
+            Self::Nats(_) => "nats",
         }
     }
 
@@ -340,6 +523,8 @@ impl SinkConfig {
         match self {
             Self::Http(c) => &c.name,
             Self::RedisStreams(c) => &c.name,
+            Self::Kafka(c) => &c.name,
+            Self::Nats(c) => &c.name,
         }
     }
 
@@ -348,6 +533,8 @@ impl SinkConfig {
         match self {
             Self::Http(c) => &c.filter,
             Self::RedisStreams(c) => &c.filter,
+            Self::Kafka(c) => &c.filter,
+            Self::Nats(c) => &c.filter,
         }
     }
 
@@ -356,6 +543,8 @@ impl SinkConfig {
         match self {
             Self::Http(c) => c.include_payload,
             Self::RedisStreams(c) => c.include_payload,
+            Self::Kafka(c) => c.include_payload,
+            Self::Nats(c) => c.include_payload,
         }
     }
 
@@ -364,12 +553,15 @@ impl SinkConfig {
         match self {
             Self::Http(c) => &c.delivery,
             Self::RedisStreams(c) => &c.delivery,
+            Self::Kafka(c) => &c.delivery,
+            Self::Nats(c) => &c.delivery,
         }
     }
 
     /// Every environment variable the sink reads a secret from: a bearer
-    /// token, an HMAC secret, or a Redis URL, which can carry a password.
-    /// Here, not in a caller, so a new kind cannot forget to list its own.
+    /// token, an HMAC secret, SASL credentials, a `.creds` file, or a URL,
+    /// which can carry a password. Here, not in a caller, so a new kind
+    /// cannot forget to list its own.
     pub fn secret_env_vars(&self) -> Vec<&str> {
         match self {
             Self::Http(c) => [c.bearer_token_env.as_deref(), c.hmac_secret_env.as_deref()]
@@ -377,6 +569,15 @@ impl SinkConfig {
                 .flatten()
                 .collect(),
             Self::RedisStreams(c) => vec![c.url_env.as_str()],
+            Self::Kafka(c) => c
+                .sasl
+                .iter()
+                .flat_map(|s| [s.username_env.as_str(), s.password_env.as_str()])
+                .collect(),
+            Self::Nats(c) => [Some(c.url_env.as_str()), c.credentials_env.as_deref()]
+                .into_iter()
+                .flatten()
+                .collect(),
         }
     }
 }
@@ -405,7 +606,14 @@ mod tests {
             r#"{"sinks":[{"kind":"http","name":"a","url":"u","allow":["h"],"filter":{"type":["job.dead"]}}]}"#,
             r#"{"sinks":[{"kind":"http","name":"a","url":"u","allow":["h"],"delivery":{"bufer":1}}]}"#,
             r#"{"sinks":[{"kind":"redis_streams","name":"r","url_env":"R","stream":"s","maxlen":1}]}"#,
-            r#"{"sinks":[{"kind":"kafka","name":"a"}]}"#,
+            r#"{"sinks":[{"kind":"pulsar","name":"a"}]}"#,
+            r#"{"sinks":[{"kind":"kafka","name":"k","brokers":["b:9092"],"topic":"t","key":"x"}]}"#,
+            r#"{"sinks":[{"kind":"kafka","name":"k","brokers":["b:9092"],"topic":"t",
+                "sasl":{"mechanism":"scram-sha-256","username_env":"U","password_env":"P","user":"u"}}]}"#,
+            r#"{"sinks":[{"kind":"kafka","name":"k","brokers":["b:9092"],"topic":"t",
+                "sasl":{"mechanism":"gssapi","username_env":"U","password_env":"P"}}]}"#,
+            r#"{"sinks":[{"kind":"nats","name":"n","url_env":"N","subject":"s","stream":"x"}]}"#,
+            r#"{"sinks":[{"kind":"nats","name":"n","url_env":"N","subject":"s","mode":"push"}]}"#,
         ] {
             // "unknown": an internally tagged enum can swallow a variant's
             // `deny_unknown_fields`, so prove the refusal is for the stray key.
@@ -449,11 +657,73 @@ mod tests {
                 r#"{"sinks":[{"kind":"redis_streams","name":"r","url_env":" ","stream":"s"}]}"#,
                 "url_env",
             ),
+            (
+                r#"{"sinks":[{"kind":"kafka","name":"k","brokers":[],"topic":"t"}]}"#,
+                "brokers",
+            ),
+            (
+                r#"{"sinks":[{"kind":"kafka","name":"k","brokers":["b:9092"],"topic":"a/b"}]}"#,
+                "topic",
+            ),
+            (
+                r#"{"sinks":[{"kind":"kafka","name":"k","brokers":["b:9092"],"topic":".."}]}"#,
+                "topic",
+            ),
+            (
+                r#"{"sinks":[{"kind":"kafka","name":"k","brokers":["b:9092"],"topic":"t","ca_file":"/ca.pem"}]}"#,
+                "ca_file needs tls",
+            ),
+            (
+                r#"{"sinks":[{"kind":"kafka","name":"k","brokers":["b:9092"],"topic":"t",
+                    "sasl":{"mechanism":"plain","username_env":"U","password_env":"P"}}]}"#,
+                "needs tls",
+            ),
+            (
+                r#"{"sinks":[{"kind":"kafka","name":"k","brokers":["b:9092"],"topic":"t","timeout_ms":0}]}"#,
+                "timeout_ms",
+            ),
+            (
+                r#"{"sinks":[{"kind":"nats","name":"n","url_env":"","subject":"s"}]}"#,
+                "url_env",
+            ),
+            (
+                r#"{"sinks":[{"kind":"nats","name":"n","url_env":"N","subject":"s.>"}]}"#,
+                "subject",
+            ),
+            (
+                r#"{"sinks":[{"kind":"nats","name":"n","url_env":"N","subject":"s.{job}"}]}"#,
+                "unknown field",
+            ),
         ];
         for (doc, needle) in cases {
             let error = EventsConfig::parse(doc).unwrap_err().to_string();
             assert!(error.contains(needle), "{doc}: {error}");
         }
+    }
+
+    #[test]
+    fn broker_sinks_take_defaults_and_list_their_secrets() {
+        let doc = r#"{"sinks":[
+            {"kind":"kafka","name":"k","brokers":["b:9092"],"topic":"flexiq.events",
+             "tls":true,"sasl":{"mechanism":"plain","username_env":"KU","password_env":"KP"}},
+            {"kind":"nats","name":"n","url_env":"NU","credentials_env":"NC",
+             "subject":"flexiq.{namespace}.{type}"}]}"#;
+        let config = EventsConfig::parse(doc).unwrap();
+        let (kafka, nats) = (&config.sinks[0], &config.sinks[1]);
+        assert_eq!((kafka.kind(), nats.kind()), ("kafka", "nats"));
+        assert_eq!(kafka.secret_env_vars(), ["KU", "KP"]);
+        assert_eq!(nats.secret_env_vars(), ["NU", "NC"]);
+        match nats {
+            SinkConfig::Nats(n) => {
+                assert_eq!(n.mode, NatsMode::Jetstream);
+                assert_eq!(n.timeout_ms, 10_000);
+            }
+            other => panic!("not a nats sink: {other:?}"),
+        }
+        let bare = r#"{"sinks":[{"kind":"kafka","name":"k","brokers":["b:9092"],"topic":"t"}]}"#;
+        assert!(EventsConfig::parse(bare).unwrap().sinks[0]
+            .secret_env_vars()
+            .is_empty());
     }
 
     #[test]

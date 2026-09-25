@@ -1,11 +1,12 @@
 ---
 title: Event egress
-description: "Send every job transition out of the server as a CloudEvent — to an HTTP endpoint or a Redis stream — for a warehouse, an audit log or an alerting pipeline: the document, the sinks, delivery semantics, metrics and Helm."
+description: "Send every job transition out of the server as a CloudEvent — to an HTTP endpoint, a Redis stream, a Kafka topic or a NATS subject — for a warehouse, an audit log or an alerting pipeline: the document, the sinks, delivery semantics, metrics and Helm."
 ---
 
 Event egress describes each job transition as a
 [CloudEvent](https://cloudevents.io) and sends it out of the process: `POST`ed
-to an HTTP endpoint, or appended to a Redis stream. A data warehouse, an audit
+to an HTTP endpoint, appended to a Redis stream, produced to a Kafka topic, or
+published to a NATS subject. A data warehouse, an audit
 log or an alerting pipeline then follows jobs as they move, without polling
 FlexiQ's storage and without an SDK of its own.
 
@@ -74,9 +75,10 @@ One JSON object: a `source` stamped on every event, and at least one sink.
   and the name in every log line.
 - **`delivery`** holds `buffer` (10000 events), `max_attempts` (5) and
   `max_batch` (1, at most 1000), each per sink.
-- **A document never holds a secret.** `bearer_token_env`, `hmac_secret_env`
-  and `url_env` name the environment variable the secret is in, so the file
-  can live in a ConfigMap while the secret lives in a Secret.
+- **A document never holds a secret.** `bearer_token_env`, `hmac_secret_env`,
+  `url_env`, Kafka's `sasl.username_env` and `sasl.password_env`, and NATS's
+  `credentials_env` name the environment variable the secret is in, so the
+  file can live in a ConfigMap while the secret lives in a Secret.
 
 The contract has [the full field tables](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md#the-configuration-document)
 and the exact messages a refused document produces. Every SDK's worker takes
@@ -142,6 +144,77 @@ included, drops the batch at once.
 `MAXLEN ~` trims: a consumer that falls more than about `max_len` entries
 behind (100000 by default) loses the oldest. Size it for the longest outage a
 consumer must survive.
+
+### Kafka
+
+```json
+{
+  "kind": "kafka",
+  "name": "bus",
+  "brokers": ["kafka-0:9093", "kafka-1:9093"],
+  "topic": "flexiq.events",
+  "tls": true,
+  "sasl": {
+    "mechanism": "scram-sha-512",
+    "username_env": "EVT_KAFKA_USER",
+    "password_env": "EVT_KAFKA_PASSWORD"
+  }
+}
+```
+
+One record per event: the job id as key, the CloudEvent JSON as value, and a
+`content-type: application/cloudevents+json` header. The partition is Kafka's
+own default for a key, murmur2, so a job's events share a partition and land
+where a Java producer would have put them. Records are acknowledged by every
+in-sync replica.
+
+`tls` turns TLS on, against the bundled web roots or, with `ca_file`, against
+the certificates in that PEM file instead. `sasl.mechanism` is `plain`,
+`scram-sha-256` or `scram-sha-512`; `plain` sends the password as it is, so it
+is refused without `tls`. `timeout_ms` (10000) bounds one batch, connecting
+included.
+
+Connection trouble, a timeout, and the broker errors Kafka itself calls
+retriable — a leader moving, too few in-sync replicas, an unknown topic — are
+retried, with the client reconnecting and re-reading the cluster metadata
+each time. An authorization or authentication failure, an oversized record,
+and any other broker error drop the batch at once. The sink's client is pure
+Rust: no build gains librdkafka or a C toolchain for it.
+
+### NATS
+
+```json
+{
+  "kind": "nats",
+  "name": "js",
+  "url_env": "EVT_NATS_URL",
+  "subject": "flexiq.{namespace}.{queue}.{type}"
+}
+```
+
+One message per event, the CloudEvent JSON as body, with `content-type` and
+`Nats-Msg-Id` set to the event `id`. `url_env` names the variable holding the
+server URL — `nats://`, `tls://`, or a comma-separated list — since it can
+carry a password or token. `credentials_env` names one holding a `.creds`
+file's contents, and `ca_file` a PEM file of CAs to trust instead of the
+bundled web roots.
+
+`subject` may name `{namespace}`, `{queue}`, `{task}` and `{type}`. A
+namespace, queue or task name always renders as one token — `.`, `*`, `>`
+and whitespace become `_` — so it cannot split the subject or turn it into a
+wildcard. `{type}` keeps its dot: the template above renders
+`flexiq.default.emails.job.dead`, and `flexiq.*.*.job.>` subscribes to every
+job type.
+
+`mode` is `jetstream` by default: the sink waits for each message's
+acknowledgement, and the stream drops a retried duplicate inside its duplicate
+window by `Nats-Msg-Id`. The subject must be captured by a stream, or every
+batch is dropped as refused. `mode: "core"` publishes and flushes instead —
+cheaper, but an event with no subscriber listening is gone.
+
+A connection failure, a timeout and a missing acknowledgement are retried; an
+authentication failure, an oversized message and a subject no stream captures
+drop the batch at once.
 
 ## Events
 
@@ -251,10 +324,11 @@ drops through its logs, which name the sink, the reason and a count.
 
 ## Builds
 
-The HTTP sink is behind the `events-http` cargo feature and the Redis Streams
-sink behind `redis`. The published image has both. A binary built without one
-refuses, at boot, a document that names its kind, and the error names the
-missing feature.
+The HTTP sink is behind the `events-http` cargo feature, the Redis Streams
+sink behind `redis`, the Kafka sink behind `events-kafka` and the NATS sink
+behind `events-nats`. The published image has all four. A binary built
+without one refuses, at boot, a document that names its kind, and the error
+names the missing feature.
 
 ## Helm
 
