@@ -208,6 +208,77 @@ func TestWaitTreatsTheWatchCapAsTransientOnlyAfterAWatchOpened(t *testing.T) {
 	}
 }
 
+// TestWatchQueueYieldsTheOpeningCheckpoint: a stream lost before its first
+// transition must still leave the caller a cursor to resume from.
+func TestWatchQueueYieldsTheOpeningCheckpoint(t *testing.T) {
+	client := serve(t, &fakeProducer{
+		watchJobs: func(_ *pb.WatchJobsRequest, stream pb.ProducerService_WatchJobsServer) error {
+			return stream.Send(&pb.WatchJobsResponse{Cursor: "c0"})
+		},
+	})
+
+	var got []flexiq.Transition
+	for transition, err := range client.WatchQueue(context.Background(), "orders", "") {
+		if err != nil {
+			t.Fatalf("WatchQueue: %v", err)
+		}
+		got = append(got, transition)
+	}
+	if len(got) != 1 || !got[0].Checkpoint || got[0].Cursor != "c0" || got[0].Terminal {
+		t.Fatalf("got %+v, want one checkpoint carrying c0", got)
+	}
+}
+
+// TestWaitRetriesATransientReadOfTheFinishedJob: the job is done, so a read
+// that fails for a reason that clears is retried rather than reported.
+func TestWaitRetriesATransientReadOfTheFinishedJob(t *testing.T) {
+	var reads atomic.Int32
+	client := serve(t, &fakeProducer{
+		watchJobs: func(_ *pb.WatchJobsRequest, stream pb.ProducerService_WatchJobsServer) error {
+			return stream.Send(transitionItem("j", pb.JobStatus_JOB_STATUS_COMPLETE, true))
+		},
+		getJob: func(_ context.Context, req *pb.GetJobRequest) (*pb.GetJobResponse, error) {
+			if reads.Add(1) == 1 {
+				return nil, status.Error(codes.Unavailable, "connection dropped")
+			}
+			return &pb.GetJobResponse{Job: &pb.Job{Id: req.GetJobId(), Status: pb.JobStatus_JOB_STATUS_COMPLETE}}, nil
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	job, err := client.Wait(ctx, "j")
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if reads.Load() != 2 || job.Status != flexiq.StatusComplete {
+		t.Errorf("read %d times and got %+v, want a second read to succeed", reads.Load(), job)
+	}
+}
+
+// TestWaitReopensAfterAProxysOwnDeadline: a reason-free DEADLINE_EXCEEDED
+// while the caller's ctx is still live is the path, not the answer.
+func TestWaitReopensAfterAProxysOwnDeadline(t *testing.T) {
+	var opened atomic.Int32
+	client := serve(t, &fakeProducer{
+		watchJobs: func(_ *pb.WatchJobsRequest, stream pb.ProducerService_WatchJobsServer) error {
+			if opened.Add(1) == 1 {
+				return status.Error(codes.DeadlineExceeded, "upstream timeout")
+			}
+			return stream.Send(transitionItem("j", pb.JobStatus_JOB_STATUS_COMPLETE, true))
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := client.Wait(ctx, "j"); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if opened.Load() != 2 {
+		t.Errorf("opened %d watches, want 2", opened.Load())
+	}
+}
+
 // TestEnqueueAndWaitWaitsForTheJobItEnqueued.
 func TestEnqueueAndWaitWaitsForTheJobItEnqueued(t *testing.T) {
 	var watched string

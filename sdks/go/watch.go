@@ -101,6 +101,10 @@ type Transition struct {
 	// exist, or is in another namespace, which the server does not
 	// distinguish. Every other field but Cursor is empty. It is terminal.
 	NotFound bool
+	// Checkpoint marks a queue watch's opening item: no job, only the Cursor
+	// the watch starts from. Keep that cursor like any other, so a stream lost
+	// before its first transition resumes with no gap.
+	Checkpoint bool
 	// Cursor is this item's position on a queue watch; pass it to
 	// [Client.WatchQueue] to resume. Opaque, and empty on an id watch.
 	Cursor string
@@ -125,12 +129,13 @@ func (c *Client) WatchJobs(ctx context.Context, jobIDs ...string) iter.Seq2[Tran
 
 // WatchQueue follows every job in a queue, until ctx ends or the stream fails.
 //
-// No snapshot: only live transitions, each carrying a Cursor. Pass the last one
-// back as resumeCursor to replay what a dropped stream missed; an empty one
+// No snapshot: a Checkpoint item carrying the starting Cursor, then live
+// transitions, each carrying a Cursor. Pass the last one — checkpoint included
+// — back as resumeCursor to replay what a dropped stream missed; an empty one
 // starts from now. The server keeps a bounded window of transitions per
 // process, so a cursor it no longer holds fails with
-// [ReasonWatchCursorExpired] — read what was missed with [Client.ListJobs],
-// then watch again from now.
+// [ReasonWatchCursorExpired]. The gap's transitions are gone: watch again from
+// now, and read current state with [Client.ListJobs] if needed.
 //
 // A queue watch sees only the transitions the server process it reaches
 // handles itself. An empty queue means "default".
@@ -193,20 +198,44 @@ func (c *Client) Wait(ctx context.Context, jobID string) (Job, error) {
 	for {
 		finished, err := c.waitOnce(ctx, jobID, &backoff, &opened)
 		if finished {
-			// The result is read, not streamed: a watch carries no payload or
-			// result. GetJob also answers the not-found case with the
-			// server's own error.
-			return c.GetJob(ctx, jobID, GetJobOptions{IncludeResult: true})
+			return c.readFinished(ctx, jobID)
 		}
 		if err != nil && !reopenable(err, opened) {
 			return Job{}, err
 		}
-		select {
-		case <-ctx.Done():
-			return Job{}, ctx.Err()
-		case <-time.After(backoff):
+		if err := sleep(ctx, backoff); err != nil {
+			return Job{}, err
 		}
 		backoff = min(backoff*2, waitBackoffCap)
+	}
+}
+
+// readFinished reads a finished job with its result, retrying a failure that
+// clears on its own: the job is done, so only the read is left to go wrong.
+//
+// The result is read, not streamed: a watch carries no payload or result.
+// GetJob also answers the not-found case with the server's own error.
+func (c *Client) readFinished(ctx context.Context, jobID string) (Job, error) {
+	backoff := waitBackoffStart
+	for {
+		job, err := c.GetJob(ctx, jobID, GetJobOptions{IncludeResult: true})
+		if err == nil || !transient(err) {
+			return job, err
+		}
+		if err := sleep(ctx, backoff); err != nil {
+			return Job{}, err
+		}
+		backoff = min(backoff*2, waitBackoffCap)
+	}
+}
+
+// sleep waits d, or returns ctx's error if it ends first.
+func sleep(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
 	}
 }
 
@@ -245,7 +274,20 @@ func reopenable(err error, openedBefore bool) bool {
 	case ReasonWatchLimit:
 		return openedBefore
 	}
-	return wireErr.Code == codes.Unavailable
+	return transient(err)
+}
+
+// transient reports UNAVAILABLE, or a reason-free DEADLINE_EXCEEDED — the
+// transport or a proxy's own deadline, not the server's answer. A caller's own
+// expired ctx also surfaces as DEADLINE_EXCEEDED; the loops catch that when
+// they next wait on ctx.
+func transient(err error) bool {
+	wireErr, ok := AsError(err)
+	if !ok {
+		return false
+	}
+	return wireErr.Code == codes.Unavailable ||
+		(wireErr.Reason == "" && wireErr.Code == codes.DeadlineExceeded)
 }
 
 // EnqueueAndWait submits one job and waits for it to finish — "run this and
@@ -265,6 +307,14 @@ func (c *Client) EnqueueAndWait(ctx context.Context, req EnqueueRequest) (Job, e
 // does not know.
 func transitionFromProto(msg *pb.WatchJobsResponse) (Transition, bool) {
 	switch item := msg.GetItem().(type) {
+	case nil:
+		// No arm this build knows. With a cursor it is still a position a
+		// queue watch must keep: the opening checkpoint, or an arm a newer
+		// server added.
+		if msg.GetCursor() == "" {
+			return Transition{}, false
+		}
+		return Transition{Checkpoint: true, Cursor: msg.GetCursor()}, true
 	case *pb.WatchJobsResponse_NotFoundJobId:
 		return Transition{
 			JobID:    item.NotFoundJobId,
