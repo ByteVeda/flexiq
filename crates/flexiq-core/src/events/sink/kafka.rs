@@ -140,6 +140,15 @@ impl KafkaSink {
                 self.topic
             )));
         }
+        if !contiguous(&ids) {
+            // `partition_for` indexes by position, which is the partition id
+            // only when the ids are exactly `0..n`, as Kafka assigns them.
+            return Err(DeliveryResult::Retry(format!(
+                "kafka topic '{}' reported partitions that are not 0..{}",
+                self.topic,
+                ids.len()
+            )));
+        }
         let mut partitions = Vec::with_capacity(ids.len());
         for id in ids {
             let partition = client
@@ -212,6 +221,13 @@ fn record(event: &JobEvent, source: &str, include_payload: bool) -> Record {
         headers: BTreeMap::from([("content-type".to_string(), CONTENT_TYPE.as_bytes().to_vec())]),
         timestamp: DateTime::from_timestamp_millis(event.time_ms).unwrap_or_else(Utc::now),
     }
+}
+
+/// Whether sorted partition ids are exactly `0..n`, so a position is an id.
+fn contiguous(ids: &[i32]) -> bool {
+    ids.iter()
+        .enumerate()
+        .all(|(index, &id)| usize::try_from(id) == Ok(index))
 }
 
 /// Kafka's default partitioner for a keyed record: `toPositive(murmur2(key))
@@ -383,6 +399,15 @@ mod tests {
             partition_for(b"21", 7),
             ((-973_932_308_i32 & 0x7fff_ffff) % 7) as usize
         );
+    }
+
+    #[test]
+    fn only_partition_ids_zero_to_n_index_by_position() {
+        assert!(contiguous(&[0]));
+        assert!(contiguous(&[0, 1, 2]));
+        assert!(!contiguous(&[1, 2]));
+        assert!(!contiguous(&[0, 2]));
+        assert!(!contiguous(&[-1, 0]));
     }
 
     #[test]
