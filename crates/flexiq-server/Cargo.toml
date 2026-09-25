@@ -51,6 +51,10 @@ push-dispatch = ["flexiq-core/push-dispatch"]
 # The HTTP event sink (CloudEvents out). Without it an events document naming
 # an `http` sink is refused at boot; the Redis Streams sink rides on `redis`.
 events-http = ["flexiq-core/events-http"]
+# The Kafka and NATS event sinks. Without one, an events document naming its
+# kind is refused at boot.
+events-kafka = ["flexiq-core/events-kafka"]
+events-nats = ["flexiq-core/events-nats"]
 
 [dependencies]
 flexiq-core = { workspace = true }

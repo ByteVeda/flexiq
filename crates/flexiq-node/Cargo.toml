@@ -23,6 +23,9 @@ push-dispatch = ["flexiq-core/push-dispatch"]
 # The `http` event sink. In the shipped addon's feature list; without it a
 # config naming an `http` sink is refused at worker start.
 events-http = ["flexiq-core/events-http"]
+# The `kafka` and `nats` event sinks, likewise in the shipped addon's list.
+events-kafka = ["flexiq-core/events-kafka"]
+events-nats = ["flexiq-core/events-nats"]
 
 [dependencies]
 flexiq-core = { workspace = true }

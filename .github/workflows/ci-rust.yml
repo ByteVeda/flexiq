@@ -154,6 +154,11 @@ jobs:
       - name: Check http-target against the other backends
         run: cargo check --workspace --features http-target,postgres,redis
 
+      # The broker sinks' unit tests. Their live tests skip here: no Kafka or
+      # NATS service runs in CI.
+      - name: Run Kafka and NATS event sink tests
+        run: LD_LIBRARY_PATH="$pythonLocation/lib" cargo test -p flexiq-core --features events-kafka,events-nats --lib events
+
   rust-test-postgres:
     name: Rust Tests (PostgreSQL)
     runs-on: ubuntu-latest
