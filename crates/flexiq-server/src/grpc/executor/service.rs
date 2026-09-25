@@ -150,8 +150,7 @@ impl ExecutorDoor {
     /// turning settle callbacks on requires the gRPC listener.
     ///
     /// `targets` is every target that accepts a `202`, and a report is handed
-    /// to the one that made the dispatch it names — see
-    /// [`Self::target_for`].
+    /// to the one that made the dispatch it names.
     #[cfg(feature = "http-target")]
     pub fn settle_only(
         targets: Vec<Arc<flexiq_core::HttpDispatchTarget>>,

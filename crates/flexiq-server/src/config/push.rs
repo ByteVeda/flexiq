@@ -490,7 +490,9 @@ pub fn targets_from_env(env: &Env) -> Result<Option<PushConfig>> {
     };
     if value(env, URL_VAR).is_some() {
         bail!(
-            "{TARGETS_VAR} and {URL_VAR} cannot both be set — with named targets, each              one's URL is FLEXIQ_PUSH_<NAME>_URL. Move {URL_VAR} onto a named target, or              unset {TARGETS_VAR} for a single target."
+            "{TARGETS_VAR} and {URL_VAR} cannot both be set — with named targets, each \
+             one's URL is FLEXIQ_PUSH_<NAME>_URL. Move {URL_VAR} onto a named target, or \
+             unset {TARGETS_VAR} for a single target."
         );
     }
 
@@ -508,13 +510,16 @@ pub fn targets_from_env(env: &Env) -> Result<Option<PushConfig>> {
         }
         let queues = queue_list(env, &queues_var).with_context(|| {
             format!(
-                "{queues_var} is required: each named target serves its own queues, so                  two targets never claim the same job"
+                "{queues_var} is required: each named target serves its own queues, so \
+                 two targets never claim the same job"
             )
         })?;
         for queue in &queues {
             if let Some((_, other)) = owners.iter().find(|(owned, _)| owned == queue) {
                 bail!(
-                    "queue {queue} is served by both push target {other} and push target                      {lower}. A queue belongs to one target, or the two would race each                      other for its jobs."
+                    "queue {queue} is served by both push target {other} and push target \
+                     {lower}. A queue belongs to one target, or the two would race each \
+                     other for its jobs."
                 );
             }
             owners.push((queue.clone(), lower.clone()));
@@ -524,7 +529,8 @@ pub fn targets_from_env(env: &Env) -> Result<Option<PushConfig>> {
         let config = from_env(&merged)
             .with_context(|| {
                 format!(
-                    "push target {lower} (read from {prefix}*, falling back to                      {TARGET_PREFIX}*)"
+                    "push target {lower} (read from {prefix}*, falling back to \
+                     {TARGET_PREFIX}*)"
                 )
             })?
             .expect("the URL was checked above, so the target is configured");
@@ -550,13 +556,15 @@ fn target_names(raw: &str) -> Result<Vec<String>> {
         // `a_connect` with setting `TIMEOUT` are both FLEXIQ_PUSH_A_CONNECT_TIMEOUT.
         if !entry.chars().all(|c| c.is_ascii_alphanumeric()) {
             bail!(
-                "{TARGETS_VAR}: '{entry}' is not a target name — use letters and digits                  only, since the name is spelt into FLEXIQ_PUSH_<NAME>_* variables"
+                "{TARGETS_VAR}: '{entry}' is not a target name — use letters and digits \
+                 only, since the name is spelt into FLEXIQ_PUSH_<NAME>_* variables"
             );
         }
         let upper = entry.to_ascii_uppercase();
         if RESERVED_TARGET_NAMES.contains(&upper.as_str()) {
             bail!(
-                "{TARGETS_VAR}: '{entry}' is reserved — FLEXIQ_PUSH_{upper}_* is already                  the single-target spelling. Choose another name."
+                "{TARGETS_VAR}: '{entry}' is reserved — FLEXIQ_PUSH_{upper}_* is already \
+                 the single-target spelling. Choose another name."
             );
         }
         if names.contains(&upper) {
