@@ -1090,6 +1090,24 @@ flexiq_events_queued{sink=\"we\\\"b\"} 0
         );
     }
 
+    #[cfg(not(feature = "events-nats"))]
+    #[test]
+    fn a_nats_sink_needs_the_events_nats_feature() {
+        let doc = r#"{"sinks":[{"kind":"nats","name":"n","url_env":"U","subject":"s"}]}"#;
+        let error = EventHub::from_json(doc).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                EventsConfigError::NotCompiled {
+                    kind: "nats",
+                    feature: "events-nats",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+    }
+
     #[test]
     fn start_revalidates_a_hand_built_config() {
         let config = EventsConfig {

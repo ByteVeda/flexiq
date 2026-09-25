@@ -41,6 +41,8 @@ events-http = ["http-target"]
 # Kafka event sink (#971). A pure-Rust client, so no artifact gains a C
 # toolchain (librdkafka) for it.
 events-kafka = ["dep:rskafka", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
+# NATS event sink (#971): core NATS or JetStream publish.
+events-nats = ["dep:async-nats", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
 
 [dependencies]
 diesel = { workspace = true }
@@ -90,6 +92,10 @@ rskafka = { version = "0.6", default-features = false, features = ["transport-tl
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 rustls-pki-types = { version = "1", features = ["std"], optional = true }
 webpki-roots = { version = "1", optional = true }
+# The NATS sink's client. Default features off drops the KV, object store,
+# service and websocket APIs; `ring` for the same reason as `rustls` above.
+async-nats = { version = "0.50", default-features = false, features = ["ring", "jetstream", "nkeys"], optional = true }
+
 [dev-dependencies]
 tempfile = "3"
 # Hand-rolled wire frames in the executor-attach tests: a frame type this build

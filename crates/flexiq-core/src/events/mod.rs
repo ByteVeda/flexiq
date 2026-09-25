@@ -28,10 +28,11 @@ pub mod event;
 mod hub;
 pub mod reason;
 pub(crate) mod sink;
+mod subject;
 
 pub use config::{
     Delivery, EventsConfig, EventsConfigError, Filter, HttpSinkConfig, KafkaSasl,
-    KafkaSaslMechanism, KafkaSinkConfig, RedisSinkConfig, SinkConfig,
+    KafkaSaslMechanism, KafkaSinkConfig, NatsMode, NatsSinkConfig, RedisSinkConfig, SinkConfig,
 };
 pub use event::{EventType, JobEvent, CLOUDEVENTS_TYPE_PREFIX, DEFAULT_SOURCE};
 pub use hub::{EventHub, SinkStats};

@@ -12,16 +12,23 @@ use super::event::JobEvent;
 mod http;
 #[cfg(feature = "events-kafka")]
 mod kafka;
+#[cfg(feature = "events-nats")]
+mod nats;
 #[cfg(feature = "redis")]
 mod redis_streams;
-#[cfg(feature = "events-kafka")]
+#[cfg(any(feature = "events-kafka", feature = "events-nats"))]
 mod tls;
 
 /// How one delivery attempt of one batch went.
 // Only feature-gated backends construct the first two; the hub matches on
 // them in every build, including one compiled with no sink kind at all.
 #[cfg_attr(
-    not(any(feature = "events-http", feature = "events-kafka", feature = "redis")),
+    not(any(
+        feature = "events-http",
+        feature = "events-kafka",
+        feature = "events-nats",
+        feature = "redis"
+    )),
     allow(dead_code)
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +56,12 @@ pub(crate) trait SinkBackend: Send + 'static {
 /// A kind this build was compiled without is refused here, at hub start, so a
 /// config that cannot deliver never looks healthy.
 #[cfg_attr(
-    not(any(feature = "events-http", feature = "events-kafka", feature = "redis")),
+    not(any(
+        feature = "events-http",
+        feature = "events-kafka",
+        feature = "events-nats",
+        feature = "redis"
+    )),
     allow(unused_variables)
 )]
 pub(crate) fn build_backend(
@@ -71,12 +83,21 @@ pub(crate) fn build_backend(
         SinkConfig::Kafka(config) => Ok(Box::new(kafka::KafkaSink::new(config, source)?)),
         #[cfg(not(feature = "events-kafka"))]
         SinkConfig::Kafka(_) => Err(not_compiled(sink, "events-kafka")),
+        #[cfg(feature = "events-nats")]
+        SinkConfig::Nats(config) => Ok(Box::new(nats::NatsSink::new(config, source)?)),
+        #[cfg(not(feature = "events-nats"))]
+        SinkConfig::Nats(_) => Err(not_compiled(sink, "events-nats")),
     }
 }
 
 // Unused only when every sink kind is compiled in, and so never refused.
 #[cfg_attr(
-    all(feature = "events-http", feature = "events-kafka", feature = "redis"),
+    all(
+        feature = "events-http",
+        feature = "events-kafka",
+        feature = "events-nats",
+        feature = "redis"
+    ),
     allow(dead_code)
 )]
 fn not_compiled(sink: &SinkConfig, feature: &'static str) -> EventsConfigError {
