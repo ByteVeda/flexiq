@@ -151,7 +151,7 @@ The CloudEvents `type` is `org.byteveda.flexiq.` followed by the short name.
 
 | Short name | Emitted by | When |
 |---|---|---|
-| `job.enqueued` | server doors | A door wrote a new job. |
+| `job.enqueued` | server doors, scheduler | A door wrote a new job, a periodic schedule fired, or a dead-letter entry was auto-retried. |
 | `job.started` | scheduler | A job was claimed and handed off for execution. |
 | `job.completed` | scheduler | An attempt succeeded. |
 | `job.failed` | scheduler | An attempt failed. Always followed by `job.retrying` or `job.dead`. |
@@ -162,9 +162,9 @@ The CloudEvents `type` is `org.byteveda.flexiq.` followed by the short name.
 
 ### When each fires
 
-- **`job.enqueued`** — only from `flexiq-server`'s producer doors, and only
-  for a row the call actually wrote: gRPC `Enqueue` and `EnqueueBatch` (and
-  the JSON facade, which calls them), triggers, the admin trigger-now of a
+- **`job.enqueued`** — from `flexiq-server`'s producer doors, and only for a
+  row the call actually wrote: gRPC `Enqueue` and `EnqueueBatch` (and the
+  JSON facade, which calls them), triggers, the admin trigger-now of a
   periodic task, the two dead-letter retry routes (the admin service's
   `ReplayDeadLetter` and the dashboard's `POST /api/dead-letters/{id}/retry`),
   and the dashboard's replay of any job (`POST /api/jobs/{id}/replay`) — each
@@ -173,6 +173,14 @@ The CloudEvents `type` is `org.byteveda.flexiq.` followed by the short name.
   nothing, and neither does a debounced enqueue that slid an existing job's
   window. An atomic batch announces its jobs only after its transaction
   commits.
+
+  The scheduler also emits it directly, with no door involved, for exactly
+  two sources: a periodic schedule's own firing (only when the tick inserted
+  a row — a unique-key hit some earlier firing already announced emits
+  nothing), and its automatic dead-letter retry (distinct from the two
+  door-driven manual replay routes above, which are unaffected). Both name
+  attempt `0` and carry no epoch. An embedded SDK worker's scheduler emits
+  `job.enqueued` for these same two sources and no other.
 - **`job.started`** — when the scheduler has claimed a job and handed it to
   its worker pool (an in-process pool, an attached executor's dispatcher, or
   a push target's), after the hand-off succeeded. It means "claimed and on its
@@ -191,23 +199,54 @@ The CloudEvents `type` is `org.byteveda.flexiq.` followed by the short name.
   shed. It carries `reason` (the dead-letter reason, beginning `rate_limit:`
   or `codel:`) and **no `job.failed`**: a shed is not a failed attempt.
 - **`job.cancelled`** — for a running job, when the scheduler settles the
-  attempt the task abandoned. For a pending job, only when a
-  `flexiq-server` cancel door (gRPC `CancelJob` or its JSON facade route, the
-  dashboard's cancel) cancelled it outright.
+  attempt the task abandoned (unchanged). For a pending job, one of four
+  causes, each naming the row's own `attempt` (its `retry_count`) and
+  carrying no epoch:
+  - the scheduler's reaper sweep expired it: `reason: "expired"`. This is
+    unscoped — it fires in every namespace the sweep touches, not just the
+    scheduler's own.
+  - the poller found it already expired as it went to claim it:
+    `reason: "expired before execution"`.
+  - the scheduler dead-lettered its parent — a DLQ move (out of retries, not
+    retryable) or a rate-limit/CoDel shed: one `job.cancelled` per dependent,
+    emitted after the parent's own `job.dead`, with
+    `reason: "dependency failed"`.
+  - a `flexiq-server` cancel door (gRPC `CancelJob` or its JSON facade route,
+    the dashboard's cancel) cancelled it outright — unchanged — and, when it
+    had dependents of its own, one `job.cancelled` each after the parent's
+    own event, with `reason: "dependency cancelled"`.
+
+  An embedded SDK's own `cancel_job` still emits nothing, neither for the job
+  it cancels nor for any dependent.
+
+An expiry sweep's `job.cancelled` and a dead-letter cascade's, captured from a
+test (`include_payload: false`, so no `payload_base64`):
+
+```json
+{"data":{"attempt":0,"job_id":"01a0d722-1949-7173-badf-21e8940d34f2","namespace":"default","queue":"default","reason":"expired","task":"send_welcome"},"datacontenttype":"application/json","flexiqnamespace":"default","flexiqqueue":"default","flexiqtask":"send_welcome","id":"01a0d722-1949-7173-badf-21e8940d34f2:0:-:job.cancelled","source":"/flexiq","specversion":"1.0","subject":"01a0d722-1949-7173-badf-21e8940d34f2","time":"2026-09-25T05:55:31.273Z","type":"org.byteveda.flexiq.job.cancelled"}
+{"data":{"attempt":0,"job_id":"01a0d722-1961-7588-a9dd-a4d317dfd9fa","namespace":"default","queue":"default","reason":"dependency failed","task":"child"},"datacontenttype":"application/json","flexiqnamespace":"default","flexiqqueue":"default","flexiqtask":"child","id":"01a0d722-1961-7588-a9dd-a4d317dfd9fa:0:-:job.cancelled","source":"/flexiq","specversion":"1.0","subject":"01a0d722-1961-7588-a9dd-a4d317dfd9fa","time":"2026-09-25T05:55:31.299Z","type":"org.byteveda.flexiq.job.cancelled"}
+```
+
+A periodic firing's `job.enqueued`, captured the same way:
+
+```json
+{"data":{"attempt":0,"job_id":"01a0d722-197a-72b5-be88-bb61f4517b1b","namespace":"default","queue":"default","task":"send_digest"},"datacontenttype":"application/json","flexiqnamespace":"default","flexiqqueue":"default","flexiqtask":"send_digest","id":"01a0d722-197a-72b5-be88-bb61f4517b1b:0:-:job.enqueued","source":"/flexiq","specversion":"1.0","subject":"01a0d722-197a-72b5-be88-bb61f4517b1b","time":"2026-09-25T05:55:31.322Z","type":"org.byteveda.flexiq.job.enqueued"}
+```
 
 ### What is not seen
 
 A consumer MUST NOT treat the stream as a complete audit of the queue. These
 transitions emit nothing:
 
-- **Enqueues outside `flexiq-server`'s doors**: a job an embedded SDK
-  enqueues in its own process, a periodic task the scheduler fires, a
-  dead-letter entry the scheduler replays automatically, and the node jobs of
-  a submitted workflow. Each still emits from `job.started` on, if its
-  scheduler has sinks.
-- **Pending-job cancels outside the server's cancel doors**, including one
-  made through an embedded SDK, and dependents cancelled by a cascade.
-- **Pending jobs that expire** before they run.
+- **Enqueues through an embedded SDK's own enqueue API**, made directly
+  against that process's own scheduler rather than through a
+  `flexiq-server` door. Still emits from `job.started` on, if its scheduler
+  has sinks.
+- **The node jobs of a submitted workflow** (`SubmitWorkflow`): the call
+  writes them and returns only ids, with no `job.enqueued`. Each still emits
+  from `job.started` on.
+- **An embedded SDK's own `cancel_job`**, for the job it cancels and for any
+  dependent it cascades to.
 - **A result that lost its claim** (another scheduler or a requeue has taken
   the job over). That attempt's events belong to whichever claim settles it.
 - **Anything in a runtime with no sinks.** Each scheduler emits only for jobs
@@ -271,12 +310,12 @@ optional, and MUST ignore fields it does not know.
 | `namespace` | string | every event (`default` for the default namespace) |
 | `queue` | string | every event; empty in the rare case a result settles for a job this scheduler never dispatched |
 | `task` | string | every event |
-| `attempt` | integer | the attempt's `retry_count`: 0 for the first run. `0` on `job.enqueued`, the row's count on a door `job.cancelled` |
+| `attempt` | integer | the attempt's `retry_count`: 0 for the first run. `0` on `job.enqueued`, the row's count on a pending-job `job.cancelled` (a door cancel, an expiry, or a cascade) |
 | `error` | string | `job.failed`, and the `job.retrying` / `job.dead` that follows it |
 | `timed_out` | bool | the same two-event failure pair |
 | `wake_at_ms` | integer | `job.sleeping`: Unix ms the job is rescheduled to |
 | `wall_time_ns` | integer | settled outcomes whose execution time was measured |
-| `reason` | string | `job.dead` from a shed |
+| `reason` | string | `job.dead` from a shed (`rate_limit:` or `codel:`); `job.cancelled` for a pending job (`expired`, `expired before execution`, `dependency failed`, `dependency cancelled` — see [When each fires](#when-each-fires)) |
 | `payload_base64` | string | see [Payloads](#payloads) |
 
 The claim epoch is not a `data` field; it appears only inside the `id`.
@@ -286,9 +325,11 @@ The claim epoch is not a `data` field; it appears only inside the `id`.
 `id` is `<job_id>:<attempt>:<epoch>:<type>`, where `<type>` is the short name
 and `-` stands for a part the emitter did not know. Examples captured from the
 code: `0192:0:3:job.completed`, and `0195:3:-:job.dead` for a shed, which has
-no claim epoch. A door's `job.enqueued` has attempt `0` and no epoch, so it
-reads `<job_id>:0:-:job.enqueued`; a door's `job.cancelled` has the row's
-attempt and no epoch.
+no claim epoch. Any `job.enqueued` has attempt `0` and no epoch, so it reads
+`<job_id>:0:-:job.enqueued` whether a door wrote the row or the scheduler
+fired it (a periodic schedule or a DLQ auto-retry); a pending-job
+`job.cancelled` — a door cancel, an expiry, or a cascade — has the row's
+attempt and no epoch, e.g. `01a0d722-1949-7173-badf-21e8940d34f2:0:-:job.cancelled`.
 
 The id is deterministic: every redelivery of one transition carries the same
 id. Each part is there because the others can repeat — the attempt separates
@@ -346,12 +387,17 @@ with `include_payload: true`, and the runtime logs a warning naming each such
 sink when the hub starts: `events sink '<name>' sends job payloads`.
 
 Even then, a payload rides only where the emitter already held the job row —
-`job.enqueued`, `job.started` and a shed's `job.dead` — as
-`data.payload_base64`: standard base64 (with padding) of the job's payload
-bytes. Those bytes are the tagged wire envelope
-[`REMOTE_SDK_CONTRACT.md`](REMOTE_SDK_CONTRACT.md#serialization) defines, not
-JSON. No other event carries one; FlexiQ never reads storage to add it. A
-sink without `include_payload` never receives the bytes at all.
+`job.enqueued`, `job.started`, a shed's `job.dead`, and a pending-job
+`job.cancelled` (an expiry or a cascade) — as `data.payload_base64`: standard
+base64 (with padding) of the job's payload bytes. Those bytes are the tagged
+wire envelope [`REMOTE_SDK_CONTRACT.md`](REMOTE_SDK_CONTRACT.md#serialization)
+defines, not JSON. No other event carries one; FlexiQ never reads storage to
+add it. A sink without `include_payload` never receives the bytes at all.
+
+One exception: the scheduler's DLQ auto-retry `job.enqueued` never carries a
+payload, even with `include_payload: true` — its listing is blob-free by
+design, and reading the job back for its bytes would cost a storage read per
+event.
 
 ## HTTP sink
 

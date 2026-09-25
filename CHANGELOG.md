@@ -18,10 +18,15 @@ their entries below keep that name.
   appended to a Redis stream, so a warehouse, an audit log or an alerting pipeline follows jobs
   without polling storage. One JSON document configures it everywhere: `flexiq-server` reads
   `FLEXIQ_EVENTS_FILE` (drain budget `FLEXIQ_EVENTS_DRAIN`, default 5 seconds) and emits
-  `job.enqueued` and pre-run `job.cancelled` from its doors; each SDK's worker takes the same
-  document as a worker option — `Queue(event_sinks=...)`, `runWorker({ eventSinks })`,
+  `job.enqueued` and pre-run `job.cancelled` from its doors, cascading a door cancel to every
+  dependent with `reason: "dependency cancelled"`; each SDK's worker takes the same document
+  as a worker option — `Queue(event_sinks=...)`, `runWorker({ eventSinks })`,
   `Worker.Builder.eventSinks(...)`, `WorkerBuilder::events(...)` — and emits everything from
-  `job.started` on, never `job.enqueued`. Delivery is at-most-once overall and may repeat an
+  `job.started` on. Every scheduler, embedded or in `flexiq-server`, also reports a pending
+  job's expiry (`reason: "expired"` from the reaper, `"expired before execution"` from the
+  poller) and a dead-letter cascade (`reason: "dependency failed"`) as `job.cancelled`, and a
+  periodic firing or a DLQ auto-retry as `job.enqueued` with attempt `0` — the only enqueues an
+  embedded worker reports on its own. Delivery is at-most-once overall and may repeat an
   event, so consumers dedupe on the CloudEvents `id`; emitting never blocks the queue. The HTTP
   sink goes through push dispatch's egress guard (a required allowlist, no proxy, no
   redirects) and signs with `x-flexiq-event-signature` when given a secret; job payloads are

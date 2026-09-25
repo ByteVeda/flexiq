@@ -194,14 +194,24 @@ only `flexiq-server` removes them after reading.
 ## What a worker sends
 
 A worker's scheduler emits `job.started`, `job.completed`, `job.failed`,
-`job.retrying`, `job.dead`, `job.cancelled` and `job.sleeping` for the jobs it
-dispatches and settles.
+`job.retrying`, `job.dead` and `job.sleeping` for the jobs it dispatches and
+settles, and `job.cancelled` for those plus a pending job it expires or
+cascade-cancels on its own (below).
 
-**An embedded worker never sends `job.enqueued`.** That event comes only from
-`flexiq-server`'s producer doors, so a job this process enqueues itself is
-first seen at its `job.started`. Nor does a pending job cancelled from this
-process emit `job.cancelled` — only one cancelled while it runs, once the
-attempt ends. If the consumer needs every enqueue, enqueue through the server.
+**An embedded worker sends `job.enqueued` for exactly two sources**: a
+periodic schedule's own firing, and its own automatic dead-letter retry —
+both with attempt `0`. A job this process enqueues through its own enqueue
+API is not one of them: it is first seen at its `job.started`. If the
+consumer needs every such enqueue, enqueue through the server instead.
+
+The worker also sends `job.cancelled` for a pending job on its own, without a
+door: `reason: "expired"` from its reaper sweep, `reason: "expired before
+execution"` when it finds a job already expired as it goes to claim it, and
+`reason: "dependency failed"` for a dependent cascaded behind a job it just
+dead-lettered. A pending job cancelled by calling `cancel_job` in this
+process still emits nothing — for that job or any dependent — since only a
+`flexiq-server` cancel door reports a pending cancel outright; a running job
+always emits `job.cancelled` once its attempt ends.
 
 Delivery is **at-most-once overall, and an accepted event may still arrive more
 than once**, so the consumer dedupes on the CloudEvents `id`. Emitting never

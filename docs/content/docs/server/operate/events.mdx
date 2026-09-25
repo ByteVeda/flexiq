@@ -149,7 +149,7 @@ The CloudEvents `type` is `org.byteveda.flexiq.` plus the short name.
 
 | Short name | Emitted by | When |
 | --- | --- | --- |
-| `job.enqueued` | The server's doors | A door wrote a new job |
+| `job.enqueued` | The server's doors, the scheduler | A door wrote a new job, a periodic schedule fired, or a dead letter was auto-retried |
 | `job.started` | The scheduler | A job was claimed and handed off for execution |
 | `job.completed` | The scheduler | An attempt succeeded |
 | `job.failed` | The scheduler | An attempt failed; always followed by `job.retrying` or `job.dead` |
@@ -158,25 +158,37 @@ The CloudEvents `type` is `org.byteveda.flexiq.` plus the short name.
 | `job.cancelled` | The scheduler, the server's doors | Cancelled, before or during its run |
 | `job.sleeping` | The scheduler | An attempt ended in a durable step sleep |
 
-**`job.enqueued` comes only from this server's doors** — gRPC `Enqueue` and
+**`job.enqueued` mostly comes from this server's doors** — gRPC `Enqueue` and
 `EnqueueBatch` and the JSON facade over them, triggers, the admin trigger-now
 of a periodic task, and the dead-letter retry and job replay routes — and only
 for a row the call actually wrote. A unique enqueue that answered with an
 existing job, or a debounced one that slid an existing job's window, emits
-nothing. A pending job cancelled through a cancel door emits `job.cancelled`
-there; a running one emits it from the scheduler once the attempt ends.
+nothing. **The scheduler also emits it directly**, with no door involved, for
+exactly two sources: a periodic schedule's own firing, and its own automatic
+dead-letter retry (distinct from the door-driven manual replay routes above).
+Both name attempt `0`.
 
-**The stream is not a complete audit of the queue.** A job an embedded SDK
-worker enqueues in its own process, a periodic task the scheduler fires, and
-the node jobs of a submitted workflow emit no `job.enqueued` — each still
-emits from `job.started` on. Nor do pending jobs that expire, cascade
-cancels, or anything a runtime with no sinks settles. The contract lists
+A pending job cancelled through a cancel door emits `job.cancelled` there,
+and cascades to any dependent with `reason: "dependency cancelled"`. A
+running job emits it from the scheduler once the attempt ends. The scheduler
+also emits `job.cancelled` on its own for a pending job: `reason: "expired"`
+from the reaper sweep, `reason: "expired before execution"` when the poller
+finds it already expired at claim, and `reason: "dependency failed"` for a
+dependent cascaded behind a dead-lettered parent (a DLQ move or a shed).
+
+**The stream is still not a complete audit of the queue.** A job an embedded
+SDK enqueues through its own process's enqueue API, the node jobs of a
+submitted workflow, and a pending-job cancel made through an embedded SDK
+(including its cascades) emit nothing. Nor does anything a runtime with no
+sinks settles. The contract lists
 [everything that is not seen](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md#what-is-not-seen).
 
 Job arguments stay in the process unless a sink sets `include_payload: true`,
-which logs a warning naming the sink at boot. Even then a payload rides only on
-`job.enqueued`, `job.started` and a shed's `job.dead`, the events whose emitter
-already holds the row.
+which logs a warning naming the sink at boot. Even then a payload rides only
+on `job.enqueued` (except the scheduler's own DLQ auto-retry, which never
+carries one), `job.started`, a shed's `job.dead`, and a pending-job
+`job.cancelled` for an expiry or a cascade — the events whose emitter already
+holds the row.
 
 ## Delivery
 
