@@ -136,7 +136,8 @@ pub async fn cancel(
     let namespace = state.namespace.clone();
     let events = state.events.clone();
     let cancelled = on_storage(&state, move |storage| {
-        let cancelled = storage.cancel_job(&job_id, namespace.as_deref())?;
+        let (cancelled, dependents) =
+            storage.cancel_job_reporting(&job_id, namespace.as_deref())?;
         // The row is read back only to announce it, so only when there is
         // somewhere to announce it.
         if let (true, Some(hub)) = (cancelled, events.as_deref()) {
@@ -144,6 +145,8 @@ pub async fn cancel(
                 crate::events::cancelled(Some(hub), &job);
             }
         }
+        // After the parent, so a sink sees the cause first.
+        crate::events::cascade_cancelled(events.as_deref(), dependents);
         Ok(cancelled)
     })
     .await?;

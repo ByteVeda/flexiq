@@ -2,8 +2,9 @@
 //! HTTP sink, and the hub's counters on the same listener's `/metrics`.
 //!
 //! The door owns two events — `job.enqueued` for a row it wrote, and
-//! `job.cancelled` for a pending job it cancelled. Everything later is the
-//! scheduler's, and is covered where the scheduler is.
+//! `job.cancelled` for a pending job it cancelled and each dependent that
+//! cancel cascaded to. Everything later is the scheduler's, and is covered
+//! where the scheduler is.
 #![cfg(all(feature = "grpc", feature = "events-http"))]
 
 mod support;
@@ -303,6 +304,56 @@ async fn cancelling_a_pending_job_emits_cancelled_once() {
     assert_eq!(events[1]["type"], "org.byteveda.flexiq.job.cancelled");
     assert_eq!(events[1]["id"], format!("{job_id}:0:-:job.cancelled"));
     assert_eq!(events[2]["subject"], marker.as_str());
+
+    harness.stop().await;
+}
+
+/// A cancel takes the job's dependents down with it; each gets its own
+/// `job.cancelled`, after the parent's, naming why.
+#[tokio::test]
+async fn cancelling_a_parent_emits_a_cancel_per_dependent() {
+    let mut harness = Harness::start("events-cascade").await;
+    let (parent, _) = harness.enqueue("send_email", keyed("parent")).await;
+    let waits_on = |id: &str| EnqueueOptions {
+        queue: "emails".to_string(),
+        depends_on: vec![id.to_string()],
+        ..Default::default()
+    };
+    let (child, _) = harness.enqueue("send_email", waits_on(&parent)).await;
+    let (grandchild, _) = harness.enqueue("send_email", waits_on(&child)).await;
+    harness
+        .client
+        .cancel_job(CancelJobRequest {
+            job_id: parent.clone(),
+        })
+        .await
+        .expect("cancel");
+    let (marker, _) = harness.enqueue("marker", keyed("marker")).await;
+
+    // Three enqueues, the parent's cancel, two cascades, the marker.
+    let events = harness.events(7).await;
+    assert_eq!(events.len(), 7, "{events:?}");
+    assert_eq!(events[3]["id"], format!("{parent}:0:-:job.cancelled"));
+    assert!(events[3]["data"].get("reason").is_none(), "{:?}", events[3]);
+
+    let mut cascaded: Vec<&str> = events[4..6]
+        .iter()
+        .map(|event| event["subject"].as_str().expect("a subject"))
+        .collect();
+    cascaded.sort_unstable();
+    let mut expected = [child.as_str(), grandchild.as_str()];
+    expected.sort_unstable();
+    assert_eq!(cascaded, expected);
+    for event in &events[4..6] {
+        let subject = event["subject"].as_str().expect("a subject");
+        assert_eq!(event["type"], "org.byteveda.flexiq.job.cancelled");
+        assert_eq!(event["id"], format!("{subject}:0:-:job.cancelled"));
+        assert_eq!(event["flexiqnamespace"], NAMESPACE);
+        assert_eq!(event["flexiqqueue"], "emails");
+        assert_eq!(event["data"]["reason"], "dependency cancelled");
+        assert_eq!(event["data"]["payload_base64"], "BwgJ");
+    }
+    assert_eq!(events[6]["subject"], marker.as_str());
 
     harness.stop().await;
 }

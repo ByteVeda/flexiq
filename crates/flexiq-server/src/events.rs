@@ -52,6 +52,30 @@ pub fn cancelled(hub: Option<&EventHub>, job: &Job) {
     hub.emit(event);
 }
 
+/// `reason` of a dependent cancelled because the job it waited on was.
+const DEPENDENCY_CANCELLED_REASON: &str = "dependency cancelled";
+
+/// Emit `job.cancelled` for each dependent a door's cancel cascaded to. Call it
+/// after the parent's own [`cancelled`], so a sink sees the cause first.
+///
+/// The rows are the archived ones the cancel handed back, so each event is
+/// built from the transition itself, with no read.
+pub fn cascade_cancelled(hub: Option<&EventHub>, dependents: Vec<Job>) {
+    let Some(hub) = hub else {
+        return;
+    };
+    let with_payload = hub.wants_payload();
+    for job in dependents {
+        let mut event = door_event(EventType::JobCancelled, &job);
+        event.attempt = Some(job.retry_count);
+        event.reason = Some(DEPENDENCY_CANCELLED_REASON.to_string());
+        if with_payload {
+            event.payload = Some(job.payload);
+        }
+        hub.emit(event);
+    }
+}
+
 /// The hub's metrics in Prometheus text, or nothing when events are off, so a
 /// deployment without them exposes no empty `flexiq_events_*` families.
 pub fn render_metrics(hub: Option<&EventHub>) -> String {

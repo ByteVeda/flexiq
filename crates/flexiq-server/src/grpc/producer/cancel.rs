@@ -32,7 +32,7 @@ pub(crate) async fn cancel_job(
         // from outside — only the task can notice — so the flag is set and the
         // task stops at its next check. A job already terminal matches neither,
         // and comes back unchanged, which is what makes a retry safe.
-        let cancelled = storage.cancel_job(&id, Some(&namespace))?;
+        let (cancelled, dependents) = storage.cancel_job_reporting(&id, Some(&namespace))?;
         if !cancelled {
             storage.request_cancel(&id, Some(&namespace))?;
         }
@@ -42,6 +42,9 @@ pub(crate) async fn cancel_job(
         if let (true, Some(job)) = (cancelled, &job) {
             crate::events::cancelled(events.as_deref(), job);
         }
+        // The dependents went with the cancel, so they are announced even if
+        // the parent's row could not be read back.
+        crate::events::cascade_cancelled(events.as_deref(), dependents);
         Ok(job)
     })
     .await?
