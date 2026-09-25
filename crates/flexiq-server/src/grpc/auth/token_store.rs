@@ -219,7 +219,11 @@ impl Authenticator for TokenStore {
 
         // The namespace is the listener's `Arc`, not a fresh allocation from the
         // row: the check above proved they are the same string.
-        Ok(Principal::new(Arc::clone(&self.namespace), token.scopes))
+        Ok(Principal::new(
+            token.id,
+            Arc::clone(&self.namespace),
+            token.scopes,
+        ))
     }
 }
 
@@ -255,12 +259,17 @@ mod tests {
     #[tokio::test]
     async fn a_stored_token_authenticates_with_its_own_scopes() {
         let storage = backend();
-        let (_, plaintext) = mint(&storage, "prod", ScopeSet::of(&[Scope::Produce]));
+        let (id, plaintext) = mint(&storage, "prod", ScopeSet::of(&[Scope::Produce]));
         let principal = TokenStore::new(storage, "prod")
             .authenticate(&with_bearer(&plaintext))
             .await
             .expect("a valid token must be accepted");
         assert_eq!(&**principal.namespace(), "prod");
+        assert_eq!(
+            &**principal.credential(),
+            id,
+            "the public id, never the secret"
+        );
         assert!(principal.grants(Scope::Produce));
         assert!(
             !principal.grants(Scope::Execute),
