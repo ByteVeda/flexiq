@@ -19,6 +19,7 @@
 //! asserts the two objects are equal.
 
 pub mod admin;
+pub mod watch;
 
 use anyhow::{anyhow, Result};
 use base64::Engine as _;
