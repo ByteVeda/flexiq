@@ -192,10 +192,10 @@ mod tests {
         Arc::new(event)
     }
 
-    fn config(url_env: &str, extra: &str) -> RedisSinkConfig {
+    fn config(url_env: &str, stream: &str) -> RedisSinkConfig {
         let doc = format!(
             r#"{{"sinks":[{{"kind":"redis_streams","name":"stream","url_env":"{url_env}",
-            "stream":"flexiq:events"{extra}}}]}}"#
+            "stream":"{stream}"}}]}}"#
         );
         match EventsConfig::parse(&doc).unwrap().sinks.remove(0) {
             SinkConfig::RedisStreams(config) => config,
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn a_missing_or_empty_url_is_refused_at_start() {
-        let config = config("NOPE", "");
+        let config = config("NOPE", "flexiq:events");
         match RedisStreamsSink::with_env(&config, "/test", |_| None) {
             Err(EventsConfigError::Sink { sink, message }) => {
                 assert_eq!(sink, "stream");
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn a_malformed_url_is_refused_without_echoing_it() {
-        let config = config("URL", "");
+        let config = config("URL", "flexiq:events");
         let env = |name: &str| (name == "URL").then(|| "not a redis url ::::".to_string());
         match RedisStreamsSink::with_env(&config, "/test", env) {
             Err(EventsConfigError::Sink { message, .. }) => {
@@ -313,7 +313,7 @@ mod tests {
             return;
         };
         let stream = format!("flexiq:events:test:{}", crate::job::now_millis());
-        let config = config("URL", &format!(r#","stream":"{stream}""#));
+        let config = config("URL", &stream);
         let env = |name: &str| (name == "URL").then(|| url.clone());
         let mut sink = RedisStreamsSink::with_env(&config, "/test", env).unwrap();
 
