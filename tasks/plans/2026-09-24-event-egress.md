@@ -546,9 +546,16 @@ Deviations from this plan, all ruled during review:
 - New public event types are `#[non_exhaustive]`; `crates/flexiq` forwards
   `events-http`.
 
-Not emitted (documented under "What is not seen" in the contract): job
-expiry, cascade cancels, DLQ auto-retry re-enqueues, periodic firings, and
-enqueues from embedded SDKs.
+Follow-up (Tasks 12–14, 2026-09-25): expiry (sweep + dispatch), cascade
+cancels, periodic firings and DLQ auto-retry now emit, via storage
+`*_reporting` variants (old methods are default wrappers; the sweep reports
+per batch). The sweep emits only the scheduler's own namespace; a scheduler
+with no namespace announces all of them, the maintenance convention.
+
+Still not emitted (contract "What is not seen"): enqueues and cancels through
+an embedded SDK's own API, bulk purges/revokes, direct-to-storage cancels,
+workflow node enqueues, and a namespace's expiries when another tenant's
+scheduler swept them first.
 
 ## Task 12: Storage reports the rows it expires and cascades
 
