@@ -1,0 +1,540 @@
+---
+title: From Cloud Tasks and EventBridge
+description: "Keep your handlers and your platform and change what dispatches: Cloud Tasks queues, OIDC, retries, scheduleTime and dispatchDeadline, and EventBridge rules mapped onto push dispatch and triggers — with the differences spelled out."
+---
+
+If you run on Cloud Run, Lambda or App Engine and use Cloud Tasks or
+EventBridge to `POST` work to an HTTP endpoint, you already run the topology
+[push dispatch](/server/operate/push) provides: something outside your service
+holds the work, and calls your handler when it is time to run it. Moving to
+FlexiQ keeps the handlers and keeps the platform. What changes is the thing
+that dispatches.
+
+```
+before:  producer → Cloud Tasks queue ──POST──▶ your Cloud Run service
+after:   producer → flexiq-server     ──POST──▶ your Cloud Run service
+```
+
+This page maps each piece of a Cloud Tasks queue and an EventBridge rule onto
+its FlexiQ equivalent, says where the behaviour differs, and ends with
+[what you gain](#what-you-gain), which is the reason to move.
+
+## What you add, and what stays
+
+**Stays:** your service, its platform, its scaling, its URL, and the handler
+code itself. A small adapter changes how the handler reads a request and
+reports its result ([below](#the-handler-adapter)).
+
+**Added:** two things Cloud Tasks ran for you.
+
+- **One long-lived `flexiq-server` process.** It holds the queue, runs the
+  scheduler, and dials out to your service. It is the one piece of this
+  topology that must stay up, so it runs somewhere that does: GKE, ECS, a VM.
+  It opens no listener for push itself; add the gRPC door
+  (`FLEXIQ_GRPC_LISTEN`) so producers can enqueue over the network.
+- **A database.** Postgres (Cloud SQL, RDS) or Redis in production. SQLite is
+  enough on a laptop.
+
+A push deployment has three parts to configure: the queue it serves, the URL it
+calls, and how it proves who it is to that URL.
+
+```bash
+FLEXIQ_DSN=postgres://flexiq:…@10.0.0.5/flexiq \
+FLEXIQ_NAMESPACE=prod \
+FLEXIQ_QUEUES=orders \
+FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
+FLEXIQ_PUSH_TARGET_URL=https://orders-abc123-uc.a.run.app/flexiq \
+FLEXIQ_PUSH_TARGET_ALLOW=orders-abc123-uc.a.run.app \
+FLEXIQ_PUSH_TARGET_CAPACITY=50 \
+FLEXIQ_PUSH_TARGET_AUTH=oidc \
+FLEXIQ_PUSH_TARGET_OIDC_SOURCE=google \
+FLEXIQ_PUSH_TARGET_OIDC_AUDIENCE=https://orders-abc123-uc.a.run.app \
+flexiq-server
+```
+
+## A Cloud Tasks queue
+
+A Cloud Tasks queue becomes a FlexiQ **queue**, named in the job at enqueue and
+served by a push process that lists it in `FLEXIQ_QUEUES`.
+
+**One push process has one target URL.** In Cloud Tasks every task carries its
+own `httpRequest.url`, so one queue can fan out to several services and one
+service can take several paths. In FlexiQ the URL is the process's, not the
+job's. What the job carries instead is its **task name**, sent as
+`x-flexiq-task`, so a service that used to expose `/process-order` and
+`/refund-order` exposes one route and dispatches on that header.
+
+When your queues call **different services**, run one push process per
+service, each with its own `FLEXIQ_QUEUES` and `FLEXIQ_PUSH_TARGET_URL`,
+against the same database. Producers pick the service by picking the queue.
+
+| Cloud Tasks | FlexiQ |
+| --- | --- |
+| Queue | A queue name, in `FLEXIQ_QUEUES` of the process that serves it |
+| `httpRequest.url` | `FLEXIQ_PUSH_TARGET_URL`, one per process; the path becomes the task name |
+| `httpRequest.httpMethod` | Always `POST` |
+| `httpRequest.headers` | No per-job headers. Pass the values as arguments |
+| `httpRequest.body` | The job's arguments, delivered as a CBOR envelope |
+| `oidcToken` | `FLEXIQ_PUSH_TARGET_AUTH=oidc` ([below](#oidc-and-outbound-auth)) |
+| Task `name` (deduplication) | `uniqueKey` ([below](#deduplication-and-deletion)) |
+| `scheduleTime` | `scheduledAt` |
+| `dispatchDeadline` | `timeout`, and `FLEXIQ_PUSH_TARGET_TIMEOUT` ([below](#dispatchdeadline)) |
+| `retryConfig` | `maxRetries` per job, and a fixed backoff ([below](#retries)) |
+| `rateLimits.maxConcurrentDispatches` | `FLEXIQ_PUSH_TARGET_CAPACITY`, per process |
+| `rateLimits.maxDispatchesPerSecond` | No equivalent under push yet ([below](#rate-limits)) |
+| Pause queue | `PauseQueue` on [the admin door](/server/operate/admin#queues) |
+| `DeleteTask` | `CancelJob` ([below](#deduplication-and-deletion)) |
+
+## Enqueueing
+
+`CreateTask` becomes `Enqueue` on the gRPC door, or `POST /v1/jobs` on its
+[JSON facade](/server/operate/grpc#the-same-door-without-grpc) when you would
+rather not add a gRPC client:
+
+```python
+# before — Cloud Tasks
+from google.cloud import tasks_v2
+from google.protobuf import duration_pb2, timestamp_pb2
+
+client = tasks_v2.CloudTasksClient()
+client.create_task(
+    parent=client.queue_path("proj", "us-central1", "orders"),
+    task={
+        "name": client.task_path("proj", "us-central1", "orders", "ord-1001"),
+        "http_request": {
+            "http_method": tasks_v2.HttpMethod.POST,
+            "url": "https://orders-abc123-uc.a.run.app/process-order",
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"order_id": "ord-1001"}).encode(),
+            "oidc_token": {"service_account_email": "tasks@proj.iam.gserviceaccount.com"},
+        },
+        "schedule_time": timestamp_pb2.Timestamp(seconds=run_at),
+        "dispatch_deadline": duration_pb2.Duration(seconds=600),
+    },
+)
+```
+
+```python
+# after — FlexiQ, over the JSON facade
+import requests
+
+requests.post(
+    "https://flexiq.internal:50051/v1/jobs",
+    headers={"authorization": f"Bearer {FLEXIQ_TOKEN}"},
+    json={
+        "taskName": "orders.process",
+        "structured": {"args": [{"order_id": "ord-1001"}]},
+        "options": {
+            "queue": "orders",
+            "uniqueKey": "ord-1001",
+            "scheduledAt": "2026-09-25T18:00:00Z",
+            "timeout": "600s",
+            "maxRetries": 9,
+        },
+    },
+).raise_for_status()
+```
+
+The URL and the credential moved out of the call and into the server's
+configuration: a producer says **what** to run and **when**, never where or as
+whom. The token is a `produce`-scoped [API token](/server/operate/tokens).
+
+<Callout type="warn" title="Set maxRetries on every enqueue">
+Cloud Tasks retries by default. The gRPC door does not: `maxRetries` is a plain
+integer, so leaving it out is `0`, and the first failure dead-letters the job.
+Set it on every call — `maxAttempts − 1`, [below](#retries).
+</Callout>
+
+A producer that is already a Python, Node or Java service can use that SDK
+instead, pointed at the same database; the job is identical either way.
+
+## The handler adapter
+
+The request your handler receives changes shape, and so does what it must
+answer. [The push contract](https://github.com/ByteVeda/flexiq/blob/master/contracts/PUSH_DISPATCH_CONTRACT.md)
+is the full specification; this is the part that touches a migrated handler.
+
+**In:** the body is not your JSON. It is the job's payload, a tag byte `0x02`
+followed by CBOR `[args, kwargs]`, with `content-type:
+application/vnd.flexiq.envelope`. The arguments you enqueued as
+`{"args": [{"order_id": "ord-1001"}]}` arrive as `args[0]`.
+
+**Out:** a `2xx` must carry `x-flexiq-outcome`. A plain `200 OK` — what every
+Cloud Tasks handler returns today — is refused as `MissingOutcome`, and **not
+retried**. This is deliberate: a framework that answers `200` for a request it
+never handled is exactly what the header exists to catch.
+
+The adapter wraps the function your route already calls:
+
+```python
+import json
+
+import cbor2
+from flask import Flask, Response, request
+
+from orders import process_order, refund_order  # unchanged
+
+app = Flask(__name__)
+HANDLERS = {"orders.process": process_order, "orders.refund": refund_order}
+
+
+class Permanent(Exception):
+    """Raise from a handler for a failure a retry cannot fix."""
+
+
+def failure(message: str, retry: bool) -> Response:
+    body = json.dumps({"errtype": "Error", "message": message, "traceback": []})
+    return Response(body, status=200, headers={
+        "x-flexiq-outcome": "failure",
+        "x-flexiq-retry": "true" if retry else "false",
+    })
+
+
+@app.post("/flexiq")
+def dispatch():
+    data = request.get_data()
+    handler = HANDLERS.get(request.headers["x-flexiq-task"])
+    if handler is None or data[:1] != b"\x02":
+        return failure("unknown task or envelope", retry=False)
+
+    args, kwargs = cbor2.loads(data[1:])
+    try:
+        result = handler(*args, **kwargs)
+    except Permanent as exc:
+        return failure(str(exc), retry=False)
+    except Exception as exc:
+        return failure(str(exc), retry=True)
+
+    return Response(b"\x02" + cbor2.dumps(result), status=200,
+                    headers={"x-flexiq-outcome": "success"})
+```
+
+On Lambda behind a function URL, the same adapter in Node — a function URL
+base64-encodes a body whose content type is not text, so decode it first:
+
+```js
+import { decode, encode } from "cbor-x";
+import { processOrder, refundOrder } from "./orders.js"; // unchanged
+
+const HANDLERS = { "orders.process": processOrder, "orders.refund": refundOrder };
+
+const failure = (message, retry) => ({
+  statusCode: 200,
+  headers: { "x-flexiq-outcome": "failure", "x-flexiq-retry": String(retry) },
+  body: JSON.stringify({ errtype: "Error", message, traceback: [] }),
+});
+
+export const handler = async (event) => {
+  const data = Buffer.from(event.body ?? "", event.isBase64Encoded ? "base64" : "utf8");
+  const run = HANDLERS[event.headers["x-flexiq-task"]];
+  if (!run || data[0] !== 0x02) return failure("unknown task or envelope", false);
+
+  const [args] = decode(data.subarray(1)); // [args, kwargs]
+  try {
+    const result = await run(...args);
+    return {
+      statusCode: 200,
+      headers: { "x-flexiq-outcome": "success" },
+      body: Buffer.concat([Buffer.from([0x02]), encode(result)]).toString("base64"),
+      isBase64Encoded: true,
+    };
+  } catch (err) {
+    return failure(String(err), err.permanent !== true);
+  }
+};
+```
+
+Two things about the status code, because Cloud Tasks read it differently:
+
+- **Report failure with `x-flexiq-outcome: failure`, not a status.** Cloud
+  Tasks retries every non-`2xx`. FlexiQ retries a `5xx` and a `408`, `425` or
+  `429`, and treats every other `4xx` as a refusal that is **not retried**. A
+  handler that answered `400` or `404` to mean "try again later" now
+  dead-letters on the first one.
+- **Answer `202` only if you will call back.** See
+  [dispatchDeadline](#dispatchdeadline).
+
+The Cloud Tasks request headers have counterparts:
+
+| Cloud Tasks | FlexiQ |
+| --- | --- |
+| `X-CloudTasks-QueueName` | `x-flexiq-queue` |
+| `X-CloudTasks-TaskName` | `x-flexiq-job-id` |
+| `X-CloudTasks-TaskRetryCount` | `x-flexiq-attempt` — retries before this dispatch, `0` on the first |
+| `X-CloudTasks-TaskExecutionCount` | None |
+| `X-CloudTasks-TaskETA` | None |
+
+Cloud Tasks delivers at least once, so your handlers are already idempotent,
+and nothing about that changes. If they deduplicate on the task name, key on
+`x-flexiq-idempotency-key` instead: it is unique per attempt **and** per claim,
+which is what a requeue needs ([the idempotency key](https://github.com/ByteVeda/flexiq/blob/master/contracts/PUSH_DISPATCH_CONTRACT.md#the-idempotency-key)).
+
+## OIDC and outbound auth
+
+A Cloud Tasks `oidcToken` becomes `FLEXIQ_PUSH_TARGET_AUTH=oidc`, and your
+service verifies it exactly as it did before: Cloud Run's IAM check does not
+know or care who minted the token.
+
+| Cloud Tasks | FlexiQ |
+| --- | --- |
+| `oidcToken.audience` | `FLEXIQ_PUSH_TARGET_OIDC_AUDIENCE`. Cloud Tasks defaulted it to the target URL; here it is required |
+| `oidcToken.serviceAccountEmail` | No field. The token is minted for the identity `flexiq-server` runs as |
+
+The second row is the one to plan for. With `FLEXIQ_PUSH_TARGET_OIDC_SOURCE=google`
+the token comes from the metadata server of wherever `flexiq-server` runs, so
+it must run on Google Cloud as a service account that holds
+`roles/run.invoker` on the target. On GKE that is Workload Identity: bind the
+pod's Kubernetes service account to the one Cloud Tasks used and nothing on
+the Cloud Run side changes. Tokens are cached and refreshed before they
+expire.
+
+The other schemes, for the other platforms:
+
+| Target | `FLEXIQ_PUSH_TARGET_AUTH` | The target checks |
+| --- | --- | --- |
+| Cloud Run, Cloud Functions | `oidc`, source `google` | A Google-signed identity token — the platform's IAM check |
+| Lambda function URL (`AWS_IAM`), API Gateway | `sigv4` | A SigV4 signature, verified by AWS at the door. `flexiq-server` needs `lambda:InvokeFunctionUrl` or `execute-api:Invoke` |
+| Azure Functions, App Service | `oidc`, source `azure-imds` or `azure-app-service` | An Entra ID token |
+| Anything else, or `flexiq-server` off-cloud | `hmac` | A replay-resistant signature, [verified in your handler](https://github.com/ByteVeda/flexiq/blob/master/contracts/PUSH_DISPATCH_CONTRACT.md#hmac--hmac-sha256-replay-resistant) |
+
+Whichever you pick, `FLEXIQ_PUSH_TARGET_ALLOW` must name the target's host.
+A Cloud Run `*.run.app` name or a Lambda `*.lambda-url.<region>.on.aws` name
+is enough on its own; [the egress guard](/server/operate/push#the-egress-guard)
+explains why.
+
+## Retries
+
+This is where the two differ most, in four ways.
+
+| | Cloud Tasks | FlexiQ push |
+| --- | --- | --- |
+| **Counts** | `maxAttempts`: every attempt, the first included | `maxRetries`: attempts **after** the first. `maxRetries = maxAttempts − 1` |
+| **Set on** | The queue | Each job, at enqueue |
+| **Curve** | Starts at `minBackoff`, doubles `maxDoublings` times, then grows linearly to `maxBackoff`. Deterministic | Full Jitter: `uniform(0, min(5 min, 1 s × 2^retry))`. Fixed under push |
+| **Unlimited** | `maxAttempts: -1` | None. Pick a number |
+| **Time limit** | `maxRetryDuration` | `expiresAt`, with a different ending (below) |
+| **After the last** | The task is deleted | The job moves to the [dead-letter queue](#what-you-gain), where it can be replayed |
+
+**The curve is not configurable under push.** An SDK worker registers each
+task's backoff when it starts, and task overrides reach the next SDK worker
+that starts. `flexiq-server` registers no task code, so a push deployment
+retries every task on the core default: a uniformly random delay under a
+ceiling that starts at one second and doubles to five minutes. A Cloud Tasks
+queue tuned to back off for an hour between attempts will retry far sooner
+here, and more times within the same hour. Size `maxRetries` for that, and let
+a handler that knows a downstream is out answer `x-flexiq-retry: false` rather
+than spend its budget.
+
+The jitter is the one change here that is an improvement rather than a
+difference: a burst of tasks failing on the same outage spreads out with every
+round instead of retrying in lockstep.
+<SdkLink to="guides/reliability/retries#backoff-formula">Retries</SdkLink> has
+the formula.
+
+**`maxRetryDuration` has no exact counterpart.** The closest is `expiresAt`:
+a job still pending after that instant, retries waiting included, is not
+dispatched. But it ends **cancelled**, not dead-lettered, so it is not in the
+dead-letter queue to replay. Set `expiresAt` to enqueue time plus the
+duration when the time bound matters more than the replay.
+
+## Rate limits
+
+`maxConcurrentDispatches` becomes `FLEXIQ_PUSH_TARGET_CAPACITY`: the number of
+requests one push process keeps in flight. It is per process, so the total is
+capacity times the replicas you run. It is also how your service's own
+concurrency limit — Cloud Run's max instances times per-instance concurrency —
+stays unexceeded: set it at or under that product.
+
+`maxDispatchesPerSecond` has **no equivalent under push yet.** FlexiQ has task
+and queue rate limits, but they are registered by an SDK worker, and a push
+deployment has none. Until that changes, capacity is the throttle: a target
+that needs a rate rather than a concurrency cap should enforce it itself,
+answering `429` — which FlexiQ retries — when it is over.
+
+## `scheduleTime`
+
+`scheduleTime` is `scheduledAt`, an RFC 3339 timestamp; the job is not claimed
+before it. Cloud Tasks caps it at 30 days ahead. FlexiQ has no cap.
+
+## `dispatchDeadline`
+
+Cloud Tasks waits for a response up to the task's `dispatchDeadline` — ten
+minutes unless set, thirty at most. FlexiQ's window is the **shorter** of two
+values, and both have to move for a long handler:
+
+- **The job's `timeout`**, set at enqueue. It defaults to five minutes.
+- **`FLEXIQ_PUSH_TARGET_TIMEOUT`**, the server's ceiling on one request. It
+  defaults to **60 seconds**.
+
+A handler that took three minutes under Cloud Tasks' defaults fails under
+FlexiQ's until the second is raised. The window is sent to the target as
+`x-flexiq-deadline-ms`.
+
+For work that outlives what the platform in front of the target allows — a
+Cloud Run request, a Lambda invocation, API Gateway's 29 seconds — Cloud Tasks
+had no answer: the deadline was the deadline. FlexiQ has one. With
+`FLEXIQ_PUSH_TARGET_SETTLE=grpc`, the target answers `202 Accepted`, keeps
+working, and reports the outcome afterwards with a `Settle` call on the gRPC
+door, extending its lease with `ExtendLease` as it goes. It needs an
+`execute`-scoped token and a single scheduler replica, or routing to the one
+that dispatched. [Work that outlives one HTTP request](/server/operate/push#work-that-outlives-one-http-request)
+has the details and the costs.
+
+## Deduplication and deletion
+
+**A task name becomes `uniqueKey`, and the window is shorter.** Cloud Tasks
+refuses a second task with the same name for some time after the first one has
+run. A `uniqueKey` refuses a duplicate only while the first job is still
+pending or running; once it has finished, the same key enqueues a new job. A
+producer that relied on the name to suppress a late duplicate needs its
+handler to be idempotent too — which, under at-least-once delivery, it already
+is.
+
+**`DeleteTask` becomes `CancelJob`, and reaches further.** Both remove a job
+that has not dispatched yet. Cloud Tasks cannot touch one that has; FlexiQ can,
+within limits — see [what you gain](#what-you-gain).
+
+## EventBridge
+
+EventBridge splits in two for this migration: the part that decides **what
+happened** stays in EventBridge, and the part that decides **how the work
+runs** moves to FlexiQ.
+
+| EventBridge | FlexiQ |
+| --- | --- |
+| Event bus, event pattern | Stays in EventBridge. FlexiQ does no pattern matching |
+| Rule → Lambda or API destination target | Rule → API destination aimed at a [trigger](/server/operate/triggers), which enqueues; push then calls your Lambda |
+| API destination connection's API key | The trigger's `shared_secret` verifier, `header` set to the connection's header name |
+| Input transformer | The trigger's `args` and `kwargs` [selectors](/server/operate/triggers#payload-mapping) — JSON Pointers into the event |
+| Target retry policy | `max_retries` on the trigger definition, retried by FlexiQ |
+| Target dead-letter queue (SQS) | The FlexiQ dead-letter queue |
+| Scheduled rule, `rate()` or `cron()` | A [periodic task](/server/operate/admin#periodic-tasks) |
+| EventBridge Scheduler `at()` | An enqueue with `scheduledAt` |
+
+A rule that invoked your Lambda directly now goes through two hops, and each
+has one job. The rule's API destination delivers the event to the trigger;
+that is the only step EventBridge still retries, and a trigger answers in
+milliseconds. The trigger enqueues, and FlexiQ owns every attempt from there.
+
+```json
+{
+  "triggers": [
+    {
+      "name": "order-placed",
+      "path": "/t/order-placed",
+      "task": "orders.process",
+      "queue": "orders",
+      "rate_limit": "300/m",
+      "max_retries": 9,
+      "auth": {
+        "kind": "shared_secret",
+        "header": "x-api-key",
+        "secret_env": "EVENTBRIDGE_API_KEY"
+      },
+      "args": [{ "from": "body", "pointer": "/detail" }],
+      "kwargs": { "source": { "from": "body", "pointer": "/source" } },
+      "unique_key": { "from": "body", "pointer": "/id" }
+    }
+  ]
+}
+```
+
+The body is the whole EventBridge event, so `/detail` is what an input
+transformer's `$.detail` was. Keying on `/id` makes EventBridge's own
+redelivery of the same event return the job it already made. An S3 event
+arriving this way can use the ready-made
+[`object_store` adapter](/server/operate/triggers#object-store-events) instead.
+
+A scheduled rule's six-field cron puts minutes first and a year last:
+`cron(0 12 * * ? *)` is noon daily. A FlexiQ cron is six fields with
+**seconds** first and no year, so the same schedule is `0 0 12 * * *`, and it
+takes an IANA `timezone` where EventBridge rules ran in UTC:
+
+```bash
+curl -s -X POST -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  -H 'content-type: application/json' https://flexiq.internal:50051/v1/admin/periodicTasks \
+  -d '{"name": "daily-settlement", "taskName": "orders.settle", "queue": "orders",
+       "cron": "0 0 12 * * *", "timezone": "UTC", "structured": {"args": []}}'
+```
+
+## What you gain
+
+The mapping above is the cost. This is the argument.
+
+**A dead-letter queue you can work.** Cloud Tasks deletes a task after its last
+attempt and keeps nothing. EventBridge's dead-letter queue is an SQS queue of
+messages with the error in their attributes, and getting one back to its
+target is a redrive you write. In FlexiQ a job that exhausts its retries keeps
+its task, arguments, queue and last error, and the
+[admin door](/server/operate/admin#dead-letters) or the dashboard can list it,
+read its payload, and **replay** it as a fresh job once the cause is fixed.
+
+**Cancellation of work in flight.** `DeleteTask` stops a task that has not run;
+EventBridge has nothing. `CancelJob` stops a pending job outright, and for one
+already dispatched it settles the attempt `Cancelled`, fences out whatever the
+target answers, and does not retry it. It cannot reach into a process it has no
+connection to, so the target's side effects up to that point still happen; a
+long-running target that calls `ExtendLease` or `ReportProgress` is told
+`JOB_CANCELLED` and can stop itself.
+[`cancel()` stops the result, not the work](/server/operate/push#cancel-stops-the-result-not-the-work)
+states the exact promise.
+
+**The same queues from a long-lived worker.** Push is one topology, not the
+only one. The same database can be served by an SDK worker in Python, Node or
+Java, or an executor attached over the gRPC door, each consuming its own
+queues. Moving a task off the request path — because it outgrew Cloud Run's
+request limit, or because it wants a process that stays warm — is a change of
+queue at enqueue, not a new system.
+
+**Durable steps, on that worker.** A task that checkpoints its progress with
+<SdkLink to="modules/steps">durable steps</SdkLink> resumes after a crash or a
+retry from the last completed step instead of from the top. Neither Cloud
+Tasks nor EventBridge has an equivalent. **Push does not provide it**: a step
+session lives inside a worker's connection, and a push target has none, so
+`slept` is refused on the push path. A task that needs steps runs on a queue a
+long-lived worker serves — the previous point is what makes that a one-line
+move.
+
+**It runs on your laptop.** Cloud Tasks has no emulator. FlexiQ's queue,
+scheduler, delays, retries, dead-letter queue and dashboard all run against a
+SQLite file with nothing else installed. The push hop itself is the one part
+with a condition: `flexiq-server` dials only `https`, trusts only publicly
+issued certificates, and never dials loopback, whatever the allowlist says.
+Locally, point it at your handler through a tunnel with a public hostname, or
+run the same tasks under an SDK worker instead of behind a URL.
+
+## Limits worth knowing first
+
+Collected from above, because each is a behaviour Cloud Tasks did not have:
+
+- **One target URL per push process.** Several services means several
+  processes, split by queue.
+- **Backoff is fixed under push, and there is no dispatch rate limit.** Task
+  and queue overrides — backoff, rate limit, concurrency — reach SDK workers,
+  not `flexiq-server`.
+- **`maxRetries` defaults to `0` on the gRPC door.** Set it on every enqueue.
+- **A `2xx` needs `x-flexiq-outcome`, and a `4xx` is final** unless it is
+  `408`, `425` or `429`.
+- **The request window defaults to 60 seconds**, not Cloud Tasks' ten minutes.
+- **No egress proxy.** A deployment that can reach the internet only through
+  one [cannot use push yet](/server/operate/push#no-egress-proxy-yet).
+- **The dashboard does not see the target's capacity**, so autoscale on queue
+  depth, not utilisation ([details](/server/operate/push#the-dashboard-is-blind-to-a-push-targets-capacity)).
+
+## Checklist
+
+- [ ] `flexiq-server` running somewhere long-lived, on Postgres or Redis
+- [ ] One push process per target service, each with `FLEXIQ_QUEUES`,
+  `FLEXIQ_PUSH_TARGET_URL`, `FLEXIQ_PUSH_TARGET_ALLOW` and
+  `FLEXIQ_PUSH_TARGET_CAPACITY`
+- [ ] Outbound auth chosen; on Google Cloud, the server's service account holds
+  `roles/run.invoker`
+- [ ] `FLEXIQ_PUSH_TARGET_TIMEOUT` raised to cover the slowest handler, or
+  settle callbacks on
+- [ ] Handlers wrapped in the adapter, answering `x-flexiq-outcome`, and
+  reporting failure by outcome rather than a `4xx`
+- [ ] Producers call `Enqueue` with `queue`, `maxRetries`, and `uniqueKey`
+  where they named tasks
+- [ ] EventBridge rules re-pointed at triggers through an API destination;
+  scheduled rules recreated as periodic tasks
+- [ ] Queues drained in Cloud Tasks before their producers stop writing there

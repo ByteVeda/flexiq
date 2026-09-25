@@ -25,6 +25,10 @@ through the process — one namespace, says how a request proves who sent it, an
 maps the request onto the task's arguments. There is no expression language and
 no transformation step; a payload that needs reshaping is the task's to reshape.
 
+Replacing EventBridge rules that call a Lambda or an API destination? The
+[migration guide](/server/migrate-cloud-tasks#eventbridge) maps rules, input
+transformers and scheduled rules onto triggers and periodic tasks.
+
 ## Environment variables
 
 | Variable | Default | Meaning |
