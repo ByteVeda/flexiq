@@ -80,9 +80,9 @@ backend-documented differences.
   attach — bearer, HMAC-SHA256, OIDC or SigV4 auth, egress guarded by a
   deny-by-default allowlist that pins DNS at connect.
 - **Event egress**: job lifecycle transitions as CloudEvents to an HTTP
-  endpoint (`events-http` feature, behind push dispatch's egress guard) or a
-  Redis stream (`redis` feature); bounded per-sink buffers, never
-  back-pressure. Contract: `contracts/EVENT_EGRESS_CONTRACT.md`.
+  endpoint (`events-http` feature, behind push dispatch's egress guard), a
+  Redis stream (`redis` feature), a Kafka topic (`events-kafka`) or a NATS
+  subject (`events-nats`); bounded per-sink buffers, never back-pressure. Contract: `contracts/EVENT_EGRESS_CONTRACT.md`.
 - **Pub/sub**: topics with durable/ephemeral subscriptions and fan-out on
   publish.
 - **Periodic tasks**: cron expressions with optional time zones.

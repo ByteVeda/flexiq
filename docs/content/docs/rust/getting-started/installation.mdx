@@ -44,6 +44,8 @@ fn charge(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
 | `redis` | Redis storage. |
 | `push-dispatch` | Event-driven scheduler wakeups instead of polling — on by default for a Redis worker, opt-in elsewhere. |
 | `events-http` | The HTTP job event sink. The Redis Streams sink comes with `redis`. |
+| `events-kafka` | The Kafka job event sink. |
+| `events-nats` | The NATS job event sink, core or JetStream. |
 | `workflows` | DAG workflows at `flexiq::workflows`. |
 | `mesh` | Decentralized mesh scheduling at `flexiq::mesh`. |
 
