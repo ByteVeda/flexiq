@@ -11,6 +11,7 @@ use crate::storage::{
     dead_worker_cutoff, try_lead, Storage, RETENTION_LOCK, RETENTION_LOCK_TTL_MS,
 };
 
+use super::events::EXPIRED_REASON;
 use super::{JobResult, Scheduler};
 
 /// Prefix of the error a dispatch accepted out of band and never settled is
@@ -97,8 +98,18 @@ fn sweep(label: &str, purge: impl FnOnce() -> Result<u64>) -> u64 {
 impl Scheduler {
     pub(super) fn reap_stale(&self) -> Result<()> {
         let now = now_millis();
-        // Expire pending jobs that passed their TTL
-        if let Err(e) = self.storage.expire_pending_jobs(now) {
+        // Expire pending jobs that passed their TTL. Only a hub needs the rows,
+        // and each batch is emitted and dropped inside the callback so the
+        // sweep's memory stays one batch whatever the backlog.
+        let expired = match &self.events {
+            Some(_) => self
+                .storage
+                .expire_pending_jobs_reporting(now, &mut |batch| {
+                    self.emit_cancelled_rows(batch, EXPIRED_REASON)
+                }),
+            None => self.storage.expire_pending_jobs(now),
+        };
+        if let Err(e) = expired {
             warn!("expire_pending_jobs error: {e}");
         }
         // Reap expired distributed locks

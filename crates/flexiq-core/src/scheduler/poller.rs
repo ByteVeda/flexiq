@@ -9,6 +9,7 @@ use crate::job::{now_millis, Job};
 use crate::resilience::retry::desync_delay;
 use crate::storage::Storage;
 
+use super::events::{DEPENDENCY_FAILED_REASON, EXPIRED_AT_DISPATCH_REASON};
 use super::{shed, Scheduler};
 
 /// Delay before re-scheduling a circuit-broken job (ms).
@@ -122,12 +123,15 @@ impl Scheduler {
             return Ok(false);
         }
 
-        let job = match self.storage.dequeue_from(
+        let dequeued = self.storage.dequeue_from_reporting(
             &active_queues,
             now,
             self.namespace.as_deref(),
             &self.dispatch_orders,
-        )? {
+        )?;
+        // Archived by this scan whether or not it found a job to claim.
+        self.emit_cancelled_rows(dequeued.expired, EXPIRED_AT_DISPATCH_REASON);
+        let job = match dequeued.claimed {
             Some(j) => j,
             None => return Ok(false),
         };
@@ -181,13 +185,15 @@ impl Scheduler {
             budget = budget.min(remaining);
         }
 
-        let jobs = self.storage.dequeue_batch_from(
+        let dequeued = self.storage.dequeue_batch_from_reporting(
             &active_queues,
             now,
             self.namespace.as_deref(),
             budget,
             &self.dispatch_orders,
         )?;
+        self.emit_cancelled_rows(dequeued.expired, EXPIRED_AT_DISPATCH_REASON);
+        let jobs = dequeued.claimed;
         if jobs.is_empty() {
             return Ok(false);
         }
@@ -272,9 +278,11 @@ impl Scheduler {
                     shed::CODEL_REASON_PREFIX,
                     cfg.target_ms
                 );
-                self.storage
-                    .shed_to_dlq(&job, &reason, Some("{\"codel\":true}"))?;
+                let cascaded =
+                    self.storage
+                        .shed_to_dlq_reporting(&job, &reason, Some("{\"codel\":true}"))?;
                 self.emit_shed(&job, &reason);
+                self.emit_cancelled_rows(cascaded, DEPENDENCY_FAILED_REASON);
                 warn!(
                     "codel shed {} on queue '{}' (sojourn {sojourn}ms)",
                     job.id, job.queue
@@ -543,9 +551,14 @@ impl Scheduler {
                 );
             }
         }
-        self.storage
-            .shed_to_dlq(job, reason, Some(shed::RATE_LIMIT_SHED_METADATA))?;
+        let cascaded = self.storage.shed_to_dlq_reporting(
+            job,
+            reason,
+            Some(shed::RATE_LIMIT_SHED_METADATA),
+        )?;
+        // The parent's `job.dead` first, then each dependent it took down.
         self.emit_shed(job, reason);
+        self.emit_cancelled_rows(cascaded, DEPENDENCY_FAILED_REASON);
         warn!(
             "rate-limit shed {} on queue '{}' (task '{}')",
             job.id, job.queue, job.task_name

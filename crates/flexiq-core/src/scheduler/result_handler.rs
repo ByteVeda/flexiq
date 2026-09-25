@@ -1,11 +1,11 @@
 use log::{error, warn};
 
 use crate::error::Result;
-use crate::job::JobCompletion;
+use crate::job::{Job, JobCompletion};
 use crate::storage::records::AttemptFence;
 use crate::storage::Storage;
 
-use super::events::failure_attempt;
+use super::events::{failure_attempt, DEPENDENCY_FAILED_REASON};
 use super::{DispatchRecord, JobResult, ResultOutcome, Scheduler};
 
 /// Dead-letter metadata marking a job the retry budget refused. `ResultOutcome`
@@ -20,6 +20,18 @@ enum Finished {
     Current(Option<DispatchRecord>),
     /// The job has moved past the attempt that reported.
     Superseded,
+}
+
+/// One settled result, with what its events are built from.
+pub(super) struct Settled {
+    /// What the settle did.
+    pub(super) outcome: ResultOutcome,
+    /// The dispatch the result was settled against; see
+    /// [`Scheduler::settle_result`].
+    pub(super) record: Option<DispatchRecord>,
+    /// Dependents a dead-letter move cascade-cancelled, emitted after the
+    /// parent's own events so a sink sees the cause first.
+    pub(super) cascaded: Vec<Job>,
 }
 
 impl Scheduler {
@@ -101,8 +113,13 @@ impl Scheduler {
     /// With an event hub set, the outcome's lifecycle events are emitted too.
     pub fn handle_result(&self, result: JobResult) -> Result<ResultOutcome> {
         let fallback_attempt = failure_attempt(&result);
-        let (outcome, record) = self.settle_result(result)?;
+        let Settled {
+            outcome,
+            record,
+            cascaded,
+        } = self.settle_result(result)?;
         self.emit_outcome(&outcome, record.as_ref(), fallback_attempt);
+        self.emit_cancelled_rows(cascaded, DEPENDENCY_FAILED_REASON);
         Ok(outcome)
     }
 
@@ -113,10 +130,7 @@ impl Scheduler {
     /// are stamped from it rather than from a later lookup: once a retry or
     /// sleep leaves the job `Pending`, the poller can re-dispatch it and
     /// overwrite the live record before the events go out.
-    pub(super) fn settle_result(
-        &self,
-        result: JobResult,
-    ) -> Result<(ResultOutcome, Option<DispatchRecord>)> {
+    pub(super) fn settle_result(&self, result: JobResult) -> Result<Settled> {
         let record = if matches!(result, JobResult::Slept { .. }) {
             // A sleep skips the fence, and deliberately. `sleep_job` already
             // left the job `Pending` with no claim — that is what a sleep *is*
@@ -135,27 +149,40 @@ impl Scheduler {
                 Finished::Current(record) => record,
                 Finished::Superseded => {
                     let job_id = result.job_id().to_string();
-                    return Ok((ResultOutcome::Superseded { job_id }, None));
+                    return Ok(Settled {
+                        outcome: ResultOutcome::Superseded { job_id },
+                        record: None,
+                        cascaded: Vec::new(),
+                    });
                 }
             }
         };
-        Ok((self.transition(result)?, record))
+        let (outcome, cascaded) = self.transition(result)?;
+        Ok(Settled {
+            outcome,
+            record,
+            cascaded,
+        })
     }
 
-    /// Write the transition an authorized result asks for.
-    fn transition(&self, result: JobResult) -> Result<ResultOutcome> {
+    /// Write the transition an authorized result asks for, returning with it
+    /// the dependents a dead-letter move cascade-cancelled.
+    fn transition(&self, result: JobResult) -> Result<(ResultOutcome, Vec<Job>)> {
         match result {
             JobResult::Success {
                 job_id,
                 result,
                 task_name,
                 wall_time_ns,
-            } => self.finalize_success(&JobCompletion {
-                job_id,
-                result,
-                task_name,
-                wall_time_ns,
-            }),
+            } => Ok((
+                self.finalize_success(&JobCompletion {
+                    job_id,
+                    result,
+                    task_name,
+                    wall_time_ns,
+                })?,
+                Vec::new(),
+            )),
             JobResult::Failure {
                 job_id,
                 error,
@@ -205,9 +232,9 @@ impl Scheduler {
 
                 let move_to_dlq = |job: Option<&crate::job::Job>,
                                    metadata: Option<&str>|
-                 -> Result<()> {
+                 -> Result<Vec<Job>> {
                     match job {
-                        Some(j) => self.dlq.move_to_dlq(j, &error, metadata),
+                        Some(j) => self.dlq.move_to_dlq_reporting(j, &error, metadata),
                         None => {
                             // The one branch that runs no transition, so the
                             // one that has no transaction to revoke the claim
@@ -220,22 +247,25 @@ impl Scheduler {
                             {
                                 error!("failed to clear the claim of vanished job {job_id}: {e}");
                             }
-                            Ok(())
+                            Ok(Vec::new())
                         }
                     }
                 };
 
                 // If should_retry is false (exception filtering), skip straight to DLQ
                 if !should_retry {
-                    move_to_dlq(job.as_ref(), None)?;
-                    return Ok(ResultOutcome::DeadLettered {
-                        job_id,
-                        task_name,
-                        queue,
-                        error,
-                        timed_out,
-                        wall_time_ns,
-                    });
+                    let cascaded = move_to_dlq(job.as_ref(), None)?;
+                    return Ok((
+                        ResultOutcome::DeadLettered {
+                            job_id,
+                            task_name,
+                            queue,
+                            error,
+                            timed_out,
+                            wall_time_ns,
+                        },
+                        cascaded,
+                    ));
                 }
 
                 let policy = self
@@ -256,40 +286,49 @@ impl Scheduler {
                     // its retry ceiling would drain the budget for its siblings.
                     if !self.retry_budget_allows(&task_name) {
                         warn!("retry budget exhausted for {task_name}; dead-lettering {job_id}");
-                        move_to_dlq(job.as_ref(), Some(RETRY_BUDGET_EXHAUSTED))?;
-                        return Ok(ResultOutcome::DeadLettered {
-                            job_id,
-                            task_name,
-                            queue,
-                            error,
-                            timed_out,
-                            wall_time_ns,
-                        });
+                        let cascaded = move_to_dlq(job.as_ref(), Some(RETRY_BUDGET_EXHAUSTED))?;
+                        return Ok((
+                            ResultOutcome::DeadLettered {
+                                job_id,
+                                task_name,
+                                queue,
+                                error,
+                                timed_out,
+                                wall_time_ns,
+                            },
+                            cascaded,
+                        ));
                     }
                     let next_at = policy.next_retry_at(retry_count);
                     self.storage
                         .retry(&job_id, next_at, self.namespace.as_deref())?;
                     #[cfg(feature = "push-dispatch")]
                     self.signal_scheduled(&queue, next_at);
-                    Ok(ResultOutcome::Retry {
-                        job_id,
-                        task_name,
-                        queue,
-                        error,
-                        retry_count,
-                        timed_out,
-                        wall_time_ns,
-                    })
+                    Ok((
+                        ResultOutcome::Retry {
+                            job_id,
+                            task_name,
+                            queue,
+                            error,
+                            retry_count,
+                            timed_out,
+                            wall_time_ns,
+                        },
+                        Vec::new(),
+                    ))
                 } else {
-                    move_to_dlq(job.as_ref(), None)?;
-                    Ok(ResultOutcome::DeadLettered {
-                        job_id,
-                        task_name,
-                        queue,
-                        error,
-                        timed_out,
-                        wall_time_ns,
-                    })
+                    let cascaded = move_to_dlq(job.as_ref(), None)?;
+                    Ok((
+                        ResultOutcome::DeadLettered {
+                            job_id,
+                            task_name,
+                            queue,
+                            error,
+                            timed_out,
+                            wall_time_ns,
+                        },
+                        cascaded,
+                    ))
                 }
             }
             JobResult::Cancelled {
@@ -322,19 +361,25 @@ impl Scheduler {
                     .as_ref()
                     .map(|j| j.queue.clone())
                     .unwrap_or_default();
-                Ok(ResultOutcome::Cancelled {
-                    job_id,
-                    task_name,
-                    queue,
-                    wall_time_ns,
-                })
+                Ok((
+                    ResultOutcome::Cancelled {
+                        job_id,
+                        task_name,
+                        queue,
+                        wall_time_ns,
+                    },
+                    Vec::new(),
+                ))
             }
             JobResult::Slept {
                 job_id,
                 task_name,
                 wake_at,
                 wall_time_ns,
-            } => self.finalize_sleep(job_id, task_name, wake_at, wall_time_ns),
+            } => Ok((
+                self.finalize_sleep(job_id, task_name, wake_at, wall_time_ns)?,
+                Vec::new(),
+            )),
         }
     }
 
@@ -353,6 +398,8 @@ impl Scheduler {
         // The record each result settled against, kept for the emit pass: by
         // then a retried job may already be re-dispatched under a new record.
         let mut records: Vec<Option<DispatchRecord>> = (0..results.len()).map(|_| None).collect();
+        // Dependents each dead-letter move cascaded, emitted after its outcome.
+        let mut cascades: Vec<Vec<Job>> = (0..results.len()).map(|_| Vec::new()).collect();
         // Read before the results move; only an events hub ever needs them.
         let fallback_attempts: Vec<Option<i32>> = if self.events.is_some() {
             results.iter().map(failure_attempt).collect()
@@ -395,9 +442,10 @@ impl Scheduler {
                 // Failures and cancellations branch (retry vs DLQ, queue
                 // lookups); batching them buys little, so keep the per-result path.
                 other => {
-                    outcomes[i] = Some(self.settle_result(other).map(|(outcome, record)| {
-                        records[i] = record;
-                        outcome
+                    outcomes[i] = Some(self.settle_result(other).map(|settled| {
+                        records[i] = settled.record;
+                        cascades[i] = settled.cascaded;
+                        settled.outcome
                     }))
                 }
             }
@@ -436,11 +484,16 @@ impl Scheduler {
             .collect();
         // One pass over the settled outcomes, so each emits exactly once
         // whether it settled inline, in the batch, or in the per-job fallback.
-        for ((outcome, record), fallback_attempt) in
-            outcomes.iter().zip(&records).zip(fallback_attempts)
+        // Without a hub `fallback_attempts` is empty, so this runs zero times.
+        for (((outcome, record), fallback_attempt), cascaded) in outcomes
+            .iter()
+            .zip(&records)
+            .zip(fallback_attempts)
+            .zip(cascades)
         {
             if let Ok(outcome) = outcome {
                 self.emit_outcome(outcome, record.as_ref(), fallback_attempt);
+                self.emit_cancelled_rows(cascaded, DEPENDENCY_FAILED_REASON);
             }
         }
         outcomes

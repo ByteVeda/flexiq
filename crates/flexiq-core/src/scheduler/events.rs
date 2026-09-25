@@ -11,6 +11,18 @@ use crate::job::Job;
 
 use super::{DispatchRecord, JobResult, ResultOutcome, Scheduler};
 
+/// `reason` of a pending job the reaper sweep expired. Storage writes the same
+/// string as the archived row's error.
+pub(super) const EXPIRED_REASON: &str = "expired";
+
+/// `reason` of a job found expired as the poller went to claim it.
+pub(super) const EXPIRED_AT_DISPATCH_REASON: &str = "expired before execution";
+
+/// `reason` of a dependent cancelled because its parent was dead-lettered.
+/// The archived row's error also names the parent; the reason stays constant
+/// so a sink can filter on it.
+pub(super) const DEPENDENCY_FAILED_REASON: &str = "dependency failed";
+
 /// The attempt a failure reports for itself — the retries already spent —
 /// used when no dispatch record names one (a reaper-recovered orphan).
 pub(super) fn failure_attempt(result: &JobResult) -> Option<i32> {
@@ -55,6 +67,34 @@ impl Scheduler {
             event.payload = Some(job.payload.clone());
         }
         hub.emit(event);
+    }
+
+    /// `job.cancelled` for each job storage archived without running it: an
+    /// expiry, or a dependent cascade-cancelled behind a dead-lettered parent.
+    ///
+    /// The rows are the archived ones storage handed back, so each event keeps
+    /// the row's own namespace — the expiry sweep is unscoped — and takes its
+    /// payload by move rather than by copy.
+    pub(super) fn emit_cancelled_rows(&self, jobs: Vec<Job>, reason: &str) {
+        let Some(hub) = &self.events else {
+            return;
+        };
+        let with_payload = hub.wants_payload();
+        for job in jobs {
+            let mut event = JobEvent::new(
+                EventType::JobCancelled,
+                job.id,
+                job.namespace,
+                job.queue,
+                job.task_name,
+            );
+            event.attempt = Some(job.retry_count);
+            event.reason = Some(reason.to_string());
+            if with_payload {
+                event.payload = Some(job.payload);
+            }
+            hub.emit(event);
+        }
     }
 
     /// The events one settled outcome stands for. `Superseded` emits nothing:
@@ -200,6 +240,7 @@ mod tests {
     use crate::job::{now_millis, NewJob};
     use crate::resilience::rate_limiter::RateLimitConfig;
     use crate::resilience::retry::RetryPolicy;
+    use crate::scheduler::result_handler::Settled;
     use crate::scheduler::{shed, SchedulerConfig, TaskConfig};
     use crate::storage::sqlite::SqliteStorage;
     use crate::storage::{Storage, StorageBackend};
@@ -408,7 +449,9 @@ mod tests {
         let ch = channel();
         let job = dispatch(&scheduler, &ch, "flaky", 3);
 
-        let (outcome, record) = scheduler.settle_result(failure(&job, 0, 3)).unwrap();
+        let Settled {
+            outcome, record, ..
+        } = scheduler.settle_result(failure(&job, 0, 3)).unwrap();
         assert!(matches!(outcome, ResultOutcome::Retry { .. }));
         assert!(
             scheduler.try_dispatch(&ch.0).unwrap(),
@@ -435,7 +478,9 @@ mod tests {
         let (scheduler, hub, rec) = with_hub(scheduler(), "");
         let ch = channel();
         let job = dispatch(&scheduler, &ch, "napper", 3);
-        let (outcome, record) = scheduler
+        let Settled {
+            outcome, record, ..
+        } = scheduler
             .settle_result(JobResult::Slept {
                 job_id: job.id.clone(),
                 task_name: "napper".to_string(),
@@ -547,6 +592,210 @@ mod tests {
             .find(|e| e.event_type == EventType::JobCompleted)
             .unwrap();
         assert_eq!(completed.queue, "default", "the batch path names the queue");
+    }
+
+    /// A job due now that expired a second ago, in `namespace`.
+    fn expired_job(task: &str, namespace: Option<&str>) -> NewJob {
+        NewJob {
+            expires_at: Some(now_millis() - 1_000),
+            namespace: namespace.map(str::to_string),
+            ..new_job(task, 3)
+        }
+    }
+
+    fn dependent_of(parent: &Job, task: &str) -> NewJob {
+        NewJob {
+            depends_on: vec![parent.id.clone()],
+            ..new_job(task, 3)
+        }
+    }
+
+    /// Every `job.cancelled` among `events`, as `(job_id, reason)`.
+    fn cancelled(events: &[JobEvent]) -> Vec<(String, Option<String>)> {
+        events
+            .iter()
+            .filter(|e| e.event_type == EventType::JobCancelled)
+            .map(|e| (e.job_id.clone(), e.reason.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn the_expiry_sweep_emits_cancelled_in_each_jobs_own_namespace() {
+        let (scheduler, hub, rec) = with_hub(scheduler(), "");
+        let plain = scheduler
+            .storage
+            .enqueue(expired_job("stale", None))
+            .unwrap();
+        let tenant = scheduler
+            .storage
+            .enqueue(expired_job("stale", Some("tenant-a")))
+            .unwrap();
+        scheduler.reap_stale().unwrap();
+
+        let mut events = delivered(&hub, &rec);
+        events.sort_by(|a, b| a.namespace.cmp(&b.namespace));
+        assert_eq!(types(&events), ["job.cancelled", "job.cancelled"]);
+        let expected = [(&plain, None), (&tenant, Some("tenant-a".to_string()))];
+        for (event, (job, namespace)) in events.iter().zip(expected) {
+            assert_eq!(event.job_id, job.id);
+            assert_eq!(event.namespace, namespace, "the row's, not the scheduler's");
+            assert_eq!(event.reason.as_deref(), Some(EXPIRED_REASON));
+            assert_eq!(event.attempt, Some(0));
+            assert_eq!(event.epoch, None);
+            assert_eq!(event.queue, "default");
+            assert_eq!(event.task_name, "stale");
+            assert!(event.payload.is_none(), "no payload unless a sink asks");
+        }
+    }
+
+    #[test]
+    fn a_payload_sink_gets_the_expired_rows_payload() {
+        let (scheduler, hub, rec) = with_hub(scheduler(), r#","include_payload":true"#);
+        scheduler
+            .storage
+            .enqueue(expired_job("stale", None))
+            .unwrap();
+        scheduler.reap_stale().unwrap();
+
+        let events = delivered(&hub, &rec);
+        assert_eq!(events[0].payload.as_deref(), Some(&[1u8, 2, 3][..]));
+    }
+
+    #[test]
+    fn an_expiry_found_at_dispatch_emits_cancelled() {
+        let (scheduler, hub, rec) = with_hub(scheduler(), "");
+        let job = scheduler
+            .storage
+            .enqueue(expired_job("stale", None))
+            .unwrap();
+        assert!(!scheduler.try_dispatch(&channel().0).unwrap());
+
+        let events = delivered(&hub, &rec);
+        assert_eq!(
+            cancelled(&events),
+            [(job.id, Some(EXPIRED_AT_DISPATCH_REASON.to_string()))]
+        );
+        assert_eq!(events[0].attempt, Some(0));
+    }
+
+    #[test]
+    fn an_expiry_found_by_a_batch_dispatch_emits_cancelled() {
+        let mut scheduler = Scheduler::new(
+            StorageBackend::Sqlite(SqliteStorage::in_memory().unwrap()),
+            vec!["default".to_string()],
+            SchedulerConfig {
+                batch_size: Some(4),
+                ..SchedulerConfig::default()
+            },
+            None,
+        );
+        let (hub, rec) = recording_hub("");
+        scheduler.set_events(Arc::clone(&hub));
+        let job = scheduler
+            .storage
+            .enqueue(expired_job("stale", None))
+            .unwrap();
+        assert!(!scheduler.try_dispatch_batch(&channel().0).unwrap());
+
+        assert_eq!(
+            cancelled(&delivered(&hub, &rec)),
+            [(job.id, Some(EXPIRED_AT_DISPATCH_REASON.to_string()))]
+        );
+    }
+
+    /// A parent that will dead-letter on its first failure, with a child
+    /// waiting on it and a grandchild waiting on the child.
+    fn doomed_chain(scheduler: &Scheduler, ch: &Channel) -> (Job, Vec<String>) {
+        let parent = dispatch(scheduler, ch, "doomed", 0);
+        let child = scheduler
+            .storage
+            .enqueue(dependent_of(&parent, "child"))
+            .unwrap();
+        let grandchild = scheduler
+            .storage
+            .enqueue(dependent_of(&child, "grandchild"))
+            .unwrap();
+        (parent, vec![child.id, grandchild.id])
+    }
+
+    /// The `job.dead` comes first, then one `job.cancelled` per dependent.
+    fn assert_cascade_after_dead(events: &[JobEvent], dependents: &[String]) {
+        let dead = events
+            .iter()
+            .position(|e| e.event_type == EventType::JobDead)
+            .expect("the parent's job.dead");
+        let tail = &events[dead + 1..];
+        let mut ids: Vec<String> = cancelled(tail).into_iter().map(|(id, _)| id).collect();
+        ids.sort();
+        let mut expected = dependents.to_vec();
+        expected.sort();
+        assert_eq!(ids, expected, "one cancel per dependent, after the parent");
+        assert_eq!(cancelled(events).len(), dependents.len(), "each only once");
+        for event in tail {
+            assert_eq!(event.event_type, EventType::JobCancelled);
+            assert_eq!(event.reason.as_deref(), Some(DEPENDENCY_FAILED_REASON));
+            assert_eq!(event.attempt, Some(0));
+            assert_eq!(event.epoch, None);
+        }
+    }
+
+    #[test]
+    fn a_dead_lettered_parent_emits_a_cancel_per_dependent() {
+        let (scheduler, hub, rec) = with_hub(scheduler(), "");
+        let ch = channel();
+        let (parent, dependents) = doomed_chain(&scheduler, &ch);
+        scheduler.handle_result(failure(&parent, 0, 0)).unwrap();
+
+        let events = delivered(&hub, &rec);
+        assert_eq!(
+            types(&events[..3]),
+            ["job.started", "job.failed", "job.dead"]
+        );
+        assert_cascade_after_dead(&events, &dependents);
+    }
+
+    #[test]
+    fn a_dead_lettered_parent_in_a_batch_emits_a_cancel_per_dependent() {
+        let (scheduler, hub, rec) = with_hub(scheduler(), "");
+        let ch = channel();
+        let (parent, dependents) = doomed_chain(&scheduler, &ch);
+        let outcomes = scheduler.handle_results(vec![failure(&parent, 0, 0)]);
+        assert!(outcomes.iter().all(Result::is_ok));
+
+        assert_cascade_after_dead(&delivered(&hub, &rec), &dependents);
+    }
+
+    #[test]
+    fn a_rate_limit_shed_parent_cascades() {
+        let mut scheduler = scheduler();
+        scheduler.register_task(
+            "shed_task".to_string(),
+            TaskConfig {
+                rate_limit: Some(RateLimitConfig {
+                    max_tokens: 1.0,
+                    refill_rate: 0.0,
+                }),
+                on_excess: shed::OnExcess::Drop,
+                ..TaskConfig::default()
+            },
+        );
+        let (scheduler, hub, rec) = with_hub(scheduler, "");
+        let ch = channel();
+        dispatch(&scheduler, &ch, "shed_task", 3);
+        let parent = scheduler.storage.enqueue(new_job("shed_task", 3)).unwrap();
+        let child = scheduler
+            .storage
+            .enqueue(dependent_of(&parent, "child"))
+            .unwrap();
+        assert!(
+            scheduler.try_dispatch(&ch.0).unwrap(),
+            "the shed is progress"
+        );
+
+        let events = delivered(&hub, &rec);
+        assert_eq!(types(&events), ["job.started", "job.dead", "job.cancelled"]);
+        assert_eq!(events[1].job_id, parent.id);
+        assert_cascade_after_dead(&events, &[child.id]);
     }
 
     #[test]

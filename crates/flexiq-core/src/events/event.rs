@@ -113,7 +113,8 @@ pub struct JobEvent {
     pub wake_at_ms: Option<i64>,
     /// Execution time the worker measured, nanoseconds.
     pub wall_time_ns: Option<i64>,
-    /// Why a job was dead-lettered without running out of retries.
+    /// Why a job was dead-lettered without running out of retries, or
+    /// cancelled without running (it expired, or a dependency did not finish).
     pub reason: Option<String>,
     /// The job's payload bytes, where the emitter held them.
     pub payload: Option<Vec<u8>>,
