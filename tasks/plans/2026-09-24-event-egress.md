@@ -665,3 +665,49 @@ entry (regenerate the mdx with `pnpm --dir docs sync:changelog`). Every
 example real. Docs typecheck, lint, build.
 
 **Commit:** `docs: events for expiry, cascades, periodic and retries`.
+
+## Task 15: A scheduler's events stay inside its own namespace
+
+User decision (2026-09-25): a worker/scheduler with no namespace gets events
+for jobs in the **default namespace only**, never other namespaces. Its job
+dispatch already works that way; events must match. A sink that wants every
+namespace is a future explicit opt-in, not an accident of a missing
+namespace.
+
+**Build:**
+- One helper in `crates/flexiq-core/src/scheduler/events.rs` deciding whether
+  a job row belongs to this scheduler's namespace: `Some(ns)` ↔ row
+  namespace `Some(ns)`; `None` ↔ row namespace `None` (the default namespace
+  — check whether rows can also carry `Some("default")` and treat it the way
+  the dequeue queries do; see `DEFAULT_NAMESPACE`). Use it at every emit
+  site that can see another namespace's rows:
+  - the expiry sweep in `maintenance.rs` (today `scope.is_none_or(..)`);
+  - stale-job reaper timeouts (`reap_stale_jobs` in maintenance, which is
+    unscoped for `None` and settles through `handle_result`): find how its
+    events get their namespace today — if a `None` scheduler emits other
+    namespaces' timeouts (possibly stamped with the wrong namespace), filter
+    them and make sure the label is the row's own namespace;
+  - periodic firings (`check_periodic`, cluster-wide for `None`);
+  - DLQ auto-retry (check whether `list_dead_for_retry` is scoped);
+  - cascades and dispatch-time expiry (verify they cannot cross namespaces;
+    filter if they can).
+  Only the **events** change. The maintenance work itself (who times out,
+  fires, retries, archives) stays exactly as it is.
+- Tests (scheduler tests, recording fake sink): a `None` scheduler over
+  expired / timed-out / periodic / auto-retry work in the default namespace
+  and in `tenant-a` emits only the default-namespace events; a `tenant-a`
+  scheduler still emits only `tenant-a`'s.
+- Contract + both guides + CHANGELOG: replace "one with no namespace
+  announces them all" with the new rule; state that no scheduler announces
+  another namespace's transitions, so a namespace's maintenance events come
+  only from a scheduler of that namespace (and may be missed if another
+  namespace's scheduler did the work first). Regenerate the changelog mdx.
+
+**Verify:** `cargo test -j1 -p flexiq-core --lib scheduler` and `--lib
+events`, `cargo test -j1 -p flexiq-server --features
+grpc,http-target,events-http --test grpc_events`, workspace check
+(`redis`, `postgres`), clippy all-features `-D warnings`, docs typecheck +
+lint.
+
+**Commits:** `fix(core): keep scheduler events in its own namespace`,
+`docs: events stay inside the scheduler's namespace`.
