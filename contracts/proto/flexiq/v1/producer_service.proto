@@ -289,13 +289,15 @@ message QueueStatsResponse {
 // terminal.
 //
 // **Watching a queue.** Live transitions of the queue's jobs, and no snapshot
-// — a queue has no "current state" small enough to send. Every item carries a
-// `cursor`; pass the last one back as `resume_cursor` to replay what the stream
-// missed. The server keeps a bounded window of recent transitions in memory,
+// — a queue has no "current state" small enough to send. The stream opens with
+// a checkpoint: an item with no `item` arm set, carrying only the `cursor` the
+// watch starts from, so a stream lost before its first transition can still
+// resume without a gap. Every item after it carries a `cursor` too; pass the
+// last one back as `resume_cursor` to replay what the stream missed. The server keeps a bounded window of recent transitions in memory,
 // per process: a cursor from another process, from before a restart, or older
 // than the window fails FAILED_PRECONDITION with reason WATCH_CURSOR_EXPIRED.
-// The client then reads what it needs with ListJobs and watches again without
-// a cursor.
+// The transitions in the gap are gone: a client that needs the jobs' current
+// state reads it with ListJobs, and either way watches again without a cursor.
 //
 // **Coverage.** A transition reaches a watch the moment this server process
 // handles it. One handled by another process — another replica, or a worker
@@ -329,6 +331,9 @@ message WatchJobIds {
 }
 
 message WatchJobsResponse {
+  // Unset on a queue watch's opening checkpoint, which carries only `cursor`.
+  // A reader skips an item whose arm it does not recognise, and keeps its
+  // cursor.
   oneof item {
     // A job's state, or a change to it.
     JobTransition transition = 1;

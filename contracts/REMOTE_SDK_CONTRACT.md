@@ -199,8 +199,11 @@ a queue:
   `status`.** `FAILED` in particular is not terminal while a `RETRYING` or `DEAD`
   is still to come. When every id is finished the stream ends with `OK`, so a
   watch on a job that is already terminal sends one item and closes.
-- **A queue watch** sends live transitions only, with no snapshot. Every item
-  carries an opaque `cursor`.
+- **A queue watch** sends live transitions only, with no snapshot. It opens with
+  a checkpoint: an item with no `item` arm set, carrying only the cursor the
+  watch starts from. Every item carries an opaque `cursor`. A client **MUST**
+  keep the cursor of an item whose arm it skips, the checkpoint included, or a
+  stream lost before its first transition resumes with a gap.
 
 Resuming after a dropped stream:
 
@@ -211,9 +214,11 @@ Resuming after a dropped stream:
   `resume_cursor`. The server keeps a bounded window of recent transitions in
   memory, per process. A cursor from another process, from before a restart, or
   older than the window is refused with `FAILED_PRECONDITION`, reason
-  `WATCH_CURSOR_EXPIRED`. On that error a client **MUST** read what it missed
-  with `ListJobs` and watch again without a cursor. A cursor is opaque exactly as
-  a `page_token` is.
+  `WATCH_CURSOR_EXPIRED`. The transitions in the gap are gone, and `ListJobs`
+  cannot replay them — it reads current rows. On that error a client **MUST**
+  watch again without a cursor and **MUST NOT** assume it saw every
+  transition. A client that needs the jobs' current state reads it with
+  `ListJobs`. A cursor is opaque exactly as a `page_token` is.
 
 Coverage and bounds:
 

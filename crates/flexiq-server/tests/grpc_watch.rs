@@ -175,6 +175,17 @@ async fn transition(stream: &mut Streaming<WatchJobsResponse>) -> (JobTransition
     }
 }
 
+/// A queue watch's opening item: no transition, only its starting cursor.
+async fn checkpoint(stream: &mut Streaming<WatchJobsResponse>) -> String {
+    let response = next(stream)
+        .await
+        .expect("an item, not the end")
+        .expect("an item, not an error");
+    assert_eq!(response.item, None, "a queue watch opens with a checkpoint");
+    assert!(!response.cursor.is_empty());
+    response.cursor
+}
+
 async fn closes_ok(stream: &mut Streaming<WatchJobsResponse>) {
     assert!(next(stream).await.is_none(), "the stream must end with OK");
 }
@@ -307,6 +318,7 @@ async fn a_job_another_process_finished_arrives_by_the_re_read() {
 async fn a_queue_watch_follows_its_queue_and_resumes_from_a_cursor() {
     let mut harness = Harness::start("watch-queue", WatchConfig::default()).await;
     let mut stream = harness.watch(queue("orders", "")).await.expect("watch");
+    checkpoint(&mut stream).await;
     let first = harness.enqueue("orders").await;
     harness.enqueue("unrelated").await;
     let second = harness.enqueue("orders").await;
@@ -326,8 +338,29 @@ async fn a_queue_watch_follows_its_queue_and_resumes_from_a_cursor() {
         .watch(queue("orders", &cursor1))
         .await
         .expect("resume");
+    checkpoint(&mut resumed).await;
     assert_eq!(transition(&mut resumed).await.0.job_id, second);
     assert_eq!(transition(&mut resumed).await.0.job_id, third);
+    drop(resumed);
+    harness.stop().await;
+}
+
+/// A stream lost before its first transition still leaves a cursor: the
+/// opening checkpoint, which replays what landed while the client was away.
+#[tokio::test]
+async fn a_queue_watch_lost_before_any_transition_resumes_without_a_gap() {
+    let mut harness = Harness::start("watch-checkpoint", WatchConfig::default()).await;
+    let mut stream = harness.watch(queue("orders", "")).await.expect("watch");
+    let start = checkpoint(&mut stream).await;
+    drop(stream);
+
+    let missed = harness.enqueue("orders").await;
+    let mut resumed = harness
+        .watch(queue("orders", &start))
+        .await
+        .expect("resume");
+    checkpoint(&mut resumed).await;
+    assert_eq!(transition(&mut resumed).await.0.job_id, missed);
     drop(resumed);
     harness.stop().await;
 }
@@ -407,6 +440,7 @@ async fn a_credential_holds_at_most_its_cap_of_watches() {
 async fn a_shutdown_ends_an_open_watch_unavailable() {
     let mut harness = Harness::start("watch-shutdown", WatchConfig::default()).await;
     let mut stream = harness.watch(queue("q", "")).await.expect("watch");
+    checkpoint(&mut stream).await;
     harness.shutdown.trigger();
     let status = next(&mut stream)
         .await

@@ -106,8 +106,8 @@ pub const WATCH_LIMIT: &str = "WATCH_LIMIT";
 /// cursor back on a queue watch.
 pub const WATCH_OVERFLOW: &str = "WATCH_OVERFLOW";
 /// A queue watch's `resume_cursor` points outside what this process still
-/// holds — another process's, one from before a restart, or one too old. Read
-/// what was missed with `ListJobs`, then watch again without a cursor.
+/// holds — another process's, one from before a restart, or one too old. The
+/// gap's transitions are gone: watch again without a cursor.
 pub const WATCH_CURSOR_EXPIRED: &str = "WATCH_CURSOR_EXPIRED";
 /// The server is shutting down. Retry against another replica, or this one
 /// once it is back.

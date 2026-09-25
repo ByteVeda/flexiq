@@ -437,7 +437,10 @@ terminal while a `RETRYING` or `DEAD` is still to come. The stream carries no
 payload or result; read the result with `GetJob` once the job is terminal.
 
 **A queue watch** sends live transitions of the queue's jobs and no snapshot.
-Every item carries a `cursor`.
+It opens with a checkpoint, an item that carries only the `cursor` the watch
+starts from. Every item after it carries a `cursor` too. Keep the last one,
+checkpoint included, so a stream lost before its first transition resumes with
+no gap.
 
 ### Where transitions come from
 
@@ -463,8 +466,9 @@ producer door on the same process as the scheduler, or watch ids.
 - **A queue watch**: send the last `cursor` back as `resumeCursor`. The server
   keeps the last `FLEXIQ_GRPC_WATCH_BUFFER` transitions in memory, per process.
   A cursor from another replica, from before a restart, or older than that
-  window fails `FAILED_PRECONDITION` with reason `WATCH_CURSOR_EXPIRED`. Read
-  what you missed with `ListJobs`, then watch again without a cursor.
+  window fails `FAILED_PRECONDITION` with reason `WATCH_CURSOR_EXPIRED`. The
+  transitions in that gap are gone. Watch again without a cursor, and read the
+  jobs' current state with `ListJobs` if you need it.
 
 ### Limits
 

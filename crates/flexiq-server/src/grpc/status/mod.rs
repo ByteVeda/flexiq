@@ -290,8 +290,8 @@ impl WireError {
         Self {
             code: Code::FailedPrecondition,
             reason: reason::WATCH_CURSOR_EXPIRED,
-            message: "this cursor is outside what the server still holds; list what was \
-                      missed, then watch again without a cursor"
+            message: "this cursor is outside what the server still holds; watch again \
+                      without a cursor, and read current state with ListJobs if needed"
                 .to_string(),
             metadata: HashMap::new(),
             retry_after: None,

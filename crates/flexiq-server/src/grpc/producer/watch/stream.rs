@@ -113,10 +113,22 @@ pub fn open(slot: Slot, stall: Duration) -> (Session, Outlet) {
 impl Session {
     /// Queue one item, waiting at most the stall bound for room.
     async fn send(&self, item: Item, cursor: String) -> Result<(), Stop> {
-        let response = pb::WatchJobsResponse {
+        self.respond(pb::WatchJobsResponse {
             item: Some(item),
             cursor,
-        };
+        })
+        .await
+    }
+
+    /// Queue a response carrying only a cursor: where a queue watch starts,
+    /// so a client that loses the stream before any transition resumes
+    /// without a gap.
+    async fn checkpoint(&self, cursor: String) -> Result<(), Stop> {
+        self.respond(pb::WatchJobsResponse { item: None, cursor })
+            .await
+    }
+
+    async fn respond(&self, response: pb::WatchJobsResponse) -> Result<(), Stop> {
         match tokio::time::timeout(self.stall, self.items.send(response)).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(_)) => Err(Stop::Gone),
@@ -332,6 +344,11 @@ async fn follow_queue(
     let mut head = ctx.feed.subscribe();
     let mut position = from;
     let instance = ctx.feed.instance();
+    // Without it, a stream lost before its first transition leaves the client
+    // no cursor, and reopening from the newer head skips the gap.
+    if let Err(stop) = session.checkpoint(cursor::encode(instance, from)).await {
+        return stop;
+    }
     loop {
         let events = match ctx.feed.read_after(position) {
             Ok(events) => events,
@@ -399,6 +416,8 @@ mod tests {
             match item {
                 Ok(response) => match response.item {
                     Some(Item::Transition(t)) => ids.push(t.job_id),
+                    // A queue watch's opening checkpoint.
+                    None => assert!(!response.cursor.is_empty()),
                     other => panic!("unexpected item {other:?}"),
                 },
                 Err(status) => {
@@ -435,7 +454,8 @@ mod tests {
         // Nobody reads while the task runs, so its sends back up.
         watch_queue(ctx, session, "ns".into(), "q".into(), 0).await;
         let (ids, reason) = drain(outlet).await;
-        assert_eq!(ids.len(), CHANNEL, "what was queued is still delivered");
+        // The channel held the opening checkpoint and then transitions.
+        assert_eq!(ids.len(), CHANNEL - 1, "what was queued is still delivered");
         assert_eq!(reason.as_deref(), Some(reason::WATCH_OVERFLOW));
     }
 
@@ -463,6 +483,9 @@ mod tests {
         ));
         enqueued(&feed, "mine-too");
         let mut outlet = outlet;
+        let opening = outlet.next().await.expect("an item").expect("not an error");
+        assert_eq!(opening.item, None, "a queue watch opens with a checkpoint");
+        assert_eq!(opening.cursor, cursor::encode(feed.instance(), 0));
         for expected in ["mine", "mine-too"] {
             let item = outlet.next().await.expect("an item").expect("not an error");
             match item.item {
