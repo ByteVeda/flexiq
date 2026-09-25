@@ -36,9 +36,9 @@ their entries below keep that name.
   embedded worker reports on its own. A scheduler announces only its own namespace's jobs —
   the default namespace's when it has none — even where its maintenance reaches other
   namespaces, so a namespace's maintenance events come only from a scheduler of that namespace.
-  Delivery is at-most-once overall and may repeat an
-  event, so consumers dedupe on the CloudEvents `id`; emitting never blocks the queue. The HTTP
-  sink goes through push dispatch's egress guard (a required allowlist, no proxy, no
+  Delivery is at-most-once overall and may repeat an event, so consumers dedupe on the
+  CloudEvents `id`; emitting never blocks the queue. The HTTP sink goes through push
+  dispatch's egress guard (a required allowlist, no proxy, no
   redirects) and signs with `x-flexiq-event-signature` when given a secret; job payloads are
   sent only by a sink that sets `include_payload`. Per-sink counters appear on the server's
   `/metrics` as `flexiq_events_*` and on every worker's event-sink stats. The HTTP sink is

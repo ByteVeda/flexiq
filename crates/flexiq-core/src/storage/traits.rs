@@ -338,8 +338,8 @@ pub trait Storage: Send + Sync + Clone {
     /// status on all backends.
     fn purge_completed_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64>;
     /// Running jobs that exceeded their deadline, for the scheduler to fail or
-    /// retry. Scoped so a scheduler never times out another namespace's job and
-    /// then records the outcome under its own.
+    /// retry. `Some(ns)` scopes the reap to that namespace; `None` reaps every
+    /// namespace.
     ///
     /// A job whose dispatch was accepted out of band is **excluded** while its
     /// settle deadline is still in the future, and flagged
@@ -349,8 +349,9 @@ pub trait Storage: Send + Sync + Clone {
     fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<StaleJob>>;
     /// Running jobs whose execution-claim owner is not in `live_owner_ids` (the
     /// worker that claimed them has died). Read-only — paired with the dead
-    /// owner so the caller can atomically reclaim before requeuing. Scoped like
-    /// [`Storage::reap_stale_jobs`].
+    /// owner so the caller can atomically reclaim before requeuing. Namespace
+    /// scoping works like [`Storage::reap_stale_jobs`]: `Some(ns)` scopes to
+    /// that namespace, `None` covers every namespace.
     fn reap_orphaned_jobs(
         &self,
         live_owner_ids: &[String],
