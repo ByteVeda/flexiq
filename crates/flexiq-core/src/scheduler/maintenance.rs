@@ -104,7 +104,11 @@ impl Scheduler {
         let expired = match &self.events {
             Some(_) => self
                 .storage
-                .expire_pending_jobs_reporting(now, &mut |batch| {
+                .expire_pending_jobs_reporting(now, &mut |mut batch| {
+                    // The sweep spans every namespace but the hub is this
+                    // tenant's: scope the rows as `reap_stale_jobs` does below.
+                    let scope = self.namespace.as_deref();
+                    batch.retain(|job| scope.is_none_or(|ns| job.namespace.as_deref() == Some(ns)));
                     self.emit_cancelled_rows(batch, reason::EXPIRED)
                 }),
             None => self.storage.expire_pending_jobs(now),

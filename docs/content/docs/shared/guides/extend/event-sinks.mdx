@@ -205,7 +205,8 @@ API is not one of them: it is first seen at its `job.started`. If the
 consumer needs every such enqueue, enqueue through the server instead.
 
 The worker also sends `job.cancelled` for a pending job on its own, without a
-door: `reason: "expired"` from its reaper sweep, `reason: "expired before
+door: `reason: "expired"` from its reaper sweep (only for its own namespace,
+when the worker has one), `reason: "expired before
 execution"` when it finds a job already expired as it goes to claim it, and
 `reason: "dependency failed"` for a dependent cascaded behind a job it just
 dead-lettered. A pending job cancelled by calling `cancel_job` in this

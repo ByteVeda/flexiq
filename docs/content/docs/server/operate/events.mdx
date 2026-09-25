@@ -172,7 +172,8 @@ A pending job cancelled through a cancel door emits `job.cancelled` there,
 and cascades to any dependent with `reason: "dependency cancelled"`. A
 running job emits it from the scheduler once the attempt ends. The scheduler
 also emits `job.cancelled` on its own for a pending job: `reason: "expired"`
-from the reaper sweep, `reason: "expired before execution"` when the poller
+from the reaper sweep (a namespaced scheduler announces only its own
+namespace's), `reason: "expired before execution"` when the poller
 finds it already expired at claim, and `reason: "dependency failed"` for a
 dependent cascaded behind a dead-lettered parent (a DLQ move or a shed).
 

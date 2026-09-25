@@ -62,8 +62,9 @@ impl Scheduler {
     /// expiry, or a dependent cascade-cancelled behind a dead-lettered parent.
     ///
     /// The rows are the archived ones storage handed back, so each event keeps
-    /// the row's own namespace — the expiry sweep is unscoped — and takes its
-    /// payload by move rather than by copy.
+    /// the row's own namespace — an unscoped scheduler's sweep spans them all —
+    /// and takes its payload by move rather than by copy. Scoping the rows to
+    /// this scheduler's tenant is the caller's job.
     pub(super) fn emit_cancelled_rows(&self, jobs: Vec<Job>, reason: &str) {
         let Some(hub) = &self.events else {
             return;
@@ -674,6 +675,46 @@ mod tests {
             assert_eq!(event.queue, "default");
             assert_eq!(event.task_name, "stale");
             assert!(event.payload.is_none(), "no payload unless a sink asks");
+        }
+    }
+
+    /// The sweep archives every namespace's expired rows, but a namespaced
+    /// scheduler's hub is its tenant's: another tenant's rows, payload and
+    /// all, must not reach its sinks.
+    #[test]
+    fn a_namespaced_expiry_sweep_emits_only_its_own_namespace() {
+        let scoped = Scheduler::new(
+            StorageBackend::Sqlite(SqliteStorage::in_memory().unwrap()),
+            vec!["default".to_string()],
+            SchedulerConfig::default(),
+            Some("tenant-a".to_string()),
+        );
+        let (scheduler, hub, rec) = with_hub(scoped, r#","include_payload":true"#);
+        let own = scheduler
+            .storage
+            .enqueue(expired_job("stale", Some("tenant-a")))
+            .unwrap();
+        let mut foreign = Vec::new();
+        for namespace in [Some("tenant-b"), None] {
+            foreign.push(
+                scheduler
+                    .storage
+                    .enqueue(expired_job("stale", namespace))
+                    .unwrap(),
+            );
+        }
+        scheduler.reap_stale().unwrap();
+
+        let events = delivered(&hub, &rec);
+        assert_eq!(
+            cancelled(&events),
+            [(own.id.clone(), Some(reason::EXPIRED.to_string()))],
+            "only tenant-a's expiry"
+        );
+        // The sweep itself stays global: the foreign rows are archived, silently.
+        for job in foreign {
+            let archived = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
+            assert_eq!(archived.status, JobStatus::Cancelled);
         }
     }
 

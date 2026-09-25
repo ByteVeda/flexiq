@@ -202,9 +202,10 @@ The CloudEvents `type` is `org.byteveda.flexiq.` followed by the short name.
   attempt the task abandoned (unchanged). For a pending job, one of four
   causes, each naming the row's own `attempt` (its `retry_count`) and
   carrying no epoch:
-  - the scheduler's reaper sweep expired it: `reason: "expired"`. This is
-    unscoped — it fires in every namespace the sweep touches, not just the
-    scheduler's own.
+  - the scheduler's reaper sweep expired it: `reason: "expired"`. The sweep
+    archives every namespace's expired rows, but a scheduler scoped to a
+    namespace announces only its own; one with no namespace announces them
+    all, each in the row's own namespace.
   - the poller found it already expired as it went to claim it:
     `reason: "expired before execution"`.
   - the scheduler dead-lettered its parent — a DLQ move (out of retries, not
@@ -249,6 +250,12 @@ transitions emit nothing:
   dependent it cascades to.
 - **A result that lost its claim** (another scheduler or a requeue has taken
   the job over). That attempt's events belong to whichever claim settles it.
+- **Another namespace's expiry, swept by a namespaced scheduler.** The expiry
+  sweep is not elected: every scheduler runs it over every namespace on each
+  reaper tick, and the first to reach an expired row archives it. A
+  namespaced scheduler never announces another tenant's row, so no scheduler
+  is guaranteed to announce a given namespace's expiries — the one whose
+  namespace owns the row, or one with no namespace, has to sweep it first.
 - **Anything in a runtime with no sinks.** Each scheduler emits only for jobs
   it dispatched and results it settled, into its own hub.
 
