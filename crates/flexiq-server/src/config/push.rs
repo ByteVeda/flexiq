@@ -1242,12 +1242,10 @@ mod tests {
         let billing = &push.targets[1];
         assert_eq!(billing.name.as_deref(), Some("billing"));
         assert_eq!(billing.config.capacity, 3, "its own capacity wins");
-        match &billing.config.auth {
-            PushAuthConfig::Oidc { audience, .. } => {
-                assert_eq!(audience, "https://billing.run.app")
-            }
-            other => panic!("expected oidc, got {other:?}"),
-        }
+        let PushAuthConfig::Oidc { audience, .. } = &billing.config.auth else {
+            panic!("billing sets an OIDC audience, so its auth is oidc");
+        };
+        assert_eq!(audience, "https://billing.run.app");
 
         assert_eq!(push.queues(), vec!["orders", "refunds", "invoices"]);
     }
