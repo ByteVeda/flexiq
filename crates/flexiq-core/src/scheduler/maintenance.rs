@@ -104,11 +104,8 @@ impl Scheduler {
         let expired = match &self.events {
             Some(_) => self
                 .storage
-                .expire_pending_jobs_reporting(now, &mut |mut batch| {
-                    // The sweep spans every namespace but the hub is this
-                    // tenant's: scope the rows as `reap_stale_jobs` does below.
-                    let scope = self.namespace.as_deref();
-                    batch.retain(|job| scope.is_none_or(|ns| job.namespace.as_deref() == Some(ns)));
+                .expire_pending_jobs_reporting(now, &mut |batch| {
+                    // Spans every namespace; the emit keeps only this one's.
                     self.emit_cancelled_rows(batch, reason::EXPIRED)
                 }),
             None => self.storage.expire_pending_jobs(now),
@@ -161,16 +158,21 @@ impl Scheduler {
             } else {
                 format!("job timed out after {}ms", job.timeout_ms)
             };
-            let _ = self.handle_result(JobResult::Failure {
-                job_id: job.id.clone(),
-                error,
-                retry_count: job.retry_count,
-                max_retries: job.max_retries,
-                task_name: job.task_name.clone(),
-                wall_time_ns: 0,
-                should_retry: true,
-                timed_out: true,
-            })?;
+            // Unscoped for a scheduler with no namespace, so the settle
+            // announces only the jobs that are its own.
+            let _ = self.settle_reaped(
+                &job,
+                JobResult::Failure {
+                    job_id: job.id.clone(),
+                    error,
+                    retry_count: job.retry_count,
+                    max_retries: job.max_retries,
+                    task_name: job.task_name.clone(),
+                    wall_time_ns: 0,
+                    should_retry: true,
+                    timed_out: true,
+                },
+            )?;
         }
 
         // Fast-path recovery: requeue jobs whose worker died, without waiting
@@ -225,16 +227,20 @@ impl Scheduler {
                         Some(epoch),
                     );
                     let error = format!("worker {dead_owner} died; recovering in-flight job");
-                    if let Err(e) = self.handle_result(JobResult::Failure {
-                        job_id: job.id.clone(),
-                        error,
-                        retry_count: job.retry_count,
-                        max_retries: job.max_retries,
-                        task_name: job.task_name.clone(),
-                        wall_time_ns: 0,
-                        should_retry: true,
-                        timed_out: false,
-                    }) {
+                    // Scoped like the stale reaper, so announced the same way.
+                    if let Err(e) = self.settle_reaped(
+                        &job,
+                        JobResult::Failure {
+                            job_id: job.id.clone(),
+                            error,
+                            retry_count: job.retry_count,
+                            max_retries: job.max_retries,
+                            task_name: job.task_name.clone(),
+                            wall_time_ns: 0,
+                            should_retry: true,
+                            timed_out: false,
+                        },
+                    ) {
                         warn!(
                             "recover_orphaned_jobs: handle_result failed for {}: {e}",
                             job.id
@@ -357,7 +363,8 @@ impl Scheduler {
     ///
     /// A scheduler with no namespace serves the whole cluster, so it reads
     /// every namespace's due rows and each job it mints inherits the *row's*
-    /// namespace rather than the scheduler's (#918). `unique_key` is namespace
+    /// namespace rather than the scheduler's (#918) — though it announces only
+    /// the default namespace's firings. `unique_key` is namespace
     /// scoped since `m0017`, so two tenants whose schedules share a name no
     /// longer deduplicate against each other.
     pub(super) fn check_periodic(&self) -> Result<()> {

@@ -5,7 +5,12 @@
 //! constant number of allocations and no storage read: the queue, attempt and
 //! epoch of a settled job come from the dispatch record its result was settled
 //! against, carried out of the settle rather than looked up again.
+//!
+//! A scheduler announces only its own namespace's transitions — the default
+//! namespace when it has none — whatever its maintenance sweeps touch; see
+//! `Scheduler::owns_namespace`.
 
+use crate::error::Result;
 use crate::events::{EventHub, EventType, JobEvent};
 use crate::job::Job;
 use crate::storage::DeadJob;
@@ -22,6 +27,26 @@ pub(super) fn failure_attempt(result: &JobResult) -> Option<i32> {
 }
 
 impl Scheduler {
+    /// Whether a job row in `namespace` is this scheduler's to announce. The
+    /// dequeue's rule: a namespaced scheduler owns exactly its namespace, and
+    /// one with none owns only rows with none (the default namespace). The
+    /// maintenance sweeps may span every namespace; their events may not.
+    pub(super) fn owns_namespace(&self, namespace: Option<&str>) -> bool {
+        self.namespace.as_deref() == namespace
+    }
+
+    /// Settle a failure the reaper synthesized for `job`, announcing it only
+    /// if the job is this scheduler's. An unscoped reaper settles every
+    /// namespace's jobs, and [`Self::emit_outcome`] labels an outcome with this
+    /// scheduler's namespace, so another tenant's would be mislabelled too.
+    pub(super) fn settle_reaped(&self, job: &Job, result: JobResult) -> Result<ResultOutcome> {
+        if self.owns_namespace(job.namespace.as_deref()) {
+            self.handle_result(result)
+        } else {
+            self.settle_result(result).map(|settled| settled.outcome)
+        }
+    }
+
     /// `job.started` for a job about to be handed to the pool, or `None`
     /// without a hub. Built before the send moves the job, so the caller emits
     /// it only once the send succeeded.
@@ -61,16 +86,18 @@ impl Scheduler {
     /// `job.cancelled` for each job storage archived without running it: an
     /// expiry, or a dependent cascade-cancelled behind a dead-lettered parent.
     ///
-    /// The rows are the archived ones storage handed back, so each event keeps
-    /// the row's own namespace — an unscoped scheduler's sweep spans them all —
-    /// and takes its payload by move rather than by copy. Scoping the rows to
-    /// this scheduler's tenant is the caller's job.
+    /// The rows are the archived ones storage handed back, each taking its
+    /// payload by move rather than by copy. The expiry sweep spans every
+    /// namespace, so rows outside this scheduler's are dropped here, silently.
     pub(super) fn emit_cancelled_rows(&self, jobs: Vec<Job>, reason: &str) {
         let Some(hub) = &self.events else {
             return;
         };
         let with_payload = hub.wants_payload();
-        for job in jobs {
+        let own = jobs
+            .into_iter()
+            .filter(|job| self.owns_namespace(job.namespace.as_deref()));
+        for job in own {
             let mut event = JobEvent::new(
                 EventType::JobCancelled,
                 job.id,
@@ -89,10 +116,15 @@ impl Scheduler {
 
     /// `job.enqueued` for a job a periodic schedule just inserted. Only for an
     /// insert: a unique-key hit is a job some earlier firing already announced.
+    /// An unscoped scheduler fires every namespace's schedules but announces
+    /// only the default namespace's.
     pub(super) fn emit_periodic_enqueued(&self, job: Job) {
         let Some(hub) = &self.events else {
             return;
         };
+        if !self.owns_namespace(job.namespace.as_deref()) {
+            return;
+        }
         let mut event = JobEvent::new(
             EventType::JobEnqueued,
             job.id,
@@ -110,10 +142,16 @@ impl Scheduler {
     /// `job.enqueued` for the fresh job an auto-retry made of a dead-letter
     /// entry. No payload: the retry listing is blob-free by design, and reading
     /// the job back for its bytes would be a storage read per event.
+    ///
+    /// The retry listing is already scoped to this namespace; the check keeps
+    /// the rule from resting on every backend's query.
     pub(super) fn emit_dlq_retried(&self, new_id: String, entry: &DeadJob) {
         let Some(hub) = &self.events else {
             return;
         };
+        if !self.owns_namespace(entry.namespace.as_deref()) {
+            return;
+        }
         let mut event = JobEvent::new(
             EventType::JobEnqueued,
             new_id,
@@ -649,8 +687,33 @@ mod tests {
             .collect()
     }
 
+    /// A scheduler in `namespace` (`None` for the default one) over a fresh
+    /// in-memory store.
+    fn scheduler_in(namespace: Option<&str>, config: SchedulerConfig) -> Scheduler {
+        Scheduler::new(
+            StorageBackend::Sqlite(SqliteStorage::in_memory().unwrap()),
+            vec!["default".to_string()],
+            config,
+            namespace.map(str::to_string),
+        )
+    }
+
+    /// The namespaces every cross-namespace test seeds work into.
+    const SEEDED: [Option<&str>; 2] = [None, Some("tenant-a")];
+
+    /// `(job_id, namespace)` of every event of `event_type`, sorted.
+    fn announced(events: &[JobEvent], event_type: EventType) -> Vec<(String, Option<String>)> {
+        let mut seen: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == event_type)
+            .map(|e| (e.job_id.clone(), e.namespace.clone()))
+            .collect();
+        seen.sort();
+        seen
+    }
+
     #[test]
-    fn the_expiry_sweep_emits_cancelled_in_each_jobs_own_namespace() {
+    fn an_unscoped_expiry_sweep_emits_only_the_default_namespace() {
         let (scheduler, hub, rec) = with_hub(scheduler(), "");
         let plain = scheduler
             .storage
@@ -662,19 +725,139 @@ mod tests {
             .unwrap();
         scheduler.reap_stale().unwrap();
 
-        let mut events = delivered(&hub, &rec);
-        events.sort_by(|a, b| a.namespace.cmp(&b.namespace));
-        assert_eq!(types(&events), ["job.cancelled", "job.cancelled"]);
-        let expected = [(&plain, None), (&tenant, Some("tenant-a".to_string()))];
-        for (event, (job, namespace)) in events.iter().zip(expected) {
-            assert_eq!(event.job_id, job.id);
-            assert_eq!(event.namespace, namespace, "the row's, not the scheduler's");
-            assert_eq!(event.reason.as_deref(), Some(reason::EXPIRED));
-            assert_eq!(event.attempt, Some(0));
-            assert_eq!(event.epoch, None);
-            assert_eq!(event.queue, "default");
-            assert_eq!(event.task_name, "stale");
-            assert!(event.payload.is_none(), "no payload unless a sink asks");
+        let events = delivered(&hub, &rec);
+        assert_eq!(types(&events), ["job.cancelled"]);
+        let event = &events[0];
+        assert_eq!(event.job_id, plain.id);
+        assert_eq!(event.namespace, None);
+        assert_eq!(event.reason.as_deref(), Some(reason::EXPIRED));
+        assert_eq!(event.attempt, Some(0));
+        assert_eq!(event.epoch, None);
+        assert_eq!(event.queue, "default");
+        assert_eq!(event.task_name, "stale");
+        assert!(event.payload.is_none(), "no payload unless a sink asks");
+        // The sweep itself is unchanged: tenant-a's row is archived, silently.
+        let archived = scheduler
+            .storage
+            .get_job(&tenant.id, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(archived.status, JobStatus::Cancelled);
+    }
+
+    /// A Running job in `namespace` whose 1 ms deadline has already passed.
+    fn timed_out_job(scheduler: &Scheduler, namespace: Option<&str>) -> Job {
+        let job = scheduler
+            .storage
+            .enqueue(NewJob {
+                timeout_ms: 1,
+                namespace: namespace.map(str::to_string),
+                ..new_job("slow", 3)
+            })
+            .unwrap();
+        // Dequeued at `now`, since `started_at` is the dequeue's clock.
+        scheduler
+            .storage
+            .dequeue("default", now_millis(), namespace)
+            .unwrap()
+            .unwrap();
+        job
+    }
+
+    #[test]
+    fn the_stale_reaper_announces_only_its_own_namespaces_timeouts() {
+        for scope in SEEDED {
+            let (scheduler, hub, rec) =
+                with_hub(scheduler_in(scope, SchedulerConfig::default()), "");
+            let jobs: Vec<Job> = SEEDED
+                .iter()
+                .map(|ns| timed_out_job(&scheduler, *ns))
+                .collect();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            scheduler.reap_stale().unwrap();
+
+            let own = jobs
+                .iter()
+                .find(|job| job.namespace.as_deref() == scope)
+                .unwrap();
+            let events = delivered(&hub, &rec);
+            let expected = vec![(own.id.clone(), scope.map(str::to_string))];
+            assert_eq!(
+                announced(&events, EventType::JobFailed),
+                expected,
+                "{scope:?}"
+            );
+            assert_eq!(
+                announced(&events, EventType::JobRetrying),
+                expected,
+                "{scope:?}"
+            );
+            assert_eq!(events.len(), 2, "{scope:?}: {:?}", types(&events));
+            assert_eq!(events[0].timed_out, Some(true));
+        }
+    }
+
+    #[test]
+    fn an_unscoped_reaper_still_times_out_another_namespaces_job_silently() {
+        let (scheduler, hub, rec) = with_hub(scheduler(), "");
+        let foreign = timed_out_job(&scheduler, Some("tenant-a"));
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        scheduler.reap_stale().unwrap();
+
+        assert!(delivered(&hub, &rec).is_empty());
+        let reaped = scheduler
+            .storage
+            .get_job(&foreign.id, Some("tenant-a"))
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            reaped.status,
+            JobStatus::Running,
+            "the timeout still settled"
+        );
+    }
+
+    #[test]
+    fn orphan_recovery_announces_only_its_own_namespace() {
+        for scope in SEEDED {
+            let mut scheduler = scheduler_in(scope, SchedulerConfig::default());
+            scheduler.set_claim_owner("survivor".to_string());
+            let (scheduler, hub, rec) = with_hub(scheduler, "");
+            let mut jobs = Vec::new();
+            for namespace in SEEDED {
+                let job = scheduler
+                    .storage
+                    .enqueue(NewJob {
+                        namespace: namespace.map(str::to_string),
+                        ..new_job("orphan", 3)
+                    })
+                    .unwrap();
+                scheduler
+                    .storage
+                    .dequeue("default", now_millis() + 1_000, namespace)
+                    .unwrap()
+                    .unwrap();
+                assert!(scheduler
+                    .storage
+                    .claim_execution(&job.id, "dead-worker")
+                    .unwrap()
+                    .is_some());
+                jobs.push(job);
+            }
+            scheduler.reap_stale().unwrap();
+
+            let own = jobs
+                .iter()
+                .find(|job| job.namespace.as_deref() == scope)
+                .unwrap();
+            let events = delivered(&hub, &rec);
+            let expected = vec![(own.id.clone(), scope.map(str::to_string))];
+            assert_eq!(
+                announced(&events, EventType::JobFailed),
+                expected,
+                "{scope:?}"
+            );
+            assert_eq!(events.len(), 2, "{scope:?}: {:?}", types(&events));
         }
     }
 
@@ -870,7 +1053,8 @@ mod tests {
 
     #[test]
     fn a_periodic_firing_emits_enqueued_once_per_slot() {
-        let (scheduler, hub, rec) = with_hub(scheduler(), "");
+        let scoped = scheduler_in(Some("tenant-a"), SchedulerConfig::default());
+        let (scheduler, hub, rec) = with_hub(scoped, "");
         scheduler
             .storage
             .register_periodic(&NewPeriodicTask {
@@ -937,6 +1121,94 @@ mod tests {
         assert_eq!(event.attempt, Some(0));
         assert_eq!(event.epoch, None);
         assert!(event.payload.is_none(), "no payload unless a sink asks");
+    }
+
+    /// A schedule named `name`, due a second ago, in `namespace`.
+    fn due_schedule(name: &str, namespace: Option<&str>) -> NewPeriodicTask {
+        NewPeriodicTask {
+            name: name.to_string(),
+            task_name: "periodic_task".to_string(),
+            cron_expr: "* * * * * *".to_string(),
+            args: None,
+            kwargs: None,
+            queue: "default".to_string(),
+            enabled: true,
+            next_run: now_millis() - 1_000,
+            timezone: None,
+            namespace: namespace.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn periodic_firings_announce_only_their_own_namespace() {
+        for scope in SEEDED {
+            let (scheduler, hub, rec) =
+                with_hub(scheduler_in(scope, SchedulerConfig::default()), "");
+            for namespace in SEEDED {
+                scheduler
+                    .storage
+                    .register_periodic(&due_schedule("nightly", namespace))
+                    .unwrap();
+            }
+            scheduler.check_periodic().unwrap();
+
+            let events = delivered(&hub, &rec);
+            assert_eq!(types(&events), ["job.enqueued"], "{scope:?}");
+            assert_eq!(events[0].namespace.as_deref(), scope);
+            let fired = scheduler.storage.list_periodic(scope).unwrap().remove(0);
+            assert!(
+                fired.last_run.is_some(),
+                "{scope:?}: its own schedule fired"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unscoped_scheduler_still_fires_another_namespaces_schedule() {
+        let (scheduler, hub, rec) = with_hub(scheduler(), "");
+        scheduler
+            .storage
+            .register_periodic(&due_schedule("nightly", Some("tenant-a")))
+            .unwrap();
+        scheduler.check_periodic().unwrap();
+
+        assert!(delivered(&hub, &rec).is_empty());
+        let fired = scheduler
+            .storage
+            .list_periodic(Some("tenant-a"))
+            .unwrap()
+            .remove(0);
+        assert!(fired.last_run.is_some(), "the firing itself is unchanged");
+    }
+
+    #[test]
+    fn dlq_auto_retry_announces_only_its_own_namespace() {
+        let config = || SchedulerConfig {
+            dlq_auto_retry_delay_ms: Some(0),
+            dlq_auto_retry_max: 3,
+            ..SchedulerConfig::default()
+        };
+        for scope in SEEDED {
+            let (scheduler, hub, rec) = with_hub(scheduler_in(scope, config()), "");
+            for namespace in SEEDED {
+                let failed = scheduler
+                    .storage
+                    .enqueue(NewJob {
+                        namespace: namespace.map(str::to_string),
+                        ..new_job("flaky", 0)
+                    })
+                    .unwrap();
+                scheduler
+                    .storage
+                    .move_to_dlq(&failed, "ConnectionError: refused", None)
+                    .unwrap();
+            }
+            scheduler.auto_retry_dlq().unwrap();
+
+            let events = delivered(&hub, &rec);
+            assert_eq!(types(&events), ["job.enqueued"], "{scope:?}");
+            assert_eq!(events[0].namespace.as_deref(), scope);
+        }
     }
 
     #[test]
