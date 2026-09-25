@@ -130,9 +130,10 @@ Configuration (environment only):
                                  the variable its secret is read from
   FLEXIQ_EVENTS_FILE            JSON document of sinks job lifecycle events are
                                  sent to as CloudEvents (default: off). Not a
-                                 role: it rides on the ones above. An `http`
-                                 sink needs a build with the `events-http`
-                                 cargo feature, a `redis_streams` one `redis`
+                                 role: it rides on the ones above. Each sink
+                                 kind needs its cargo feature: `http`
+                                 `events-http`, `redis_streams` `redis`,
+                                 `kafka` `events-kafka`, `nats` `events-nats`
   FLEXIQ_EVENTS_DRAIN           seconds shutdown spends delivering buffered
                                  events before dropping them (default: 5)
 

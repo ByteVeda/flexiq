@@ -204,24 +204,36 @@ mod tests {
         const BEARER: &str = "FLEXIQ_TEST_EVENTS_SCRUB_BEARER";
         const HMAC: &str = "FLEXIQ_TEST_EVENTS_SCRUB_HMAC";
         const REDIS: &str = "FLEXIQ_TEST_EVENTS_SCRUB_REDIS_URL";
+        const KAFKA_USER: &str = "FLEXIQ_TEST_EVENTS_SCRUB_KAFKA_USER";
+        const KAFKA_PASS: &str = "FLEXIQ_TEST_EVENTS_SCRUB_KAFKA_PASS";
+        const NATS: &str = "FLEXIQ_TEST_EVENTS_SCRUB_NATS_URL";
+        const NATS_CREDS: &str = "FLEXIQ_TEST_EVENTS_SCRUB_NATS_CREDS";
         let document = file(&format!(
             r#"{{"sinks": [
                 {{"kind": "http", "name": "w", "url": "https://events.example.com/in",
                   "allow": ["events.example.com"],
                   "bearer_token_env": "{BEARER}", "hmac_secret_env": "{HMAC}"}},
-                {{"kind": "redis_streams", "name": "s", "url_env": "{REDIS}", "stream": "flexiq:events"}}
+                {{"kind": "redis_streams", "name": "s", "url_env": "{REDIS}", "stream": "flexiq:events"}},
+                {{"kind": "kafka", "name": "k", "brokers": ["kafka:9093"], "topic": "flexiq.events",
+                  "tls": true, "sasl": {{"mechanism": "scram-sha-512",
+                  "username_env": "{KAFKA_USER}", "password_env": "{KAFKA_PASS}"}}}},
+                {{"kind": "nats", "name": "n", "url_env": "{NATS}", "credentials_env": "{NATS_CREDS}",
+                  "subject": "flexiq.{{queue}}"}}
             ]}}"#
         ));
         let settings = from_env(&env(&[(FILE_VAR, &document.path())]))
             .expect("valid")
             .expect("enabled");
-        assert_eq!(secret_vars(&settings), vec![BEARER, HMAC, REDIS]);
+        let all = [
+            BEARER, HMAC, REDIS, KAFKA_USER, KAFKA_PASS, NATS, NATS_CREDS,
+        ];
+        assert_eq!(secret_vars(&settings), all);
 
-        for var in [BEARER, HMAC, REDIS] {
+        for var in all {
             std::env::set_var(var, "redis://:hunter2@cache:6379");
         }
         scrub_event_secrets(&settings);
-        for var in [BEARER, HMAC, REDIS] {
+        for var in all {
             assert!(std::env::var(var).is_err(), "{var} survived the scrub");
         }
     }
