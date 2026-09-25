@@ -2,10 +2,11 @@ use crate::error::{QueueError, Result};
 use crate::job::{Job, NewJob};
 use crate::step::StepLimits;
 use crate::storage::records::{
-    AttemptFence, CircuitBreakerState, DebounceOptions, JobError, JobStep, LockInfo, NewJobStep,
-    NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SettleClaimant,
-    SettleGrant, SleepOutcome, StaleJob, StepCommit, Subscription, SubscriptionMode, TaskLogEntry,
-    TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
+    AttemptFence, CircuitBreakerState, DebounceOptions, Dequeued, JobError, JobStep, LockInfo,
+    NewJobStep, NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry,
+    SettleClaimant, SettleGrant, SleepOutcome, StaleJob, StepCommit, Subscription,
+    SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo,
+    WorkerRegistration, WorkerStatus,
 };
 use crate::storage::{
     DeadJob, DispatchOrder, QueueStats, RetentionCounts, RetentionCutoffs, SubscriptionBacklogStats,
@@ -95,13 +96,31 @@ pub trait Storage: Send + Sync + Clone {
     fn dequeue(&self, queue_name: &str, now: i64, namespace: Option<&str>) -> Result<Option<Job>>;
     /// [`dequeue`](Self::dequeue) across several queues, checked in order. Each
     /// queue uses its dispatch order from `orders` (absent = the `Fifo` default).
+    ///
+    /// The claim of [`dequeue_from_reporting`](Self::dequeue_from_reporting),
+    /// with the expired jobs it archived dropped.
     fn dequeue_from(
         &self,
         queues: &[String],
         now: i64,
         namespace: Option<&str>,
         orders: &std::collections::HashMap<String, DispatchOrder>,
-    ) -> Result<Option<Job>>;
+    ) -> Result<Option<Job>> {
+        Ok(self
+            .dequeue_from_reporting(queues, now, namespace, orders)?
+            .claimed)
+    }
+    /// [`dequeue_from`](Self::dequeue_from), also returning every candidate the
+    /// scan found past `expires_at` and archived as `Cancelled` instead of
+    /// claiming. The expired rows were already loaded to archive them, so
+    /// reporting them costs no extra read.
+    fn dequeue_from_reporting(
+        &self,
+        queues: &[String],
+        now: i64,
+        namespace: Option<&str>,
+        orders: &std::collections::HashMap<String, DispatchOrder>,
+    ) -> Result<Dequeued<Option<Job>>>;
     /// Atomically claim up to `max` ready jobs from a single queue in one
     /// transaction. Returns the claimed jobs (now in `Running` state). May
     /// return fewer than `max` if the queue lacks enough eligible jobs.
@@ -115,6 +134,10 @@ pub trait Storage: Send + Sync + Clone {
     /// Claim up to `max` ready jobs across the given queues, checking each in
     /// order until the budget is exhausted. Each queue uses its dispatch order
     /// from `orders` (absent = the `Fifo` default).
+    ///
+    /// The claims of
+    /// [`dequeue_batch_from_reporting`](Self::dequeue_batch_from_reporting),
+    /// with the expired jobs it archived dropped.
     fn dequeue_batch_from(
         &self,
         queues: &[String],
@@ -122,7 +145,22 @@ pub trait Storage: Send + Sync + Clone {
         namespace: Option<&str>,
         max: usize,
         orders: &std::collections::HashMap<String, DispatchOrder>,
-    ) -> Result<Vec<Job>>;
+    ) -> Result<Vec<Job>> {
+        Ok(self
+            .dequeue_batch_from_reporting(queues, now, namespace, max, orders)?
+            .claimed)
+    }
+    /// [`dequeue_batch_from`](Self::dequeue_batch_from), also returning every
+    /// candidate archived as expired on the way, as in
+    /// [`dequeue_from_reporting`](Self::dequeue_from_reporting).
+    fn dequeue_batch_from_reporting(
+        &self,
+        queues: &[String],
+        now: i64,
+        namespace: Option<&str>,
+        max: usize,
+        orders: &std::collections::HashMap<String, DispatchOrder>,
+    ) -> Result<Dequeued<Vec<Job>>>;
     /// Mark a job completed with its result, moving it from `jobs` into
     /// `archived_jobs` in one transaction. A job in another namespace reports
     /// `JobNotFound`, like an unknown id.
@@ -172,7 +210,16 @@ pub trait Storage: Send + Sync + Clone {
     /// A job in another namespace reports `false`, the same answer an unknown
     /// or already-terminal id gets: a caller scoped to one namespace learns
     /// nothing about ids outside it. `None` addresses every namespace.
-    fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool>;
+    ///
+    /// The flag of [`cancel_job_reporting`](Self::cancel_job_reporting), with
+    /// the cascaded dependents dropped.
+    fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
+        Ok(self.cancel_job_reporting(id, namespace)?.0)
+    }
+    /// [`cancel_job`](Self::cancel_job), also returning every dependent the
+    /// cascade cancelled, as [`cascade_cancel_reporting`](Self::cascade_cancel_reporting)
+    /// reports them. The list is empty whenever the flag is `false`.
+    fn cancel_job_reporting(&self, id: &str, namespace: Option<&str>) -> Result<(bool, Vec<Job>)>;
     /// Set the cancel-requested flag on a `Running` job — the task must poll
     /// for it. Returns `false` when no running job matched, which is also the
     /// answer for a job in another namespace.
@@ -205,7 +252,21 @@ pub trait Storage: Send + Sync + Clone {
         failed_job_id: &str,
         reason: &str,
         namespace: Option<&str>,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        self.cascade_cancel_reporting(failed_job_id, reason, namespace)
+            .map(drop)
+    }
+    /// [`cascade_cancel`](Self::cascade_cancel), returning every dependent it
+    /// cancelled. Each is the archived row — status `Cancelled`,
+    /// `completed_at` set, error `"<reason>: <failed_job_id>"` — payload
+    /// included, since archiving already loaded it. A dependent that was no
+    /// longer pending, or sat outside `namespace`, was left alone and is absent.
+    fn cascade_cancel_reporting(
+        &self,
+        failed_job_id: &str,
+        reason: &str,
+        namespace: Option<&str>,
+    ) -> Result<Vec<Job>>;
     /// Ids of the jobs `job_id` depends on.
     ///
     /// A dependency may not cross namespaces — [`enqueue`](Self::enqueue) and
@@ -277,8 +338,8 @@ pub trait Storage: Send + Sync + Clone {
     /// status on all backends.
     fn purge_completed_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64>;
     /// Running jobs that exceeded their deadline, for the scheduler to fail or
-    /// retry. Scoped so a scheduler never times out another namespace's job and
-    /// then records the outcome under its own.
+    /// retry. `Some(ns)` scopes the reap to that namespace; `None` reaps every
+    /// namespace.
     ///
     /// A job whose dispatch was accepted out of band is **excluded** while its
     /// settle deadline is still in the future, and flagged
@@ -288,8 +349,9 @@ pub trait Storage: Send + Sync + Clone {
     fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<StaleJob>>;
     /// Running jobs whose execution-claim owner is not in `live_owner_ids` (the
     /// worker that claimed them has died). Read-only — paired with the dead
-    /// owner so the caller can atomically reclaim before requeuing. Scoped like
-    /// [`Storage::reap_stale_jobs`].
+    /// owner so the caller can atomically reclaim before requeuing. Namespace
+    /// scoping works like [`Storage::reap_stale_jobs`]: `Some(ns)` scopes to
+    /// that namespace, `None` covers every namespace.
     fn reap_orphaned_jobs(
         &self,
         live_owner_ids: &[String],
@@ -315,7 +377,22 @@ pub trait Storage: Send + Sync + Clone {
     /// Move a job to the dead-letter queue and cascade-cancel its dependents.
     /// Records an ordinary failure; a job the scheduler threw away on purpose
     /// goes through [`shed_to_dlq`](Self::shed_to_dlq) instead.
-    fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()>;
+    ///
+    /// [`move_to_dlq_reporting`](Self::move_to_dlq_reporting) with the
+    /// cascaded dependents dropped.
+    fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
+        self.move_to_dlq_reporting(job, error, metadata).map(drop)
+    }
+    /// [`move_to_dlq`](Self::move_to_dlq), returning every dependent the
+    /// cascade cancelled (reason `"dependency failed"`), as
+    /// [`cascade_cancel_reporting`](Self::cascade_cancel_reporting) reports
+    /// them.
+    fn move_to_dlq_reporting(
+        &self,
+        job: &Job,
+        error: &str,
+        metadata: Option<&str>,
+    ) -> Result<Vec<Job>>;
     /// Dead-letter a job the scheduler shed rather than ran, marking the entry
     /// so [`list_dead_for_retry`](Self::list_dead_for_retry) never offers it.
     ///
@@ -324,12 +401,27 @@ pub trait Storage: Send + Sync + Clone {
     /// the scheduler's vocabulary — storage is told "shed", never asked to
     /// parse — and `move_to_dlq` keeps the signature it published.
     ///
-    /// Defaults to [`move_to_dlq`](Self::move_to_dlq) so an out-of-tree backend
-    /// keeps compiling. Such a backend records the entry as an ordinary failure
-    /// and leans on the sweep's reason-prefix guard, exactly as every backend
-    /// did before the `shed` flag existed.
+    /// [`shed_to_dlq_reporting`](Self::shed_to_dlq_reporting) with the
+    /// cascaded dependents dropped.
     fn shed_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
-        self.move_to_dlq(job, error, metadata)
+        self.shed_to_dlq_reporting(job, error, metadata).map(drop)
+    }
+    /// [`shed_to_dlq`](Self::shed_to_dlq), returning the cascaded dependents
+    /// like [`move_to_dlq_reporting`](Self::move_to_dlq_reporting).
+    ///
+    /// Defaults to [`move_to_dlq_reporting`](Self::move_to_dlq_reporting), so a
+    /// backend with no notion of a shed need not implement it. Such a backend
+    /// records the entry as an ordinary failure and leans on the sweep's
+    /// reason-prefix guard, exactly as every backend did before the `shed`
+    /// flag existed. Override this one, not `shed_to_dlq`: the plain method
+    /// routes through it.
+    fn shed_to_dlq_reporting(
+        &self,
+        job: &Job,
+        error: &str,
+        metadata: Option<&str>,
+    ) -> Result<Vec<Job>> {
+        self.move_to_dlq_reporting(job, error, metadata)
     }
     /// Dead-letter entries, newest first, paginated.
     /// `namespace` of `None` returns every namespace, matching `list_jobs`.
@@ -723,7 +815,29 @@ pub trait Storage: Send + Sync + Clone {
 
     /// Fail pending jobs whose `expires_at` has passed. Returns the count
     /// expired.
-    fn expire_pending_jobs(&self, now: i64) -> Result<u64>;
+    ///
+    /// Works in bounded batches: however large the expired backlog, at most
+    /// one batch of rows is in memory at once. Defaults to
+    /// [`expire_pending_jobs_reporting`](Self::expire_pending_jobs_reporting)
+    /// with a callback that drops each batch; every in-tree backend forwards
+    /// its own count-only sweep instead.
+    fn expire_pending_jobs(&self, now: i64) -> Result<u64> {
+        self.expire_pending_jobs_reporting(now, &mut drop::<Vec<Job>>)
+    }
+    /// [`expire_pending_jobs`](Self::expire_pending_jobs), handing every job it
+    /// expired, across every namespace, to `on_batch` one batch at a time.
+    /// Returns the total count.
+    ///
+    /// Each job is the archived row — status `Cancelled`, `completed_at` set,
+    /// error `"expired"` — payload included, since archiving already loaded
+    /// it. A batch is handed over only once committed and is never empty. The
+    /// plain sweep's bound holds as long as `on_batch` keeps nothing: storage
+    /// holds at most one batch (500 rows on every in-tree backend) at once.
+    fn expire_pending_jobs_reporting(
+        &self,
+        now: i64,
+        on_batch: &mut dyn FnMut(Vec<Job>),
+    ) -> Result<u64>;
 
     // ── Job revocation ───────────────────────────────────────────
 

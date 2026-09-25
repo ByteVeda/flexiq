@@ -4,6 +4,7 @@
     "index",
     "events",
     "middleware",
+    "event-sinks",
     "serializers",
     "monitoring",
     "logging",

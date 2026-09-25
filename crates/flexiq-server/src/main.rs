@@ -3,7 +3,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use flexiq_server::config::{
-    dashboard::scrub_bootstrap_password, listen::scrub_attach_token,
+    dashboard::scrub_bootstrap_password, events::scrub_event_secrets, listen::scrub_attach_token,
     push::scrub_push_target_secrets, trigger::scrub_trigger_secrets, Config,
 };
 use flexiq_server::runtime;
@@ -128,6 +128,13 @@ Configuration (environment only):
   FLEXIQ_TRIGGERS_FILE          JSON file of trigger definitions; required with
                                  FLEXIQ_TRIGGER_LISTEN. Each definition names
                                  the variable its secret is read from
+  FLEXIQ_EVENTS_FILE            JSON document of sinks job lifecycle events are
+                                 sent to as CloudEvents (default: off). Not a
+                                 role: it rides on the ones above. An `http`
+                                 sink needs a build with the `events-http`
+                                 cargo feature, a `redis_streams` one `redis`
+  FLEXIQ_EVENTS_DRAIN           seconds shutdown spends delivering buffered
+                                 events before dropping them (default: 5)
 
 At least one of FLEXIQ_LISTEN, FLEXIQ_DASHBOARD, FLEXIQ_WEBHOOK_LISTEN,
 FLEXIQ_GRPC_LISTEN, FLEXIQ_PUSH_TARGET_URL or FLEXIQ_TRIGGER_LISTEN must be
@@ -168,11 +175,21 @@ fn main() -> Result<()> {
     }
 
     let config = Config::from_env()?;
+    // Before the scrub: the sinks read their secret variables as they are
+    // built, and a sink that cannot be built stops the boot here.
+    let events = config
+        .events
+        .as_ref()
+        .map(runtime::start_events)
+        .transpose()?;
     scrub_bootstrap_password();
     scrub_attach_token();
     scrub_push_target_secrets();
     if let Some(triggers) = &config.triggers {
         scrub_trigger_secrets(triggers);
     }
-    runtime::run(config)
+    if let Some(settings) = &config.events {
+        scrub_event_secrets(settings);
+    }
+    runtime::run(config, events)
 }

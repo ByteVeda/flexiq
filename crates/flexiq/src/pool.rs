@@ -22,8 +22,8 @@ use async_trait::async_trait;
 use crossbeam_channel::Sender;
 use flexiq_core::worker::CancelSignals;
 use flexiq_core::{
-    Job, JobResult, LeaseBook, QueueError, Result, SchedulerConfig, StorageBackend, TaskConfig,
-    TaskError, Worker, WorkerDispatcher, WorkerHandle,
+    EventHub, Job, JobResult, LeaseBook, QueueError, Result, SchedulerConfig, StorageBackend,
+    TaskConfig, TaskError, Worker, WorkerDispatcher, WorkerHandle,
 };
 use tokio::sync::Semaphore;
 
@@ -52,6 +52,7 @@ pub struct WorkerBuilder {
     worker_id: Option<String>,
     scheduler_config: Option<SchedulerConfig>,
     push_dispatch: Option<bool>,
+    events: Option<Arc<EventHub>>,
     duplicate: Option<String>,
 }
 
@@ -69,6 +70,7 @@ impl WorkerBuilder {
             worker_id: None,
             scheduler_config: None,
             push_dispatch: None,
+            events: None,
             duplicate: None,
         }
     }
@@ -126,6 +128,36 @@ impl WorkerBuilder {
         self
     }
 
+    /// Send job lifecycle events to `hub`, built with [`EventHub::start`] or
+    /// [`EventHub::from_json`] from an [`EventsConfig`](crate::EventsConfig).
+    ///
+    /// The worker never shuts the hub down: call [`EventHub::shutdown`] after
+    /// the worker's own `shutdown` returns, so its last outcomes are flushed
+    /// within a budget you choose.
+    ///
+    /// ```no_run
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    ///
+    /// let q = flexiq::FlexiQ::in_memory()?;
+    /// let config = flexiq::EventsConfig::parse(
+    ///     r#"{"sinks":[{"kind":"redis_streams","name":"audit",
+    ///                   "url_env":"EVT_REDIS_URL","stream":"flexiq:events"}]}"#,
+    /// )?;
+    /// let hub = Arc::new(flexiq::EventHub::start(config)?);
+    /// let worker = q.worker().events(Arc::clone(&hub)).spawn()?;
+    /// // ... run ...
+    /// worker.shutdown()?;
+    /// hub.shutdown(Duration::from_secs(5));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn events(mut self, hub: Arc<EventHub>) -> Self {
+        self.events = Some(hub);
+        self
+    }
+
     /// Register this process, start the scheduler and the pool, and return a
     /// handle whose `shutdown` drains and unregisters.
     pub fn spawn(self) -> Result<WorkerHandle> {
@@ -167,6 +199,9 @@ impl WorkerBuilder {
         }
         if let Some(enabled) = self.push_dispatch {
             worker = worker.push_dispatch(enabled);
+        }
+        if let Some(hub) = self.events {
+            worker = worker.events(hub);
         }
         for (name, config) in self.configs {
             worker = worker.task_config(name, config);

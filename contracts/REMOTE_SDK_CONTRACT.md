@@ -785,6 +785,7 @@ is the file to correct if the two ever disagree:
 | RPC and message shapes, field numbers, idempotency levels | `contracts/proto/flexiq/**` |
 | The payload envelope, durable-step semantics, capability meaning, job status | `crates/flexiq-core/BINDING_CONTRACT.md` |
 | Conformance vectors | `contracts/wire-vectors.json` |
+| Job lifecycle events sent out as CloudEvents (event egress) | `contracts/EVENT_EGRESS_CONTRACT.md` |
 | The compiled descriptor reflection serves | `contracts/descriptor.binpb`, at the `buf` version in `contracts/BUF_VERSION` |
 | Why any of it is shaped this way | `tasks/specs/2026-09-01-flexiq-v1-proto-design.md` |
 

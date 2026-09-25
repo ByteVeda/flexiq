@@ -53,7 +53,7 @@ jobs:
           args: >-
             --release --out dist
             --interpreter python3.10 python3.12 python3.14
-            --features extension-module,postgres,redis,native-async,workflows,mesh,push-dispatch
+            --features extension-module,postgres,redis,native-async,workflows,mesh,push-dispatch,events-http
           maturin-version: v1.13.3
           # Build on the runner rather than in a manylinux container: the cargo
           # cache restored above is the host's, and these wheels only ever have
@@ -81,7 +81,7 @@ jobs:
         uses: ./.github/actions/provision-gradle
 
       - name: Build the JNI cdylib
-        run: cargo build --release --features postgres,redis,workflows,mesh,push-dispatch -p flexiq-java
+        run: cargo build --release --features postgres,redis,workflows,mesh,push-dispatch,events-http -p flexiq-java
 
       # The example resolves org.byteveda:flexiq from mavenLocal(), so this
       # tree's build has to land there. -x cargoBuild reuses the cdylib above;

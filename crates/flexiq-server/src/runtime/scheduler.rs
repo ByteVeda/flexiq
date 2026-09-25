@@ -16,7 +16,8 @@ use flexiq_core::scheduler::retention::RetentionConfig;
 #[cfg(feature = "http-target")]
 use flexiq_core::HttpDispatchTarget;
 use flexiq_core::{
-    RemoteDispatcher, SchedulerConfig, StorageBackend, Worker, WorkerDispatcher, WorkerHandle,
+    EventHub, RemoteDispatcher, SchedulerConfig, StorageBackend, Worker, WorkerDispatcher,
+    WorkerHandle,
 };
 
 /// Pool type the attach path reports to the worker registry, so
@@ -115,6 +116,9 @@ pub struct SchedulerSettings {
     pub maintenance: bool,
     /// Wake-on-enqueue choice; `None` keeps the backend default.
     pub push_dispatch: Option<bool>,
+    /// Where the scheduler's job lifecycle events go. `None` emits none.
+    /// Shut down by `runtime::run`, after the worker, never by the worker.
+    pub events: Option<Arc<EventHub>>,
 }
 
 /// Owns the scheduler's lifecycle: start-once, shutdown-once.
@@ -211,6 +215,9 @@ impl SchedulerSupervisor {
         }
         if let Some(enabled) = self.settings.push_dispatch {
             worker = worker.push_dispatch(enabled);
+        }
+        if let Some(hub) = &self.settings.events {
+            worker = worker.events(Arc::clone(hub));
         }
         worker
     }

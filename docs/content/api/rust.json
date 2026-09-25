@@ -840,6 +840,20 @@
     },
     {
       "owner": "WorkerBuilder",
+      "name": "events",
+      "kind": "method",
+      "signature": "fn events(hub: Arc<EventHub>) -> Self",
+      "params": [
+        {
+          "name": "hub",
+          "type": "Arc<EventHub>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "WorkerBuilder",
       "name": "num_workers",
       "kind": "method",
       "signature": "fn num_workers(num_workers: usize) -> Self",

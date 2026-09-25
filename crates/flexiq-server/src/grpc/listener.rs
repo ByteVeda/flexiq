@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use flexiq_core::StorageBackend;
+use flexiq_core::{EventHub, StorageBackend};
 use flexiq_workflows::WorkflowStorageBackend;
 use tokio::net::TcpListener;
 #[cfg(unix)]
@@ -26,6 +26,7 @@ use tonic::transport::Server;
 
 use crate::config::grpc::GrpcConfig;
 use crate::config::listen::ListenAddress;
+use crate::events::Events;
 use crate::grpc::admin::Admin;
 use crate::grpc::auth::{self, AuthLayer};
 use crate::grpc::executor::ExecutorDoor;
@@ -70,6 +71,7 @@ where
 pub struct Listener {
     config: GrpcConfig,
     incoming: Incoming,
+    events: Events,
 }
 
 /// The bound socket, in whichever shape the address asked for.
@@ -111,7 +113,15 @@ impl Listener {
         Ok(Self {
             config: config.clone(),
             incoming,
+            events: None,
         })
+    }
+
+    /// Announce the jobs the producer and admin doors enqueue or cancel on
+    /// `hub`. Without it the doors emit nothing.
+    pub fn events(mut self, hub: Arc<EventHub>) -> Self {
+        self.events = Some(hub);
+        self
     }
 
     /// Address actually bound, for a TCP listener.
@@ -138,10 +148,10 @@ impl Listener {
         executor: Option<ExecutorDoor>,
         shutdown: Shutdown,
     ) -> Result<()> {
-        let producer = Producer::new(storage.clone(), workflows);
+        let producer = Producer::new(storage.clone(), workflows, self.events.clone());
         // Always registered: what separates an operator from a producer is the
         // token's scope, checked by the one gate in front of both.
-        let admin = Admin::new(storage.clone());
+        let admin = Admin::new(storage.clone(), self.events.clone());
         let health = health::serve(
             storage.clone(),
             self.config.namespace.clone(),
@@ -159,6 +169,7 @@ impl Listener {
             self.config.namespace.clone(),
             executor.clone(),
             Arc::clone(&rpc_metrics),
+            self.events.clone(),
         )
         .merge(facade::router(producer.clone(), admin.clone()));
 

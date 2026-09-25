@@ -442,6 +442,12 @@ impl PyQueue {
             self.namespace.clone(),
         );
         scheduler.set_claim_owner(worker_id.clone());
+        // Started before the worker registers, so a sink this build lacks
+        // refuses the start cleanly. Its drop drains the hub after the run.
+        let events_run = self.start_event_hub()?;
+        if let Some(run) = &events_run {
+            scheduler.set_events(run.hub());
+        }
         // This worker's own step handle, fenced on the id it claims execution
         // under. It belongs to the worker rather than to `self`, because one
         // `Queue` may run several workers and a shared slot would leave all but
@@ -925,6 +931,10 @@ impl PyQueue {
         // Unregister worker on shutdown
         let _ = self.storage.unregister_worker(&worker_id);
         self.clear_drained(&worker_id);
+
+        // Last: the scheduler has stopped and every result is handled, so the
+        // hub drains a buffer nothing adds to.
+        drop(events_run);
 
         Ok(())
     }

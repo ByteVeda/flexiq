@@ -1,4 +1,5 @@
 pub mod codel;
+mod events;
 mod maintenance;
 pub use maintenance::ACCEPTED_NOT_SETTLED;
 mod poller;
@@ -16,6 +17,7 @@ use std::time::{Duration, Instant};
 use log::error;
 use tokio::sync::Notify;
 
+use crate::events::EventHub;
 use crate::lease::{Lease, LeaseBook};
 use crate::resilience::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
 use crate::resilience::dlq::DeadLetterQueue;
@@ -355,6 +357,9 @@ const RETIRED_DISPATCHES: usize = 1024;
 #[derive(Clone)]
 struct DispatchRecord {
     task_name: String,
+    /// Queue the job was dispatched from, so a settled job's events name it
+    /// without a storage read.
+    queue: String,
     owner: String,
     attempt: i32,
     /// Epoch of the execution claim this dispatch was made under. `None` for a
@@ -544,6 +549,8 @@ pub struct Scheduler {
     /// deferral would give every one its own drain, which defers the next batch.
     #[cfg(feature = "push-dispatch")]
     deferred_floor: std::sync::atomic::AtomicI64,
+    /// Where lifecycle events go. `None` emits nothing and costs nothing.
+    events: Option<Arc<EventHub>>,
 }
 
 /// Counters for tick-based scheduling of periodic maintenance tasks.
@@ -600,6 +607,7 @@ impl Scheduler {
             delayed_deadlines: Mutex::new(std::collections::BTreeSet::new()),
             #[cfg(feature = "push-dispatch")]
             deferred_floor: std::sync::atomic::AtomicI64::new(i64::MAX),
+            events: None,
         }
     }
 
@@ -664,7 +672,14 @@ impl Scheduler {
     /// Unconditional, unlike the caps it also feeds: the record is what every
     /// result is fenced against, so a scheduler with no `max_in_flight` still
     /// needs one.
-    fn track_in_flight(&self, job_id: &str, task_name: &str, attempt: i32, epoch: Option<i64>) {
+    fn track_in_flight(
+        &self,
+        job_id: &str,
+        task_name: &str,
+        queue: &str,
+        attempt: i32,
+        epoch: Option<i64>,
+    ) {
         self.in_flight
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -672,6 +687,7 @@ impl Scheduler {
                 job_id,
                 DispatchRecord {
                     task_name: task_name.to_string(),
+                    queue: queue.to_string(),
                     owner: self.claim_owner.clone(),
                     attempt,
                     epoch,
@@ -807,6 +823,16 @@ impl Scheduler {
                 .unwrap_or_else(|p| p.into_inner())
                 .len()
                 == 0
+    }
+
+    /// Emit job lifecycle events to `hub`: `job.started` on dispatch, the
+    /// outcome events as results settle, and `job.dead` for every shed.
+    ///
+    /// Must be called before the scheduler is shared, like the `register_*`
+    /// calls. The caller owns the hub and calls
+    /// [`EventHub::shutdown`] once the scheduler has stopped.
+    pub fn set_events(&mut self, hub: Arc<EventHub>) {
+        self.events = Some(hub);
     }
 
     /// Set the rate-limit/concurrency policy for a queue.
@@ -1641,6 +1667,7 @@ mod tests {
     fn dispatched_as(job_id: &str) -> DispatchRecord {
         DispatchRecord {
             task_name: format!("task-for-{job_id}"),
+            queue: "default".to_string(),
             owner: "owner".to_string(),
             attempt: 0,
             epoch: Some(1),
@@ -3324,7 +3351,7 @@ mod tests {
             .claim_execution(&job.id, &scheduler.claim_owner)
             .unwrap();
         assert!(epoch.is_some());
-        scheduler.track_in_flight(&job.id, task_name, 0, epoch);
+        scheduler.track_in_flight(&job.id, task_name, &job.queue, 0, epoch);
         (scheduler, job)
     }
 

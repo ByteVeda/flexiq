@@ -42,6 +42,7 @@ use flexiq_core::StorageBackend;
 use flexiq_workflows::WorkflowStorageBackend;
 
 use crate::config::grpc::GrpcConfig;
+use crate::events::Events;
 use crate::runtime::shutdown::Shutdown;
 
 pub use executor::ExecutorDoor;
@@ -56,10 +57,12 @@ pub async fn serve(
     storage: StorageBackend,
     workflows: WorkflowStorageBackend,
     executor: Option<ExecutorDoor>,
+    events: Events,
     shutdown: Shutdown,
 ) -> Result<()> {
-    Listener::bind(&config)
-        .await?
-        .serve(storage, workflows, executor, shutdown)
-        .await
+    let mut listener = Listener::bind(&config).await?;
+    if let Some(hub) = events {
+        listener = listener.events(hub);
+    }
+    listener.serve(storage, workflows, executor, shutdown).await
 }

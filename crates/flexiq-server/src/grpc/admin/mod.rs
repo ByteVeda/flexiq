@@ -24,16 +24,19 @@ use std::sync::Arc;
 use flexiq_core::StorageBackend;
 use tonic::{Request, Response, Status};
 
+use crate::events::Events;
 use crate::grpc::auth::Principal;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
 use crate::grpc::pb::admin as pb;
 use crate::grpc::pb::admin::admin_service_server::{AdminService, AdminServiceServer};
 use crate::grpc::status::WireError;
 
-/// The operator door's state: the storage handle this process holds.
+/// The operator door's state: the storage handle this process holds, and the
+/// event hub the jobs it enqueues are announced on.
 #[derive(Clone)]
 pub struct Admin {
     storage: StorageBackend,
+    events: Events,
 }
 
 // Hand-written: `StorageBackend` is not `Debug`, and a backend's debug output
@@ -45,9 +48,10 @@ impl std::fmt::Debug for Admin {
 }
 
 impl Admin {
-    /// Serve out of `storage`. The namespace arrives per request.
-    pub fn new(storage: StorageBackend) -> Self {
-        Self { storage }
+    /// Serve out of `storage`, announcing the jobs it enqueues on `events`
+    /// when set. The namespace arrives per request.
+    pub fn new(storage: StorageBackend, events: Events) -> Self {
+        Self { storage, events }
     }
 
     /// The registered service. Its messages are the producer door's size: the
@@ -75,6 +79,7 @@ impl Admin {
             })?;
         let scoped = Scoped {
             storage: self.storage.clone(),
+            events: self.events.clone(),
             namespace: Arc::clone(principal.namespace()),
         };
         Ok((scoped, request.into_inner()))
@@ -85,6 +90,7 @@ impl Admin {
 /// caller's credential grants.
 pub(crate) struct Scoped {
     storage: StorageBackend,
+    events: Events,
     namespace: Arc<str>,
 }
 
@@ -98,6 +104,11 @@ impl Scoped {
 
     pub(crate) fn storage(&self) -> &StorageBackend {
         &self.storage
+    }
+
+    /// The event hub, when events are configured.
+    pub(crate) fn events(&self) -> Events {
+        self.events.clone()
     }
 }
 

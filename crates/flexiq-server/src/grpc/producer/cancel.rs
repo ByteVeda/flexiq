@@ -22,6 +22,7 @@ pub(crate) async fn cancel_job(
 ) -> Result<Response<pb::CancelJobResponse>, Status> {
     let id = require_job_id(&request.job_id)?;
     let namespace = scoped.namespace().to_string();
+    let events = scoped.events();
 
     // All three calls share one hop onto the blocking pool: they are one
     // logical operation, and three round trips through the pool would be three
@@ -31,10 +32,22 @@ pub(crate) async fn cancel_job(
         // from outside — only the task can notice — so the flag is set and the
         // task stops at its next check. A job already terminal matches neither,
         // and comes back unchanged, which is what makes a retry safe.
-        if !storage.cancel_job(&id, Some(&namespace))? {
+        let (cancelled, dependents) = storage.cancel_job_reporting(&id, Some(&namespace))?;
+        if !cancelled {
             storage.request_cancel(&id, Some(&namespace))?;
         }
-        storage.get_job(&id, Some(&namespace))
+        // Bound without `?`: the cancel has committed, so a failed read-back
+        // must not skip the dependents' events below.
+        let read = storage.get_job(&id, Some(&namespace));
+        // Only the pending cancel is this door's to announce; a running job's
+        // is emitted by the scheduler once the task honours it.
+        if let (true, Ok(Some(job))) = (cancelled, &read) {
+            crate::events::cancelled(events.as_deref(), job);
+        }
+        // After the parent, so a sink sees the cause first; announced even if
+        // the parent's row could not be read back, then the read's error goes up.
+        crate::events::cascade_cancelled(events.as_deref(), dependents);
+        read
     })
     .await?
     .ok_or_else(|| not_found(&request.job_id))?;

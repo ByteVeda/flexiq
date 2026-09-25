@@ -95,6 +95,7 @@ export const SECTION_SKELETON = [
       "events",
       "middleware",
       "webhooks",
+      "event-sinks",
       "serializers",
       "monitoring",
       "logging",

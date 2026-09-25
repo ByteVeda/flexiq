@@ -470,14 +470,20 @@ fn allow(env: &Env) -> Result<Allowlist> {
 
 /// Read a whole number of seconds, or `default` when the variable is unset.
 ///
-/// Zero is refused for every caller. None of these three is a "no limit"
-/// switch — each is a deadline, and a deadline of zero has already passed by
-/// the time anything is measured against it, so it does not disable the
-/// budget, it fails every use of it. `zero_means` says what that failure
-/// would look like, because the failure itself carries no explanation: a
-/// dispatch that times out instantly looks exactly like a target that never
-/// answered.
-fn seconds(env: &Env, key: &str, default: Duration, zero_means: &str) -> Result<Duration> {
+/// Zero is refused for every caller. None of these is a "no limit" switch —
+/// each is a deadline, and a deadline of zero has already passed by the time
+/// anything is measured against it, so it does not disable the budget, it
+/// fails every use of it. `zero_means` says what that failure would look
+/// like, because the failure itself carries no explanation: a dispatch that
+/// times out instantly looks exactly like a target that never answered.
+///
+/// Shared with the events drain, so every drain variable reads the same way.
+pub(crate) fn seconds(
+    env: &Env,
+    key: &str,
+    default: Duration,
+    zero_means: &str,
+) -> Result<Duration> {
     let Some(raw) = value(env, key) else {
         return Ok(default);
     };
@@ -612,8 +618,8 @@ fn parse_aws_source(env: &Env) -> Result<PushAwsSource> {
 }
 
 /// Remove push-target secrets from the process environment once they are
-/// parsed, so neither a bearer token nor an HMAC secret survives into
-/// `/proc/<pid>/environ`, `ps`, or a crash dump. Mirrors
+/// parsed, so no later in-process read or child process sees a bearer token
+/// or an HMAC secret. Mirrors
 /// `listen::scrub_attach_token` — one `remove_var` per secret rather than a
 /// shared `fn scrub_vars(names: &[&str])`: two literal calls already read as
 /// clearly as a loop over a two-element array would, and keeping this

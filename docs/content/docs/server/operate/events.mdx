@@ -1,0 +1,295 @@
+---
+title: Event egress
+description: "Send every job transition out of the server as a CloudEvent — to an HTTP endpoint or a Redis stream — for a warehouse, an audit log or an alerting pipeline: the document, the sinks, delivery semantics, metrics and Helm."
+---
+
+Event egress describes each job transition as a
+[CloudEvent](https://cloudevents.io) and sends it out of the process: `POST`ed
+to an HTTP endpoint, or appended to a Redis stream. A data warehouse, an audit
+log or an alerting pipeline then follows jobs as they move, without polling
+FlexiQ's storage and without an SDK of its own.
+
+```bash
+FLEXIQ_DSN=/var/lib/flexiq/app.db \
+FLEXIQ_DASHBOARD=127.0.0.1:8080 \
+FLEXIQ_EVENTS_FILE=/etc/flexiq/events.json \
+EVT_HMAC=… \
+EVT_REDIS_URL=redis://… \
+flexiq-server
+```
+
+**Events are not a role.** They open no port and start nothing on their own;
+they report on the roles that are running. A process with only
+`FLEXIQ_EVENTS_FILE` set still refuses to boot, as one with no role always
+does.
+
+The normative version of this page — every field, header, status code and
+literal, and what a consumer must do in return — is
+[the event egress contract](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md).
+Read it before writing a consumer. This page is about running it.
+
+## Environment variables
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FLEXIQ_EVENTS_FILE` | Unset (off) | Path to the JSON document of sinks |
+| `FLEXIQ_EVENTS_DRAIN` | `5` | Whole seconds shutdown spends delivering buffered events. `0` is refused |
+
+The file is read **once, at boot**, and refused whole if any part of it is
+wrong — a misspelt field, an HTTP sink with an empty `allow`, a secret variable
+that is not set. Changing it means restarting the process; the Helm chart does
+that for you when it owns the file.
+
+## The document
+
+One JSON object: a `source` stamped on every event, and at least one sink.
+
+```json
+{
+  "source": "/flexiq",
+  "sinks": [
+    {
+      "kind": "http",
+      "name": "warehouse",
+      "url": "https://events.example.com/in",
+      "allow": ["events.example.com"],
+      "hmac_secret_env": "EVT_HMAC",
+      "filter": { "types": ["job.completed", "job.dead"] },
+      "delivery": { "max_batch": 100 }
+    },
+    {
+      "kind": "redis_streams",
+      "name": "audit",
+      "url_env": "EVT_REDIS_URL",
+      "stream": "flexiq:events"
+    }
+  ]
+}
+```
+
+- **Unknown fields are refused at every level.** A misspelt `allow` that read
+  as empty would fail open, so a typo stops the boot instead, naming the field
+  it did not know and the ones it expected.
+- **`name`** is unique in the document. It is the `sink` label on every metric
+  and the name in every log line.
+- **`delivery`** holds `buffer` (10000 events), `max_attempts` (5) and
+  `max_batch` (1, at most 1000), each per sink.
+- **A document never holds a secret.** `bearer_token_env`, `hmac_secret_env`
+  and `url_env` name the environment variable the secret is in, so the file
+  can live in a ConfigMap while the secret lives in a Secret.
+
+The contract has [the full field tables](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md#the-configuration-document)
+and the exact messages a refused document produces. Every SDK's worker takes
+this same document, parsed by the same code — see
+<SdkLink to="guides/extend/event-sinks">Event sinks</SdkLink>.
+
+### Secrets leave the environment
+
+The server reads each variable a sink names once, while it builds the sinks,
+then **removes every one of them from its environment** before any role
+starts, so nothing later in the process reads them back and no child process
+inherits them. An unset or empty one is refused at boot, naming the sink and
+the variable.
+
+### Filters
+
+```json
+"filter": { "namespaces": ["prod"], "queues": [], "tasks": [], "types": ["job.dead"] }
+```
+
+Four allowlists. An empty or absent list admits everything, and an event must
+pass all four. `types` takes the short names below and refuses an unknown one
+at boot; the other three are checked against nothing, so a misspelt queue
+admits nothing rather than failing. The default namespace is named `default`.
+
+## Sinks
+
+### HTTP
+
+One `POST` to `url` per batch. With `max_batch` at its default of 1 the body
+is one CloudEvent and the content type is `application/cloudevents+json`;
+above 1 it is always a JSON array, even of one event, under
+`application/cloudevents-batch+json`. A `2xx` is delivered; `408`, `429`, a
+`5xx` and a connection failure are retried; anything else, a redirect
+included, drops the batch at once.
+
+With `hmac_secret_env` set, each request carries `x-flexiq-event-timestamp`
+(Unix milliseconds) and `x-flexiq-event-signature: v1=<hex>`, an HMAC-SHA256 of
+`<timestamp>.<raw body>`. Verify against the raw bytes, never re-serialised
+JSON — the contract has
+[a worked example to test a verifier against](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md#signing).
+`bearer_token_env` adds an `authorization: Bearer` header instead or as well.
+
+**The HTTP sink goes through push dispatch's egress guard.** `allow` is
+required and not empty, and every address a name resolves to is checked when
+it is dialled, so DNS rebinding cannot aim it at an internal address.
+Link-local and metadata addresses are refused whatever `allow` says,
+proxies are ignored, redirects are never followed, and the scheme is `https`
+except to a loopback host with `allow_loopback`. The rules are the ones
+[Push dispatch](/server/operate/push) documents for its target.
+
+### Redis Streams
+
+One `XADD <stream> MAXLEN ~ <max_len> *` per event, pipelined per batch. Each
+entry carries `id`, `type`, `source`, `time`, `namespace`, `queue` and `task`
+as fields of their own, so a consumer group can route without parsing JSON,
+plus the whole CloudEvent as `event`. `url_env` names the variable holding the
+`redis://` URL, since it carries the password. A connection failure and the
+replies a restart or failover produces — `LOADING`, `TRYAGAIN`, `MASTERDOWN`,
+`CLUSTERDOWN`, `READONLY` — are retried; any other error reply, `BUSY`
+included, drops the batch at once.
+
+`MAXLEN ~` trims: a consumer that falls more than about `max_len` entries
+behind (100000 by default) loses the oldest. Size it for the longest outage a
+consumer must survive.
+
+## Events
+
+The CloudEvents `type` is `org.byteveda.flexiq.` plus the short name.
+
+| Short name | Emitted by | When |
+| --- | --- | --- |
+| `job.enqueued` | The server's doors, the scheduler | A door wrote a new job, a periodic schedule fired, or a dead letter was auto-retried |
+| `job.started` | The scheduler | A job was claimed and handed off for execution |
+| `job.completed` | The scheduler | An attempt succeeded |
+| `job.failed` | The scheduler | An attempt failed; always followed by `job.retrying` or `job.dead` |
+| `job.retrying` | The scheduler | The failed attempt was rescheduled |
+| `job.dead` | The scheduler | Dead-lettered: out of retries, not retryable, or shed |
+| `job.cancelled` | The scheduler, the server's doors | Cancelled, before or during its run |
+| `job.sleeping` | The scheduler | An attempt ended in a durable step sleep |
+
+**`job.enqueued` mostly comes from this server's doors** — gRPC `Enqueue` and
+`EnqueueBatch` and the JSON facade over them, triggers, the admin trigger-now
+of a periodic task, and the dead-letter retry and job replay routes — and only
+for a row the call actually wrote. A unique enqueue that answered with an
+existing job, or a debounced one that slid an existing job's window, emits
+nothing. **The scheduler also emits it directly**, with no door involved, for
+exactly two sources: a periodic schedule's own firing, and its own automatic
+dead-letter retry (distinct from the door-driven manual replay routes above).
+Both name attempt `0`.
+
+A pending job cancelled through a cancel door emits `job.cancelled` there,
+and cascades to any dependent with `reason: "dependency cancelled"`. A
+running job emits it from the scheduler once the attempt ends. The scheduler
+also emits `job.cancelled` on its own for a pending job: `reason: "expired"`
+from the reaper sweep, `reason: "expired before execution"` when the poller
+finds it already expired at claim, and `reason: "dependency failed"` for a
+dependent cascaded behind a dead-lettered parent (a DLQ move or a shed).
+
+**A scheduler's events stay in its own namespace.** A scheduler with a
+namespace announces that namespace's jobs only, and one with no namespace
+announces the default namespace's only — the jobs its dispatch serves. No
+scheduler announces another namespace's transitions, even where its
+maintenance reaches them: the expiry sweep covers every namespace, and a
+scheduler with no namespace also times out, recovers and fires periodic
+schedules for all of them. That work still happens, unannounced, so a
+namespace's maintenance events come only from a scheduler of that namespace
+and are missed when another namespace's scheduler did the work first.
+
+**The stream is still not a complete audit of the queue.** A job an embedded
+SDK enqueues through its own process's enqueue API, the node jobs of a
+submitted workflow, and a pending-job cancel made through an embedded SDK
+(including its cascades) emit nothing. Neither do bulk purges or revokes of a
+queue's or a task's pending jobs, a cancel written to storage directly by any
+tool other than a cancel door, nor maintenance a scheduler of another
+namespace did. Nor does anything a runtime with no sinks settles. The
+contract lists
+[everything that is not seen](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md#what-is-not-seen).
+
+Job arguments stay in the process unless a sink sets `include_payload: true`,
+which logs a warning naming the sink at boot. Even then a payload rides only
+on `job.enqueued` (except the scheduler's own DLQ auto-retry, which never
+carries one), `job.started`, a shed's `job.dead`, and a pending-job
+`job.cancelled` for an expiry or a cascade — the events whose emitter already
+holds the row.
+
+## Delivery
+
+**At-most-once overall, and each accepted event may still arrive more than
+once. Never exactly-once.**
+
+- **Lost** when a sink's buffer is full, when its `max_attempts` run out,
+  when the process dies — the buffer is in memory — or when a storage error
+  interrupts an operation after part of it has committed.
+- **Repeated** when a response is lost after the endpoint accepted, or when a
+  batch is retried after part of it landed.
+- **Unordered** — emits race across threads, so a fast task's `job.completed`
+  can precede its `job.started`. Order by `data.attempt`, then `time`.
+
+So a consumer **dedupes on the CloudEvents `id`**, which is
+`<job_id>:<attempt>:<epoch>:<type>` with `-` for a part the emitter did not
+know: the same for every redelivery of one transition, different for any two
+transitions. A consumer reading several deployments dedupes on `source` +
+`id`.
+
+**Emitting never blocks the queue.** Each sink has its own buffer and its own
+thread, so a slow or unreachable endpoint drops its own events and counts them;
+it never slows dispatch and never delays another sink.
+
+On shutdown the server stops its roles first, so their final events are
+emitted, then spends up to `FLEXIQ_EVENTS_DRAIN` seconds delivering what is
+buffered. Whatever is left then is dropped and counted as `shutdown`. Size
+the pod's grace period for it — the Helm chart does.
+
+## Metrics
+
+With events configured, the dashboard's and the gRPC door's `/metrics` gain
+three families, one series set per sink:
+
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `flexiq_events_delivered_total` | Counter | `sink` |
+| `flexiq_events_dropped_total` | Counter | `sink`, `reason` |
+| `flexiq_events_queued` | Gauge | `sink` |
+
+`reason` is `buffer_full`, `rejected` (refused for good), `failed` (every
+attempt failed) or `shutdown`, and every reason is rendered from boot at zero,
+so a rate query has a series before the first drop. Alert on
+`rate(flexiq_events_dropped_total[5m]) > 0`. Without `FLEXIQ_EVENTS_FILE`
+none of the three families appears. A process with neither listener reports
+drops through its logs, which name the sink, the reason and a count.
+
+## Builds
+
+The HTTP sink is behind the `events-http` cargo feature and the Redis Streams
+sink behind `redis`. The published image has both. A binary built without one
+refuses, at boot, a document that names its kind, and the error names the
+missing feature.
+
+## Helm
+
+```yaml
+events:
+  enabled: true
+  config:
+    sinks:
+      - kind: http
+        name: warehouse
+        url: https://events.example.com/in
+        allow: [events.example.com]
+        hmac_secret_env: EVT_HMAC
+        filter: {types: [job.completed, job.dead]}
+  drain: 10
+  secretEnv:
+    - {name: EVT_HMAC, secretName: event-sink-secrets, key: warehouse-hmac}
+```
+
+The chart renders `config` into a ConfigMap, mounts it where
+`FLEXIQ_EVENTS_FILE` points, sets `FLEXIQ_EVENTS_DRAIN` from `drain`, and fills
+each `secretEnv` entry from a Secret you own. The document's hash is a pod
+annotation, so an edited sink rolls the pods. `events.enabled` with no sinks
+fails at `helm template` time rather than at boot.
+
+The events hub drains after every other role has stopped, so its budget comes
+on top of theirs. An unset `terminationGracePeriodSeconds` accounts for that:
+`2 × push.drain + 10 + events.drain` with push on, and
+`max(30, events.drain + 10)` without it.
+
+## Not the dashboard's webhooks
+
+Dashboard webhook subscriptions share the event names but are a separate
+feature: stored in the database, managed from the dashboard, and signed under
+`x-flexiq-signature`. Event egress is configuration read at boot, delivered by
+whichever runtime observed the transition, and signed under
+`x-flexiq-event-signature`. The header names differ on purpose,
+so one verifier can never accept the other's messages.

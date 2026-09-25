@@ -5,6 +5,7 @@ use log::warn;
 use tokio::sync::mpsc::error::TrySendError;
 
 use crate::error::Result;
+use crate::events::reason;
 use crate::job::{now_millis, Job};
 use crate::resilience::retry::desync_delay;
 use crate::storage::Storage;
@@ -122,12 +123,15 @@ impl Scheduler {
             return Ok(false);
         }
 
-        let job = match self.storage.dequeue_from(
+        let dequeued = self.storage.dequeue_from_reporting(
             &active_queues,
             now,
             self.namespace.as_deref(),
             &self.dispatch_orders,
-        )? {
+        )?;
+        // Archived by this scan whether or not it found a job to claim.
+        self.emit_cancelled_rows(dequeued.expired, reason::EXPIRED_BEFORE_EXECUTION);
+        let job = match dequeued.claimed {
             Some(j) => j,
             None => return Ok(false),
         };
@@ -181,13 +185,15 @@ impl Scheduler {
             budget = budget.min(remaining);
         }
 
-        let jobs = self.storage.dequeue_batch_from(
+        let dequeued = self.storage.dequeue_batch_from_reporting(
             &active_queues,
             now,
             self.namespace.as_deref(),
             budget,
             &self.dispatch_orders,
         )?;
+        self.emit_cancelled_rows(dequeued.expired, reason::EXPIRED_BEFORE_EXECUTION);
+        let jobs = dequeued.claimed;
         if jobs.is_empty() {
             return Ok(false);
         }
@@ -272,8 +278,11 @@ impl Scheduler {
                     shed::CODEL_REASON_PREFIX,
                     cfg.target_ms
                 );
-                self.storage
-                    .shed_to_dlq(&job, &reason, Some("{\"codel\":true}"))?;
+                let cascaded =
+                    self.storage
+                        .shed_to_dlq_reporting(&job, &reason, Some("{\"codel\":true}"))?;
+                self.emit_shed(&job, &reason);
+                self.emit_cancelled_rows(cascaded, reason::DEPENDENCY_FAILED);
                 warn!(
                     "codel shed {} on queue '{}' (sojourn {sojourn}ms)",
                     job.id, job.queue
@@ -419,9 +428,14 @@ impl Scheduler {
         // owner alone cannot separate two runs of the same job. The epoch is
         // the third, and separates two claims that `requeue_stuck` produced
         // from one attempt — where neither of the other two moves.
-        self.track_in_flight(&job_id, &task_name, job.retry_count, epoch);
+        self.track_in_flight(&job_id, &task_name, &job.queue, job.retry_count, epoch);
+        // Built before the send moves the job, emitted only once it succeeded.
+        let started = self.started_event(&job, epoch);
         match job_tx.try_send(job) {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                self.emit_event(started);
+                Ok(true)
+            }
             Err(TrySendError::Full(job)) => {
                 warn!("worker channel full; rescheduling job {job_id} (worker pool is behind)",);
                 self.untrack_in_flight(&job_id);
@@ -537,8 +551,14 @@ impl Scheduler {
                 );
             }
         }
-        self.storage
-            .shed_to_dlq(job, reason, Some(shed::RATE_LIMIT_SHED_METADATA))?;
+        let cascaded = self.storage.shed_to_dlq_reporting(
+            job,
+            reason,
+            Some(shed::RATE_LIMIT_SHED_METADATA),
+        )?;
+        // The parent's `job.dead` first, then each dependent it took down.
+        self.emit_shed(job, reason);
+        self.emit_cancelled_rows(cascaded, reason::DEPENDENCY_FAILED);
         warn!(
             "rate-limit shed {} on queue '{}' (task '{}')",
             job.id, job.queue, job.task_name

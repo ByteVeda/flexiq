@@ -132,6 +132,7 @@ pub async fn metrics(
     // The trigger port is public and serves no metrics; its counters surface
     // here when the role runs in this process.
     body.push_str(&crate::trigger::metrics::render());
+    body.push_str(&crate::events::render_metrics(state.events.as_deref()));
 
     Ok((
         [("content-type", crate::metrics::EXPOSITION_CONTENT_TYPE)],

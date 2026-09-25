@@ -36,7 +36,9 @@ PyQueue(
     dlq_auto_retry_delay: int | None = None,
     dlq_auto_retry_max: int = 1,
     retention: dict[str, int] | None = None,
-    auto_migrate: bool = True
+    auto_migrate: bool = True,
+    event_sinks: str | None = None,
+    event_sinks_drain: float = 5.0
 )
 ```
 
@@ -240,6 +242,12 @@ queue.enqueue_batch(
     expires_list: list[float | None] | None = None,
     result_ttl_list: list[int | None] | None = None
 ) -> list[PyJob]
+```
+
+### `queue.event_sink_stats()`
+
+```python
+queue.event_sink_stats() -> list[dict[str, Any]]
 ```
 
 ### `queue.expand_fan_out()`

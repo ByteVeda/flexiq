@@ -12,7 +12,7 @@ mod client;
 mod egress;
 mod resolver;
 #[cfg(test)]
-mod testing;
+pub(crate) mod testing;
 
 pub use auth::{AuthError, OutboundAuth, Signer, SigningRequest};
 pub use client::DispatchClient;

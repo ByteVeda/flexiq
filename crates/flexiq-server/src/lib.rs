@@ -10,6 +10,7 @@
 
 pub mod config;
 pub mod dashboard;
+pub mod events;
 #[cfg(feature = "grpc")]
 pub mod grpc;
 pub mod log_safe;

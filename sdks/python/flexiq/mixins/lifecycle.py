@@ -363,6 +363,18 @@ class QueueLifecycleMixin:
         finally:
             self._inner.end_run()
 
+    def event_sink_stats(self) -> list[dict[str, Any]]:
+        """Counters for each event sink of the latest worker started on this queue.
+
+        One dict per sink, in configuration order, with ``name``, ``kind``,
+        ``delivered``, ``dropped_buffer_full``, ``dropped_rejected``,
+        ``dropped_failed``, ``dropped_shutdown`` and ``queued``. Live while the
+        worker runs; once ``run_worker`` returns they are the final counts,
+        until another worker starts. Empty before any worker has started or
+        when ``event_sinks`` was not set.
+        """
+        return self._inner.event_sink_stats()
+
     def _build_resource_health_json(self) -> str | None:
         """Snapshot current resource health as JSON for heartbeat."""
         if not self._resource_definitions:

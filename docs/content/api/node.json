@@ -2222,6 +2222,14 @@
     },
     {
       "owner": "JsWorker",
+      "name": "eventSinkStats",
+      "kind": "method",
+      "signature": "eventSinkStats(): Array<JsSinkStats>",
+      "params": [],
+      "returns": "Array<JsSinkStats>"
+    },
+    {
+      "owner": "JsWorker",
       "name": "id",
       "kind": "property",
       "signature": "id(): string",
@@ -2254,6 +2262,14 @@
       "signature": "stop(): void",
       "params": [],
       "returns": "void"
+    },
+    {
+      "owner": "JsWorker",
+      "name": "waitEventDrain",
+      "kind": "method",
+      "signature": "waitEventDrain(): Promise<void>",
+      "params": [],
+      "returns": "Promise<void>"
     }
   ]
 }

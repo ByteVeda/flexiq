@@ -143,6 +143,7 @@ otherwise.
 | `postgres` | PostgreSQL storage |
 | `redis` | Redis storage |
 | `push-dispatch` | a Redis worker wakes on enqueue instead of polling |
+| `events-http` | the HTTP job event sink (the Redis Streams sink comes with `redis`) |
 | `workflows` | DAG workflows at `flexiq::workflows` |
 | `mesh` | decentralized mesh scheduling at `flexiq::mesh` |
 

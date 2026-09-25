@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{map_err, strip_dead_blob, watched_transaction, RedisStorage, SCAN_BATCH};
 use crate::error::{QueueError, Result};
+use crate::events::reason;
 use crate::job::{now_millis, Job, JobStatus, NewJob};
 use crate::storage::DeadJob;
 
@@ -76,24 +77,46 @@ impl From<DeadJobEntry> for DeadJob {
 impl RedisStorage {
     /// Move a job to the dead-letter queue and cascade-cancel its dependents.
     pub fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
+        self.dead_letter(job, error, metadata, false).map(drop)
+    }
+
+    /// [`move_to_dlq`](Self::move_to_dlq), returning every dependent the
+    /// cascade cancelled.
+    pub fn move_to_dlq_reporting(
+        &self,
+        job: &Job,
+        error: &str,
+        metadata: Option<&str>,
+    ) -> Result<Vec<Job>> {
         self.dead_letter(job, error, metadata, false)
     }
 
     /// Dead-letter a job the scheduler shed, flagging the entry so the
     /// auto-retry sweep skips it before it can spend the candidate budget.
     pub fn shed_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
+        self.dead_letter(job, error, metadata, true).map(drop)
+    }
+
+    /// [`shed_to_dlq`](Self::shed_to_dlq), returning every dependent the
+    /// cascade cancelled.
+    pub fn shed_to_dlq_reporting(
+        &self,
+        job: &Job,
+        error: &str,
+        metadata: Option<&str>,
+    ) -> Result<Vec<Job>> {
         self.dead_letter(job, error, metadata, true)
     }
 
     /// Shared body of `move_to_dlq`/`shed_to_dlq`; `shed` is the only
-    /// difference between them.
+    /// difference between them. Returns the cascaded dependents.
     fn dead_letter(
         &self,
         job: &Job,
         error: &str,
         metadata: Option<&str>,
         shed: bool,
-    ) -> Result<()> {
+    ) -> Result<Vec<Job>> {
         let now = now_millis();
         let dlq_id = uuid::Uuid::now_v7().to_string();
         let mut conn = self.conn()?;
@@ -168,11 +191,10 @@ impl RedisStorage {
         // Cascade-cancel dependents only if we actually dead-lettered the job
         // (skipped when a racer had already archived it).
         drop(conn);
-        if dead_lettered {
-            self.cascade_cancel(&job.id, "dependency failed", job.namespace.as_deref())?;
+        if !dead_lettered {
+            return Ok(Vec::new());
         }
-
-        Ok(())
+        self.cascade_cancel_reporting(&job.id, reason::DEPENDENCY_FAILED, job.namespace.as_deref())
     }
 
     /// Dead-letter entries, newest first, paginated. `namespace` of `None`

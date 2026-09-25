@@ -48,6 +48,9 @@ http-target = ["flexiq-core/http-target"]
 # Event-driven scheduler wakeups — unrelated to `http-target` above. With it the
 # scheduler wakes on enqueue on Redis instead of polling (#961).
 push-dispatch = ["flexiq-core/push-dispatch"]
+# The HTTP event sink (CloudEvents out). Without it an events document naming
+# an `http` sink is refused at boot; the Redis Streams sink rides on `redis`.
+events-http = ["flexiq-core/events-http"]
 
 [dependencies]
 flexiq-core = { workspace = true }

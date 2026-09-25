@@ -5,6 +5,7 @@ import {
   middlewareKey,
   type OverridesStore,
 } from "./dashboard/stores";
+import { type EventSinkStats, eventSinksDocument } from "./event-sinks";
 import { type Emitter, OUTCOME_KIND_EVENTS, type OutcomeEvent } from "./events";
 import type { Middleware } from "./middleware";
 import type {
@@ -211,6 +212,8 @@ export class Worker {
       mesh: run?.mesh,
       retention: run?.retention,
       pushDispatch: run?.pushDispatch,
+      events: eventSinksDocument(run?.eventSinks),
+      eventsDrainMs: drainMs(run?.eventSinksDrainMs),
     };
     const native = queue.runWorker(taskCallback, outcomeCallback, nativeOptions);
     started = native;
@@ -330,13 +333,24 @@ export class Worker {
   }
 
   /**
+   * Each event sink's counters, in configuration order. Empty when the worker
+   * was started without `eventSinks`. Still readable after {@link Worker.stop},
+   * whose promise resolves once these are the final counts.
+   */
+  eventSinkStats(): EventSinkStats[] {
+    return this.native.eventSinkStats();
+  }
+
+  /**
    * Stop the worker; in-flight results drain before background tasks exit.
    *
    * Dispatch, the heartbeat and the log consumers halt synchronously, so
    * ignoring the return value behaves exactly as a void `stop()` would. The
    * returned promise resolves once worker-scoped resources have been disposed
-   * — await it when that matters (test teardown, graceful shutdown). It never
-   * rejects: teardown failures are logged, not thrown.
+   * and, with `eventSinks`, once buffered events are delivered or counted as
+   * dropped — at most `eventSinksDrainMs` after this call. Await it when that
+   * matters (test teardown, graceful shutdown). It never rejects: teardown
+   * failures are logged, not thrown.
    *
    * Idempotent: later calls return the first teardown. Re-running it would
    * release a second resource lease and tear down another worker's resources.
@@ -375,12 +389,18 @@ export class Worker {
     }
     this.native.stop();
     this.emitter.emit("worker.stopped", { workerId: this.native.id });
+    // The drain runs off the JS thread; this only waits for it, bounded by
+    // `eventSinksDrainMs`, and resolves at once for a worker without sinks.
+    const eventsDrained = this.native.waitEventDrain().catch((error) => {
+      log.error(() => "event sink drain failed", error);
+    });
     // Dispose worker-scoped resources after the native worker quiesces (the
     // teardown drains the runtime's health checker before touching caches).
     // Best effort: lazy resources mean this is a no-op when none were built.
-    return this.resources.teardownWorker().catch((error) => {
+    const resourcesDisposed = this.resources.teardownWorker().catch((error) => {
       log.debug(() => "worker-scope resource teardown failed", error);
     });
+    return Promise.all([eventsDrained, resourcesDisposed]).then(() => undefined);
   }
 }
 
@@ -470,6 +490,17 @@ async function drainLogConsumerBatch(
     await queue.ackTopicCursor(consumer.topic, consumer.name, lastAcked);
   }
   return retryFailure ? "retry-backoff" : "drained";
+}
+
+/** Largest drain the native `u32` option carries without wrapping. */
+const MAX_DRAIN_MS = 0xffff_ffff;
+
+/** Check `eventSinksDrainMs` here: the addon narrows it to `u32`, which would wrap a negative. */
+function drainMs(value: number | undefined): number | undefined {
+  if (value !== undefined && !(Number.isInteger(value) && value >= 0 && value <= MAX_DRAIN_MS)) {
+    throw new RangeError(`eventSinksDrainMs must be a non-negative integer, got ${value}`);
+  }
+  return value;
 }
 
 /** Collect per-task configs that actually set something. */

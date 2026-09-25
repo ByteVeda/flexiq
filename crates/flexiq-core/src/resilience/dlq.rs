@@ -14,9 +14,16 @@ impl DeadLetterQueue {
         Self { storage }
     }
 
-    /// Move a *failed* job to the dead letter queue. The shed paths call
-    /// `Storage::shed_to_dlq` directly so their entries are flagged.
-    pub(crate) fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
-        self.storage.move_to_dlq(job, error, metadata)
+    /// Move a *failed* job to the dead letter queue, returning the dependents
+    /// the cascade cancelled so the caller can report them. The shed paths
+    /// call `Storage::shed_to_dlq_reporting` directly so their entries are
+    /// flagged.
+    pub(crate) fn move_to_dlq_reporting(
+        &self,
+        job: &Job,
+        error: &str,
+        metadata: Option<&str>,
+    ) -> Result<Vec<Job>> {
+        self.storage.move_to_dlq_reporting(job, error, metadata)
     }
 }

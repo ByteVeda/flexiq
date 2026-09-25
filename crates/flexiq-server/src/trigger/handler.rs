@@ -26,6 +26,7 @@ use axum::Json;
 use flexiq_core::StorageBackend;
 use serde_json::{json, Value};
 
+use crate::events::Events;
 use crate::trigger::auth::sns::{self, AwsUrl};
 use crate::trigger::auth::{Inbound, KeyFetcher};
 use crate::trigger::definition::{Source, Trigger, HEALTH_PATH};
@@ -47,16 +48,19 @@ pub struct Role {
     triggers: Arc<[Trigger]>,
     by_path: HashMap<String, usize>,
     keys: KeyFetcher,
+    events: Events,
 }
 
 impl Role {
     /// Serve `triggers` into `namespace` on `storage`, fetching the published
-    /// keys a verifier needs through `keys`.
+    /// keys a verifier needs through `keys` and announcing each job it
+    /// enqueues on `events`.
     pub fn new(
         storage: StorageBackend,
         namespace: String,
         triggers: Arc<[Trigger]>,
         keys: KeyFetcher,
+        events: Events,
     ) -> Self {
         let by_path = triggers
             .iter()
@@ -69,6 +73,7 @@ impl Role {
             triggers,
             by_path,
             keys,
+            events,
         }
     }
 
@@ -295,11 +300,12 @@ async fn handle(
     let key = rate::bucket_key(&role.namespace, &trigger.name);
     let retry_after = rate::retry_after_secs(&limit);
     let name = trigger.name.clone();
+    let events = role.events.clone();
     let stored = tokio::task::spawn_blocking(move || {
         if !rate::acquire(&storage, &key, &limit, jobs.len())? {
             return Ok(None);
         }
-        enqueue::submit(&storage, jobs).map(Some)
+        enqueue::submit(&storage, jobs, events.as_deref()).map(Some)
     })
     .await;
 

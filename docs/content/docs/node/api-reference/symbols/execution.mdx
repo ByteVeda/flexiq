@@ -119,6 +119,12 @@ executor.writeTaskLog(
 
 ## JsWorker
 
+### `worker.eventSinkStats()`
+
+```typescript
+worker.eventSinkStats(): Array<JsSinkStats>
+```
+
 ### `worker.id`
 
 ```typescript
@@ -138,5 +144,11 @@ worker.openStepSession(
 
 ```typescript
 worker.stop(): void
+```
+
+### `worker.waitEventDrain()`
+
+```typescript
+worker.waitEventDrain(): Promise<void>
 ```
 

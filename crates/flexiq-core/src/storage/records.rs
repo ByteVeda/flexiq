@@ -771,6 +771,22 @@ pub struct StaleJob {
     pub awaiting_settle: bool,
 }
 
+/// What a reporting dequeue did: the jobs it claimed, plus every candidate it
+/// found past `expires_at` and archived as `Cancelled` instead of claiming.
+///
+/// `C` is `Option<Job>` for a single claim and `Vec<Job>` for a batch. Each
+/// expired job is the archived row — status `Cancelled`, `completed_at` set,
+/// error `"expired before execution"` — payload included, since archiving
+/// already loaded it.
+#[derive(Debug, Clone, Default)]
+pub struct Dequeued<C> {
+    /// The jobs claimed, now `Running`.
+    pub claimed: C,
+    /// Jobs archived as expired on the way, in scan order. Empty on the common
+    /// path.
+    pub expired: Vec<Job>,
+}
+
 /// One committed step of a job, as read back at attempt start.
 ///
 /// There is no `status` and no `error`: a step whose closure raised is never

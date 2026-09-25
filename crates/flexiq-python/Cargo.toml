@@ -18,6 +18,9 @@ workflows = ["dep:flexiq-workflows"]
 # Event-driven scheduler wakeups. In the shipped wheel's feature list; without
 # it the scheduler always polls.
 push-dispatch = ["flexiq-core/push-dispatch"]
+# The `http` event sink. In the shipped wheel's feature list; without it a
+# config naming an `http` sink is refused at worker start.
+events-http = ["flexiq-core/events-http"]
 mesh = ["dep:flexiq-mesh"]
 
 [lib]

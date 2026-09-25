@@ -5,6 +5,7 @@ use redis::Commands;
 
 use super::dequeue_score;
 use crate::error::{QueueError, Result};
+use crate::events::reason;
 use crate::job::{now_millis, Job, JobStatus};
 use crate::storage::redis_backend::{map_err, RedisStorage};
 
@@ -260,15 +261,25 @@ impl RedisStorage {
     /// A job in another namespace also reports `false`, so a scoped caller
     /// learns nothing about ids outside its own namespace.
     pub fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
+        Ok(self.cancel_job_reporting(id, namespace)?.0)
+    }
+
+    /// [`cancel_job`](Self::cancel_job), also returning every dependent the
+    /// cascade cancelled.
+    pub fn cancel_job_reporting(
+        &self,
+        id: &str,
+        namespace: Option<&str>,
+    ) -> Result<(bool, Vec<Job>)> {
         let job = match self.get_job(id, namespace)? {
             Some(j) => j,
-            None => return Ok(false),
+            None => return Ok((false, Vec::new())),
         };
         // Checked out after `get_job` returns its own, so that one is reused.
         let mut conn = self.conn()?;
 
         if job.status != JobStatus::Pending {
-            return Ok(false);
+            return Ok((false, Vec::new()));
         }
 
         let mut job = job;
@@ -282,9 +293,10 @@ impl RedisStorage {
 
         // Cascade cancel dependents
         drop(conn);
-        self.cascade_cancel(id, "dependency cancelled", namespace)?;
+        let cascaded =
+            self.cascade_cancel_reporting(id, reason::DEPENDENCY_CANCELLED, namespace)?;
 
-        Ok(true)
+        Ok((true, cascaded))
     }
 
     /// Set the cancel-requested flag on a `Running` job — the task must poll
@@ -418,6 +430,18 @@ impl RedisStorage {
         reason: &str,
         namespace: Option<&str>,
     ) -> Result<()> {
+        self.cascade_cancel_reporting(failed_job_id, reason, namespace)
+            .map(drop)
+    }
+
+    /// [`cascade_cancel`](Self::cascade_cancel), returning every dependent it
+    /// archived, as archived. Each was already loaded to check its status.
+    pub fn cascade_cancel_reporting(
+        &self,
+        failed_job_id: &str,
+        reason: &str,
+        namespace: Option<&str>,
+    ) -> Result<Vec<Job>> {
         let now = now_millis();
 
         let mut queue: Vec<String> = vec![failed_job_id.to_string()];
@@ -446,6 +470,7 @@ impl RedisStorage {
         }
 
         let error_msg = format!("{reason}: {failed_job_id}");
+        let mut cancelled = Vec::new();
         for dep_id in &queue {
             if let Some(mut job) = self.get_job(dep_id, namespace)? {
                 if job.status == JobStatus::Pending {
@@ -458,11 +483,12 @@ impl RedisStorage {
                     // `archive_job_immediately` removes the job from the
                     // per-queue pending zset as part of its atomic move.
                     self.archive_job_immediately(&mut conn, &job, old_status)?;
+                    cancelled.push(job);
                 }
             }
         }
 
-        Ok(())
+        Ok(cancelled)
     }
 
     /// Ids of the jobs `job_id` depends on.

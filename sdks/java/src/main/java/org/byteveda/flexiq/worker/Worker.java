@@ -1,8 +1,13 @@
 package org.byteveda.flexiq.worker;
 
 import com.fasterxml.jackson.core.JacksonException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -59,7 +64,8 @@ public final class Worker implements AutoCloseable {
     private static final FlexiQLogger LOG = FlexiQLogger.create("worker");
     private static final long SHUTDOWN_TIMEOUT_SECONDS = 30;
     private static final long LOG_CONSUMER_JOIN_TIMEOUT_SECONDS = 10;
-    private static final ObjectMapper MESH_JSON = new ObjectMapper();
+    private static final ObjectMapper NATIVE_JSON = new ObjectMapper();
+    private static final TypeReference<List<EventSinkStats>> SINK_STATS = new TypeReference<>() {};
 
     private final WorkerControl control;
     private final ExecutorService executor;
@@ -75,6 +81,8 @@ public final class Worker implements AutoCloseable {
     private final AtomicBoolean stoppedEmitted = new AtomicBoolean();
     /** Set by the first drain request, which is terminal. */
     private final AtomicBoolean drainStarted = new AtomicBoolean();
+    /** Each sink's counters once {@link #close()} drained them; the native handle is gone by then. */
+    private volatile @Nullable List<EventSinkStats> finalSinkStats;
 
     private final CountDownLatch shutdown = new CountDownLatch(1);
     private boolean closed;
@@ -131,7 +139,10 @@ public final class Worker implements AutoCloseable {
         return new Builder(backend, serializer, middleware, resources, codecs);
     }
 
-    /** Stop dispatching; in-flight jobs continue to drain. */
+    /**
+     * Stop dispatching; in-flight jobs continue to drain. Their events still go
+     * out; {@link #close()} waits for them.
+     */
     public void stop() {
         control.stop();
         emitStopped();
@@ -168,11 +179,55 @@ public final class Worker implements AutoCloseable {
     public Optional<MeshClusterInfo> meshClusterInfo() {
         return control.meshClusterInfoJson().map(json -> {
             try {
-                return MESH_JSON.readValue(json, MeshClusterInfo.class);
+                return NATIVE_JSON.readValue(json, MeshClusterInfo.class);
             } catch (Exception e) {
                 throw new SerializationException("failed to decode mesh cluster info", e);
             }
         });
+    }
+
+    /**
+     * Each event sink's counters, in configuration order. Empty when the worker
+     * was started without {@link Builder#eventSinks}. After {@link #close()} it
+     * keeps reporting the final counts, taken once the drain finished.
+     *
+     * @return one entry per configured sink
+     */
+    public List<EventSinkStats> eventSinkStats() {
+        List<EventSinkStats> last = finalSinkStats;
+        if (last != null) {
+            return last;
+        }
+        try {
+            return readSinkStats();
+        } catch (IllegalStateException closedMeanwhile) {
+            // close() freed the handle between the check above and the read;
+            // it recorded the final counts first.
+            return Objects.requireNonNullElse(finalSinkStats, List.of());
+        }
+    }
+
+    private List<EventSinkStats> readSinkStats() {
+        try {
+            return List.copyOf(NATIVE_JSON.readValue(control.eventSinkStatsJson(), SINK_STATS));
+        } catch (JacksonException e) {
+            throw new SerializationException("failed to decode event sink stats", e);
+        }
+    }
+
+    /**
+     * Drain the event sinks, starting the budget now, after {@link #close()}'s
+     * handler wait, then keep the final counts. Never fails the close: the
+     * native handle still has to be freed.
+     */
+    private void drainEventSinks() {
+        try {
+            control.awaitEventDrain();
+            finalSinkStats = readSinkStats();
+        } catch (RuntimeException e) {
+            LOG.warn("event sink drain failed; buffered events may be lost", e);
+            finalSinkStats = List.of();
+        }
     }
 
     /**
@@ -218,7 +273,12 @@ public final class Worker implements AutoCloseable {
      * worker. Draining BEFORE {@code control.close()} is essential: a running
      * handler may still call back into the native worker
      * ({@code completeJob}/{@code failJob}), so the handle must outlive every
-     * handler task. Idempotent.
+     * handler task.
+     *
+     * <p>With event sinks, every event is delivered or counted as dropped by the
+     * time this returns: it first waits for in-flight handlers (up to 30 seconds,
+     * then 30 more after interrupting them), then up to
+     * {@link Builder#eventSinksDrain} for the sinks. Idempotent.
      */
     @Override
     public synchronized void close() {
@@ -252,6 +312,9 @@ public final class Worker implements AutoCloseable {
             Thread.currentThread().interrupt();
             executor.shutdownNow();
         }
+        // After the handler wait, and the budget starts here: events of handlers
+        // that finished during that wait still go out.
+        drainEventSinks();
         // Safe even if a straggler survives: JniWorkerControl serializes close()
         // against in-flight native calls and rejects any call made afterwards.
         control.close();
@@ -315,6 +378,8 @@ public final class Worker implements AutoCloseable {
         private @Nullable MeshOptions mesh;
         private @Nullable Retention retention;
         private @Nullable Boolean pushDispatch;
+        private @Nullable String eventSinks;
+        private @Nullable Long eventSinksDrainMillis;
         private long middlewareTimeoutMillis = HookDeadline.DEFAULT_TIMEOUT_MILLIS;
         private @Nullable Emitter hub;
         private @Nullable WorkerLifecycle lifecycle;
@@ -599,6 +664,79 @@ public final class Worker implements AutoCloseable {
         public Builder pushDispatch(boolean pushDispatch) {
             this.pushDispatch = pushDispatch;
             return this;
+        }
+
+        /**
+         * Send this worker's job lifecycle events ({@code job.started},
+         * {@code job.completed}, {@code job.failed}, ...) as CloudEvents to the
+         * sinks the configuration document describes: HTTP endpoints and Redis
+         * streams. The document follows the cross-SDK contract's
+         * {@code {"source": ..., "sinks": [...]}} shape.
+         *
+         * <p>Delivery is at-most-once overall: an event is lost when a sink's
+         * buffer is full, when its delivery attempts run out, or when the process
+         * dies. An accepted event may still arrive more than once, so receivers
+         * dedupe on the CloudEvents {@code id}. Events carry no job payload unless
+         * a sink sets {@code include_payload}. Emitting never blocks a job.
+         *
+         * <p>The document is checked at {@link #start()}, which throws
+         * {@link IllegalArgumentException} carrying the reason for a malformed one
+         * or for a sink kind the native library was built without.
+         *
+         * @param configJson the event-sinks configuration document, as JSON
+         * @return {@code this}, for chaining
+         */
+        public Builder eventSinks(String configJson) {
+            this.eventSinks = Objects.requireNonNull(configJson, "eventSinks");
+            return this;
+        }
+
+        /**
+         * {@link #eventSinks(String)} with the document read from a file, now.
+         *
+         * @param configFile a UTF-8 file holding the event-sinks configuration document
+         * @return {@code this}, for chaining
+         * @throws UncheckedIOException if the file cannot be read
+         */
+        public Builder eventSinks(Path configFile) {
+            Objects.requireNonNull(configFile, "eventSinks");
+            try {
+                return eventSinks(Files.readString(configFile));
+            } catch (IOException e) {
+                throw new UncheckedIOException("failed to read event sinks config " + configFile, e);
+            }
+        }
+
+        /**
+         * How long {@link Worker#close()} waits for buffered events to go out;
+         * 5 seconds when unset. The budget starts once {@code close()} has finished
+         * waiting for in-flight handlers, so their events are sent too, and
+         * {@code close()} takes at most that handler wait plus this budget.
+         * Whatever is still buffered then is counted as dropped.
+         *
+         * @param drain the budget; {@link Duration#ZERO} drops what is buffered at once
+         * @return {@code this}, for chaining
+         * @throws IllegalArgumentException if {@code drain} is negative
+         */
+        public Builder eventSinksDrain(Duration drain) {
+            Objects.requireNonNull(drain, "eventSinksDrain");
+            if (drain.isNegative()) {
+                throw new IllegalArgumentException("eventSinksDrain must not be negative");
+            }
+            this.eventSinksDrainMillis = drainMillis(drain);
+            return this;
+        }
+
+        /** Round a positive sub-millisecond budget up, and saturate one too long for a {@code long}. */
+        private static long drainMillis(Duration drain) {
+            if (drain.isZero()) {
+                return 0L;
+            }
+            try {
+                return Math.max(1L, drain.toMillis());
+            } catch (ArithmeticException tooLong) {
+                return Long.MAX_VALUE;
+            }
         }
 
         /**
@@ -892,6 +1030,12 @@ public final class Worker implements AutoCloseable {
             // never touches this knob.
             if (pushDispatch != null) {
                 options.put("pushDispatch", pushDispatch);
+            }
+            if (eventSinks != null) {
+                options.put("events", eventSinks);
+            }
+            if (eventSinksDrainMillis != null) {
+                options.put("eventsDrainMs", eventSinksDrainMillis);
             }
             try {
                 return JSON.writeValueAsString(options);

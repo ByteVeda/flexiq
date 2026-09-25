@@ -41,6 +41,7 @@ use flexiq_core::StorageBackend;
 use flexiq_workflows::WorkflowStorageBackend;
 use tonic::{Request, Response, Status};
 
+use crate::events::Events;
 use crate::grpc::auth::Principal;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
 use crate::grpc::pb;
@@ -48,11 +49,12 @@ use crate::grpc::pb::producer_service_server::{ProducerService, ProducerServiceS
 use crate::grpc::status::WireError;
 
 /// The producer door's state: the two storage handles this process holds, and
-/// nothing else.
+/// the event hub its writes are announced on.
 #[derive(Clone)]
 pub struct Producer {
     storage: StorageBackend,
     workflows: WorkflowStorageBackend,
+    events: Events,
 }
 
 // Hand-written rather than derived: `StorageBackend` is not `Debug`, and it
@@ -65,10 +67,14 @@ impl std::fmt::Debug for Producer {
 }
 
 impl Producer {
-    /// Serve out of `storage` and `workflows`. The namespace arrives per
-    /// request.
-    pub fn new(storage: StorageBackend, workflows: WorkflowStorageBackend) -> Self {
-        Self { storage, workflows }
+    /// Serve out of `storage` and `workflows`, announcing enqueues and cancels
+    /// on `events` when set. The namespace arrives per request.
+    pub fn new(storage: StorageBackend, workflows: WorkflowStorageBackend, events: Events) -> Self {
+        Self {
+            storage,
+            workflows,
+            events,
+        }
     }
 
     /// The registered service, capped at the producer door's message size.
@@ -102,6 +108,7 @@ impl Producer {
         let scoped = Scoped {
             storage: &self.storage,
             workflows: &self.workflows,
+            events: self.events.clone(),
             namespace: Arc::clone(principal.namespace()),
         };
         Ok((scoped, request.into_inner()))
@@ -117,6 +124,9 @@ impl Producer {
 pub(crate) struct Scoped<'a> {
     storage: &'a StorageBackend,
     workflows: &'a WorkflowStorageBackend,
+    /// Owned rather than borrowed so a handler can move it onto the blocking
+    /// pool and emit right after the write it announces.
+    events: Events,
     namespace: Arc<str>,
 }
 
@@ -136,6 +146,11 @@ impl Scoped<'_> {
     /// namespace argument exists on `WorkflowStorage`.
     pub(crate) fn workflows(&self) -> &WorkflowStorageBackend {
         self.workflows
+    }
+
+    /// The event hub, when events are configured.
+    pub(crate) fn events(&self) -> Events {
+        self.events.clone()
     }
 }
 

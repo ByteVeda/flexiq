@@ -60,6 +60,8 @@ pub(crate) fn make_test_pyqueue() -> PyQueue {
         auto_migrate: true,
         namespace: None,
         push_dispatch: None,
+        event_sinks: None,
+        event_hub: Mutex::new(None),
         dispatcher: Arc::new(Mutex::new(None)),
         workflow_storage,
     }

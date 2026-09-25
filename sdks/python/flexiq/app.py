@@ -41,6 +41,7 @@ from flexiq.debounce import (
 )
 from flexiq.detached import DetachedNative, is_detached
 from flexiq.enums import StorageBackend, coerce_enum
+from flexiq.event_sinks import EventSinksConfig, event_sinks_document
 from flexiq.events import EventBus, EventType
 from flexiq.exceptions import QueueFullError, SerializationError
 from flexiq.interception import ArgumentInterceptor, InterceptionMode
@@ -171,6 +172,8 @@ class Queue(
         max_pending: dict[str, int] | None = None,
         auto_migrate: bool = True,
         middleware_timeout: float = 5.0,
+        event_sinks: EventSinksConfig | None = None,
+        event_sinks_drain: float = 5.0,
     ):
         """Initialize a new task queue.
 
@@ -279,6 +282,18 @@ class Queue(
                 Python cannot abandon the call — see
                 :mod:`flexiq.hook_deadline` — but the prefork pool kills a
                 child that outruns its ``timeout`` regardless.
+            event_sinks: Where workers send job lifecycle events as
+                CloudEvents — ``job.started``, ``job.completed``,
+                ``job.failed`` and the rest. A dict, its JSON text, or an
+                ``os.PathLike`` naming a JSON file; a ``str`` is always the
+                document, never a path. Validated here, so a bad document
+                raises :class:`ValueError` at construction; a sink kind this
+                build lacks raises when a worker starts. Delivery is
+                at-most-once overall and may repeat an event, so dedupe on
+                the CloudEvents ``id``. Job payloads are not sent unless a
+                sink sets ``include_payload``. ``None`` (default) sends none.
+            event_sinks_drain: Seconds a stopping worker waits for buffered
+                events to be delivered before dropping them. Defaults to 5.
         """
         # Before anything is created or opened, so a bad value costs no database
         # file. `inf` would have the hook watchdog wait on a timeout CPython
@@ -339,6 +354,8 @@ class Queue(
                 dlq_auto_retry_max=dlq_auto_retry_max,
                 retention=retention._as_map() if retention is not None else None,
                 auto_migrate=auto_migrate,
+                event_sinks=event_sinks_document(event_sinks),
+                event_sinks_drain=event_sinks_drain,
             )
         )
         self._backend = backend

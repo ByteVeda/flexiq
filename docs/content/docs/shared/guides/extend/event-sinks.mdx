@@ -1,0 +1,340 @@
+---
+title: Event sinks
+description: "Have a worker send its job lifecycle events out as CloudEvents — to an HTTP endpoint or a Redis stream — with the same configuration document the server reads."
+---
+
+A worker can send every job transition it observes out of the process as a
+[CloudEvent](https://cloudevents.io): `POST`ed to an HTTP endpoint, or appended
+to a Redis stream. A data warehouse, an audit log or an alerting pipeline then
+follows jobs without polling storage, and without running any FlexiQ code of
+its own.
+
+The configuration is one JSON document, the same one `flexiq-server` reads, and
+it is parsed and validated by the same code whichever SDK hands it over. Its
+fields, the sinks, the event types and the delivery semantics are on
+[Event egress](/server/operate/events); the normative version, for whoever
+writes the consumer, is
+[the event egress contract](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md).
+This page is about handing that document to a worker.
+
+## Configure a worker
+
+The document below sends each completed and dead-lettered job to one HTTP
+endpoint, signed with the secret in `EVT_HMAC`.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+from flexiq import Queue
+
+queue = Queue(
+    db_path="tasks.db",
+    event_sinks={
+        "sinks": [
+            {
+                "kind": "http",
+                "name": "warehouse",
+                "url": "https://events.example.com/in",
+                "allow": ["events.example.com"],
+                "hmac_secret_env": "EVT_HMAC",
+                "filter": {"types": ["job.completed", "job.dead"]},
+            }
+        ]
+    },
+    event_sinks_drain=5.0,
+)
+```
+
+`event_sinks` takes a `dict`, the document as JSON text, or an
+`os.PathLike` naming a JSON file — `Path("/etc/flexiq/events.json")`. A `str`
+is always the document itself, never a path. The option lives on the `Queue`,
+so every worker that queue runs sends events, `flexiq worker` included.
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+import { Queue } from "@byteveda/flexiq";
+
+const queue = new Queue({ dbPath: "tasks.db" });
+
+const worker = queue.runWorker({
+  eventSinks: {
+    sinks: [
+      {
+        kind: "http",
+        name: "warehouse",
+        url: "https://events.example.com/in",
+        allow: ["events.example.com"],
+        hmac_secret_env: "EVT_HMAC",
+        filter: { types: ["job.completed", "job.dead"] },
+      },
+    ],
+  },
+  eventSinksDrainMs: 5000,
+});
+```
+
+`eventSinks` takes the document as an object, typed by the exported
+`EventSinksConfig`, or as its JSON text. Its keys stay `snake_case`: it is the
+cross-SDK document, not a Node options bag.
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Worker worker = flexiq.worker()
+        .handle(process, payload -> handle(payload))
+        .eventSinks("""
+                {"sinks": [{
+                  "kind": "http",
+                  "name": "warehouse",
+                  "url": "https://events.example.com/in",
+                  "allow": ["events.example.com"],
+                  "hmac_secret_env": "EVT_HMAC",
+                  "filter": {"types": ["job.completed", "job.dead"]}
+                }]}
+                """)
+        .eventSinksDrain(Duration.ofSeconds(5))
+        .start();
+```
+
+`eventSinks` takes the document as a JSON `String`, or a `Path` to a UTF-8
+file holding it, which is read when you call the builder method.
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use flexiq::{EventHub, FlexiQ};
+
+let queue = FlexiQ::open("tasks.db")?;
+let hub = Arc::new(EventHub::from_json(
+    r#"{"sinks": [{
+          "kind": "http",
+          "name": "warehouse",
+          "url": "https://events.example.com/in",
+          "allow": ["events.example.com"],
+          "hmac_secret_env": "EVT_HMAC",
+          "filter": {"types": ["job.completed", "job.dead"]}
+        }]}"#,
+)?);
+let worker = queue
+    .worker()
+    .register::<process>()
+    .events(Arc::clone(&hub))
+    .spawn()?;
+// ... later
+worker.shutdown()?;
+hub.shutdown(Duration::from_secs(5));
+```
+
+You own the hub: build it with `EventHub::from_json` (or `EventHub::start`
+over a parsed `EventsConfig`), hand the worker an `Arc` of it, and shut it
+down yourself once the worker has stopped.
+
+  </Tab>
+</CodeTabs>
+
+## When a bad document fails
+
+<SdkOnly sdk="python">
+
+`Queue(...)` parses the document and raises `ValueError` with the reason — a
+misspelt field, an HTTP sink with an empty `allow`, an unknown event type — so
+a bad config fails where it is written rather than when a worker starts. What
+the document can only find out by building its sinks, such as an `*_env`
+variable that is unset or a sink kind this build lacks, raises `ValueError`
+when a worker starts.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+`runWorker` throws with the reason — a malformed document, an HTTP sink with
+an empty `allow`, a secret variable that is unset, or a sink kind the addon was
+built without. The worker never starts.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+`start()` throws `IllegalArgumentException` with the reason — a malformed
+document, an HTTP sink with an empty `allow`, a secret variable that is unset,
+or a sink kind the native library was built without — before the worker
+registers anything.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+`EventHub::from_json` returns an `EventsConfigError` with the reason: a
+malformed document, an HTTP sink with an empty `allow`, a secret variable that
+is unset. A sink kind this build was compiled without is
+`EventsConfigError::NotCompiled`, which names the missing feature.
+
+The Redis Streams sink compiles under the `redis` feature. The HTTP sink needs
+the `events-http` feature:
+
+```toml
+[dependencies]
+flexiq = { version = "2", features = ["events-http"] }
+```
+
+</SdkOnly>
+
+Secrets are named by environment variable in the document and read each time
+a worker starts its sinks. An embedded worker leaves them in the environment;
+only `flexiq-server` removes them after reading.
+
+## What a worker sends
+
+A worker's scheduler emits `job.started`, `job.completed`, `job.failed`,
+`job.retrying`, `job.dead` and `job.sleeping` for the jobs it dispatches and
+settles, and `job.cancelled` for those plus a pending job it expires or
+cascade-cancels on its own (below).
+
+**An embedded worker sends `job.enqueued` for exactly two sources**: a
+periodic schedule's own firing, and its own automatic dead-letter retry —
+both with attempt `0`. A job this process enqueues through its own enqueue
+API is not one of them: it is first seen at its `job.started`. If the
+consumer needs every such enqueue, enqueue through the server instead.
+
+The worker also sends `job.cancelled` for a pending job on its own, without a
+door: `reason: "expired"` from its reaper sweep, `reason: "expired before
+execution"` when it finds a job already expired as it goes to claim it, and
+`reason: "dependency failed"` for a dependent cascaded behind a job it just
+dead-lettered. A pending job cancelled by calling `cancel_job` in this
+process still emits nothing — for that job or any dependent — since only a
+`flexiq-server` cancel door reports a pending cancel outright; a running job
+always emits `job.cancelled` once its attempt ends.
+
+**A worker's events stay in its own namespace.** A worker with a namespace
+announces that namespace's jobs only, and one with no namespace announces the
+default namespace's only — the jobs it dispatches. No worker announces
+another namespace's transitions, even where its maintenance reaches them: the
+expiry sweep covers every namespace, and a worker with no namespace also
+times out, recovers and fires periodic schedules for all of them. That work
+still happens, unannounced, so a namespace's maintenance events come only from
+a worker of that namespace and are missed when another namespace's worker did
+the work first.
+
+Delivery is **at-most-once overall, and an accepted event may still arrive more
+than once**, so the consumer dedupes on the CloudEvents `id`. Emitting never
+blocks a job: a sink whose buffer is full drops the event and counts it.
+
+## Stopping drains the sinks
+
+<SdkOnly sdk="python">
+
+When `run_worker` returns — after `queue.shutdown()`, or `Ctrl+C` — it first
+spends up to `event_sinks_drain` seconds (default 5) delivering what the sinks
+still hold. What is left then is dropped and counted as `shutdown`.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+The promise `worker.stop()` returns resolves once buffered events are
+delivered or counted as dropped, at most `eventSinksDrainMs` (default 5000)
+after the call — in-flight jobs spend that budget too. Await it in a graceful
+shutdown; a `stop()` nobody awaits still drains, but the process may exit
+first.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+`close()` first waits for in-flight handlers, so the events of jobs that finish
+during that wait still go out, then spends up to `eventSinksDrain` (default 5
+seconds) delivering what the sinks hold. What is left then is dropped and
+counted as `shutdown`.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The worker never shuts the hub down. Call `hub.shutdown(budget)` after
+`worker.shutdown()` returns, so the last outcomes are flushed within a budget
+you choose; what is left then is dropped and counted as `shutdown`.
+
+</SdkOnly>
+
+## Counters
+
+Each sink keeps the counters `flexiq-server` exposes as
+`flexiq_events_delivered_total`, `flexiq_events_dropped_total` and
+`flexiq_events_queued`, one entry per sink in configuration order.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+for sink in queue.event_sink_stats():
+    print(sink["name"], sink["delivered"], sink["dropped_failed"])
+```
+
+Each entry is a `dict` with `name`, `kind`, `delivered`,
+`dropped_buffer_full`, `dropped_rejected`, `dropped_failed`,
+`dropped_shutdown` and `queued`. After `run_worker` returns they are the final
+counts, until another worker starts on the queue; before any worker with sinks
+has started, the list is empty.
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+for (const sink of worker.eventSinkStats()) {
+  console.log(sink.name, sink.delivered, sink.droppedFailed);
+}
+```
+
+Each entry is an `EventSinkStats` with `name`, `kind`, `delivered`,
+`droppedBufferFull`, `droppedRejected`, `droppedFailed`, `droppedShutdown` and
+`queued`. Still readable after `stop()`, whose promise resolves once these are
+the final counts.
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+for (EventSinkStats sink : worker.eventSinkStats()) {
+    System.out.println(sink.name() + " " + sink.delivered() + " " + sink.droppedFailed());
+}
+```
+
+`EventSinkStats` is a record of `name`, `kind`, `delivered`,
+`droppedBufferFull`, `droppedRejected`, `droppedFailed`, `droppedShutdown` and
+`queued`. After `close()` it keeps reporting the final counts.
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+for sink in hub.stats() {
+    println!("{} {} {}", sink.name, sink.delivered, sink.dropped_failed);
+}
+// The same counters in Prometheus text, for your own /metrics.
+let metrics = hub.render_prometheus();
+```
+
+`SinkStats` has `name`, `kind`, `delivered`, `dropped_buffer_full`,
+`dropped_rejected`, `dropped_failed`, `dropped_shutdown` and `queued`.
+
+  </Tab>
+</CodeTabs>
+
+`dropped_failed` climbing means the endpoint is down or refusing;
+`dropped_buffer_full` means it is too slow for the event rate — raise
+`delivery.max_batch` or `delivery.buffer`, or filter out types the consumer
+does not need.
+
+## Not the in-process event bus
+
+<SdkLink to="guides/extend/events">Events</SdkLink> are callbacks inside this
+process, with no serialization and no network. Event sinks are the same
+lifecycle, sent out as CloudEvents to something that is not FlexiQ.

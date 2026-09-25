@@ -44,8 +44,17 @@ pub async fn retry(
     Path(dead_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let namespace = state.namespace.clone();
+    let events = state.events.clone();
     let new_job_id = on_storage(&state, move |storage| {
-        storage.retry_dead(&dead_id, namespace.as_deref())
+        let new_job_id = storage.retry_dead(&dead_id, namespace.as_deref())?;
+        // A retry is a fresh job, announced as an enqueue. The row is read
+        // back only when there is somewhere to announce it.
+        if let Some(hub) = events.as_deref() {
+            if let Some(job) = storage.get_job(&new_job_id, namespace.as_deref())? {
+                crate::events::enqueued(Some(hub), &job);
+            }
+        }
+        Ok(new_job_id)
     })
     .await?;
     Ok(Json(json!({ "new_job_id": new_job_id })))

@@ -107,8 +107,8 @@ pub(crate) fn secret(env: &Env, var: &str) -> Result<Option<Secret>> {
     Ok(Some(token))
 }
 
-/// Remove the token from the process environment once it is parsed, so a task
-/// body or a crash dump cannot read it back.
+/// Remove the token from the process environment once it is parsed, so no
+/// later in-process read or child process sees it.
 pub fn scrub_attach_token() {
     // Called once from `main`, before any thread that reads the environment
     // has been spawned.

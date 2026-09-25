@@ -17,6 +17,7 @@ use crate::convert::outcome_to_js;
 use crate::dispatcher::{NodeDispatcher, TaskCallback};
 #[cfg(feature = "mesh")]
 use crate::error::invalid_arg;
+use crate::event_sinks::WorkerEvents;
 use crate::queue::OutcomeCallback;
 
 const DEFAULT_QUEUE: &str = "default";
@@ -33,6 +34,9 @@ pub struct JsWorker {
     /// started from one queue must not share one owner slot.
     pub(crate) storage: StorageBackend,
     pub(crate) namespace: Option<String>,
+    /// This worker's event hub, kept for `eventSinkStats` and the stop-time
+    /// drain. The result-drain thread drains it once the last result is handled.
+    pub(crate) events: Option<Arc<WorkerEvents>>,
     shutdown: Arc<Notify>,
     lifecycle_stop: Arc<Notify>,
     #[cfg(feature = "mesh")]
@@ -50,13 +54,17 @@ impl JsWorker {
 
     /// Stop the worker: the scheduler stops dispatching, the lifecycle task
     /// unregisters, mesh gossip/steal tasks shut down, and the background
-    /// tasks exit once in-flight results drain.
+    /// tasks exit once in-flight results drain. Starts the event drain budget;
+    /// await `waitEventDrain` for the events to go out.
     #[napi]
     pub fn stop(&self) {
         // `notify_one` stores a permit if no waiter is parked yet, so the signal
         // is never lost between loop iterations.
         self.shutdown.notify_one();
         self.lifecycle_stop.notify_one();
+        if let Some(events) = &self.events {
+            events.mark_stopping();
+        }
         #[cfg(feature = "mesh")]
         self.mesh_shutdown.notify_one();
     }
@@ -154,6 +162,13 @@ pub fn start_worker(
         }
         scheduler.register_queue_config(input.name.clone(), crate::convert::queue_config(input)?);
     }
+    // Started last among the fallible steps, so a config error above leaves no
+    // sink threads behind; nothing after this point fails.
+    let events = WorkerEvents::start(options.events.as_deref(), options.events_drain_ms)?;
+    if let Some(events) = &events {
+        scheduler.set_events(events.hub());
+    }
+    let worker_events = events.clone();
     let scheduler = Arc::new(scheduler);
     // Push-dispatch: swap polling for enqueue-driven wakeups before any loop
     // below takes the source. We are on the JS thread here, so enter the napi
@@ -304,12 +319,18 @@ pub fn start_worker(
                 Err(_) => log::error!("[flexiq-node] result handling panicked; outcomes dropped"),
             }
         }
+        // Every sender is gone, so the scheduler has stopped and its last
+        // result is handled: nothing emits again. Drain here, off the JS thread.
+        if let Some(events) = &events {
+            events.drain();
+        }
     });
 
     Ok(JsWorker {
         worker_id,
         storage: steps_storage,
         namespace: steps_namespace,
+        events: worker_events,
         shutdown,
         lifecycle_stop,
         #[cfg(feature = "mesh")]

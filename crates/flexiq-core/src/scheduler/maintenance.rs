@@ -1,12 +1,13 @@
 use log::{error, info, warn};
 
 use crate::error::Result;
+use crate::events::reason;
 use crate::job::now_millis;
 use crate::periodic::{next_run, periodic_job};
 use crate::scheduler::retention::{
     publish_effective_retention, EffectiveRetention, RetentionConfig, DEFAULT_NAMESPACE,
 };
-use crate::storage::records::{SettleClaimant, SettleGrant};
+use crate::storage::records::{PeriodicTask, SettleClaimant, SettleGrant};
 use crate::storage::{
     dead_worker_cutoff, try_lead, Storage, RETENTION_LOCK, RETENTION_LOCK_TTL_MS,
 };
@@ -97,8 +98,19 @@ fn sweep(label: &str, purge: impl FnOnce() -> Result<u64>) -> u64 {
 impl Scheduler {
     pub(super) fn reap_stale(&self) -> Result<()> {
         let now = now_millis();
-        // Expire pending jobs that passed their TTL
-        if let Err(e) = self.storage.expire_pending_jobs(now) {
+        // Expire pending jobs that passed their TTL. Only a hub needs the rows,
+        // and each batch is emitted and dropped inside the callback so the
+        // sweep's memory stays one batch whatever the backlog.
+        let expired = match &self.events {
+            Some(_) => self
+                .storage
+                .expire_pending_jobs_reporting(now, &mut |batch| {
+                    // Spans every namespace; the emit keeps only this one's.
+                    self.emit_cancelled_rows(batch, reason::EXPIRED)
+                }),
+            None => self.storage.expire_pending_jobs(now),
+        };
+        if let Err(e) = expired {
             warn!("expire_pending_jobs error: {e}");
         }
         // Reap expired distributed locks
@@ -146,16 +158,21 @@ impl Scheduler {
             } else {
                 format!("job timed out after {}ms", job.timeout_ms)
             };
-            let _ = self.handle_result(JobResult::Failure {
-                job_id: job.id.clone(),
-                error,
-                retry_count: job.retry_count,
-                max_retries: job.max_retries,
-                task_name: job.task_name.clone(),
-                wall_time_ns: 0,
-                should_retry: true,
-                timed_out: true,
-            })?;
+            // Unscoped for a scheduler with no namespace, so the settle
+            // announces only the jobs that are its own.
+            let _ = self.settle_reaped(
+                &job,
+                JobResult::Failure {
+                    job_id: job.id.clone(),
+                    error,
+                    retry_count: job.retry_count,
+                    max_retries: job.max_retries,
+                    task_name: job.task_name.clone(),
+                    wall_time_ns: 0,
+                    should_retry: true,
+                    timed_out: true,
+                },
+            )?;
         }
 
         // Fast-path recovery: requeue jobs whose worker died, without waiting
@@ -202,18 +219,28 @@ impl Scheduler {
                     // rescue is a new claim, so the dead owner's executor —
                     // which may still be on its way to reporting — is fenced
                     // out by the same value that authorizes this result.
-                    self.track_in_flight(&job.id, &job.task_name, job.retry_count, Some(epoch));
+                    self.track_in_flight(
+                        &job.id,
+                        &job.task_name,
+                        &job.queue,
+                        job.retry_count,
+                        Some(epoch),
+                    );
                     let error = format!("worker {dead_owner} died; recovering in-flight job");
-                    if let Err(e) = self.handle_result(JobResult::Failure {
-                        job_id: job.id.clone(),
-                        error,
-                        retry_count: job.retry_count,
-                        max_retries: job.max_retries,
-                        task_name: job.task_name.clone(),
-                        wall_time_ns: 0,
-                        should_retry: true,
-                        timed_out: false,
-                    }) {
+                    // Scoped like the stale reaper, so announced the same way.
+                    if let Err(e) = self.settle_reaped(
+                        &job,
+                        JobResult::Failure {
+                            job_id: job.id.clone(),
+                            error,
+                            retry_count: job.retry_count,
+                            max_retries: job.max_retries,
+                            task_name: job.task_name.clone(),
+                            wall_time_ns: 0,
+                            should_retry: true,
+                            timed_out: false,
+                        },
+                    ) {
                         warn!(
                             "recover_orphaned_jobs: handle_result failed for {}: {e}",
                             job.id
@@ -336,7 +363,8 @@ impl Scheduler {
     ///
     /// A scheduler with no namespace serves the whole cluster, so it reads
     /// every namespace's due rows and each job it mints inherits the *row's*
-    /// namespace rather than the scheduler's (#918). `unique_key` is namespace
+    /// namespace rather than the scheduler's (#918) — though it announces only
+    /// the default namespace's firings. `unique_key` is namespace
     /// scoped since `m0017`, so two tenants whose schedules share a name no
     /// longer deduplicate against each other.
     pub(super) fn check_periodic(&self) -> Result<()> {
@@ -346,11 +374,7 @@ impl Scheduler {
             .get_due_periodic(now, self.namespace.as_deref())?;
 
         for task in due_tasks {
-            let unique_key = Some(format!("periodic:{}:{}", task.name, now));
-            if let Err(e) = self
-                .storage
-                .enqueue_unique(periodic_job(&task, now, unique_key))
-            {
+            if let Err(e) = self.fire_periodic(&task, now) {
                 error!("failed to enqueue periodic task '{}': {e}", task.name);
                 continue;
             }
@@ -373,6 +397,20 @@ impl Scheduler {
             }
         }
 
+        Ok(())
+    }
+
+    /// Enqueue one due schedule's job for the `now` slot. The unique key makes
+    /// two schedulers firing the same slot one job, and only the insert is
+    /// announced, so that job gets one `job.enqueued`.
+    pub(super) fn fire_periodic(&self, task: &PeriodicTask, now: i64) -> Result<()> {
+        let unique_key = Some(format!("periodic:{}:{}", task.name, now));
+        let (job, existed) = self
+            .storage
+            .enqueue_unique_reporting(periodic_job(task, now, unique_key))?;
+        if !existed {
+            self.emit_periodic_enqueued(job);
+        }
         Ok(())
     }
 
@@ -423,6 +461,7 @@ impl Scheduler {
                         entry.dlq_retry_count + 1,
                         max_retries
                     );
+                    self.emit_dlq_retried(new_id, entry);
                     retried += 1;
                 }
                 Err(e) => {

@@ -707,6 +707,39 @@ macro_rules! impl_diesel_job_ops {
                 namespace: Option<&str>,
                 order: $crate::storage::DispatchOrder,
             ) -> Result<Option<Job>> {
+                Ok(self
+                    .dequeue_ordered_reporting(queue_name, now, namespace, order)?
+                    .claimed)
+            }
+
+            /// Archive a candidate the dequeue scan found past `expires_at`
+            /// as cancelled, returning the archived row. The archive keeps the
+            /// payload, so the full row is loaded — only for an expired one.
+            fn archive_expired_candidate(
+                conn: &mut $conn_type,
+                id: &str,
+                now: i64,
+            ) -> diesel::result::QueryResult<Job> {
+                let mut full: JobRow = jobs::table
+                    .find(id)
+                    .select(JobRow::as_select())
+                    .first(conn)?;
+                full.status = JobStatus::Cancelled as i32;
+                full.completed_at = Some(now);
+                full.error = Some($crate::events::reason::EXPIRED_BEFORE_EXECUTION.to_string());
+                Self::archive_job_row(conn, &full)?;
+                Ok(Job::from(full))
+            }
+
+            /// [`dequeue_ordered`](Self::dequeue_ordered), also returning the
+            /// candidates it archived as expired instead of claiming.
+            fn dequeue_ordered_reporting(
+                &self,
+                queue_name: &str,
+                now: i64,
+                namespace: Option<&str>,
+                order: $crate::storage::DispatchOrder,
+            ) -> Result<$crate::storage::records::Dequeued<Option<Job>>> {
                 self.write_transaction(|conn| {
                     // Narrow candidate scan (no payload/result blobs). Postgres
                     // applies FOR UPDATE SKIP LOCKED so concurrent workers claim
@@ -714,21 +747,13 @@ macro_rules! impl_diesel_job_ops {
                     let candidates: Vec<NarrowJobRow> = Self::scan_dequeue_candidates(
                         conn, queue_name, now, namespace, 100, order,
                     )?;
+                    let mut expired: Vec<Job> = Vec::new();
 
                     for row in candidates {
-                        // Skip expired jobs — archive them as cancelled. The
-                        // archived row keeps the payload, so load the full row
-                        // (only for this one expired candidate) before archiving.
+                        // Skip expired jobs — archive them as cancelled.
                         if let Some(expires_at) = row.expires_at {
                             if now > expires_at {
-                                let mut full: JobRow = jobs::table
-                                    .find(&row.id)
-                                    .select(JobRow::as_select())
-                                    .first(conn)?;
-                                full.status = JobStatus::Cancelled as i32;
-                                full.completed_at = Some(now);
-                                full.error = Some("expired before execution".to_string());
-                                Self::archive_job_row(conn, &full)?;
+                                expired.push(Self::archive_expired_candidate(conn, &row.id, now)?);
                                 continue;
                             }
                         }
@@ -763,10 +788,16 @@ macro_rules! impl_diesel_job_ops {
                             .select(JobRow::as_select())
                             .first(conn)?;
 
-                        return Ok(Some(Job::from(updated)));
+                        return Ok($crate::storage::records::Dequeued {
+                            claimed: Some(Job::from(updated)),
+                            expired,
+                        });
                     }
 
-                    Ok(None)
+                    Ok($crate::storage::records::Dequeued {
+                        claimed: None,
+                        expired,
+                    })
                 })
             }
 
@@ -779,13 +810,37 @@ macro_rules! impl_diesel_job_ops {
                 namespace: Option<&str>,
                 orders: &std::collections::HashMap<String, $crate::storage::DispatchOrder>,
             ) -> Result<Option<Job>> {
+                Ok(self
+                    .dequeue_from_reporting(queues, now, namespace, orders)?
+                    .claimed)
+            }
+
+            /// [`dequeue_from`](Self::dequeue_from), also returning every
+            /// candidate archived as expired across the queues it scanned.
+            pub fn dequeue_from_reporting(
+                &self,
+                queues: &[String],
+                now: i64,
+                namespace: Option<&str>,
+                orders: &std::collections::HashMap<String, $crate::storage::DispatchOrder>,
+            ) -> Result<$crate::storage::records::Dequeued<Option<Job>>> {
+                let mut expired: Vec<Job> = Vec::new();
                 for queue_name in queues {
                     let order = $crate::storage::order_for(orders, queue_name);
-                    if let Some(job) = self.dequeue_ordered(queue_name, now, namespace, order)? {
-                        return Ok(Some(job));
+                    let mut step =
+                        self.dequeue_ordered_reporting(queue_name, now, namespace, order)?;
+                    expired.append(&mut step.expired);
+                    if step.claimed.is_some() {
+                        return Ok($crate::storage::records::Dequeued {
+                            claimed: step.claimed,
+                            expired,
+                        });
                     }
                 }
-                Ok(None)
+                Ok($crate::storage::records::Dequeued {
+                    claimed: None,
+                    expired,
+                })
             }
 
             /// Atomically claim up to `max` ready jobs from a single queue in
@@ -824,8 +879,24 @@ macro_rules! impl_diesel_job_ops {
                 max: usize,
                 order: $crate::storage::DispatchOrder,
             ) -> Result<Vec<Job>> {
+                Ok(self
+                    .dequeue_batch_ordered_reporting(queue_name, now, namespace, max, order)?
+                    .claimed)
+            }
+
+            /// [`dequeue_batch_ordered`](Self::dequeue_batch_ordered), also
+            /// returning the candidates it archived as expired instead of
+            /// claiming.
+            fn dequeue_batch_ordered_reporting(
+                &self,
+                queue_name: &str,
+                now: i64,
+                namespace: Option<&str>,
+                max: usize,
+                order: $crate::storage::DispatchOrder,
+            ) -> Result<$crate::storage::records::Dequeued<Vec<Job>>> {
                 if max == 0 {
-                    return Ok(Vec::new());
+                    return Ok($crate::storage::records::Dequeued::default());
                 }
 
                 // Scan more candidates than `max` so dependency/expiry skips
@@ -842,6 +913,7 @@ macro_rules! impl_diesel_job_ops {
                     )?;
 
                     let mut claimed: Vec<Job> = Vec::with_capacity(max.min(candidates.len()));
+                    let mut expired: Vec<Job> = Vec::new();
 
                     for row in candidates {
                         if claimed.len() == max {
@@ -852,14 +924,7 @@ macro_rules! impl_diesel_job_ops {
                         // leave the live `jobs` table (matching `dequeue`).
                         if let Some(expires_at) = row.expires_at {
                             if now > expires_at {
-                                let mut full: JobRow = jobs::table
-                                    .find(&row.id)
-                                    .select(JobRow::as_select())
-                                    .first(conn)?;
-                                full.status = JobStatus::Cancelled as i32;
-                                full.completed_at = Some(now);
-                                full.error = Some("expired before execution".to_string());
-                                Self::archive_job_row(conn, &full)?;
+                                expired.push(Self::archive_expired_candidate(conn, &row.id, now)?);
                                 continue;
                             }
                         }
@@ -895,7 +960,7 @@ macro_rules! impl_diesel_job_ops {
                         claimed.push(Job::from(updated));
                     }
 
-                    Ok(claimed)
+                    Ok($crate::storage::records::Dequeued { claimed, expired })
                 })
             }
 
@@ -910,18 +975,35 @@ macro_rules! impl_diesel_job_ops {
                 max: usize,
                 orders: &std::collections::HashMap<String, $crate::storage::DispatchOrder>,
             ) -> Result<Vec<Job>> {
-                let mut claimed: Vec<Job> = Vec::new();
+                Ok(self
+                    .dequeue_batch_from_reporting(queues, now, namespace, max, orders)?
+                    .claimed)
+            }
+
+            /// [`dequeue_batch_from`](Self::dequeue_batch_from), also returning
+            /// every candidate archived as expired across the queues it scanned.
+            pub fn dequeue_batch_from_reporting(
+                &self,
+                queues: &[String],
+                now: i64,
+                namespace: Option<&str>,
+                max: usize,
+                orders: &std::collections::HashMap<String, $crate::storage::DispatchOrder>,
+            ) -> Result<$crate::storage::records::Dequeued<Vec<Job>>> {
+                let mut out = $crate::storage::records::Dequeued::<Vec<Job>>::default();
                 for queue_name in queues {
-                    if claimed.len() >= max {
+                    if out.claimed.len() >= max {
                         break;
                     }
-                    let remaining = max - claimed.len();
+                    let remaining = max - out.claimed.len();
                     let order = $crate::storage::order_for(orders, queue_name);
-                    let mut batch =
-                        self.dequeue_batch_ordered(queue_name, now, namespace, remaining, order)?;
-                    claimed.append(&mut batch);
+                    let mut batch = self.dequeue_batch_ordered_reporting(
+                        queue_name, now, namespace, remaining, order,
+                    )?;
+                    out.claimed.append(&mut batch.claimed);
+                    out.expired.append(&mut batch.expired);
                 }
-                Ok(claimed)
+                Ok(out)
             }
 
             /// Mark a job as complete with the given result. The job moves from
@@ -1164,6 +1246,16 @@ macro_rules! impl_diesel_job_ops {
             /// unknown or already-terminal id gets: a caller scoped to one
             /// tenant learns nothing about ids outside it.
             pub fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
+                Ok(self.cancel_job_reporting(id, namespace)?.0)
+            }
+
+            /// [`cancel_job`](Self::cancel_job), also returning every dependent
+            /// the cascade cancelled.
+            pub fn cancel_job_reporting(
+                &self,
+                id: &str,
+                namespace: Option<&str>,
+            ) -> Result<(bool, Vec<Job>)> {
                 let now = now_millis();
 
                 let archived = self.write_transaction(|conn| {
@@ -1188,11 +1280,15 @@ macro_rules! impl_diesel_job_ops {
                     Ok(true)
                 })?;
 
-                if archived {
-                    self.cascade_cancel(id, "dependency cancelled", namespace)?;
+                if !archived {
+                    return Ok((false, Vec::new()));
                 }
-
-                Ok(archived)
+                let cascaded = self.cascade_cancel_reporting(
+                    id,
+                    $crate::events::reason::DEPENDENCY_CANCELLED,
+                    namespace,
+                )?;
+                Ok((true, cascaded))
             }
 
             /// Request cancellation of a running job. The task must check for this.
@@ -1311,6 +1407,18 @@ macro_rules! impl_diesel_job_ops {
                 reason: &str,
                 namespace: Option<&str>,
             ) -> Result<()> {
+                self.cascade_cancel_reporting(failed_job_id, reason, namespace)
+                    .map(drop)
+            }
+
+            /// [`cascade_cancel`](Self::cascade_cancel), returning every
+            /// dependent it archived, as archived.
+            pub fn cascade_cancel_reporting(
+                &self,
+                failed_job_id: &str,
+                reason: &str,
+                namespace: Option<&str>,
+            ) -> Result<Vec<Job>> {
                 let mut conn = self.conn()?;
                 let now = now_millis();
 
@@ -1343,29 +1451,30 @@ macro_rules! impl_diesel_job_ops {
                 // its own (single-connection pools would otherwise deadlock).
                 drop(conn);
 
-                if !queue.is_empty() {
-                    let error_msg = format!("{reason}: {failed_job_id}");
-                    self.write_transaction(|conn| {
-                        let mut select = jobs::table
-                            .filter(jobs::id.eq_any(&queue))
-                            .filter(jobs::status.eq(JobStatus::Pending as i32))
-                            .into_boxed();
-                        if let Some(ns) = namespace {
-                            select = select.filter(jobs::namespace.eq(ns));
-                        }
-                        let rows: Vec<JobRow> = select.select(JobRow::as_select()).load(conn)?;
-
-                        for mut row in rows {
-                            row.status = JobStatus::Cancelled as i32;
-                            row.completed_at = Some(now);
-                            row.error = Some(error_msg.clone());
-                            Self::archive_job_row(conn, &row)?;
-                        }
-                        Ok(())
-                    })?;
+                if queue.is_empty() {
+                    return Ok(Vec::new());
                 }
+                let error_msg = format!("{reason}: {failed_job_id}");
+                self.write_transaction(|conn| {
+                    let mut select = jobs::table
+                        .filter(jobs::id.eq_any(&queue))
+                        .filter(jobs::status.eq(JobStatus::Pending as i32))
+                        .into_boxed();
+                    if let Some(ns) = namespace {
+                        select = select.filter(jobs::namespace.eq(ns));
+                    }
+                    let rows: Vec<JobRow> = select.select(JobRow::as_select()).load(conn)?;
 
-                Ok(())
+                    let mut cancelled = Vec::with_capacity(rows.len());
+                    for mut row in rows {
+                        row.status = JobStatus::Cancelled as i32;
+                        row.completed_at = Some(now);
+                        row.error = Some(error_msg.clone());
+                        Self::archive_job_row(conn, &row)?;
+                        cancelled.push(Job::from(row));
+                    }
+                    Ok(cancelled)
+                })
             }
 
             /// Get the IDs of jobs that a given job depends on.
@@ -2435,21 +2544,23 @@ macro_rules! impl_diesel_job_ops {
             }
 
             /// Archive a set of pending job rows as cancelled with the given
-            /// error, moving each from `jobs` to `archived_jobs`.
+            /// error, moving each from `jobs` to `archived_jobs`. Returns the
+            /// rows as archived.
             fn archive_pending_rows(
                 conn: &mut $conn_type,
                 rows: Vec<JobRow>,
                 now: i64,
                 error: &str,
-            ) -> diesel::result::QueryResult<u64> {
-                let count = rows.len() as u64;
+            ) -> diesel::result::QueryResult<Vec<JobRow>> {
+                let mut archived = Vec::with_capacity(rows.len());
                 for mut row in rows {
                     row.status = JobStatus::Cancelled as i32;
                     row.completed_at = Some(now);
                     row.error = Some(error.to_string());
                     Self::archive_job_row(conn, &row)?;
+                    archived.push(row);
                 }
-                Ok(count)
+                Ok(archived)
             }
 
             /// Archive matching pending jobs in bounded batches. `select_batch`
@@ -2458,22 +2569,31 @@ macro_rules! impl_diesel_job_ops {
             /// SQLite writer lock (or the full row set in memory) at once. The
             /// archive removes each row from `jobs`, so the same filter drains
             /// toward empty across iterations.
-            fn archive_pending_in_batches<S>(
+            ///
+            /// Each committed, non-empty batch's archived rows go to `on_batch`
+            /// and are dropped after it returns, so at most one batch is held.
+            fn archive_pending_in_batches<S, F>(
                 &self,
                 now: i64,
                 error: &str,
                 select_batch: S,
+                mut on_batch: F,
             ) -> Result<u64>
             where
                 S: Fn(&mut $conn_type, i64) -> diesel::result::QueryResult<Vec<JobRow>>,
+                F: FnMut(Vec<JobRow>),
             {
                 let mut total = 0u64;
                 loop {
-                    let archived = self.write_transaction(|conn| {
+                    let rows = self.write_transaction(|conn| {
                         let rows = select_batch(conn, Self::MASS_ARCHIVE_BATCH)?;
                         Ok(Self::archive_pending_rows(conn, rows, now, error)?)
                     })?;
+                    let archived = rows.len() as u64;
                     total += archived;
+                    if !rows.is_empty() {
+                        on_batch(rows);
+                    }
                     if archived < Self::MASS_ARCHIVE_BATCH as u64 {
                         break;
                     }
@@ -2483,41 +2603,79 @@ macro_rules! impl_diesel_job_ops {
 
             /// Expire pending jobs that have passed their expires_at.
             pub fn expire_pending_jobs(&self, now: i64) -> Result<u64> {
-                self.archive_pending_in_batches(now, "expired", |conn, limit| {
-                    jobs::table
-                        .filter(jobs::status.eq(JobStatus::Pending as i32))
-                        .filter(jobs::expires_at.is_not_null())
-                        .filter(jobs::expires_at.lt(now))
-                        .select(JobRow::as_select())
-                        .limit(limit)
-                        .load(conn)
+                self.expire_in_batches(now, drop)
+            }
+
+            /// [`expire_pending_jobs`](Self::expire_pending_jobs), handing each
+            /// committed batch of expired jobs, as archived, to `on_batch`.
+            /// Returns the total count; memory stays bounded to one batch.
+            pub fn expire_pending_jobs_reporting(
+                &self,
+                now: i64,
+                on_batch: &mut dyn FnMut(Vec<Job>),
+            ) -> Result<u64> {
+                self.expire_in_batches(now, |rows| {
+                    on_batch(rows.into_iter().map(Job::from).collect())
                 })
+            }
+
+            /// Shared body of the two expiry sweeps; `on_batch` receives each
+            /// committed batch's archived rows.
+            fn expire_in_batches<F: FnMut(Vec<JobRow>)>(
+                &self,
+                now: i64,
+                on_batch: F,
+            ) -> Result<u64> {
+                self.archive_pending_in_batches(
+                    now,
+                    $crate::events::reason::EXPIRED,
+                    |conn, limit| {
+                        jobs::table
+                            .filter(jobs::status.eq(JobStatus::Pending as i32))
+                            .filter(jobs::expires_at.is_not_null())
+                            .filter(jobs::expires_at.lt(now))
+                            .select(JobRow::as_select())
+                            .limit(limit)
+                            .load(conn)
+                    },
+                    on_batch,
+                )
             }
 
             /// Cancel all pending jobs in a specific queue.
             pub fn cancel_pending_by_queue(&self, queue: &str) -> Result<u64> {
                 let now = now_millis();
-                self.archive_pending_in_batches(now, "purged", |conn, limit| {
-                    jobs::table
-                        .filter(jobs::status.eq(JobStatus::Pending as i32))
-                        .filter(jobs::queue.eq(queue))
-                        .select(JobRow::as_select())
-                        .limit(limit)
-                        .load(conn)
-                })
+                self.archive_pending_in_batches(
+                    now,
+                    "purged",
+                    |conn, limit| {
+                        jobs::table
+                            .filter(jobs::status.eq(JobStatus::Pending as i32))
+                            .filter(jobs::queue.eq(queue))
+                            .select(JobRow::as_select())
+                            .limit(limit)
+                            .load(conn)
+                    },
+                    drop,
+                )
             }
 
             /// Cancel all pending jobs for a specific task name.
             pub fn cancel_pending_by_task(&self, task_name: &str) -> Result<u64> {
                 let now = now_millis();
-                self.archive_pending_in_batches(now, "revoked", |conn, limit| {
-                    jobs::table
-                        .filter(jobs::status.eq(JobStatus::Pending as i32))
-                        .filter(jobs::task_name.eq(task_name))
-                        .select(JobRow::as_select())
-                        .limit(limit)
-                        .load(conn)
-                })
+                self.archive_pending_in_batches(
+                    now,
+                    "revoked",
+                    |conn, limit| {
+                        jobs::table
+                            .filter(jobs::status.eq(JobStatus::Pending as i32))
+                            .filter(jobs::task_name.eq(task_name))
+                            .select(JobRow::as_select())
+                            .limit(limit)
+                            .load(conn)
+                    },
+                    drop,
+                )
             }
 
             /// Count running jobs for a specific task name (for per-task concurrency limiting).

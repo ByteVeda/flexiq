@@ -57,6 +57,15 @@ fn fixture_keys(fetched: Arc<Mutex<Vec<String>>>) -> KeyFetcher {
 }
 
 async fn start(label: &str, triggers: Value) -> Harness {
+    start_with_events(label, triggers, None).await
+}
+
+/// A harness whose enqueues are announced on `events`.
+async fn start_with_events(
+    label: &str,
+    triggers: Value,
+    events: Option<Arc<flexiq_core::EventHub>>,
+) -> Harness {
     let env = Env::from([
         ("GITHUB_SECRET".to_string(), GITHUB_SECRET.to_string()),
         ("SHARED_SECRET".to_string(), SHARED_SECRET.to_string()),
@@ -76,6 +85,7 @@ async fn start(label: &str, triggers: Value) -> Harness {
         &config,
         (*storage).clone(),
         fixture_keys(fetched.clone()),
+        events,
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -184,6 +194,46 @@ async fn a_signed_delivery_becomes_the_job_its_definition_describes() {
         ],
     );
     assert_eq!(job.payload, expected);
+}
+
+/// A trigger announces the job it wrote, and a redelivery that answers with
+/// that same job announces nothing.
+#[cfg(feature = "events-http")]
+#[tokio::test]
+async fn a_triggered_job_is_announced_once() {
+    let receiver = support::webhook_receiver::WebhookReceiver::start().await;
+    let document = json!({"sinks": [{
+        "kind": "http", "name": "loopback", "url": receiver.url,
+        "allow": ["127.0.0.1"], "allow_loopback": true
+    }]});
+    let hub =
+        Arc::new(flexiq_core::EventHub::from_json(&document.to_string()).expect("the hub starts"));
+    let harness = start_with_events(
+        "announced",
+        json!([github_trigger("10/s")]),
+        Some(Arc::clone(&hub)),
+    )
+    .await;
+
+    let first = job_ids(harness.github("delivery-1", PUSH, &sign(PUSH)).await).await;
+    let again = job_ids(harness.github("delivery-1", PUSH, &sign(PUSH)).await).await;
+    assert!(again[0].1, "the redelivery deduplicated");
+    // The shutdown drain flushes whatever is buffered, so after it the
+    // receiver holds everything the hub was ever handed.
+    tokio::task::spawn_blocking({
+        let hub = Arc::clone(&hub);
+        move || hub.shutdown(std::time::Duration::from_secs(5))
+    })
+    .await
+    .expect("the drain");
+
+    let received = receiver.received();
+    assert_eq!(received.len(), 1, "{received:?}");
+    let event = received[0].body.as_ref().expect("a JSON event");
+    assert_eq!(event["type"], "org.byteveda.flexiq.job.enqueued");
+    assert_eq!(event["subject"], first[0].0.as_str());
+    assert_eq!(event["flexiqtask"], "ci.on_push");
+    assert_eq!(event["flexiqnamespace"], NAMESPACE);
 }
 
 #[tokio::test]

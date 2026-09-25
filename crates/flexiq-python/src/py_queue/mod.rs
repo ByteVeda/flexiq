@@ -1,6 +1,7 @@
 // pyo3's #[pymethods] macro generates Into<PyErr> conversions that trigger this lint
 #![allow(clippy::useless_conversion)]
 
+mod event_sinks;
 mod inspection;
 mod pubsub;
 mod steps;
@@ -26,6 +27,7 @@ use flexiq_core::worker::WorkerDispatcher;
 use flexiq_core::{DebounceOptions, NewPeriodicTask};
 
 use crate::py_job::PyJob;
+use event_sinks::EventSinks;
 
 pub(crate) use flexiq_core::storage::cursor::next_cursor;
 
@@ -85,6 +87,12 @@ pub struct PyQueue {
     /// `None` keeps the backend default (on for Redis). Honored only when the
     /// crate is built with the `push-dispatch` cargo feature.
     pub(crate) push_dispatch: Option<bool>,
+    /// Where workers send job events, if anywhere. Each `run_worker` starts
+    /// its own hub from it.
+    pub(crate) event_sinks: Option<EventSinks>,
+    /// The hub of the latest worker started on this queue, kept after it
+    /// drains so `event_sink_stats` can report the final counts.
+    pub(crate) event_hub: Mutex<Option<Arc<flexiq_core::EventHub>>>,
     /// Whether opening applies schema changes. When false the workflow store is
     /// built unmigrated too, so *no* path applies DDL until `migrate()` runs.
     /// Only the workflow path reads it, hence the cfg.
@@ -156,7 +164,7 @@ fn build_retention_config(
 )]
 impl PyQueue {
     #[new]
-    #[pyo3(signature = (db_path=".flexiq/flexiq.db", workers=0, default_retry=3, default_timeout=300, default_priority=0, result_ttl=None, backend="sqlite", db_url=None, schema="flexiq", pool_size=None, scheduler_poll_interval_ms=50, scheduler_reap_interval=100, scheduler_cleanup_interval=1200, scheduler_batch_size=None, namespace=None, push_dispatch=None, dlq_auto_retry_delay=None, dlq_auto_retry_max=1, retention=None, auto_migrate=true))]
+    #[pyo3(signature = (db_path=".flexiq/flexiq.db", workers=0, default_retry=3, default_timeout=300, default_priority=0, result_ttl=None, backend="sqlite", db_url=None, schema="flexiq", pool_size=None, scheduler_poll_interval_ms=50, scheduler_reap_interval=100, scheduler_cleanup_interval=1200, scheduler_batch_size=None, namespace=None, push_dispatch=None, dlq_auto_retry_delay=None, dlq_auto_retry_max=1, retention=None, auto_migrate=true, event_sinks=None, event_sinks_drain=5.0))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         py: Python<'_>,
@@ -180,7 +188,11 @@ impl PyQueue {
         dlq_auto_retry_max: i32,
         retention: Option<std::collections::HashMap<String, i64>>,
         auto_migrate: bool,
+        event_sinks: Option<String>,
+        event_sinks_drain: f64,
     ) -> PyResult<Self> {
+        // Before any storage is opened, so a bad document costs no database file.
+        let event_sinks = EventSinks::parse(event_sinks, event_sinks_drain)?;
         // A negative TTL inverts the cleanup cutoff: `now.saturating_sub(-ttl)`
         // lands in the future, so every archived job matches and auto-cleanup
         // deletes the whole history.
@@ -323,6 +335,8 @@ impl PyQueue {
             dlq_auto_retry_max,
             namespace,
             push_dispatch,
+            event_sinks,
+            event_hub: Mutex::new(None),
             #[cfg(feature = "workflows")]
             auto_migrate,
             dispatcher: Arc::new(Mutex::new(None)),

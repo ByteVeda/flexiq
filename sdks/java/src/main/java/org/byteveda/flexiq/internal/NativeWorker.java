@@ -88,4 +88,22 @@ public final class NativeWorker {
      * @return the snapshot as JSON, or {@code null}
      */
     public static native String meshClusterInfo(long handle);
+
+    /**
+     * Each event sink's counters as a JSON array, in configuration order; {@code []}
+     * when the worker has no sinks.
+     *
+     * @param handle the worker handle from {@link NativeQueue#runWorker}
+     * @return the counters as JSON
+     */
+    public static native String eventSinkStats(long handle);
+
+    /**
+     * Block until a stopped worker's buffered events are delivered or counted as
+     * dropped, for at most the worker's drain budget from this call. Returns at
+     * once for a worker without sinks.
+     *
+     * @param handle the worker handle from {@link NativeQueue#runWorker}
+     */
+    public static native void awaitEventDrain(long handle);
 }

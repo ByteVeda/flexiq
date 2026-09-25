@@ -14,6 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::error::Result;
+use crate::events::EventHub;
 use crate::scheduler::{QueueConfig, ResultOutcome, Scheduler, SchedulerConfig, TaskConfig};
 use crate::storage::records::{WorkerRegistration, WorkerStatus};
 use crate::storage::{
@@ -47,6 +48,7 @@ pub struct Worker {
     on_outcome: Option<OutcomeCallback>,
     dispatcher: Option<(String, Arc<dyn WorkerDispatcher>)>,
     push_dispatch: Option<bool>,
+    events: Option<Arc<EventHub>>,
 }
 
 impl Worker {
@@ -65,6 +67,7 @@ impl Worker {
             on_outcome: None,
             dispatcher: None,
             push_dispatch: None,
+            events: None,
         }
     }
 
@@ -143,6 +146,15 @@ impl Worker {
         self
     }
 
+    /// Send this worker's job lifecycle events to `hub` (see
+    /// [`Scheduler::set_events`]). The hub stays the caller's: call
+    /// [`EventHub::shutdown`] after [`WorkerHandle::shutdown`] returns, so the
+    /// last outcomes are flushed within a budget you choose.
+    pub fn events(mut self, hub: Arc<EventHub>) -> Self {
+        self.events = Some(hub);
+        self
+    }
+
     /// Register a blocking handler. See [`TaskRegistry::register`].
     pub fn register(
         mut self,
@@ -180,6 +192,7 @@ impl Worker {
             on_outcome,
             dispatcher,
             push_dispatch,
+            events,
         } = self;
 
         let worker_id =
@@ -241,6 +254,9 @@ impl Worker {
         }
         for (queue_name, config) in queue_configs {
             scheduler.register_queue_config(queue_name, config);
+        }
+        if let Some(hub) = events {
+            scheduler.set_events(hub);
         }
         let scheduler = Arc::new(scheduler);
         let shutdown = scheduler.shutdown_handle();
@@ -474,6 +490,8 @@ impl WorkerHandle {
 #[cfg(all(test, feature = "push-dispatch"))]
 mod tests {
     use super::*;
+    use crate::events::test_support::{delivered, recording_hub};
+    use crate::job::{now_millis, Job, JobStatus, NewJob};
     use crate::storage::sqlite::SqliteStorage;
 
     fn scheduler_over(storage: StorageBackend) -> Scheduler {
@@ -487,6 +505,48 @@ mod tests {
 
     fn sqlite() -> StorageBackend {
         StorageBackend::Sqlite(SqliteStorage::in_memory().unwrap())
+    }
+
+    #[test]
+    fn events_set_on_the_builder_reach_the_hub() {
+        let storage = sqlite();
+        let (hub, recorded) = recording_hub("");
+        let handle = Worker::new(storage.clone())
+            .register("echo", |job: &Job| Ok(Some(job.payload.clone())))
+            .events(Arc::clone(&hub))
+            .spawn()
+            .unwrap();
+        let job = storage
+            .enqueue(NewJob {
+                queue: "default".to_string(),
+                task_name: "echo".to_string(),
+                payload: vec![1],
+                priority: 0,
+                scheduled_at: now_millis(),
+                max_retries: 0,
+                timeout_ms: 30_000,
+                unique_key: None,
+                metadata: None,
+                notes: None,
+                depends_on: vec![],
+                expires_at: None,
+                result_ttl_ms: None,
+                namespace: None,
+                debounce_key: None,
+            })
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while storage.get_job(&job.id, None).unwrap().unwrap().status != JobStatus::Complete {
+            assert!(std::time::Instant::now() < deadline, "job never completed");
+            thread::sleep(Duration::from_millis(10));
+        }
+        handle.shutdown().unwrap();
+
+        let types: Vec<_> = delivered(&hub, &recorded)
+            .iter()
+            .map(|e| e.event_type.as_str())
+            .collect();
+        assert_eq!(types, ["job.started", "job.completed"]);
     }
 
     #[test]

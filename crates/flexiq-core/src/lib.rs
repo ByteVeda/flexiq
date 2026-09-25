@@ -8,6 +8,8 @@
 pub mod contract;
 /// Error types: [`QueueError`] and the crate-wide [`Result`] alias.
 pub mod error;
+/// Job lifecycle events sent out as CloudEvents: [`EventHub`] and its sinks.
+pub mod events;
 /// Outbound HTTP: the egress guard and the client every dialled URL goes through.
 #[cfg(feature = "http-target")]
 pub mod http;
@@ -53,6 +55,7 @@ pub use contract::{
     MIN_CONTRACT_VERSION,
 };
 pub use error::{QueueError, Result, StepDivergence};
+pub use events::{EventHub, EventType, EventsConfig, EventsConfigError, JobEvent, SinkStats};
 #[cfg(feature = "http-target")]
 pub use http::auth::{AuthError, OutboundAuth, Signer, SigningRequest};
 #[cfg(feature = "http-target")]
@@ -78,11 +81,11 @@ pub use storage::cursor::Page;
 #[cfg(feature = "postgres")]
 pub use storage::postgres::PostgresStorage;
 pub use storage::records::{
-    AttemptFence, CircuitBreakerState, DebounceOptions, JobError, JobStep, LockInfo, NewJobStep,
-    NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SettleClaimant,
-    SettleGrant, SleepOutcome, StaleJob, StepCommit, StepKind, Subscription, SubscriptionMode,
-    TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration,
-    WorkerStatus,
+    AttemptFence, CircuitBreakerState, DebounceOptions, Dequeued, JobError, JobStep, LockInfo,
+    NewJobStep, NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry,
+    SettleClaimant, SettleGrant, SleepOutcome, StaleJob, StepCommit, StepKind, Subscription,
+    SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo,
+    WorkerRegistration, WorkerStatus,
 };
 #[cfg(feature = "redis")]
 pub use storage::redis_backend::{RedisConnection, RedisStorage};

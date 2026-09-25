@@ -247,6 +247,51 @@ triggers:
     pathType: Prefix
     tls: []
 
+# Job lifecycle events (#848): fan job.* events out to sinks — HTTP with an
+# HMAC signature, or a Redis stream. Not a role: events.enabled opens no port
+# and adds no Service, only a ConfigMap and env on the server container. See
+# contracts/EVENT_EGRESS_CONTRACT.md for the document shape and delivery
+# semantics (at-most-once, dedupe on the CloudEvents id).
+events:
+  enabled: false
+  # The events document — same shape as the JSON file
+  # flexiq_core::events::EventsConfig parses, rendered into a ConfigMap the
+  # server reads at boot. A sink secret is named through *_env
+  # (bearer_token_env, hmac_secret_env, url_env) and never written here —
+  # events.secretEnv below fills it from a Secret you own, the same split as
+  # triggers.secretEnv.
+  #
+  #   config:
+  #     source: /flexiq
+  #     sinks:
+  #       - kind: http
+  #         name: warehouse
+  #         url: https://events.example.com/in
+  #         allow: [events.example.com]
+  #         bearer_token_env: EVT_TOKEN
+  #         hmac_secret_env: EVT_HMAC
+  #       - kind: redis_streams
+  #         name: stream
+  #         url_env: EVT_REDIS_URL
+  #         stream: flexiq:events
+  config: {}
+  # Seconds shutdown spends delivering what is still buffered before
+  # dropping it. The events hub drains last, once every role has already
+  # stopped, so this is spent on top of any other role's own shutdown budget
+  # — see terminationGracePeriodSeconds below, which folds this in whenever
+  # it computes a default, push.enabled or not, and never below Kubernetes'
+  # own 30s floor. Whole seconds; the server refuses 0 at boot, same as
+  # FLEXIQ_EVENTS_DRAIN.
+  drain: 5
+  # The secrets the document names through *_env fields, each from a Secret
+  # you own:
+  #
+  #   secretEnv:
+  #     - name: EVT_TOKEN
+  #       secretName: event-sink-secrets
+  #       key: warehouse-token
+  secretEnv: []
+
 # Annotation-driven executor sidecar injection.
 webhook:
   enabled: false
@@ -280,22 +325,39 @@ podAnnotations: {}
 podLabels: {}
 
 # Seconds Kubernetes waits after SIGTERM before SIGKILL. Empty leaves the
-# field off the Deployment when push is disabled, which is Kubernetes' own
-# 30s default — nothing here needs more.
+# field off the Deployment when neither push nor events is enabled, which is
+# Kubernetes' own 30s default — nothing here needs more.
 #
 # With push.enabled, empty is computed instead: 2 × push.drain (the full
 # shutdown budget — push.drain is spent twice, once waiting for in-flight
 # dispatches and again for each to settle once abandoned) plus a fixed 10s
 # margin for the pod's own teardown that the two drains don't cover — SIGTERM
 # delivery, the tokio runtime unwinding once the second drain returns, the
-# container runtime's own stop overhead. That is 70s at the chart's
-# push.drain default of 30.
+# container runtime's own stop overhead — plus events.drain on top when
+# events.enabled, since the events hub drains last, after every role
+# including push has already stopped. That is 70s at the chart's push.drain
+# default of 30, or 75s with events left at its own default of 5.
+#
+# With events.enabled alone (no push), empty is computed as events.drain
+# plus the same 10s teardown margin — but never below Kubernetes' own 30s
+# default, because the events hub only starts draining after every other
+# role has already stopped (attach's own handshake teardown, the
+# dashboard's graceful shutdown, none of it bounded by events.drain), and
+# events.drain + 10 undercuts what this workload already got with events
+# off at the chart's events.drain default of 5. That is 30s at the default,
+# 30s through events.drain=20, and events.drain + 10 above that. Without
+# either push or events enabled, nothing here spends time beyond the pod's
+# own teardown, so the field stays absent.
 #
 # An explicit value always wins over the computed one, 0 included — a
 # deliberate "kill immediately, no grace". Any other explicit value is
-# refused at template time unless it clears 2 × push.drain: at or under that,
-# Kubernetes can SIGKILL mid-abandonment and the lease goes to the stale-job
-# reaper instead of settling. Lower push.drain if the value you need is fixed.
+# refused at template time unless it clears 2 × push.drain while
+# push.enabled: at or under that, Kubernetes can SIGKILL mid-abandonment and
+# the lease goes to the stale-job reaper instead of settling. Lower
+# push.drain if the value you need is fixed. There is no equivalent refusal
+# for events.drain alone — a shutdown that outruns it only drops whatever
+# events were still buffered, the same lossy-by-design outcome a full sink
+# buffer already produces, not a lease an operator could lose.
 terminationGracePeriodSeconds: ""
 
 # The image already runs as nonroot:65532 and needs no write access to its own

@@ -132,6 +132,210 @@ fn test_dequeue_batch_archives_expired_jobs(s: &impl Storage) {
     assert!(!pending.iter().any(|job| job.id == expired.id));
 }
 
+/// A job storage archived on its own, as a reporting method hands it back: the
+/// identity an event needs, the archived status, and the payload archiving
+/// already loaded.
+fn assert_reported(
+    reported: &flexiq_core::job::Job,
+    expected: &flexiq_core::job::Job,
+    error: &str,
+) {
+    assert_eq!(reported.id, expected.id);
+    assert_eq!(reported.queue, expected.queue);
+    assert_eq!(reported.task_name, expected.task_name);
+    assert_eq!(reported.namespace, expected.namespace);
+    assert_eq!(reported.retry_count, expected.retry_count);
+    assert_eq!(reported.payload, expected.payload);
+    assert_eq!(reported.status, JobStatus::Cancelled);
+    assert_eq!(reported.error.as_deref(), Some(error));
+    assert!(reported.completed_at.is_some());
+}
+
+/// Sorted by id, so a report compares against a fixed expectation whatever
+/// order the backend walked it in.
+fn by_id(mut jobs: Vec<flexiq_core::job::Job>) -> Vec<flexiq_core::job::Job> {
+    jobs.sort_by(|a, b| a.id.cmp(&b.id));
+    jobs
+}
+
+/// Both reporting dequeues hand back the candidates they archived as expired,
+/// scoped to the namespace they scanned, and nothing on a scan with none.
+fn test_dequeue_reports_expired_jobs(s: &impl Storage) {
+    use std::collections::HashMap;
+    let q = "q-dequeue-report-expired";
+    let ns = Some("expiry-tenant");
+    let now = now_millis();
+    let orders = HashMap::new();
+    let queues = [q.to_string()];
+
+    let namespaced = |task: &str, expires_at: Option<i64>| {
+        let mut job = make_job(q, task);
+        job.namespace = ns.map(str::to_string);
+        job.expires_at = expires_at;
+        // The expired job must be scanned before the live one, or a one-job
+        // claim stops at the live job first. Enqueue order is not enough: a
+        // same-millisecond score tie breaks on member order, so it ranks
+        // ahead on priority instead.
+        if expires_at.is_some() {
+            job.priority = 10;
+        }
+        job
+    };
+
+    let expired = s
+        .enqueue(namespaced("report_expired", Some(now - 1_000)))
+        .unwrap();
+    let live = s.enqueue(namespaced("report_live", None)).unwrap();
+    let batch = s
+        .dequeue_batch_from_reporting(&queues, now + 1_000, ns, 10, &orders)
+        .unwrap();
+    assert_eq!(batch.claimed.len(), 1);
+    assert_eq!(batch.claimed[0].id, live.id);
+    assert_eq!(batch.expired.len(), 1, "the expired candidate is reported");
+    assert_reported(&batch.expired[0], &expired, "expired before execution");
+
+    let expired = s
+        .enqueue(namespaced("report_expired", Some(now - 1_000)))
+        .unwrap();
+    let live = s.enqueue(namespaced("report_live", None)).unwrap();
+    let single = s
+        .dequeue_from_reporting(&queues, now + 1_000, ns, &orders)
+        .unwrap();
+    assert_eq!(single.claimed.map(|job| job.id), Some(live.id));
+    assert_eq!(single.expired.len(), 1);
+    assert_reported(&single.expired[0], &expired, "expired before execution");
+
+    // The common path: nothing expired, nothing reported.
+    let plain = s.enqueue(namespaced("report_live", None)).unwrap();
+    let batch = s
+        .dequeue_batch_from_reporting(&queues, now + 1_000, ns, 10, &orders)
+        .unwrap();
+    assert_eq!(batch.claimed.len(), 1);
+    assert_eq!(batch.claimed[0].id, plain.id);
+    assert!(batch.expired.is_empty());
+}
+
+/// Run the reporting sweep, collecting every batch it hands over.
+fn sweep_expired(s: &impl Storage, now: i64) -> Vec<flexiq_core::job::Job> {
+    let mut reported = Vec::new();
+    let count = s
+        .expire_pending_jobs_reporting(now, &mut |batch| reported.extend(batch))
+        .unwrap();
+    assert_eq!(count as usize, reported.len(), "the count matches the rows");
+    reported
+}
+
+/// The reaper sweep reports every job it expired, as archived.
+fn test_expire_pending_jobs_reports_rows(s: &impl Storage) {
+    let q = "q-expire-report";
+    let now = now_millis();
+
+    let mut expiring = make_job(q, "sweep_expired");
+    expiring.namespace = Some("sweep-tenant".to_string());
+    expiring.expires_at = Some(now - 1_000);
+    let expired = s.enqueue(expiring).unwrap();
+    let mut unscoped = make_job(q, "sweep_expired_unscoped");
+    unscoped.expires_at = Some(now - 1_000);
+    let unscoped = s.enqueue(unscoped).unwrap();
+    let kept = s.enqueue(make_job(q, "sweep_kept")).unwrap();
+
+    // The store is shared across the suite, so keep only this queue's rows.
+    let reported: Vec<_> = sweep_expired(s, now)
+        .into_iter()
+        .filter(|job| job.queue == q)
+        .collect();
+    let reported = by_id(reported);
+    let expected = by_id(vec![expired, unscoped]);
+    assert_eq!(reported.len(), 2, "both expired jobs are reported");
+    for (got, want) in reported.iter().zip(&expected) {
+        assert_reported(got, want, "expired");
+    }
+    assert_eq!(
+        s.get_job(&kept.id, None).unwrap().unwrap().status,
+        JobStatus::Pending
+    );
+    assert!(sweep_expired(s, now).iter().all(|job| job.queue != q));
+}
+
+/// A namespace-scoped cancel reports every dependent it cascaded into, down a
+/// multi-level chain and across a fan-out.
+fn test_cancel_job_reports_cascade(s: &impl Storage) {
+    let q = "q-cancel-report-cascade";
+    let ns = Some("cascade-tenant");
+    let scoped = |task: &str, depends_on: Vec<String>| {
+        let mut job = make_job(q, task);
+        job.namespace = ns.map(str::to_string);
+        job.depends_on = depends_on;
+        job
+    };
+
+    let root = s.enqueue(scoped("cascade_root", vec![])).unwrap();
+    let child = s
+        .enqueue(scoped("cascade_child", vec![root.id.clone()]))
+        .unwrap();
+    let grandchild = s
+        .enqueue(scoped("cascade_grandchild", vec![child.id.clone()]))
+        .unwrap();
+    let sibling = s
+        .enqueue(scoped("cascade_sibling", vec![root.id.clone()]))
+        .unwrap();
+
+    // Another namespace addresses nothing, so nothing cascades.
+    let (cancelled, cascaded) = s.cancel_job_reporting(&root.id, Some("other")).unwrap();
+    assert!(!cancelled);
+    assert!(cascaded.is_empty());
+
+    let (cancelled, cascaded) = s.cancel_job_reporting(&root.id, ns).unwrap();
+    assert!(cancelled);
+    let error = format!("dependency cancelled: {}", root.id);
+    let cascaded = by_id(cascaded);
+    let expected = by_id(vec![child, grandchild, sibling]);
+    assert_eq!(cascaded.len(), 3, "every level of the chain is reported");
+    for (got, want) in cascaded.iter().zip(&expected) {
+        assert_reported(got, want, &error);
+    }
+
+    let (cancelled, cascaded) = s.cancel_job_reporting(&root.id, ns).unwrap();
+    assert!(!cancelled);
+    assert!(cascaded.is_empty());
+}
+
+/// Dead-lettering reports the dependents it cascaded into, on both the
+/// failure and the shed path.
+fn test_dead_letter_reports_cascade(s: &impl Storage) {
+    for shed in [false, true] {
+        let q = if shed {
+            "q-shed-report-cascade"
+        } else {
+            "q-dlq-report-cascade"
+        };
+        let parent = s.enqueue(make_job(q, "dlq_parent")).unwrap();
+        let mut child = make_job(q, "dlq_child");
+        child.depends_on = vec![parent.id.clone()];
+        let child = s.enqueue(child).unwrap();
+        let mut grandchild = make_job(q, "dlq_grandchild");
+        grandchild.depends_on = vec![child.id.clone()];
+        let grandchild = s.enqueue(grandchild).unwrap();
+
+        let running = s.dequeue(q, now_millis() + 1000, None).unwrap().unwrap();
+        assert_eq!(running.id, parent.id);
+        let cascaded = if shed {
+            s.shed_to_dlq_reporting(&running, "codel: shed", None)
+        } else {
+            s.move_to_dlq_reporting(&running, "boom", None)
+        }
+        .unwrap();
+
+        let error = format!("dependency failed: {}", parent.id);
+        let cascaded = by_id(cascaded);
+        let expected = by_id(vec![child, grandchild]);
+        assert_eq!(cascaded.len(), 2, "shed = {shed}");
+        for (got, want) in cascaded.iter().zip(&expected) {
+            assert_reported(got, want, &error);
+        }
+    }
+}
+
 /// #836: terminal jobs in a window, per queue and per namespace. Pending and
 /// running jobs are not throughput.
 fn test_queue_throughput(s: &impl Storage) {
@@ -2835,6 +3039,10 @@ fn run_storage_tests(s: &impl Storage) {
     test_dequeue(s);
     test_dequeue_batch(s);
     test_dequeue_batch_archives_expired_jobs(s);
+    test_dequeue_reports_expired_jobs(s);
+    test_expire_pending_jobs_reports_rows(s);
+    test_cancel_job_reports_cascade(s);
+    test_dead_letter_reports_cascade(s);
     test_dispatch_order_lifo_map(s);
     test_complete(s);
     test_queue_throughput(s);

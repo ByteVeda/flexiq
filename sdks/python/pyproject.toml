@@ -59,7 +59,7 @@ oauth = ["authlib>=1.7,<2", "joserfc>=0.12", "requests>=2.31"]
 manifest-path = "../../crates/flexiq-python/Cargo.toml"
 python-source = "."
 module-name = "flexiq._flexiq"
-features = ["extension-module", "postgres", "redis", "workflows", "push-dispatch"]
+features = ["extension-module", "postgres", "redis", "workflows", "push-dispatch", "events-http"]
 include = [
     { path = "flexiq/static/dashboard/**/*", format = ["wheel", "sdist"] },
     { path = "flexiq/contrib/django/templates/**/*", format = ["wheel", "sdist"] },
