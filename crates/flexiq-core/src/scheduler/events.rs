@@ -8,6 +8,7 @@
 
 use crate::events::{EventHub, EventType, JobEvent};
 use crate::job::Job;
+use crate::storage::DeadJob;
 
 use super::{DispatchRecord, JobResult, ResultOutcome, Scheduler};
 
@@ -95,6 +96,44 @@ impl Scheduler {
             }
             hub.emit(event);
         }
+    }
+
+    /// `job.enqueued` for a job a periodic schedule just inserted. Only for an
+    /// insert: a unique-key hit is a job some earlier firing already announced.
+    pub(super) fn emit_periodic_enqueued(&self, job: Job) {
+        let Some(hub) = &self.events else {
+            return;
+        };
+        let mut event = JobEvent::new(
+            EventType::JobEnqueued,
+            job.id,
+            job.namespace,
+            job.queue,
+            job.task_name,
+        );
+        event.attempt = Some(0);
+        if hub.wants_payload() {
+            event.payload = Some(job.payload);
+        }
+        hub.emit(event);
+    }
+
+    /// `job.enqueued` for the fresh job an auto-retry made of a dead-letter
+    /// entry. No payload: the retry listing is blob-free by design, and reading
+    /// the job back for its bytes would be a storage read per event.
+    pub(super) fn emit_dlq_retried(&self, new_id: String, entry: &DeadJob) {
+        let Some(hub) = &self.events else {
+            return;
+        };
+        let mut event = JobEvent::new(
+            EventType::JobEnqueued,
+            new_id,
+            entry.namespace.clone(),
+            entry.queue.clone(),
+            entry.task_name.clone(),
+        );
+        event.attempt = Some(0);
+        hub.emit(event);
     }
 
     /// The events one settled outcome stands for. `Superseded` emits nothing:
@@ -237,11 +276,12 @@ mod tests {
 
     use super::*;
     use crate::events::test_support::{delivered, recording_hub, Attempts};
-    use crate::job::{now_millis, NewJob};
+    use crate::job::{now_millis, JobStatus, NewJob};
     use crate::resilience::rate_limiter::RateLimitConfig;
     use crate::resilience::retry::RetryPolicy;
     use crate::scheduler::result_handler::Settled;
     use crate::scheduler::{shed, SchedulerConfig, TaskConfig};
+    use crate::storage::records::NewPeriodicTask;
     use crate::storage::sqlite::SqliteStorage;
     use crate::storage::{Storage, StorageBackend};
 
@@ -796,6 +836,120 @@ mod tests {
         assert_eq!(types(&events), ["job.started", "job.dead", "job.cancelled"]);
         assert_eq!(events[1].job_id, parent.id);
         assert_cascade_after_dead(&events, &[child.id]);
+    }
+
+    #[test]
+    fn a_periodic_firing_emits_enqueued_once_per_slot() {
+        let (scheduler, hub, rec) = with_hub(scheduler(), "");
+        scheduler
+            .storage
+            .register_periodic(&NewPeriodicTask {
+                name: "nightly".to_string(),
+                task_name: "periodic_task".to_string(),
+                cron_expr: "* * * * * *".to_string(),
+                args: Some(vec![9]),
+                kwargs: None,
+                queue: "default".to_string(),
+                enabled: true,
+                next_run: now_millis() - 1_000,
+                timezone: None,
+                namespace: Some("tenant-a".to_string()),
+            })
+            .unwrap();
+        scheduler.check_periodic().unwrap();
+
+        // A second firing of the same slot, as a racing scheduler would make:
+        // the unique key answers with the first job, which is announced once.
+        let task = scheduler
+            .storage
+            .list_periodic(Some("tenant-a"))
+            .unwrap()
+            .remove(0);
+        let jobs = scheduler
+            .storage
+            .list_jobs(
+                Some(JobStatus::Pending as i32),
+                None,
+                Some("periodic_task"),
+                10,
+                0,
+                None,
+            )
+            .unwrap();
+        assert_eq!(jobs.len(), 1);
+        scheduler
+            .fire_periodic(&task, jobs[0].scheduled_at)
+            .unwrap();
+        assert_eq!(
+            scheduler
+                .storage
+                .list_jobs(
+                    Some(JobStatus::Pending as i32),
+                    None,
+                    Some("periodic_task"),
+                    10,
+                    0,
+                    None
+                )
+                .unwrap()
+                .len(),
+            1,
+            "the second firing deduplicated"
+        );
+
+        let events = delivered(&hub, &rec);
+        assert_eq!(types(&events), ["job.enqueued"]);
+        let event = &events[0];
+        assert_eq!(event.job_id, jobs[0].id);
+        assert_eq!(event.namespace.as_deref(), Some("tenant-a"));
+        assert_eq!(event.task_name, "periodic_task");
+        assert_eq!(event.queue, "default");
+        assert_eq!(event.attempt, Some(0));
+        assert_eq!(event.epoch, None);
+        assert!(event.payload.is_none(), "no payload unless a sink asks");
+    }
+
+    #[test]
+    fn a_dlq_auto_retry_emits_enqueued_with_the_new_id() {
+        let scheduler = Scheduler::new(
+            StorageBackend::Sqlite(SqliteStorage::in_memory().unwrap()),
+            vec!["default".to_string()],
+            SchedulerConfig {
+                dlq_auto_retry_delay_ms: Some(0),
+                dlq_auto_retry_max: 3,
+                ..SchedulerConfig::default()
+            },
+            None,
+        );
+        let (scheduler, hub, rec) = with_hub(scheduler, "");
+        let failed = scheduler.storage.enqueue(new_job("flaky", 0)).unwrap();
+        scheduler
+            .storage
+            .move_to_dlq(&failed, "ConnectionError: refused", None)
+            .unwrap();
+        scheduler.auto_retry_dlq().unwrap();
+
+        let fresh = scheduler
+            .storage
+            .list_jobs(
+                Some(JobStatus::Pending as i32),
+                None,
+                Some("flaky"),
+                10,
+                0,
+                None,
+            )
+            .unwrap();
+        assert_eq!(fresh.len(), 1);
+        assert_ne!(fresh[0].id, failed.id, "the retry is a fresh job");
+
+        let events = delivered(&hub, &rec);
+        assert_eq!(types(&events), ["job.enqueued"]);
+        assert_eq!(events[0].job_id, fresh[0].id);
+        assert_eq!(events[0].queue, "default");
+        assert_eq!(events[0].task_name, "flaky");
+        assert_eq!(events[0].namespace, None);
+        assert_eq!(events[0].attempt, Some(0));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use crate::periodic::{next_run, periodic_job};
 use crate::scheduler::retention::{
     publish_effective_retention, EffectiveRetention, RetentionConfig, DEFAULT_NAMESPACE,
 };
-use crate::storage::records::{SettleClaimant, SettleGrant};
+use crate::storage::records::{PeriodicTask, SettleClaimant, SettleGrant};
 use crate::storage::{
     dead_worker_cutoff, try_lead, Storage, RETENTION_LOCK, RETENTION_LOCK_TTL_MS,
 };
@@ -363,11 +363,7 @@ impl Scheduler {
             .get_due_periodic(now, self.namespace.as_deref())?;
 
         for task in due_tasks {
-            let unique_key = Some(format!("periodic:{}:{}", task.name, now));
-            if let Err(e) = self
-                .storage
-                .enqueue_unique(periodic_job(&task, now, unique_key))
-            {
+            if let Err(e) = self.fire_periodic(&task, now) {
                 error!("failed to enqueue periodic task '{}': {e}", task.name);
                 continue;
             }
@@ -390,6 +386,20 @@ impl Scheduler {
             }
         }
 
+        Ok(())
+    }
+
+    /// Enqueue one due schedule's job for the `now` slot. The unique key makes
+    /// two schedulers firing the same slot one job, and only the insert is
+    /// announced, so that job gets one `job.enqueued`.
+    pub(super) fn fire_periodic(&self, task: &PeriodicTask, now: i64) -> Result<()> {
+        let unique_key = Some(format!("periodic:{}:{}", task.name, now));
+        let (job, existed) = self
+            .storage
+            .enqueue_unique_reporting(periodic_job(task, now, unique_key))?;
+        if !existed {
+            self.emit_periodic_enqueued(job);
+        }
         Ok(())
     }
 
@@ -440,6 +450,7 @@ impl Scheduler {
                         entry.dlq_retry_count + 1,
                         max_retries
                     );
+                    self.emit_dlq_retried(new_id, entry);
                     retried += 1;
                 }
                 Err(e) => {
