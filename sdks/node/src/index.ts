@@ -65,6 +65,9 @@ export type {
   EventSinkStats,
   EventSinksConfig,
   HttpEventSink,
+  KafkaEventSink,
+  KafkaEventSinkSasl,
+  NatsEventSink,
   RedisStreamsEventSink,
 } from "./event-sinks";
 export {
