@@ -246,16 +246,15 @@ fn murmur2(data: &[u8]) -> u32 {
     // Kafka hashes the length as a Java `int`; a key over 2 GiB is not a
     // job id.
     let mut h = SEED ^ data.len() as u32;
-    let mut words = data.chunks_exact(4);
-    for word in &mut words {
-        let mut k = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
+    let (words, tail) = data.as_chunks::<4>();
+    for word in words {
+        let mut k = u32::from_le_bytes(*word);
         k = k.wrapping_mul(M);
         k ^= k >> R;
         k = k.wrapping_mul(M);
         h = h.wrapping_mul(M);
         h ^= k;
     }
-    let tail = words.remainder();
     if !tail.is_empty() {
         for (i, byte) in tail.iter().enumerate().rev() {
             h ^= u32::from(*byte) << (8 * i);
