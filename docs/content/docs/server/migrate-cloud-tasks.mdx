@@ -266,8 +266,14 @@ The Cloud Tasks request headers have counterparts:
 
 Cloud Tasks delivers at least once, so your handlers are already idempotent,
 and nothing about that changes. If they deduplicate on the task name, key on
-`x-flexiq-idempotency-key` instead: it is unique per attempt **and** per claim,
-which is what a requeue needs ([the idempotency key](https://github.com/ByteVeda/flexiq/blob/master/contracts/PUSH_DISPATCH_CONTRACT.md#the-idempotency-key)).
+`x-flexiq-job-id` instead: like the task name, it is the same on every retry,
+so a side effect recorded against it is not repeated by the next attempt.
+`x-flexiq-idempotency-key` is not a replacement for it. It changes with every
+attempt **and** every claim, so it tells one dispatch from another — a
+repeated request for the same attempt — rather than suppressing a retry
+([the idempotency key](https://github.com/ByteVeda/flexiq/blob/master/contracts/PUSH_DISPATCH_CONTRACT.md#the-idempotency-key)).
+A replay from the dead-letter queue is a new job with a new id, so it runs
+again by design.
 
 ## OIDC and outbound auth
 
