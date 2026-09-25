@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{map_err, strip_dead_blob, watched_transaction, RedisStorage, SCAN_BATCH};
 use crate::error::{QueueError, Result};
+use crate::events::reason;
 use crate::job::{now_millis, Job, JobStatus, NewJob};
 use crate::storage::DeadJob;
 
@@ -193,7 +194,7 @@ impl RedisStorage {
         if !dead_lettered {
             return Ok(Vec::new());
         }
-        self.cascade_cancel_reporting(&job.id, "dependency failed", job.namespace.as_deref())
+        self.cascade_cancel_reporting(&job.id, reason::DEPENDENCY_FAILED, job.namespace.as_deref())
     }
 
     /// Dead-letter entries, newest first, paginated. `namespace` of `None`

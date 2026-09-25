@@ -1,6 +1,7 @@
 use log::{error, info, warn};
 
 use crate::error::Result;
+use crate::events::reason;
 use crate::job::now_millis;
 use crate::periodic::{next_run, periodic_job};
 use crate::scheduler::retention::{
@@ -11,7 +12,6 @@ use crate::storage::{
     dead_worker_cutoff, try_lead, Storage, RETENTION_LOCK, RETENTION_LOCK_TTL_MS,
 };
 
-use super::events::EXPIRED_REASON;
 use super::{JobResult, Scheduler};
 
 /// Prefix of the error a dispatch accepted out of band and never settled is
@@ -105,7 +105,7 @@ impl Scheduler {
             Some(_) => self
                 .storage
                 .expire_pending_jobs_reporting(now, &mut |batch| {
-                    self.emit_cancelled_rows(batch, EXPIRED_REASON)
+                    self.emit_cancelled_rows(batch, reason::EXPIRED)
                 }),
             None => self.storage.expire_pending_jobs(now),
         };

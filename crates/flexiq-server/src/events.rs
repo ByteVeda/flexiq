@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use flexiq_core::events::reason;
 use flexiq_core::{EventHub, EventType, Job, JobEvent};
 
 /// The hub the doors share, when events are configured.
@@ -52,9 +53,6 @@ pub fn cancelled(hub: Option<&EventHub>, job: &Job) {
     hub.emit(event);
 }
 
-/// `reason` of a dependent cancelled because the job it waited on was.
-const DEPENDENCY_CANCELLED_REASON: &str = "dependency cancelled";
-
 /// Emit `job.cancelled` for each dependent a door's cancel cascaded to. Call it
 /// after the parent's own [`cancelled`], so a sink sees the cause first.
 ///
@@ -68,7 +66,7 @@ pub fn cascade_cancelled(hub: Option<&EventHub>, dependents: Vec<Job>) {
     for job in dependents {
         let mut event = door_event(EventType::JobCancelled, &job);
         event.attempt = Some(job.retry_count);
-        event.reason = Some(DEPENDENCY_CANCELLED_REASON.to_string());
+        event.reason = Some(reason::DEPENDENCY_CANCELLED.to_string());
         if with_payload {
             event.payload = Some(job.payload);
         }

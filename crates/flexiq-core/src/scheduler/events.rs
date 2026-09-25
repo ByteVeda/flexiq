@@ -12,18 +12,6 @@ use crate::storage::DeadJob;
 
 use super::{DispatchRecord, JobResult, ResultOutcome, Scheduler};
 
-/// `reason` of a pending job the reaper sweep expired. Storage writes the same
-/// string as the archived row's error.
-pub(super) const EXPIRED_REASON: &str = "expired";
-
-/// `reason` of a job found expired as the poller went to claim it.
-pub(super) const EXPIRED_AT_DISPATCH_REASON: &str = "expired before execution";
-
-/// `reason` of a dependent cancelled because its parent was dead-lettered.
-/// The archived row's error also names the parent; the reason stays constant
-/// so a sink can filter on it.
-pub(super) const DEPENDENCY_FAILED_REASON: &str = "dependency failed";
-
 /// The attempt a failure reports for itself — the retries already spent —
 /// used when no dispatch record names one (a reaper-recovered orphan).
 pub(super) fn failure_attempt(result: &JobResult) -> Option<i32> {
@@ -275,6 +263,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::events::reason;
     use crate::events::test_support::{delivered, recording_hub, Attempts};
     use crate::job::{now_millis, JobStatus, NewJob};
     use crate::resilience::rate_limiter::RateLimitConfig;
@@ -679,7 +668,7 @@ mod tests {
         for (event, (job, namespace)) in events.iter().zip(expected) {
             assert_eq!(event.job_id, job.id);
             assert_eq!(event.namespace, namespace, "the row's, not the scheduler's");
-            assert_eq!(event.reason.as_deref(), Some(EXPIRED_REASON));
+            assert_eq!(event.reason.as_deref(), Some(reason::EXPIRED));
             assert_eq!(event.attempt, Some(0));
             assert_eq!(event.epoch, None);
             assert_eq!(event.queue, "default");
@@ -713,7 +702,7 @@ mod tests {
         let events = delivered(&hub, &rec);
         assert_eq!(
             cancelled(&events),
-            [(job.id, Some(EXPIRED_AT_DISPATCH_REASON.to_string()))]
+            [(job.id, Some(reason::EXPIRED_BEFORE_EXECUTION.to_string()))]
         );
         assert_eq!(events[0].attempt, Some(0));
     }
@@ -739,7 +728,7 @@ mod tests {
 
         assert_eq!(
             cancelled(&delivered(&hub, &rec)),
-            [(job.id, Some(EXPIRED_AT_DISPATCH_REASON.to_string()))]
+            [(job.id, Some(reason::EXPIRED_BEFORE_EXECUTION.to_string()))]
         );
     }
 
@@ -773,7 +762,7 @@ mod tests {
         assert_eq!(cancelled(events).len(), dependents.len(), "each only once");
         for event in tail {
             assert_eq!(event.event_type, EventType::JobCancelled);
-            assert_eq!(event.reason.as_deref(), Some(DEPENDENCY_FAILED_REASON));
+            assert_eq!(event.reason.as_deref(), Some(reason::DEPENDENCY_FAILED));
             assert_eq!(event.attempt, Some(0));
             assert_eq!(event.epoch, None);
         }

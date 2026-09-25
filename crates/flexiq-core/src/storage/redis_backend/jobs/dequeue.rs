@@ -3,6 +3,7 @@
 use std::sync::LazyLock;
 
 use crate::error::Result;
+use crate::events::reason;
 use crate::job::{Job, JobStatus};
 use crate::storage::records::Dequeued;
 use crate::storage::redis_backend::{map_err, RedisConnection, RedisStorage};
@@ -229,7 +230,7 @@ impl RedisStorage {
         }
         job.status = JobStatus::Cancelled;
         job.completed_at = Some(now);
-        job.error = Some("expired before execution".to_string());
+        job.error = Some(reason::EXPIRED_BEFORE_EXECUTION.to_string());
         self.archive_job_immediately(conn, &job, JobStatus::Pending)?;
         Ok(Some(job))
     }

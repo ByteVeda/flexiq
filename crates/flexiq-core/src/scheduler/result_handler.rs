@@ -1,11 +1,12 @@
 use log::{error, warn};
 
 use crate::error::Result;
+use crate::events::reason;
 use crate::job::{Job, JobCompletion};
 use crate::storage::records::AttemptFence;
 use crate::storage::Storage;
 
-use super::events::{failure_attempt, DEPENDENCY_FAILED_REASON};
+use super::events::failure_attempt;
 use super::{DispatchRecord, JobResult, ResultOutcome, Scheduler};
 
 /// Dead-letter metadata marking a job the retry budget refused. `ResultOutcome`
@@ -119,7 +120,7 @@ impl Scheduler {
             cascaded,
         } = self.settle_result(result)?;
         self.emit_outcome(&outcome, record.as_ref(), fallback_attempt);
-        self.emit_cancelled_rows(cascaded, DEPENDENCY_FAILED_REASON);
+        self.emit_cancelled_rows(cascaded, reason::DEPENDENCY_FAILED);
         Ok(outcome)
     }
 
@@ -493,7 +494,7 @@ impl Scheduler {
         {
             if let Ok(outcome) = outcome {
                 self.emit_outcome(outcome, record.as_ref(), fallback_attempt);
-                self.emit_cancelled_rows(cascaded, DEPENDENCY_FAILED_REASON);
+                self.emit_cancelled_rows(cascaded, reason::DEPENDENCY_FAILED);
             }
         }
         outcomes

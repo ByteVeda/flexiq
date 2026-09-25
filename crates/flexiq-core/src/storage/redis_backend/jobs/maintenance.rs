@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use redis::Commands;
 
 use crate::error::Result;
+use crate::events::reason;
 use crate::job::{now_millis, Job, JobStatus};
 use crate::storage::records::StaleJob;
 use crate::storage::redis_backend::{map_err, RedisStorage, SCAN_BATCH};
@@ -498,7 +499,7 @@ impl RedisStorage {
                         let old_status = job.status;
                         job.status = JobStatus::Cancelled;
                         job.completed_at = Some(now);
-                        job.error = Some("expired".to_string());
+                        job.error = Some(reason::EXPIRED.to_string());
 
                         let queue_key = self.key(&["queue", &job.queue, "pending"]);
                         conn.zrem::<_, _, ()>(&queue_key, &job.id)

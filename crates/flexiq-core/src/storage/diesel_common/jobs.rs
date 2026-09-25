@@ -726,7 +726,7 @@ macro_rules! impl_diesel_job_ops {
                     .first(conn)?;
                 full.status = JobStatus::Cancelled as i32;
                 full.completed_at = Some(now);
-                full.error = Some("expired before execution".to_string());
+                full.error = Some($crate::events::reason::EXPIRED_BEFORE_EXECUTION.to_string());
                 Self::archive_job_row(conn, &full)?;
                 Ok(Job::from(full))
             }
@@ -1283,8 +1283,11 @@ macro_rules! impl_diesel_job_ops {
                 if !archived {
                     return Ok((false, Vec::new()));
                 }
-                let cascaded =
-                    self.cascade_cancel_reporting(id, "dependency cancelled", namespace)?;
+                let cascaded = self.cascade_cancel_reporting(
+                    id,
+                    $crate::events::reason::DEPENDENCY_CANCELLED,
+                    namespace,
+                )?;
                 Ok((true, cascaded))
             }
 
@@ -2625,7 +2628,7 @@ macro_rules! impl_diesel_job_ops {
             ) -> Result<u64> {
                 self.archive_pending_in_batches(
                     now,
-                    "expired",
+                    $crate::events::reason::EXPIRED,
                     |conn, limit| {
                         jobs::table
                             .filter(jobs::status.eq(JobStatus::Pending as i32))

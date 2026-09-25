@@ -26,6 +26,7 @@
 pub mod config;
 pub mod event;
 mod hub;
+pub mod reason;
 pub(crate) mod sink;
 
 pub use config::{

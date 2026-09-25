@@ -140,7 +140,7 @@ macro_rules! impl_diesel_dead_letter_ops {
                 // archive transaction above must already be committed).
                 self.cascade_cancel_reporting(
                     &job_id,
-                    "dependency failed",
+                    $crate::events::reason::DEPENDENCY_FAILED,
                     job.namespace.as_deref(),
                 )
             }

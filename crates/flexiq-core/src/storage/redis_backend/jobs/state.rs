@@ -5,6 +5,7 @@ use redis::Commands;
 
 use super::dequeue_score;
 use crate::error::{QueueError, Result};
+use crate::events::reason;
 use crate::job::{now_millis, Job, JobStatus};
 use crate::storage::redis_backend::{map_err, RedisStorage};
 
@@ -292,7 +293,8 @@ impl RedisStorage {
 
         // Cascade cancel dependents
         drop(conn);
-        let cascaded = self.cascade_cancel_reporting(id, "dependency cancelled", namespace)?;
+        let cascaded =
+            self.cascade_cancel_reporting(id, reason::DEPENDENCY_CANCELLED, namespace)?;
 
         Ok((true, cascaded))
     }
