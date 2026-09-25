@@ -1,9 +1,10 @@
 # FlexiQ — event egress contract
 
 What a consumer of FlexiQ's job lifecycle events may rely on, and what it must
-do in return. It is the contract for GitHub issue #848: the scheduler and the
-server's producer doors describe each job transition as a CloudEvent and send
-it out of the process — to an HTTP endpoint or a Redis stream — so a data
+do in return. It is the contract for GitHub issues #848 and #971: the
+scheduler and the server's producer doors describe each job transition as a
+CloudEvent and send it out of the process — to an HTTP endpoint, a Redis
+stream, a Kafka topic or a NATS subject — so a data
 warehouse, an audit log or an alerting pipeline can follow jobs without
 polling FlexiQ's storage. Read this if you are writing that consumer, in any
 language, with no FlexiQ SDK.
@@ -12,7 +13,8 @@ Everything here is normative. **MUST**, **MUST NOT**, **SHOULD** and **MAY**
 carry their RFC 2119 meanings; a claim without one of them is background.
 Every field name, header, status code and literal below is taken from
 `crates/flexiq-core/src/events/` (`event.rs`, `config.rs`, `hub.rs`,
-`sink/http.rs`, `sink/redis_streams.rs`), `crates/flexiq-core/src/scheduler/events.rs`
+`subject.rs`, `sink/http.rs`, `sink/redis_streams.rs`, `sink/kafka.rs`,
+`sink/nats.rs`), `crates/flexiq-core/src/scheduler/events.rs`
 and `crates/flexiq-server/src/events.rs` — the source of truth this document
 restates. Where the two ever disagree, the code wins.
 
@@ -51,7 +53,13 @@ rule below stops the runtime at start, before any event exists.
      "filter": {"types": ["job.dead", "job.completed"]},
      "delivery": {"max_batch": 100}},
     {"kind": "redis_streams", "name": "stream", "url_env": "EVT_REDIS_URL",
-     "stream": "flexiq:events"}
+     "stream": "flexiq:events"},
+    {"kind": "kafka", "name": "bus", "brokers": ["kafka-0:9093"],
+     "topic": "flexiq.events", "tls": true,
+     "sasl": {"mechanism": "scram-sha-512", "username_env": "EVT_KAFKA_USER",
+              "password_env": "EVT_KAFKA_PASSWORD"}},
+    {"kind": "nats", "name": "js", "url_env": "EVT_NATS_URL",
+     "subject": "flexiq.{namespace}.{queue}.{type}"}
   ]
 }
 ```
@@ -61,19 +69,19 @@ rule below stops the runtime at start, before any event exists.
 | Field | Type | Default | Rule |
 |---|---|---|---|
 | `source` | string | `"/flexiq"` | CloudEvents `source` on every event. Not empty or whitespace. |
-| `sinks` | array | required | At least one. Each has a `kind`: `http` or `redis_streams`. |
+| `sinks` | array | required | At least one. Each has a `kind`: `http`, `redis_streams`, `kafka` or `nats`. |
 
 ### Every sink
 
 | Field | Type | Default | Rule |
 |---|---|---|---|
-| `kind` | string | required | `http` or `redis_streams`. Any other value is refused. |
+| `kind` | string | required | `http`, `redis_streams`, `kafka` or `nats`. Any other value is refused. |
 | `name` | string | required | Not empty; unique in the document. It is the `sink` metrics label and the name in logs. |
 | `filter` | object | admit all | See [Filters](#filters). |
 | `include_payload` | bool | `false` | See [Payloads](#payloads). |
 | `delivery.buffer` | integer | `10000` | Events held before new ones are dropped. At least 1. |
 | `delivery.max_attempts` | integer | `5` | Attempts per batch, the first included. At least 1. |
-| `delivery.max_batch` | integer | `1` | Events per request (HTTP) or pipeline (Redis). 1 to 1000. |
+| `delivery.max_batch` | integer | `1` | Events per request (HTTP), pipeline (Redis), produce (Kafka) or publish round (NATS). 1 to 1000. |
 
 ### `http`
 
@@ -95,17 +103,45 @@ rule below stops the runtime at start, before any event exists.
 | `stream` | string | required | Stream key events are appended to. Not empty. |
 | `max_len` | integer | `100000` | Approximate cap on the stream's length (`MAXLEN ~`). At least 1. |
 
+### `kafka`
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `brokers` | array of strings | required | Bootstrap brokers, `host:port`. Not empty, and no entry empty. |
+| `topic` | string | required | Kafka's own rule: 1 to 249 of `[a-zA-Z0-9._-]`, not `.` or `..`. |
+| `tls` | bool | `false` | Connect over TLS. |
+| `ca_file` | string | none | PEM file of CA certificates trusted *instead of* the bundled web roots. Needs `tls`. |
+| `sasl.mechanism` | string | — | `plain`, `scram-sha-256` or `scram-sha-512`. `plain` needs `tls`. |
+| `sasl.username_env` | string | — | Name of an environment variable holding the username. Required with `sasl`. |
+| `sasl.password_env` | string | — | Name of an environment variable holding the password. Required with `sasl`. |
+| `timeout_ms` | integer | `10000` | Budget for one batch, connecting included. At least 1. |
+
+### `nats`
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `url_env` | string | required | Name of an environment variable holding the server URL (`nats://`, `tls://`), or a comma-separated list. Not empty. |
+| `credentials_env` | string | none | Name of an environment variable holding the contents of a `.creds` file (user JWT and NKey seed). |
+| `ca_file` | string | none | PEM file of CA certificates trusted *instead of* the bundled web roots. |
+| `subject` | string | required | Subject template. See [NATS sink](#nats-sink). |
+| `mode` | string | `jetstream` | `jetstream` or `core`. |
+| `timeout_ms` | integer | `10000` | Budget for one batch, connecting included. At least 1. |
+
 ### Rules checked when the sinks are built
 
 Beyond the shape, each sink is built at start, and any of these refuses it:
 
 - A `kind` this build was compiled without: `http` needs `flexiq-core`'s
-  `events-http` feature, `redis_streams` its `redis` feature. The error names
-  the feature (`EventsConfigError::NotCompiled`).
+  `events-http` feature, `redis_streams` its `redis` feature, `kafka`
+  `events-kafka` and `nats` `events-nats`. The error names the feature
+  (`EventsConfigError::NotCompiled`).
 - An `allow` entry that does not parse, a `url` that fails the rules above.
 - A `*_env` field naming a variable that is unset or empty, or a bearer token
   no header can carry.
 - A Redis URL `redis` cannot use. The error names the category, never the URL.
+- A NATS URL that does not parse, or credentials that are not a `.creds` file.
+  Neither error echoes the value.
+- A `ca_file` that cannot be read or holds no certificate.
 
 These are the messages a runtime reports, as captured from the parser and the
 HTTP sink:
@@ -117,13 +153,19 @@ events sink 'a': unknown event type 'job.boom'
 events config is not valid: unknown field `alow`, expected one of `name`, `url`, `allow`, `allow_loopback`, `bearer_token_env`, `hmac_secret_env`, `timeout_ms`, `connect_timeout_ms`, `filter`, `include_payload`, `delivery` at line 1 column 93
 events sink 'web': url host 'evil.example.com' is not on the allowlist
 events sink 'a': url host 'e.example.com' must be reached over https; cleartext http is allowed only to a loopback host with allow_loopback
+events sink 'k': sasl mechanism 'plain' sends the password in clear, so it needs tls
+events sink 'k': sasl.username_env names 'KU', which is unset or empty
+events sink 'n': subject must not contain '>'
+events sink 'n': subject names unknown field '{job}'; use {namespace}, {queue}, {task} or {type}
 ```
 
 ### Secrets
 
 Every credential is named by an environment variable, never written in the
-document: `bearer_token_env`, `hmac_secret_env`, and `url_env` (a Redis URL
-carries its password). The document can then live in a ConfigMap.
+document: `bearer_token_env`, `hmac_secret_env`, `url_env` (a Redis or NATS
+URL carries its password), Kafka's `sasl.username_env` and
+`sasl.password_env`, and NATS's `credentials_env`. The document can then live
+in a ConfigMap.
 
 `flexiq-server` reads each variable once, while building the sinks, then
 **removes every one of them from its environment** before any role starts, so
@@ -587,6 +629,101 @@ event     = {"data":{"attempt":3,"job_id":"0195","namespace":"default","queue":"
   Connect, read and write each time out after 5 seconds.
 - A pipeline that failed part-way is retried whole, so entries that already
   landed appear again under the same `id`.
+
+## Kafka sink
+
+One record per event, in the CloudEvents Kafka protocol binding's structured
+mode:
+
+| Part | Value |
+|---|---|
+| Key | The job id, UTF-8 |
+| Value | The structured CloudEvent JSON, payload per the sink's `include_payload` |
+| Header `content-type` | `application/cloudevents+json` |
+| Timestamp | The event's `time` |
+
+- **Partitioning is Kafka's default for a keyed record**:
+  `toPositive(murmur2(key)) % partitions`, the sign bit masked rather than
+  negated. A job's events share one partition and land where the Java producer
+  would put the same key. Within that partition they sit in the order this
+  sink sent them, which is not necessarily the order they happened in — see
+  [Delivery semantics](#delivery-semantics).
+- A batch is grouped by partition and produced one request per partition.
+  Records are acknowledged by every in-sync replica (`acks=all`) and sent
+  uncompressed.
+- The client connects on first delivery and reads the topic's partitions from
+  fresh cluster metadata. **Any failure drops the client**, and the next
+  attempt reconnects and re-reads the metadata, so a leader move or an added
+  partition is picked up there. A topic missing from the metadata is retried:
+  Kafka files an unknown topic as retriable, since it may be being created.
+- `timeout_ms` bounds a whole attempt, connecting included; the client's own
+  internal backoff stops at the same deadline, so the hub stays the one place
+  retries are counted.
+- The outcome follows Kafka's own taxonomy:
+  - **Retried**: connection and I/O failures, a timeout, a failed SASL
+    exchange that broke on the network, and the protocol errors the Java client
+    files under `RetriableException` — among them `NOT_LEADER_OR_FOLLOWER`,
+    `LEADER_NOT_AVAILABLE`, `NOT_ENOUGH_REPLICAS`,
+    `NOT_ENOUGH_REPLICAS_AFTER_APPEND`, `REQUEST_TIMED_OUT`,
+    `UNKNOWN_TOPIC_OR_PARTITION`, `KAFKA_STORAGE_ERROR` and
+    `THROTTLING_QUOTA_EXCEEDED`.
+  - **Rejected**: every other protocol error — `TOPIC_AUTHORIZATION_FAILED`,
+    `SASL_AUTHENTICATION_FAILED`, `MESSAGE_TOO_LARGE`, `INVALID_RECORD` and the
+    like — refused SASL credentials, a request that cannot be encoded, and any
+    code the client does not recognise.
+
+  A message names the protocol error, never the broker's free-text reason.
+- A batch that failed part-way is retried whole, so records that already
+  landed appear again under the same `id`.
+
+## NATS sink
+
+One message per event, in the CloudEvents NATS protocol binding's structured
+mode: the body is the structured CloudEvent JSON, with the headers
+`content-type: application/cloudevents+json` and `Nats-Msg-Id: <id>`.
+
+### Subject
+
+`subject` is a template. Four fields may appear anywhere in it, each as many
+times as wanted:
+
+| Field | Value |
+|---|---|
+| `{namespace}` | Namespace label (`default` for the default namespace) |
+| `{queue}` | Queue |
+| `{task}` | Task name |
+| `{type}` | The short event type, e.g. `job.dead` — two tokens |
+
+A namespace, queue or task name renders as **one token**: `.`, `*`, `>`,
+whitespace and control characters become `_`, and an empty name is `_`, so a
+name can neither split the subject nor make it a wildcard. `{type}` keeps its
+dot, so `flexiq.{namespace}.{queue}.{type}` renders
+`flexiq.default.emails.job.dead` and a consumer can subscribe to
+`flexiq.*.*.job.>`. Any other `{…}` is refused, as are `*`, `>` or whitespace
+in the literal text, and a template that is empty, starts or ends with `.`,
+or contains `..`.
+
+### Modes
+
+- **`jetstream`** (default) publishes every message of the batch, then waits
+  for each acknowledgement. `Nats-Msg-Id` is the CloudEvents `id`, so a stream
+  drops a retried duplicate that arrives within its duplicate window. The
+  subject must be captured by a stream; if none captures it, the batch is
+  rejected.
+- **`core`** publishes, then flushes. Delivered means the server received it,
+  not that any subscriber did; with none listening the event is gone.
+
+The client connects on first delivery and is then kept: it reconnects by
+itself, and a batch sent while it is reconnecting runs out of `timeout_ms` and
+is retried.
+
+- **Retried**: DNS, I/O and connect timeouts, a publish that could not be sent,
+  a flush that failed, and a JetStream acknowledgement that timed out, found
+  the connection closed, or was refused for too many in flight.
+- **Rejected**: an unparseable server address, failed authentication or
+  authorization, a TLS setup the server refuses, a message over the server's
+  `max_payload`, no stream for the subject, and any other refusal from the
+  stream.
 
 ## Metrics
 
