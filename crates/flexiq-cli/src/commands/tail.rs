@@ -108,7 +108,11 @@ pub enum Recovery {
 
 /// Classify a failure. Reopening is always safe — the RPC writes nothing —
 /// so anything that says "try again" is retried.
-pub fn recovery(status: &Status) -> Recovery {
+///
+/// `WATCH_LIMIT` is fatal only until a watch has opened: after a dropped
+/// connection the server may still hold the old stream's slot until it notices,
+/// so the cap refusing a reopen is transient.
+pub fn recovery(status: &Status, opened_before: bool) -> Recovery {
     let reason = status
         .get_error_details()
         .error_info()
@@ -117,6 +121,7 @@ pub fn recovery(status: &Status) -> Recovery {
     match reason.as_str() {
         "WATCH_CURSOR_EXPIRED" => Recovery::FromNow,
         "WATCH_OVERFLOW" | "SHUTTING_DOWN" => Recovery::Reconnect,
+        "WATCH_LIMIT" if opened_before => Recovery::Reconnect,
         _ if status.code() == Code::Unavailable => Recovery::Reconnect,
         _ => Recovery::Fail,
     }
@@ -126,8 +131,9 @@ pub fn recovery(status: &Status) -> Recovery {
 pub async fn run(client: &mut Client, args: &TailArgs, json: bool) -> Result<()> {
     let mut target = Target::from_args(args);
     let mut backoff = BACKOFF_START;
+    let mut opened = false;
     loop {
-        let ended = follow(client, &mut target, json, &mut backoff).await;
+        let ended = follow(client, &mut target, json, &mut backoff, &mut opened).await;
         let status = match ended {
             Ok(()) if target.finished() => return Ok(()),
             // A queue watch that ends with OK is a server ending it early;
@@ -135,7 +141,10 @@ pub async fn run(client: &mut Client, args: &TailArgs, json: bool) -> Result<()>
             Ok(()) => None,
             Err(status) => Some(status),
         };
-        match status.as_ref().map_or(Recovery::Reconnect, recovery) {
+        let decided = status
+            .as_ref()
+            .map_or(Recovery::Reconnect, |status| recovery(status, opened));
+        match decided {
             Recovery::Fail => {
                 let described = status.as_ref().map(error::describe).unwrap_or_default();
                 return Err(anyhow!("{described}"));
@@ -162,14 +171,17 @@ pub async fn run(client: &mut Client, args: &TailArgs, json: bool) -> Result<()>
 }
 
 /// Open one stream and print it to its end. A delivered item resets the
-/// backoff: the connection works again.
+/// backoff: the connection works again. `opened` records that a watch was
+/// accepted at least once.
 async fn follow(
     client: &mut Client,
     target: &mut Target,
     json: bool,
     backoff: &mut Duration,
+    opened: &mut bool,
 ) -> Result<(), Status> {
     let mut stream = client.watch_jobs(target.request()).await?.into_inner();
+    *opened = true;
     while let Some(response) = stream.message().await? {
         *backoff = BACKOFF_START;
         print(&response, json);
@@ -256,26 +268,39 @@ mod tests {
 
     #[test]
     fn a_retryable_end_reconnects_and_anything_else_fails() {
-        assert_eq!(
-            recovery(&refused(Code::FailedPrecondition, "WATCH_CURSOR_EXPIRED")),
-            Recovery::FromNow
-        );
-        assert_eq!(
-            recovery(&refused(Code::ResourceExhausted, "WATCH_OVERFLOW")),
-            Recovery::Reconnect
-        );
-        assert_eq!(
-            recovery(&refused(Code::Unavailable, "SHUTTING_DOWN")),
-            Recovery::Reconnect
-        );
-        assert_eq!(recovery(&Status::unavailable("gone")), Recovery::Reconnect);
-        assert_eq!(
-            recovery(&refused(Code::ResourceExhausted, "WATCH_LIMIT")),
-            Recovery::Fail
-        );
-        assert_eq!(
-            recovery(&refused(Code::Unauthenticated, "UNAUTHENTICATED")),
-            Recovery::Fail
-        );
+        for opened in [false, true] {
+            assert_eq!(
+                recovery(
+                    &refused(Code::FailedPrecondition, "WATCH_CURSOR_EXPIRED"),
+                    opened
+                ),
+                Recovery::FromNow
+            );
+            assert_eq!(
+                recovery(&refused(Code::ResourceExhausted, "WATCH_OVERFLOW"), opened),
+                Recovery::Reconnect
+            );
+            assert_eq!(
+                recovery(&refused(Code::Unavailable, "SHUTTING_DOWN"), opened),
+                Recovery::Reconnect
+            );
+            assert_eq!(
+                recovery(&Status::unavailable("gone"), opened),
+                Recovery::Reconnect
+            );
+            assert_eq!(
+                recovery(&refused(Code::Unauthenticated, "UNAUTHENTICATED"), opened),
+                Recovery::Fail
+            );
+        }
+    }
+
+    /// The cap refusing the first open means the credential really is at it;
+    /// refusing a reopen can be the dropped stream's slot not yet released.
+    #[test]
+    fn the_watch_cap_is_fatal_only_before_a_watch_has_opened() {
+        let limit = refused(Code::ResourceExhausted, "WATCH_LIMIT");
+        assert_eq!(recovery(&limit, false), Recovery::Fail);
+        assert_eq!(recovery(&limit, true), Recovery::Reconnect);
     }
 }
