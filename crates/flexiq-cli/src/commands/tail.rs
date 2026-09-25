@@ -15,9 +15,9 @@ use tonic_types::StatusExt as _;
 
 use crate::cli::TailArgs;
 use crate::connect::Client;
+use crate::error;
 use crate::output::watch::{watch_json, watch_line};
 use crate::pb::{self, watch_jobs_request, watch_jobs_response::Item};
-use crate::{error, safe};
 
 /// The first wait before reconnecting; doubles per failure.
 const BACKOFF_START: Duration = Duration::from_secs(1);
@@ -98,6 +98,8 @@ impl Target {
 /// What to do about a stream that ended with `status`.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Recovery {
+    /// Nothing left to follow.
+    Done,
     /// Reopen from where the target stands.
     Reconnect,
     /// The cursor is gone: reopen a queue watch from now.
@@ -127,6 +129,20 @@ pub fn recovery(status: &Status, opened_before: bool) -> Recovery {
     }
 }
 
+/// What to do once a stream has ended, with `status` when it failed.
+///
+/// Finished is checked before the error: a stream that failed after
+/// delivering the last terminal item has nothing left to reopen for. An OK
+/// end with work left is a server ending the stream early.
+pub fn after_stream(target: &Target, status: Option<&Status>, opened_before: bool) -> Recovery {
+    if target.finished() {
+        return Recovery::Done;
+    }
+    status.map_or(Recovery::Reconnect, |status| {
+        recovery(status, opened_before)
+    })
+}
+
 /// `fq tail`.
 pub async fn run(client: &mut Client, args: &TailArgs, json: bool) -> Result<()> {
     let mut target = Target::from_args(args);
@@ -134,17 +150,9 @@ pub async fn run(client: &mut Client, args: &TailArgs, json: bool) -> Result<()>
     let mut opened = false;
     loop {
         let ended = follow(client, &mut target, json, &mut backoff, &mut opened).await;
-        let status = match ended {
-            Ok(()) if target.finished() => return Ok(()),
-            // A queue watch that ends with OK is a server ending it early;
-            // an id watch that ends with ids left is the same.
-            Ok(()) => None,
-            Err(status) => Some(status),
-        };
-        let decided = status
-            .as_ref()
-            .map_or(Recovery::Reconnect, |status| recovery(status, opened));
-        match decided {
+        let status = ended.err();
+        match after_stream(&target, status.as_ref(), opened) {
+            Recovery::Done => return Ok(()),
             Recovery::Fail => {
                 let described = status.as_ref().map(error::describe).unwrap_or_default();
                 return Err(anyhow!("{described}"));
@@ -190,14 +198,13 @@ async fn follow(
     Ok(())
 }
 
+/// `--json` prints every item, a queue watch's cursor-only checkpoint
+/// included; the table skips an item with no arm this build can show.
 fn print(response: &pb::WatchJobsResponse, json: bool) {
     if json {
         println!("{}", watch_json(response));
     } else if let Some(line) = watch_line(response) {
         println!("{line}");
-    } else {
-        // An arm this build does not know: say so rather than print nothing.
-        println!("{}", safe::escape(&format!("{response:?}")));
     }
 }
 
@@ -259,6 +266,12 @@ mod tests {
     fn a_queue_watch_resumes_from_its_last_cursor() {
         let mut target = Target::from_args(&args(&[], Some("orders")));
         assert_eq!(target.request().resume_cursor, "");
+        // The opening checkpoint alone is enough to resume without a gap.
+        target.observe(&pb::WatchJobsResponse {
+            item: None,
+            cursor: "c0".into(),
+        });
+        assert_eq!(target.request().resume_cursor, "c0");
         let mut item = transition("a", true);
         item.cursor = "c7".into();
         target.observe(&item);
@@ -293,6 +306,24 @@ mod tests {
                 Recovery::Fail
             );
         }
+    }
+
+    /// Every id already delivered its terminal item, so a failure after it is
+    /// not a reason to reopen — an empty id set would be refused anyway.
+    #[test]
+    fn a_stream_failing_after_the_last_terminal_item_is_done() {
+        let mut target = Target::from_args(&args(&["a"], None));
+        target.observe(&transition("a", true));
+        let dropped = Status::unavailable("gone");
+        assert_eq!(after_stream(&target, Some(&dropped), true), Recovery::Done);
+        assert_eq!(after_stream(&target, None, true), Recovery::Done);
+
+        let pending = Target::from_args(&args(&["b"], None));
+        assert_eq!(
+            after_stream(&pending, Some(&dropped), true),
+            Recovery::Reconnect
+        );
+        assert_eq!(after_stream(&pending, None, true), Recovery::Reconnect);
     }
 
     /// The cap refusing the first open means the credential really is at it;
