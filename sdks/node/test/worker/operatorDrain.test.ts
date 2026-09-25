@@ -73,6 +73,12 @@ describe("an operator's drain request", () => {
     await expect(queue.drainWorker(drained)).resolves.toBe(true);
 
     expect(await waitFor(() => stopped.includes(drained))).toBe(true);
+    // `worker.stopped` fires before the row is unregistered; wait for that too.
+    expect(
+      await waitFor(async () =>
+        (await queue.listWorkers()).every((row) => row.workerId !== drained),
+      ),
+    ).toBe(true);
     const rows = await queue.listWorkers();
     expect(rows.map((row) => row.workerId)).toEqual([sibling]);
     expect(rows[0]?.status).toBe("active");
