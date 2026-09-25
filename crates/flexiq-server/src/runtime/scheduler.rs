@@ -121,48 +121,101 @@ pub struct SchedulerSettings {
     pub events: Option<Arc<EventHub>>,
 }
 
+/// One scheduler this process runs: a dispatch path and the queues it serves.
+///
+/// A process has one lane unless it pushes to more than one target. Each
+/// target then gets a lane of its own — its own `Worker`, claiming only its
+/// own queues, sized from its own capacity — because a `Worker` holds exactly
+/// one dispatcher, and one scheduler feeding several targets would claim jobs
+/// for a target that has no free slot while another sits idle.
+pub struct Lane {
+    /// Names the lane in logs. `None` for the single-target and attach shapes,
+    /// which have nothing to tell apart.
+    pub name: Option<String>,
+    /// How this lane's jobs reach the code that runs them.
+    pub path: DispatchPath,
+    /// What its `Worker` is built from.
+    pub settings: SchedulerSettings,
+}
+
 /// Owns the scheduler's lifecycle: start-once, shutdown-once.
 pub struct SchedulerSupervisor {
     storage: StorageBackend,
-    path: DispatchPath,
-    settings: SchedulerSettings,
-    handle: Mutex<Option<WorkerHandle>>,
+    lanes: Vec<Lane>,
+    handles: Mutex<Option<Vec<WorkerHandle>>>,
 }
 
 impl SchedulerSupervisor {
-    /// Build a supervisor that has not started its worker yet.
+    /// Build a supervisor over one dispatch path that has not started its
+    /// worker yet.
     pub fn new(storage: StorageBackend, path: DispatchPath, settings: SchedulerSettings) -> Self {
+        Self::with_lanes(
+            storage,
+            vec![Lane {
+                name: None,
+                path,
+                settings,
+            }],
+        )
+    }
+
+    /// Build a supervisor that runs one `Worker` per lane, none started yet.
+    pub fn with_lanes(storage: StorageBackend, lanes: Vec<Lane>) -> Self {
         Self {
             storage,
-            path,
-            settings,
-            handle: Mutex::new(None),
+            lanes,
+            handles: Mutex::new(None),
         }
     }
 
     /// Start the scheduler if it is not running. Safe to call on every attach,
     /// and called once at boot on a path that [`DispatchPath::starts_eagerly`].
+    ///
+    /// Every lane starts, or none does: a lane that fails shuts the ones
+    /// already started back down, so a half-started process never reads as
+    /// running.
     pub fn ensure_started(&self) -> Result<()> {
-        let mut handle = self.handle.lock().unwrap_or_else(|e| e.into_inner());
-        if handle.is_some() {
+        let mut handles = self.handles.lock().unwrap_or_else(|e| e.into_inner());
+        if handles.is_some() {
             return Ok(());
         }
-        let worker = self
-            .build_worker()
-            .spawn()
-            .context("scheduler failed to start")?;
-        log::info!(
-            "[flexiq] scheduler {} started on queues [{}]",
-            worker.worker_id(),
-            self.settings.queues.join(", ")
-        );
-        *handle = Some(worker);
+        let mut started = Vec::with_capacity(self.lanes.len());
+        for (index, lane) in self.lanes.iter().enumerate() {
+            let spawned = self
+                .build_worker(lane, index == 0)
+                .spawn()
+                .with_context(|| match &lane.name {
+                    Some(name) => format!("scheduler for push target {name} failed to start"),
+                    None => "scheduler failed to start".to_string(),
+                });
+            let worker = match spawned {
+                Ok(worker) => worker,
+                Err(error) => {
+                    shutdown_all(started);
+                    return Err(error);
+                }
+            };
+            match &lane.name {
+                Some(name) => log::info!(
+                    "[flexiq] scheduler {} started for push target {name} on queues [{}]",
+                    worker.worker_id(),
+                    lane.settings.queues.join(", ")
+                ),
+                None => log::info!(
+                    "[flexiq] scheduler {} started on queues [{}]",
+                    worker.worker_id(),
+                    lane.settings.queues.join(", ")
+                ),
+            }
+            started.push(worker);
+        }
+        *handles = Some(started);
         Ok(())
     }
 
     /// Whether the scheduler is running.
     pub fn is_running(&self) -> bool {
-        self.handle
+        self.handles
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .is_some()
@@ -180,25 +233,31 @@ impl SchedulerSupervisor {
     /// or joining the drain ahead of `run` would park the last in-flight
     /// settlement for good. Do not invert it.
     pub fn shutdown(&self) {
-        let taken = self.handle.lock().unwrap_or_else(|e| e.into_inner()).take();
-        if let Some(worker) = taken {
-            if let Err(error) = worker.shutdown() {
-                log::warn!("scheduler shutdown reported an error: {error}");
-            }
+        let taken = self
+            .handles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(workers) = taken {
+            shutdown_all(workers);
         }
     }
 
-    fn build_worker(&self) -> Worker {
-        let num_workers = self.settings.workers.unwrap_or_else(|| {
+    /// Build one lane's `Worker`. `first` is whether it is the process's
+    /// first lane, which alone runs retention: several lanes on one database
+    /// would otherwise sweep the same rows once each.
+    fn build_worker(&self, lane: &Lane, first: bool) -> Worker {
+        let settings = &lane.settings;
+        let num_workers = settings.workers.unwrap_or_else(|| {
             // Sized from the slots the configured path actually has —
             // advertised by attached executors, or configured on the push
             // target. `max_in_flight` derives from this, so it must not exceed
             // them.
-            self.path.total_slots().max(1) as usize
+            lane.path.total_slots().max(1) as usize
         });
 
         let mut scheduler_config = SchedulerConfig::default();
-        if !self.settings.maintenance {
+        if !settings.maintenance || !first {
             // An empty retention config is the documented "keep everything"
             // switch; dead-worker reaping stays on because in-flight recovery
             // depends on it.
@@ -206,19 +265,36 @@ impl SchedulerSupervisor {
         }
 
         let mut worker = Worker::new(self.storage.clone())
-            .queues(self.settings.queues.clone())
+            .queues(settings.queues.clone())
             .num_workers(num_workers)
             .scheduler_config(scheduler_config)
-            .dispatcher(self.path.pool_type(), self.path.as_worker_dispatcher());
-        if let Some(namespace) = &self.settings.namespace {
+            .dispatcher(lane.path.pool_type(), lane.path.as_worker_dispatcher());
+        if let Some(namespace) = &settings.namespace {
             worker = worker.namespace(namespace.clone());
         }
-        if let Some(enabled) = self.settings.push_dispatch {
+        if let Some(enabled) = settings.push_dispatch {
             worker = worker.push_dispatch(enabled);
         }
-        if let Some(hub) = &self.settings.events {
+        if let Some(hub) = &settings.events {
             worker = worker.events(Arc::clone(hub));
         }
-        worker
+        super::overrides::apply(worker, &self.storage, settings.namespace.as_deref())
     }
+}
+
+/// Drain every lane's worker at once, returning when the last has stopped.
+///
+/// Concurrently, not in turn: each push lane's drain runs to twice its
+/// `FLEXIQ_PUSH_TARGET_DRAIN`, and the grace period a deployment gives the
+/// process is sized for one drain, not one per target.
+fn shutdown_all(workers: Vec<WorkerHandle>) {
+    std::thread::scope(|scope| {
+        for worker in workers {
+            scope.spawn(move || {
+                if let Err(error) = worker.shutdown() {
+                    log::warn!("scheduler shutdown reported an error: {error}");
+                }
+            });
+        }
+    });
 }

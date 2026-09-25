@@ -12,6 +12,15 @@ their entries below keep that name.
 
 ### Added
 
+- **More than one push target per process.** `FLEXIQ_PUSH_TARGETS` names several targets, each
+  with its own URL and queues (`FLEXIQ_PUSH_<NAME>_URL`, `FLEXIQ_PUSH_<NAME>_QUEUES`) and any
+  push setting of its own (`FLEXIQ_PUSH_<NAME>_CAPACITY`, `…_OIDC_AUDIENCE`, …), falling back to
+  the shared `FLEXIQ_PUSH_TARGET_*` value. Each target runs its own scheduler over its own queues,
+  sized from its own capacity, so a full target never holds up another; shutdown drains them
+  concurrently, and the executor door hands a `Settle`, `ExtendLease` or report to the target that
+  made the dispatch. A queue named by two targets, `FLEXIQ_PUSH_TARGET_URL` beside the list, and
+  `FLEXIQ_QUEUES` or `FLEXIQ_WORKERS` beside named targets are refused at boot. The Helm chart
+  still configures one target.
 - **Kafka and NATS event sinks** (#971). Two more `kind`s for the event egress document.
   `kafka` produces each event as a structured-mode CloudEvent record keyed by job id, placed
   with Kafka's own murmur2 partitioner and acknowledged by every in-sync replica, over TLS and
@@ -136,6 +145,13 @@ their entries below keep that name.
 
 ### Fixed
 
+- **`flexiq-server`'s scheduler applies task and queue overrides.** It registered none, so under
+  attach and push alike every job retried on the core's default backoff, and an override's rate
+  limit or concurrency cap — set on the dashboard, over the admin door or with the CLI — was
+  stored and never enforced; for a push deployment that was every task it ran. The scheduler now
+  reads them when it starts, as an SDK worker does: a task's `retry_backoff`, `rate_limit` and
+  `max_concurrent`, and a queue's `rate_limit` and `max_concurrent`. A field that cannot be read
+  is logged and skipped rather than failing the start.
 - **A Python worker start no longer resumes a paused schedule.** Every start re-registered each
   `@queue.periodic` with `enabled: true`, so a restart silently undid an operator's pause. It now
   declares the schedule, which keeps the pause and the last run (#919's conditional write).

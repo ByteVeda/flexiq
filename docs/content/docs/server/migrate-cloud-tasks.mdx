@@ -55,23 +55,40 @@ flexiq-server
 ## A Cloud Tasks queue
 
 A Cloud Tasks queue becomes a FlexiQ **queue**, named in the job at enqueue and
-served by a push process that lists it in `FLEXIQ_QUEUES`.
+served by a push target that lists it in its queues.
 
-**One push process has one target URL.** In Cloud Tasks every task carries its
-own `httpRequest.url`, so one queue can fan out to several services and one
-service can take several paths. In FlexiQ the URL is the process's, not the
-job's. What the job carries instead is its **task name**, sent as
-`x-flexiq-task`, so a service that used to expose `/process-order` and
+**A queue has one target URL.** In Cloud Tasks every task carries its own
+`httpRequest.url`, so one queue can fan out to several services and one service
+can take several paths. In FlexiQ the URL belongs to the target serving the
+queue, not to the job. What the job carries instead is its **task name**, sent
+as `x-flexiq-task`, so a service that used to expose `/process-order` and
 `/refund-order` exposes one route and dispatches on that header.
 
-When your queues call **different services**, run one push process per
-service, each with its own `FLEXIQ_QUEUES` and `FLEXIQ_PUSH_TARGET_URL`,
-against the same database. Producers pick the service by picking the queue.
+When your queues call **different services**, name one target per service in
+`FLEXIQ_PUSH_TARGETS`, each with its own URL, queues and audience —
+[More than one target](/server/operate/push#more-than-one-target) has the
+variables. One `flexiq-server` process serves them all, and producers pick the
+service by picking the queue:
+
+```bash
+FLEXIQ_PUSH_TARGETS=orders,billing \
+FLEXIQ_PUSH_ORDERS_URL=https://orders-abc123-uc.a.run.app/flexiq \
+FLEXIQ_PUSH_ORDERS_QUEUES=orders \
+FLEXIQ_PUSH_ORDERS_OIDC_AUDIENCE=https://orders-abc123-uc.a.run.app \
+FLEXIQ_PUSH_BILLING_URL=https://billing-def456-uc.a.run.app/flexiq \
+FLEXIQ_PUSH_BILLING_QUEUES=invoices \
+FLEXIQ_PUSH_BILLING_OIDC_AUDIENCE=https://billing-def456-uc.a.run.app \
+FLEXIQ_PUSH_TARGET_ALLOW=.run.app \
+FLEXIQ_PUSH_TARGET_CAPACITY=50 \
+FLEXIQ_PUSH_TARGET_AUTH=oidc \
+FLEXIQ_PUSH_TARGET_OIDC_SOURCE=google \
+flexiq-server
+```
 
 | Cloud Tasks | FlexiQ |
 | --- | --- |
-| Queue | A queue name, in `FLEXIQ_QUEUES` of the process that serves it |
-| `httpRequest.url` | `FLEXIQ_PUSH_TARGET_URL`, one per process; the path becomes the task name |
+| Queue | A queue name, served by one push target |
+| `httpRequest.url` | The target's URL, one per target; the path becomes the task name |
 | `httpRequest.httpMethod` | Always `POST` |
 | `httpRequest.headers` | No per-job headers. Pass the values as arguments |
 | `httpRequest.body` | The job's arguments, delivered as a CBOR envelope |
@@ -80,8 +97,8 @@ against the same database. Producers pick the service by picking the queue.
 | `scheduleTime` | `scheduledAt` |
 | `dispatchDeadline` | `timeout`, and `FLEXIQ_PUSH_TARGET_TIMEOUT` ([below](#dispatchdeadline)) |
 | `retryConfig` | `maxRetries` per job, and a fixed backoff ([below](#retries)) |
-| `rateLimits.maxConcurrentDispatches` | `FLEXIQ_PUSH_TARGET_CAPACITY`, per process |
-| `rateLimits.maxDispatchesPerSecond` | No equivalent under push yet ([below](#rate-limits)) |
+| `rateLimits.maxConcurrentDispatches` | The target's capacity, per process |
+| `rateLimits.maxDispatchesPerSecond` | A queue override's `rateLimit` ([below](#rate-limits)) |
 | Pause queue | `PauseQueue` on [the admin door](/server/operate/admin#queues) |
 | `DeleteTask` | `CancelJob` ([below](#deduplication-and-deletion)) |
 
@@ -316,20 +333,30 @@ This is where the two differ most, in four ways.
 | --- | --- | --- |
 | **Counts** | `maxAttempts`: every attempt, the first included | `maxRetries`: attempts **after** the first. `maxRetries = maxAttempts − 1` |
 | **Set on** | The queue | Each job, at enqueue |
-| **Curve** | Starts at `minBackoff`, doubles `maxDoublings` times, then grows linearly to `maxBackoff`. Deterministic | Full Jitter: `uniform(0, min(5 min, 1 s × 2^retry))`. Fixed under push |
+| **Curve** | Starts at `minBackoff`, doubles `maxDoublings` times, then grows linearly to `maxBackoff`. Deterministic | Full Jitter: `uniform(0, min(5 min, base × 2^retry))`. The base is one second unless a task override sets `retryBackoff` |
 | **Unlimited** | `maxAttempts: -1` | None. Pick a number |
 | **Time limit** | `maxRetryDuration` | `expiresAt`, with a different ending (below) |
 | **After the last** | The task is deleted | The job moves to the [dead-letter queue](#what-you-gain), where it can be replayed |
 
-**The curve is not configurable under push.** An SDK worker registers each
-task's backoff when it starts, and task overrides reach the next SDK worker
-that starts. `flexiq-server` registers no task code, so a push deployment
-retries every task on the core default: a uniformly random delay under a
-ceiling that starts at one second and doubles to five minutes. A Cloud Tasks
-queue tuned to back off for an hour between attempts will retry far sooner
-here, and more times within the same hour. Size `maxRetries` for that, and let
-a handler that knows a downstream is out answer `x-flexiq-retry: false` rather
-than spend its budget.
+**`minBackoff` becomes a task override.** `flexiq-server` registers no task
+code, so a task's backoff is set as an
+[override](/server/operate/admin#overrides): `retryBackoff` is the base delay,
+the first retry's ceiling, and the ceiling doubles from there. The scheduler
+reads overrides when it starts, so set them before the deployment boots, or
+restart it after.
+
+```bash
+curl -s -X POST -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  -H 'content-type: application/json' \
+  https://flexiq.internal:50051/v1/admin/tasks/orders.process/override \
+  -d '{"retryBackoff": "10s"}'
+```
+
+**`maxBackoff` has no counterpart: the ceiling stops doubling at five
+minutes.** A Cloud Tasks queue tuned to back off for an hour between attempts
+will retry sooner here, and more times within the same hour. Size `maxRetries`
+for that, and let a handler that knows a downstream is out answer
+`x-flexiq-retry: false` rather than spend its budget.
 
 The jitter is the one change here that is an improvement rather than a
 difference: a burst of tasks failing on the same outage spreads out with every
@@ -345,17 +372,26 @@ duration when the time bound matters more than the replay.
 
 ## Rate limits
 
-`maxConcurrentDispatches` becomes `FLEXIQ_PUSH_TARGET_CAPACITY`: the number of
-requests one push process keeps in flight. It is per process, so the total is
-capacity times the replicas you run. It is also how your service's own
+`maxConcurrentDispatches` becomes the target's capacity,
+`FLEXIQ_PUSH_TARGET_CAPACITY` or `FLEXIQ_PUSH_<NAME>_CAPACITY`: the number of
+requests one process keeps in flight to that target. It is per process, so the
+total is capacity times the replicas you run. It is also how your service's own
 concurrency limit — Cloud Run's max instances times per-instance concurrency —
 stays unexceeded: set it at or under that product.
 
-`maxDispatchesPerSecond` has **no equivalent under push yet.** FlexiQ has task
-and queue rate limits, but they are registered by an SDK worker, and a push
-deployment has none. Until that changes, capacity is the throttle: a target
-that needs a rate rather than a concurrency cap should enforce it itself,
-answering `429` — which FlexiQ retries — when it is over.
+`maxDispatchesPerSecond` becomes a queue override's `rateLimit`, a count over
+a second, minute or hour. Its bucket lives in the database, so it holds across
+every replica rather than multiplying by them:
+
+```bash
+curl -s -X POST -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  -H 'content-type: application/json' \
+  https://flexiq.internal:50051/v1/admin/queues/orders/override \
+  -d '{"rateLimit": "500/s"}'
+```
+
+A queue override's `maxConcurrent` caps the queue's running jobs across every
+replica too, where capacity caps them per process.
 
 ## `scheduleTime`
 
@@ -513,11 +549,10 @@ run the same tasks under an SDK worker instead of behind a URL.
 
 Collected from above, because each is a behaviour Cloud Tasks did not have:
 
-- **One target URL per push process.** Several services means several
-  processes, split by queue.
-- **Backoff is fixed under push, and there is no dispatch rate limit.** Task
-  and queue overrides — backoff, rate limit, concurrency — reach SDK workers,
-  not `flexiq-server`.
+- **One target URL per queue.** Several services means several named
+  targets, split by queue.
+- **The backoff ceiling is five minutes.** An override sets the base delay,
+  not the cap, and overrides are read when the scheduler starts.
 - **`maxRetries` defaults to `0` on the gRPC door.** Set it on every enqueue.
 - **A `2xx` needs `x-flexiq-outcome`, and a `4xx` is final** unless it is
   `408`, `425` or `429`.
@@ -530,9 +565,11 @@ Collected from above, because each is a behaviour Cloud Tasks did not have:
 ## Checklist
 
 - [ ] `flexiq-server` running somewhere long-lived, on Postgres or Redis
-- [ ] One push process per target service, each with `FLEXIQ_QUEUES`,
-  `FLEXIQ_PUSH_TARGET_URL`, `FLEXIQ_PUSH_TARGET_ALLOW` and
-  `FLEXIQ_PUSH_TARGET_CAPACITY`
+- [ ] One push target per service — `FLEXIQ_PUSH_TARGET_URL` for one, or
+  `FLEXIQ_PUSH_TARGETS` with a URL and queues each — with an allowlist and a
+  capacity
+- [ ] Queue `retryConfig` and `rateLimits` recreated as task and queue
+  overrides, before the server starts
 - [ ] Outbound auth chosen; on Google Cloud, the server's service account holds
   `roles/run.invoker`
 - [ ] `FLEXIQ_PUSH_TARGET_TIMEOUT` raised to cover the slowest handler, or

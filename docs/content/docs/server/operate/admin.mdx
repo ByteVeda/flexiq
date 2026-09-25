@@ -147,8 +147,16 @@ queue's override has no `paused`: `PauseQueue` is the one way to pause a queue.
 <Callout type="warn" title="An override reaches the next worker start">
 Workers read overrides when they start. A change made here applies to every
 worker that starts afterwards and to no worker already running — restart the
-fleet to apply it now.
+fleet to apply it now. `flexiq-server`'s own scheduler counts as a worker here:
+under attach or push it applies the backoff, rate limits and concurrency caps
+it finds when it starts.
 </Callout>
+
+The server's scheduler applies the fields a scheduler consumes: `retryBackoff`,
+`rateLimit` and `maxConcurrent` on a task, and `rateLimit` and `maxConcurrent`
+on a queue. `timeout`, `priority` and a task's pause are applied where jobs are
+enqueued, by an SDK, so an override of them does not reach a job enqueued
+through this door.
 
 ## Errors
 

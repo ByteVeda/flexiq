@@ -821,6 +821,28 @@ impl HttpDispatchTarget {
         self.shared.accepted_count()
     }
 
+    /// Whether this target has anything to say about `job_id`: a dispatch it
+    /// is holding open, or one it recently stopped holding.
+    ///
+    /// For a process that dispatches to more than one target and has to hand
+    /// a settle, a lease extension or a report to the one that made the
+    /// dispatch. Every refusal a target gives about a job it has never heard
+    /// of is [`SettleRefused::NotHere`], so routing to a target that answers
+    /// `false` here would turn a "cancelled" or "already settled" into a
+    /// "wrong replica".
+    pub fn holds(&self, job_id: &str) -> bool {
+        // `accepted` before `ended`, the order every other reader takes them.
+        let accepted = self.shared.accepted.lock().unwrap_or_else(recover);
+        accepted.contains_key(job_id)
+            || self
+                .shared
+                .ended
+                .lock()
+                .unwrap_or_else(recover)
+                .by_job
+                .contains_key(job_id)
+    }
+
     /// Settle a dispatch this target accepted, from outside the request that
     /// carried it.
     ///
@@ -1541,6 +1563,28 @@ mod tests {
             ended.refusal("never-seen", &Lease::from_epoch(7)),
             SettleRefused::NotHere
         ));
+    }
+
+    #[test]
+    fn a_target_holds_only_the_jobs_it_has_ended_or_is_holding() {
+        let target = HttpDispatchTarget::new(HttpTargetConfig::new(
+            "https://api.example.com/hook",
+            1,
+            allow("api.example.com"),
+        ))
+        .expect("an allowlisted https target builds");
+        assert!(!target.holds("job"), "a fresh target has seen no job");
+
+        target.shared.ended.lock().unwrap().record(
+            "job",
+            Some(Lease::from_epoch(1)),
+            Ending::Cancelled,
+        );
+        assert!(
+            target.holds("job"),
+            "an ended dispatch is still this target's to explain"
+        );
+        assert!(!target.holds("other"));
     }
 
     #[test]

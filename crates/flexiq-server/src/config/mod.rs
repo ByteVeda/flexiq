@@ -22,7 +22,7 @@ use crate::config::dashboard::DashboardConfig;
 use crate::config::events::EventsSettings;
 use crate::config::grpc::GrpcConfig;
 use crate::config::listen::AttachConfig;
-use crate::config::push::PushTargetConfig;
+use crate::config::push::PushConfig;
 use crate::config::trigger::TriggerConfig;
 use crate::config::webhook::WebhookConfig;
 
@@ -59,9 +59,10 @@ pub struct Config {
     pub webhook: Option<WebhookConfig>,
     /// Where the `flexiq.v1` gRPC door listens. `None` disables it.
     pub grpc: Option<GrpcConfig>,
-    /// The endpoint the scheduler POSTs claimed jobs to. `None` disables push
-    /// dispatch, which is then the attach path's to serve.
-    pub push: Option<PushTargetConfig>,
+    /// The endpoints the scheduler POSTs claimed jobs to — one, or one per
+    /// name in `FLEXIQ_PUSH_TARGETS`. `None` disables push dispatch, which is
+    /// then the attach path's to serve.
+    pub push: Option<PushConfig>,
     /// Where inbound triggers are answered, and the definitions they follow.
     /// `None` disables the listener.
     pub triggers: Option<TriggerConfig>,
@@ -87,7 +88,7 @@ impl Config {
         // depends on it, and it needs the parsed value to say so.
         let namespace = value(env, "FLEXIQ_NAMESPACE");
 
-        let config = Self {
+        let mut config = Self {
             dsn: value(env, "FLEXIQ_DSN"),
             backend: value(env, "FLEXIQ_BACKEND"),
             queues: queues(env),
@@ -99,7 +100,7 @@ impl Config {
             dashboard: dashboard::from_env(env, allow_insecure)?,
             webhook: webhook::from_env(env)?,
             grpc: grpc::from_env(env, namespace.as_deref())?,
-            push: push::from_env(env)?,
+            push: push::targets_from_env(env)?,
             triggers: trigger::from_env(env, namespace.as_deref())?,
             events: events::from_env(env)?,
             namespace,
@@ -127,7 +128,7 @@ impl Config {
         if config
             .push
             .as_ref()
-            .is_some_and(|push| push.settle_callbacks)
+            .is_some_and(PushConfig::settle_callbacks)
             && config.grpc.is_none()
         {
             bail!(
@@ -162,6 +163,22 @@ impl Config {
                  two dispatchers for the same queues. Choose push dispatch or \
                  executor attach for this process."
             );
+        }
+        // Named push targets each serve their own queues and size their own
+        // concurrency, so the process-wide spellings of both would be a second
+        // answer to a question each target already answered.
+        if let Some(push) = config.push.as_ref().filter(|push| push.is_named()) {
+            for key in ["FLEXIQ_QUEUES", "FLEXIQ_WORKERS"] {
+                if value(env, key).is_some() {
+                    bail!(
+                        "{key} cannot be set with {} — each named target sets its own \
+                         queues (FLEXIQ_PUSH_<NAME>_QUEUES) and its own concurrency \
+                         (FLEXIQ_PUSH_<NAME>_CAPACITY).",
+                        push::TARGETS_VAR
+                    );
+                }
+            }
+            config.queues = push.queues();
         }
         Ok(config)
     }
@@ -436,5 +453,45 @@ mod tests {
         .expect("push dispatch and the gRPC producer door may run together");
         assert!(config.push.is_some());
         assert!(config.grpc.is_some());
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn named_push_targets_set_the_queues_and_refuse_the_process_wide_ones() {
+        let named = [
+            ("FLEXIQ_DSN", ":memory:"),
+            ("FLEXIQ_PUSH_TARGETS", "a,b"),
+            ("FLEXIQ_PUSH_TARGET_ALLOW", "example.com"),
+            ("FLEXIQ_PUSH_TARGET_CAPACITY", "1"),
+            ("FLEXIQ_PUSH_A_URL", "https://example.com/a"),
+            ("FLEXIQ_PUSH_A_QUEUES", "one"),
+            ("FLEXIQ_PUSH_B_URL", "https://example.com/b"),
+            ("FLEXIQ_PUSH_B_QUEUES", "two,three"),
+        ];
+        let config = Config::from_map(&env(&named)).expect("named targets are valid");
+        assert_eq!(config.queues, vec!["one", "two", "three"]);
+
+        for key in ["FLEXIQ_QUEUES", "FLEXIQ_WORKERS"] {
+            let mut pairs = named.to_vec();
+            pairs.push((key, "4"));
+            let error = Config::from_map(&env(&pairs)).expect_err("must refuse");
+            assert!(error.to_string().contains(key), "{error}");
+        }
+    }
+
+    #[cfg(feature = "http-target")]
+    #[test]
+    fn a_named_target_with_settle_callbacks_needs_the_grpc_door() {
+        let error = Config::from_map(&env(&[
+            ("FLEXIQ_DSN", ":memory:"),
+            ("FLEXIQ_PUSH_TARGETS", "a"),
+            ("FLEXIQ_PUSH_TARGET_ALLOW", "example.com"),
+            ("FLEXIQ_PUSH_TARGET_CAPACITY", "1"),
+            ("FLEXIQ_PUSH_A_URL", "https://example.com/a"),
+            ("FLEXIQ_PUSH_A_QUEUES", "one"),
+            ("FLEXIQ_PUSH_A_SETTLE", "grpc"),
+        ]))
+        .expect_err("a 202 needs somewhere to report to");
+        assert!(error.to_string().contains("FLEXIQ_GRPC_LISTEN"), "{error}");
     }
 }
