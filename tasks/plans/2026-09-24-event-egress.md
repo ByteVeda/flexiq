@@ -12,6 +12,10 @@ User decisions (2026-09-24):
 - `job.enqueued` and pre-run `job.cancelled`: from the server's doors only
   (gRPC producer, triggers, admin/dashboard cancel). Embedded enqueues are
   not seen; the docs say so.
+- 2026-09-25, after review: "fix them" — expiry, cascade cancels, periodic
+  firings and DLQ auto-retry must emit too (Tasks 12–14). Periodic and
+  auto-retry enqueues come from the scheduler, so embedded workers now send
+  `job.enqueued` for those two sources only.
 
 ## Global Constraints (bind every task)
 
@@ -545,3 +549,112 @@ Deviations from this plan, all ruled during review:
 Not emitted (documented under "What is not seen" in the contract): job
 expiry, cascade cancels, DLQ auto-retry re-enqueues, periodic firings, and
 enqueues from embedded SDKs.
+
+## Task 12: Storage reports the rows it expires and cascades
+
+**Where it fits:** expiry and cascade cancels happen inside storage, which
+holds each full row and throws it away, returning only a count or unit. This
+task makes the rows come back. flexiq-core storage only; no emitting yet.
+
+**Build** — follow the `enqueue_unique_reporting` precedent (`storage/traits.rs`),
+but give the *old* methods default bodies that call the new ones and discard
+the rows, so no caller (scheduler, server, Python/Node/Java/Rust shells)
+changes:
+- `expire_pending_jobs_reporting(now) -> Result<Vec<Job>>` — the reaper
+  sweep (`diesel_common/jobs.rs` `archive_pending_in_batches` /
+  `archive_pending_rows`; `redis_backend/jobs/maintenance.rs`). Rows as they
+  were before archiving (status Pending is fine; the event says cancelled).
+  `expire_pending_jobs` becomes the default wrapper returning `len()`.
+- Dispatch-time expiry: the Diesel `dequeue_ordered` / `dequeue_batch_ordered`
+  skip-and-archive (`error = "expired before execution"`) and the Redis
+  `SELECT_AND_CLAIM` `expired_ids` → `archive_expired` path. Add reporting
+  variants of whichever dequeue methods the poller calls (read
+  `scheduler/poller.rs` to see which) that also return the expired jobs, e.g.
+  a `Dequeued { claimed, expired }` record; the plain methods become default
+  wrappers. The Redis Lua script already returns the expired ids; load the
+  rows it archives only if they are not already loaded (no new round trip
+  per claim on the common no-expiry path — measure it by reading the code).
+- Cascade: `cascade_cancel(...) -> Result<Vec<Job>>` returning every
+  dependent it cancelled (Diesel BFS `diesel_common/jobs.rs`; Redis
+  `redis_backend/jobs/state.rs`). Surface that list through reporting
+  variants of its public callers: `move_to_dlq_reporting`,
+  `shed_to_dlq_reporting` (keep `shed_to_dlq`'s existing default-to-
+  `move_to_dlq` behaviour meaningful for the reporting pair) and
+  `cancel_job_reporting -> Result<(bool, Vec<Job>)>`. Old methods = default
+  wrappers. Also `resilience/dlq.rs` `DeadLetterQueue` gets a reporting method.
+- Wire every new method through `impl_storage!` / `delegate!` in
+  `storage/mod.rs` so `StorageBackend` and all three backends expose it.
+- Tests: extend the storage contract / backend tests that already cover
+  expiry, cascade and dequeue (find them — SQLite in-memory runs locally;
+  Postgres/Redis contract suites compile-only locally, `FLEXIQ_REDIS_TEST_URL`
+  gating as the crate does) to assert the returned rows: ids, queue,
+  task_name, namespace of each expired/cascaded job, including a multi-level
+  cascade and a namespace-scoped cancel.
+
+**Verify:** `cargo test -j1 -p flexiq-core --lib storage` (and the crate's
+storage contract test target if separate), `cargo check -j1 --workspace
+--features postgres` and `--features redis`, clippy `--workspace
+--all-targets --all-features -- -D warnings`.
+
+**Commit(s):** e.g. `feat(core): report expired jobs from storage`,
+`feat(core): report cascade-cancelled dependents`.
+
+## Task 13: Emit the four missing transitions
+
+**Where it fits:** consumes Task 12's rows. flexiq-core scheduler + server
+doors.
+
+**Build:**
+- Expiry → `job.cancelled` with `reason` = the storage error string
+  (`"expired"` for the sweep, `"expired before execution"` at dispatch),
+  `attempt = job.retry_count`, no epoch, the job's own namespace (the sweep
+  is unscoped and covers every namespace). Sweep: `scheduler/maintenance.rs`
+  switches to `expire_pending_jobs_reporting`. Dispatch: the poller switches
+  to the reporting dequeue.
+- Cascades → one `job.cancelled` per dependent with `reason` = the cascade
+  reason (`"dependency failed"` / `"dependency cancelled"`), from: the
+  scheduler's DLQ moves (`result_handler.rs` via the reporting DLQ call),
+  both shed paths in `poller.rs`, and the server's cancel doors
+  (`crates/flexiq-server/src/events.rs` `cancelled` callers — gRPC
+  `CancelJob`, facade, dashboard cancel) via `cancel_job_reporting`. The
+  parent's own event stays as today. Embedded-SDK `cancel_job` keeps emitting
+  nothing (no hub there, and the parent is not announced either).
+- Periodic firings → `job.enqueued` from `scheduler/maintenance.rs`
+  (`check_periodic`): switch to `enqueue_unique_reporting` and emit only when
+  inserted (a dedup hit emits nothing, matching the doors). `attempt = 0`,
+  payload only if `hub.wants_payload()`.
+- DLQ auto-retry → `job.enqueued` from `maintenance.rs` (`auto_retry_dlq`)
+  with the new id `retry_dead` returns and queue/task/namespace from the
+  `DeadJob` entry; `attempt = 0`.
+- All helpers live in `scheduler/events.rs` beside `emit_shed` /
+  `emit_outcome`; no emit when no hub; no new storage reads.
+- Tests (scheduler tests, in-memory SQLite, recording fake sink as Task 4
+  did): sweep expiry emits cancelled+reason for each expired job; dispatch-
+  time expiry emits; a dead-lettered parent with a two-level dependent chain
+  emits one cancelled per dependent; a rate-limit shed parent cascades; a
+  periodic tick emits one enqueued and a second tick for the same slot emits
+  none; DLQ auto-retry emits enqueued with the new id. Server: extend
+  `tests/grpc_events.rs` — cancelling a pending parent emits the parent's and
+  each dependent's `job.cancelled`.
+
+**Verify:** `cargo test -j1 -p flexiq-core --lib scheduler`, `--lib events`,
+`cargo test -j1 -p flexiq-server --features grpc,http-target,events-http
+--test grpc_events`, workspace check + clippy as Task 12.
+
+**Commits:** e.g. `feat(core): emit expiry and cascade cancels`,
+`feat(core): emit periodic and auto-retry enqueues`,
+`feat(server): emit cascade cancels from the cancel doors`.
+
+## Task 14: Contract, docs and CHANGELOG catch up
+
+**Build:** `contracts/EVENT_EGRESS_CONTRACT.md` — move the four items out of
+"What is not seen" into the taxonomy table (who emits, reason strings,
+attempt/epoch values); state that embedded workers now send `job.enqueued`
+for periodic and auto-retry enqueues only; the dispatch-time vs sweep reason
+strings. Update the docs guides (`docs/content/docs/server/operate/events.mdx`,
+`docs/content/docs/shared/guides/extend/event-sinks.mdx` — the "An embedded
+worker never sends `job.enqueued`" sentence is now wrong) and the CHANGELOG
+entry (regenerate the mdx with `pnpm --dir docs sync:changelog`). Every
+example real. Docs typecheck, lint, build.
+
+**Commit:** `docs: events for expiry, cascades, periodic and retries`.
