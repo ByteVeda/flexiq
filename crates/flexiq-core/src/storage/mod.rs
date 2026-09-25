@@ -556,14 +556,16 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Option<$crate::job::Job>> {
                 self.dequeue(queue_name, now, namespace)
             }
-            fn dequeue_from(
+            fn dequeue_from_reporting(
                 &self,
                 queues: &[String],
                 now: i64,
                 namespace: Option<&str>,
                 orders: &std::collections::HashMap<String, $crate::storage::DispatchOrder>,
-            ) -> $crate::error::Result<Option<$crate::job::Job>> {
-                self.dequeue_from(queues, now, namespace, orders)
+            ) -> $crate::error::Result<
+                $crate::storage::records::Dequeued<Option<$crate::job::Job>>,
+            > {
+                self.dequeue_from_reporting(queues, now, namespace, orders)
             }
             fn dequeue_batch(
                 &self,
@@ -574,15 +576,16 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Vec<$crate::job::Job>> {
                 self.dequeue_batch(queue_name, now, namespace, max)
             }
-            fn dequeue_batch_from(
+            fn dequeue_batch_from_reporting(
                 &self,
                 queues: &[String],
                 now: i64,
                 namespace: Option<&str>,
                 max: usize,
                 orders: &std::collections::HashMap<String, $crate::storage::DispatchOrder>,
-            ) -> $crate::error::Result<Vec<$crate::job::Job>> {
-                self.dequeue_batch_from(queues, now, namespace, max, orders)
+            ) -> $crate::error::Result<$crate::storage::records::Dequeued<Vec<$crate::job::Job>>>
+            {
+                self.dequeue_batch_from_reporting(queues, now, namespace, max, orders)
             }
             fn complete(
                 &self,
@@ -1231,8 +1234,11 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Vec<String>> {
                 self.list_paused_queues(namespace)
             }
-            fn expire_pending_jobs(&self, now: i64) -> $crate::error::Result<u64> {
-                self.expire_pending_jobs(now)
+            fn expire_pending_jobs_reporting(
+                &self,
+                now: i64,
+            ) -> $crate::error::Result<Vec<$crate::job::Job>> {
+                self.expire_pending_jobs_reporting(now)
             }
             fn cancel_pending_by_queue(&self, queue: &str) -> $crate::error::Result<u64> {
                 self.cancel_pending_by_queue(queue)
@@ -1725,14 +1731,14 @@ impl Storage for StorageBackend {
     fn dequeue(&self, queue_name: &str, now: i64, namespace: Option<&str>) -> Result<Option<Job>> {
         delegate!(self, dequeue, queue_name, now, namespace)
     }
-    fn dequeue_from(
+    fn dequeue_from_reporting(
         &self,
         queues: &[String],
         now: i64,
         namespace: Option<&str>,
         orders: &std::collections::HashMap<String, DispatchOrder>,
-    ) -> Result<Option<Job>> {
-        delegate!(self, dequeue_from, queues, now, namespace, orders)
+    ) -> Result<records::Dequeued<Option<Job>>> {
+        delegate!(self, dequeue_from_reporting, queues, now, namespace, orders)
     }
     fn dequeue_batch(
         &self,
@@ -1743,17 +1749,17 @@ impl Storage for StorageBackend {
     ) -> Result<Vec<Job>> {
         delegate!(self, dequeue_batch, queue_name, now, namespace, max)
     }
-    fn dequeue_batch_from(
+    fn dequeue_batch_from_reporting(
         &self,
         queues: &[String],
         now: i64,
         namespace: Option<&str>,
         max: usize,
         orders: &std::collections::HashMap<String, DispatchOrder>,
-    ) -> Result<Vec<Job>> {
+    ) -> Result<records::Dequeued<Vec<Job>>> {
         delegate!(
             self,
-            dequeue_batch_from,
+            dequeue_batch_from_reporting,
             queues,
             now,
             namespace,
@@ -2287,8 +2293,8 @@ impl Storage for StorageBackend {
     fn list_paused_queues(&self, namespace: Option<&str>) -> Result<Vec<String>> {
         delegate!(self, list_paused_queues, namespace)
     }
-    fn expire_pending_jobs(&self, now: i64) -> Result<u64> {
-        delegate!(self, expire_pending_jobs, now)
+    fn expire_pending_jobs_reporting(&self, now: i64) -> Result<Vec<Job>> {
+        delegate!(self, expire_pending_jobs_reporting, now)
     }
     fn cancel_pending_by_queue(&self, queue: &str) -> Result<u64> {
         delegate!(self, cancel_pending_by_queue, queue)

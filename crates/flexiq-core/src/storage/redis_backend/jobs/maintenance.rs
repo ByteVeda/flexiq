@@ -458,11 +458,17 @@ impl RedisStorage {
     /// Cancel pending jobs whose `expires_at` has passed, archiving them as
     /// `Cancelled`. Returns the count expired.
     pub fn expire_pending_jobs(&self, now: i64) -> Result<u64> {
+        Ok(self.expire_pending_jobs_reporting(now)?.len() as u64)
+    }
+
+    /// [`expire_pending_jobs`](Self::expire_pending_jobs), returning every job
+    /// it expired, as archived. Each was already loaded to read `expires_at`.
+    pub fn expire_pending_jobs_reporting(&self, now: i64) -> Result<Vec<Job>> {
         let mut conn = self.conn()?;
         let status_key = self.key(&["jobs", "status", &(JobStatus::Pending as i32).to_string()]);
         let job_ids: Vec<String> = conn.smembers(&status_key).map_err(map_err)?;
 
-        let mut count = 0u64;
+        let mut expired = Vec::new();
         for id in &job_ids {
             if let Some(mut job) = self.load_job(&mut conn, id)? {
                 if let Some(expires_at) = job.expires_at {
@@ -476,13 +482,13 @@ impl RedisStorage {
                         conn.zrem::<_, _, ()>(&queue_key, &job.id)
                             .map_err(map_err)?;
                         self.archive_job_immediately(&mut conn, &job, old_status)?;
-                        count += 1;
+                        expired.push(job);
                     }
                 }
             }
         }
 
-        Ok(count)
+        Ok(expired)
     }
 
     /// Cancel every pending job in a queue. Returns the count cancelled.

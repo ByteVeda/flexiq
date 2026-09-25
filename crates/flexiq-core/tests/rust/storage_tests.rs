@@ -132,6 +132,120 @@ fn test_dequeue_batch_archives_expired_jobs(s: &impl Storage) {
     assert!(!pending.iter().any(|job| job.id == expired.id));
 }
 
+/// A job storage archived on its own, as a reporting method hands it back: the
+/// identity an event needs, the archived status, and the payload archiving
+/// already loaded.
+fn assert_reported(
+    reported: &flexiq_core::job::Job,
+    expected: &flexiq_core::job::Job,
+    error: &str,
+) {
+    assert_eq!(reported.id, expected.id);
+    assert_eq!(reported.queue, expected.queue);
+    assert_eq!(reported.task_name, expected.task_name);
+    assert_eq!(reported.namespace, expected.namespace);
+    assert_eq!(reported.retry_count, expected.retry_count);
+    assert_eq!(reported.payload, expected.payload);
+    assert_eq!(reported.status, JobStatus::Cancelled);
+    assert_eq!(reported.error.as_deref(), Some(error));
+    assert!(reported.completed_at.is_some());
+}
+
+/// Sorted by id, so a report compares against a fixed expectation whatever
+/// order the backend walked it in.
+fn by_id(mut jobs: Vec<flexiq_core::job::Job>) -> Vec<flexiq_core::job::Job> {
+    jobs.sort_by(|a, b| a.id.cmp(&b.id));
+    jobs
+}
+
+/// Both reporting dequeues hand back the candidates they archived as expired,
+/// scoped to the namespace they scanned, and nothing on a scan with none.
+fn test_dequeue_reports_expired_jobs(s: &impl Storage) {
+    use std::collections::HashMap;
+    let q = "q-dequeue-report-expired";
+    let ns = Some("expiry-tenant");
+    let now = now_millis();
+    let orders = HashMap::new();
+    let queues = [q.to_string()];
+
+    let namespaced = |task: &str, expires_at: Option<i64>| {
+        let mut job = make_job(q, task);
+        job.namespace = ns.map(str::to_string);
+        job.expires_at = expires_at;
+        job
+    };
+
+    let expired = s
+        .enqueue(namespaced("report_expired", Some(now - 1_000)))
+        .unwrap();
+    let live = s.enqueue(namespaced("report_live", None)).unwrap();
+    let batch = s
+        .dequeue_batch_from_reporting(&queues, now + 1_000, ns, 10, &orders)
+        .unwrap();
+    assert_eq!(batch.claimed.len(), 1);
+    assert_eq!(batch.claimed[0].id, live.id);
+    assert_eq!(batch.expired.len(), 1, "the expired candidate is reported");
+    assert_reported(&batch.expired[0], &expired, "expired before execution");
+
+    let expired = s
+        .enqueue(namespaced("report_expired", Some(now - 1_000)))
+        .unwrap();
+    let live = s.enqueue(namespaced("report_live", None)).unwrap();
+    let single = s
+        .dequeue_from_reporting(&queues, now + 1_000, ns, &orders)
+        .unwrap();
+    assert_eq!(single.claimed.map(|job| job.id), Some(live.id));
+    assert_eq!(single.expired.len(), 1);
+    assert_reported(&single.expired[0], &expired, "expired before execution");
+
+    // The common path: nothing expired, nothing reported.
+    let plain = s.enqueue(namespaced("report_live", None)).unwrap();
+    let batch = s
+        .dequeue_batch_from_reporting(&queues, now + 1_000, ns, 10, &orders)
+        .unwrap();
+    assert_eq!(batch.claimed.len(), 1);
+    assert_eq!(batch.claimed[0].id, plain.id);
+    assert!(batch.expired.is_empty());
+}
+
+/// The reaper sweep reports every job it expired, as archived.
+fn test_expire_pending_jobs_reports_rows(s: &impl Storage) {
+    let q = "q-expire-report";
+    let now = now_millis();
+
+    let mut expiring = make_job(q, "sweep_expired");
+    expiring.namespace = Some("sweep-tenant".to_string());
+    expiring.expires_at = Some(now - 1_000);
+    let expired = s.enqueue(expiring).unwrap();
+    let mut unscoped = make_job(q, "sweep_expired_unscoped");
+    unscoped.expires_at = Some(now - 1_000);
+    let unscoped = s.enqueue(unscoped).unwrap();
+    let kept = s.enqueue(make_job(q, "sweep_kept")).unwrap();
+
+    // The store is shared across the suite, so keep only this queue's rows.
+    let reported: Vec<_> = s
+        .expire_pending_jobs_reporting(now)
+        .unwrap()
+        .into_iter()
+        .filter(|job| job.queue == q)
+        .collect();
+    let reported = by_id(reported);
+    let expected = by_id(vec![expired, unscoped]);
+    assert_eq!(reported.len(), 2, "both expired jobs are reported");
+    for (got, want) in reported.iter().zip(&expected) {
+        assert_reported(got, want, "expired");
+    }
+    assert_eq!(
+        s.get_job(&kept.id, None).unwrap().unwrap().status,
+        JobStatus::Pending
+    );
+    assert!(s
+        .expire_pending_jobs_reporting(now)
+        .unwrap()
+        .iter()
+        .all(|job| job.queue != q));
+}
+
 /// #836: terminal jobs in a window, per queue and per namespace. Pending and
 /// running jobs are not throughput.
 fn test_queue_throughput(s: &impl Storage) {
@@ -2835,6 +2949,8 @@ fn run_storage_tests(s: &impl Storage) {
     test_dequeue(s);
     test_dequeue_batch(s);
     test_dequeue_batch_archives_expired_jobs(s);
+    test_dequeue_reports_expired_jobs(s);
+    test_expire_pending_jobs_reports_rows(s);
     test_dispatch_order_lifo_map(s);
     test_complete(s);
     test_queue_throughput(s);

@@ -2,10 +2,11 @@ use crate::error::{QueueError, Result};
 use crate::job::{Job, NewJob};
 use crate::step::StepLimits;
 use crate::storage::records::{
-    AttemptFence, CircuitBreakerState, DebounceOptions, JobError, JobStep, LockInfo, NewJobStep,
-    NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SettleClaimant,
-    SettleGrant, SleepOutcome, StaleJob, StepCommit, Subscription, SubscriptionMode, TaskLogEntry,
-    TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
+    AttemptFence, CircuitBreakerState, DebounceOptions, Dequeued, JobError, JobStep, LockInfo,
+    NewJobStep, NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry,
+    SettleClaimant, SettleGrant, SleepOutcome, StaleJob, StepCommit, Subscription,
+    SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo,
+    WorkerRegistration, WorkerStatus,
 };
 use crate::storage::{
     DeadJob, DispatchOrder, QueueStats, RetentionCounts, RetentionCutoffs, SubscriptionBacklogStats,
@@ -95,13 +96,31 @@ pub trait Storage: Send + Sync + Clone {
     fn dequeue(&self, queue_name: &str, now: i64, namespace: Option<&str>) -> Result<Option<Job>>;
     /// [`dequeue`](Self::dequeue) across several queues, checked in order. Each
     /// queue uses its dispatch order from `orders` (absent = the `Fifo` default).
+    ///
+    /// The claim of [`dequeue_from_reporting`](Self::dequeue_from_reporting),
+    /// with the expired jobs it archived dropped.
     fn dequeue_from(
         &self,
         queues: &[String],
         now: i64,
         namespace: Option<&str>,
         orders: &std::collections::HashMap<String, DispatchOrder>,
-    ) -> Result<Option<Job>>;
+    ) -> Result<Option<Job>> {
+        Ok(self
+            .dequeue_from_reporting(queues, now, namespace, orders)?
+            .claimed)
+    }
+    /// [`dequeue_from`](Self::dequeue_from), also returning every candidate the
+    /// scan found past `expires_at` and archived as `Cancelled` instead of
+    /// claiming. The expired rows were already loaded to archive them, so
+    /// reporting them costs no extra read.
+    fn dequeue_from_reporting(
+        &self,
+        queues: &[String],
+        now: i64,
+        namespace: Option<&str>,
+        orders: &std::collections::HashMap<String, DispatchOrder>,
+    ) -> Result<Dequeued<Option<Job>>>;
     /// Atomically claim up to `max` ready jobs from a single queue in one
     /// transaction. Returns the claimed jobs (now in `Running` state). May
     /// return fewer than `max` if the queue lacks enough eligible jobs.
@@ -115,6 +134,10 @@ pub trait Storage: Send + Sync + Clone {
     /// Claim up to `max` ready jobs across the given queues, checking each in
     /// order until the budget is exhausted. Each queue uses its dispatch order
     /// from `orders` (absent = the `Fifo` default).
+    ///
+    /// The claims of
+    /// [`dequeue_batch_from_reporting`](Self::dequeue_batch_from_reporting),
+    /// with the expired jobs it archived dropped.
     fn dequeue_batch_from(
         &self,
         queues: &[String],
@@ -122,7 +145,22 @@ pub trait Storage: Send + Sync + Clone {
         namespace: Option<&str>,
         max: usize,
         orders: &std::collections::HashMap<String, DispatchOrder>,
-    ) -> Result<Vec<Job>>;
+    ) -> Result<Vec<Job>> {
+        Ok(self
+            .dequeue_batch_from_reporting(queues, now, namespace, max, orders)?
+            .claimed)
+    }
+    /// [`dequeue_batch_from`](Self::dequeue_batch_from), also returning every
+    /// candidate archived as expired on the way, as in
+    /// [`dequeue_from_reporting`](Self::dequeue_from_reporting).
+    fn dequeue_batch_from_reporting(
+        &self,
+        queues: &[String],
+        now: i64,
+        namespace: Option<&str>,
+        max: usize,
+        orders: &std::collections::HashMap<String, DispatchOrder>,
+    ) -> Result<Dequeued<Vec<Job>>>;
     /// Mark a job completed with its result, moving it from `jobs` into
     /// `archived_jobs` in one transaction. A job in another namespace reports
     /// `JobNotFound`, like an unknown id.
@@ -722,8 +760,20 @@ pub trait Storage: Send + Sync + Clone {
     // ── Job expiry ───────────────────────────────────────────────
 
     /// Fail pending jobs whose `expires_at` has passed. Returns the count
-    /// expired.
-    fn expire_pending_jobs(&self, now: i64) -> Result<u64>;
+    /// expired: the length of
+    /// [`expire_pending_jobs_reporting`](Self::expire_pending_jobs_reporting).
+    fn expire_pending_jobs(&self, now: i64) -> Result<u64> {
+        Ok(self.expire_pending_jobs_reporting(now)?.len() as u64)
+    }
+    /// [`expire_pending_jobs`](Self::expire_pending_jobs), returning every job
+    /// it expired, across every namespace. Each is the archived row — status
+    /// `Cancelled`, `completed_at` set, error `"expired"` — payload included,
+    /// since archiving already loaded it.
+    ///
+    /// The whole sweep's rows are held until it returns, where the plain
+    /// method held one batch at a time; a backlog that large is expired
+    /// either way, and reporting it is the point.
+    fn expire_pending_jobs_reporting(&self, now: i64) -> Result<Vec<Job>>;
 
     // ── Job revocation ───────────────────────────────────────────
 

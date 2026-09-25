@@ -81,11 +81,11 @@ pub use storage::cursor::Page;
 #[cfg(feature = "postgres")]
 pub use storage::postgres::PostgresStorage;
 pub use storage::records::{
-    AttemptFence, CircuitBreakerState, DebounceOptions, JobError, JobStep, LockInfo, NewJobStep,
-    NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SettleClaimant,
-    SettleGrant, SleepOutcome, StaleJob, StepCommit, StepKind, Subscription, SubscriptionMode,
-    TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration,
-    WorkerStatus,
+    AttemptFence, CircuitBreakerState, DebounceOptions, Dequeued, JobError, JobStep, LockInfo,
+    NewJobStep, NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry,
+    SettleClaimant, SettleGrant, SleepOutcome, StaleJob, StepCommit, StepKind, Subscription,
+    SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo,
+    WorkerRegistration, WorkerStatus,
 };
 #[cfg(feature = "redis")]
 pub use storage::redis_backend::{RedisConnection, RedisStorage};

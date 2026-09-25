@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 
 use crate::error::Result;
 use crate::job::{Job, JobStatus};
+use crate::storage::records::Dequeued;
 use crate::storage::redis_backend::{map_err, RedisConnection, RedisStorage};
 
 /// Lua: select and claim up to `max` ready jobs from one queue in a single
@@ -213,17 +214,24 @@ impl RedisStorage {
     /// Archive a job the claim script found expired as cancelled, exactly as
     /// both Diesel paths do. A job that left `Pending` since the script ran is
     /// someone else's to settle.
-    fn archive_expired(&self, conn: &mut RedisConnection, job_id: &str, now: i64) -> Result<()> {
+    /// Returns the archived job, or `None` when it was not archived here.
+    fn archive_expired(
+        &self,
+        conn: &mut RedisConnection,
+        job_id: &str,
+        now: i64,
+    ) -> Result<Option<Job>> {
         let Some(mut job) = self.load_job(conn, job_id)? else {
-            return Ok(());
+            return Ok(None);
         };
         if job.status != JobStatus::Pending {
-            return Ok(());
+            return Ok(None);
         }
         job.status = JobStatus::Cancelled;
         job.completed_at = Some(now);
         job.error = Some("expired before execution".to_string());
-        self.archive_job_immediately(conn, &job, JobStatus::Pending)
+        self.archive_job_immediately(conn, &job, JobStatus::Pending)?;
+        Ok(Some(job))
     }
 
     /// Atomically claim the highest-priority ready job, moving it to `Running`.
@@ -250,14 +258,38 @@ impl RedisStorage {
         queues: &[String],
         now: i64,
         namespace: Option<&str>,
-        _orders: &std::collections::HashMap<String, crate::storage::DispatchOrder>,
+        orders: &std::collections::HashMap<String, crate::storage::DispatchOrder>,
     ) -> Result<Option<Job>> {
+        Ok(self
+            .dequeue_from_reporting(queues, now, namespace, orders)?
+            .claimed)
+    }
+
+    /// [`dequeue_from`](Self::dequeue_from), also returning every candidate
+    /// archived as expired across the queues it scanned. `orders` is ignored
+    /// for the same reason.
+    pub fn dequeue_from_reporting(
+        &self,
+        queues: &[String],
+        now: i64,
+        namespace: Option<&str>,
+        _orders: &std::collections::HashMap<String, crate::storage::DispatchOrder>,
+    ) -> Result<Dequeued<Option<Job>>> {
+        let mut expired: Vec<Job> = Vec::new();
         for queue_name in queues {
-            if let Some(job) = self.dequeue(queue_name, now, namespace)? {
-                return Ok(Some(job));
+            let mut step = self.dequeue_batch_reporting(queue_name, now, namespace, 1)?;
+            expired.append(&mut step.expired);
+            if let Some(job) = step.claimed.into_iter().next() {
+                return Ok(Dequeued {
+                    claimed: Some(job),
+                    expired,
+                });
             }
         }
-        Ok(None)
+        Ok(Dequeued {
+            claimed: None,
+            expired,
+        })
     }
 
     /// Claim up to `max` ready jobs from a single queue. Candidate selection
@@ -276,8 +308,23 @@ impl RedisStorage {
         namespace: Option<&str>,
         max: usize,
     ) -> Result<Vec<Job>> {
+        Ok(self
+            .dequeue_batch_reporting(queue_name, now, namespace, max)?
+            .claimed)
+    }
+
+    /// [`dequeue_batch`](Self::dequeue_batch), also returning the candidates
+    /// the script found expired and Rust archived. Those are the only rows
+    /// loaded beyond the claim, so a scan with nothing expired costs the same.
+    fn dequeue_batch_reporting(
+        &self,
+        queue_name: &str,
+        now: i64,
+        namespace: Option<&str>,
+        max: usize,
+    ) -> Result<Dequeued<Vec<Job>>> {
         if max == 0 {
-            return Ok(Vec::new());
+            return Ok(Dequeued::default());
         }
 
         let mut conn = self.conn()?;
@@ -317,8 +364,9 @@ impl RedisStorage {
             claimed.push(job);
         }
 
+        let mut expired: Vec<Job> = Vec::new();
         for job_id in &expired_ids {
-            self.archive_expired(&mut conn, job_id, now)?;
+            expired.extend(self.archive_expired(&mut conn, job_id, now)?);
         }
 
         for doc in &deferred_docs {
@@ -336,7 +384,7 @@ impl RedisStorage {
             }
         }
 
-        Ok(claimed)
+        Ok(Dequeued { claimed, expired })
     }
 
     /// Claim up to `max` ready jobs across the given queues, checking each in
@@ -348,17 +396,34 @@ impl RedisStorage {
         now: i64,
         namespace: Option<&str>,
         max: usize,
-        _orders: &std::collections::HashMap<String, crate::storage::DispatchOrder>,
+        orders: &std::collections::HashMap<String, crate::storage::DispatchOrder>,
     ) -> Result<Vec<Job>> {
-        let mut claimed: Vec<Job> = Vec::new();
+        Ok(self
+            .dequeue_batch_from_reporting(queues, now, namespace, max, orders)?
+            .claimed)
+    }
+
+    /// [`dequeue_batch_from`](Self::dequeue_batch_from), also returning every
+    /// candidate archived as expired across the queues it scanned. `orders` is
+    /// ignored for the same reason.
+    pub fn dequeue_batch_from_reporting(
+        &self,
+        queues: &[String],
+        now: i64,
+        namespace: Option<&str>,
+        max: usize,
+        _orders: &std::collections::HashMap<String, crate::storage::DispatchOrder>,
+    ) -> Result<Dequeued<Vec<Job>>> {
+        let mut out = Dequeued::<Vec<Job>>::default();
         for queue_name in queues {
-            if claimed.len() >= max {
+            if out.claimed.len() >= max {
                 break;
             }
-            let remaining = max - claimed.len();
-            let mut batch = self.dequeue_batch(queue_name, now, namespace, remaining)?;
-            claimed.append(&mut batch);
+            let remaining = max - out.claimed.len();
+            let mut batch = self.dequeue_batch_reporting(queue_name, now, namespace, remaining)?;
+            out.claimed.append(&mut batch.claimed);
+            out.expired.append(&mut batch.expired);
         }
-        Ok(claimed)
+        Ok(out)
     }
 }
