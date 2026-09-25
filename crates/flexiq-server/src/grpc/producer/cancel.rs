@@ -36,16 +36,18 @@ pub(crate) async fn cancel_job(
         if !cancelled {
             storage.request_cancel(&id, Some(&namespace))?;
         }
-        let job = storage.get_job(&id, Some(&namespace))?;
+        // Bound without `?`: the cancel has committed, so a failed read-back
+        // must not skip the dependents' events below.
+        let read = storage.get_job(&id, Some(&namespace));
         // Only the pending cancel is this door's to announce; a running job's
         // is emitted by the scheduler once the task honours it.
-        if let (true, Some(job)) = (cancelled, &job) {
+        if let (true, Ok(Some(job))) = (cancelled, &read) {
             crate::events::cancelled(events.as_deref(), job);
         }
-        // The dependents went with the cancel, so they are announced even if
-        // the parent's row could not be read back.
+        // After the parent, so a sink sees the cause first; announced even if
+        // the parent's row could not be read back, then the read's error goes up.
         crate::events::cascade_cancelled(events.as_deref(), dependents);
-        Ok(job)
+        read
     })
     .await?
     .ok_or_else(|| not_found(&request.job_id))?;

@@ -139,15 +139,20 @@ pub async fn cancel(
         let (cancelled, dependents) =
             storage.cancel_job_reporting(&job_id, namespace.as_deref())?;
         // The row is read back only to announce it, so only when there is
-        // somewhere to announce it.
-        if let (true, Some(hub)) = (cancelled, events.as_deref()) {
-            if let Some(job) = storage.get_job(&job_id, namespace.as_deref())? {
-                crate::events::cancelled(Some(hub), &job);
-            }
+        // somewhere to announce it. Bound without `?`: the cancel has
+        // committed, so a failed read-back must not skip the dependents below.
+        let read = if cancelled && events.is_some() {
+            storage.get_job(&job_id, namespace.as_deref())
+        } else {
+            Ok(None)
+        };
+        if let Ok(Some(job)) = &read {
+            crate::events::cancelled(events.as_deref(), job);
         }
-        // After the parent, so a sink sees the cause first.
+        // After the parent, so a sink sees the cause first; announced even if
+        // the parent's row could not be read back, then the read's error goes up.
         crate::events::cascade_cancelled(events.as_deref(), dependents);
-        Ok(cancelled)
+        read.map(|_| cancelled)
     })
     .await?;
     Ok(Json(json!({ "cancelled": cancelled })))
