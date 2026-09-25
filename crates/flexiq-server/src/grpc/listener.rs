@@ -31,6 +31,7 @@ use crate::grpc::admin::Admin;
 use crate::grpc::auth::{self, AuthLayer};
 use crate::grpc::executor::ExecutorDoor;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
+use crate::grpc::producer::watch::Watches;
 use crate::grpc::producer::Producer;
 use crate::grpc::{facade, health, metrics, reflection};
 use crate::runtime::shutdown::Shutdown;
@@ -148,10 +149,19 @@ impl Listener {
         executor: Option<ExecutorDoor>,
         shutdown: Shutdown,
     ) -> Result<()> {
-        let producer = Producer::new(storage.clone(), workflows, self.events.clone());
+        // Watch streams read what the hub announces, so there is always one:
+        // without configured sinks it only feeds the taps. The runtime hands
+        // the scheduler the same hub, so its transitions arrive here too.
+        let hub = self
+            .events
+            .clone()
+            .unwrap_or_else(|| Arc::new(EventHub::without_sinks()));
+        let events = Some(Arc::clone(&hub));
+        let watches = Watches::start(storage.clone(), &hub, &self.config.watch, shutdown.clone());
+        let producer = Producer::new(storage.clone(), workflows, events.clone(), watches);
         // Always registered: what separates an operator from a producer is the
         // token's scope, checked by the one gate in front of both.
-        let admin = Admin::new(storage.clone(), self.events.clone());
+        let admin = Admin::new(storage.clone(), events.clone());
         let health = health::serve(
             storage.clone(),
             self.config.namespace.clone(),
@@ -169,7 +179,7 @@ impl Listener {
             self.config.namespace.clone(),
             executor.clone(),
             Arc::clone(&rpc_metrics),
-            self.events.clone(),
+            events,
         )
         .merge(facade::router(producer.clone(), admin.clone()));
 

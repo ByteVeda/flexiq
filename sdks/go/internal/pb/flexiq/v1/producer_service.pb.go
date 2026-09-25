@@ -20,6 +20,7 @@ import (
 	status "google.golang.org/genproto/googleapis/rpc/status"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -31,6 +32,90 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+// What a JobTransition reports.
+//
+// A reader that does not recognise a value treats it like SNAPSHOT: the item
+// still carries the job's status, and `terminal` still decides.
+type JobTransitionKind int32
+
+const (
+	JobTransitionKind_JOB_TRANSITION_KIND_UNSPECIFIED JobTransitionKind = 0
+	// The job's current state, read from storage when the watch opened or when
+	// the server's reconcile found it had moved on.
+	JobTransitionKind_JOB_TRANSITION_KIND_SNAPSHOT JobTransitionKind = 1
+	// Written to the queue.
+	JobTransitionKind_JOB_TRANSITION_KIND_ENQUEUED JobTransitionKind = 2
+	// Claimed and handed to a worker.
+	JobTransitionKind_JOB_TRANSITION_KIND_STARTED JobTransitionKind = 3
+	// Finished successfully.
+	JobTransitionKind_JOB_TRANSITION_KIND_COMPLETED JobTransitionKind = 4
+	// An attempt failed. Always followed by RETRYING or DEAD.
+	JobTransitionKind_JOB_TRANSITION_KIND_FAILED JobTransitionKind = 5
+	// Rescheduled for another attempt.
+	JobTransitionKind_JOB_TRANSITION_KIND_RETRYING JobTransitionKind = 6
+	// Dead-lettered: out of retries, not retryable, or shed.
+	JobTransitionKind_JOB_TRANSITION_KIND_DEAD JobTransitionKind = 7
+	// Cancelled, before or during its run.
+	JobTransitionKind_JOB_TRANSITION_KIND_CANCELLED JobTransitionKind = 8
+	// An attempt ended in a durable step sleep; the job is pending again.
+	JobTransitionKind_JOB_TRANSITION_KIND_SLEEPING JobTransitionKind = 9
+)
+
+// Enum value maps for JobTransitionKind.
+var (
+	JobTransitionKind_name = map[int32]string{
+		0: "JOB_TRANSITION_KIND_UNSPECIFIED",
+		1: "JOB_TRANSITION_KIND_SNAPSHOT",
+		2: "JOB_TRANSITION_KIND_ENQUEUED",
+		3: "JOB_TRANSITION_KIND_STARTED",
+		4: "JOB_TRANSITION_KIND_COMPLETED",
+		5: "JOB_TRANSITION_KIND_FAILED",
+		6: "JOB_TRANSITION_KIND_RETRYING",
+		7: "JOB_TRANSITION_KIND_DEAD",
+		8: "JOB_TRANSITION_KIND_CANCELLED",
+		9: "JOB_TRANSITION_KIND_SLEEPING",
+	}
+	JobTransitionKind_value = map[string]int32{
+		"JOB_TRANSITION_KIND_UNSPECIFIED": 0,
+		"JOB_TRANSITION_KIND_SNAPSHOT":    1,
+		"JOB_TRANSITION_KIND_ENQUEUED":    2,
+		"JOB_TRANSITION_KIND_STARTED":     3,
+		"JOB_TRANSITION_KIND_COMPLETED":   4,
+		"JOB_TRANSITION_KIND_FAILED":      5,
+		"JOB_TRANSITION_KIND_RETRYING":    6,
+		"JOB_TRANSITION_KIND_DEAD":        7,
+		"JOB_TRANSITION_KIND_CANCELLED":   8,
+		"JOB_TRANSITION_KIND_SLEEPING":    9,
+	}
+)
+
+func (x JobTransitionKind) Enum() *JobTransitionKind {
+	p := new(JobTransitionKind)
+	*p = x
+	return p
+}
+
+func (x JobTransitionKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (JobTransitionKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_flexiq_v1_producer_service_proto_enumTypes[0].Descriptor()
+}
+
+func (JobTransitionKind) Type() protoreflect.EnumType {
+	return &file_flexiq_v1_producer_service_proto_enumTypes[0]
+}
+
+func (x JobTransitionKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use JobTransitionKind.Descriptor instead.
+func (JobTransitionKind) EnumDescriptor() ([]byte, []int) {
+	return file_flexiq_v1_producer_service_proto_rawDescGZIP(), []int{0}
+}
 
 type EnqueueRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -861,11 +946,429 @@ func (x *QueueStatsResponse) GetCancelled() int64 {
 	return 0
 }
 
+// What to watch, and where a resumed queue watch left off.
+//
+// **Watching ids.** The stream opens with one item per id: a SNAPSHOT of the
+// job's current state, or `not_found_job_id` for an id that does not exist or
+// is in another namespace — the two are indistinguishable, as they are to
+// GetJob. Live transitions follow. Once a job's `terminal` item is sent that
+// id is finished with, and when every id is, the stream ends with OK. So a
+// watch on a job that is already terminal sends that one item and closes.
+//
+// Resuming an id watch needs no cursor: open it again. The snapshot is read
+// from storage, so a job that finished while the client was away comes back
+// terminal.
+//
+// **Watching a queue.** Live transitions of the queue's jobs, and no snapshot
+// — a queue has no "current state" small enough to send. Every item carries a
+// `cursor`; pass the last one back as `resume_cursor` to replay what the stream
+// missed. The server keeps a bounded window of recent transitions in memory,
+// per process: a cursor from another process, from before a restart, or older
+// than the window fails FAILED_PRECONDITION with reason WATCH_CURSOR_EXPIRED.
+// The client then reads what it needs with ListJobs and watches again without
+// a cursor.
+//
+// **Coverage.** A transition reaches a watch the moment this server process
+// handles it. One handled by another process — another replica, or a worker
+// that reads the database directly — reaches an id watch within the server's
+// reconcile interval (seconds), because the server re-reads every watched id
+// on that cadence. A queue watch sees only this process's transitions.
+//
+// **Limits.** At most 100 ids per watch, and a per-credential cap on
+// concurrent watches (RESOURCE_EXHAUSTED, reason WATCH_LIMIT). A client that
+// stops reading is not waited for: once it falls behind the server's buffer,
+// the stream ends RESOURCE_EXHAUSTED with reason WATCH_OVERFLOW, and the client
+// resumes as above. A server shutting down ends every stream UNAVAILABLE.
+type WatchJobsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Setting no arm is an error.
+	//
+	// Types that are valid to be assigned to Target:
+	//
+	//	*WatchJobsRequest_JobIds
+	//	*WatchJobsRequest_Queue
+	Target isWatchJobsRequest_Target `protobuf_oneof:"target"`
+	// A queue watch's last `cursor`, to replay what came after it. Opaque.
+	// Refused on an id watch, which resumes by snapshot.
+	ResumeCursor  string `protobuf:"bytes,3,opt,name=resume_cursor,json=resumeCursor,proto3" json:"resume_cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchJobsRequest) Reset() {
+	*x = WatchJobsRequest{}
+	mi := &file_flexiq_v1_producer_service_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchJobsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchJobsRequest) ProtoMessage() {}
+
+func (x *WatchJobsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_v1_producer_service_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchJobsRequest.ProtoReflect.Descriptor instead.
+func (*WatchJobsRequest) Descriptor() ([]byte, []int) {
+	return file_flexiq_v1_producer_service_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *WatchJobsRequest) GetTarget() isWatchJobsRequest_Target {
+	if x != nil {
+		return x.Target
+	}
+	return nil
+}
+
+func (x *WatchJobsRequest) GetJobIds() *WatchJobIds {
+	if x != nil {
+		if x, ok := x.Target.(*WatchJobsRequest_JobIds); ok {
+			return x.JobIds
+		}
+	}
+	return nil
+}
+
+func (x *WatchJobsRequest) GetQueue() string {
+	if x != nil {
+		if x, ok := x.Target.(*WatchJobsRequest_Queue); ok {
+			return x.Queue
+		}
+	}
+	return ""
+}
+
+func (x *WatchJobsRequest) GetResumeCursor() string {
+	if x != nil {
+		return x.ResumeCursor
+	}
+	return ""
+}
+
+type isWatchJobsRequest_Target interface {
+	isWatchJobsRequest_Target()
+}
+
+type WatchJobsRequest_JobIds struct {
+	// Between 1 and 100 ids.
+	JobIds *WatchJobIds `protobuf:"bytes,1,opt,name=job_ids,json=jobIds,proto3,oneof"`
+}
+
+type WatchJobsRequest_Queue struct {
+	// A queue name. Empty means "default", as in EnqueueOptions.queue.
+	Queue string `protobuf:"bytes,2,opt,name=queue,proto3,oneof"`
+}
+
+func (*WatchJobsRequest_JobIds) isWatchJobsRequest_Target() {}
+
+func (*WatchJobsRequest_Queue) isWatchJobsRequest_Target() {}
+
+// A set of job ids to watch.
+type WatchJobIds struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Duplicates are watched once.
+	JobIds        []string `protobuf:"bytes,1,rep,name=job_ids,json=jobIds,proto3" json:"job_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchJobIds) Reset() {
+	*x = WatchJobIds{}
+	mi := &file_flexiq_v1_producer_service_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchJobIds) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchJobIds) ProtoMessage() {}
+
+func (x *WatchJobIds) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_v1_producer_service_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchJobIds.ProtoReflect.Descriptor instead.
+func (*WatchJobIds) Descriptor() ([]byte, []int) {
+	return file_flexiq_v1_producer_service_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *WatchJobIds) GetJobIds() []string {
+	if x != nil {
+		return x.JobIds
+	}
+	return nil
+}
+
+type WatchJobsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Item:
+	//
+	//	*WatchJobsResponse_Transition
+	//	*WatchJobsResponse_NotFoundJobId
+	Item isWatchJobsResponse_Item `protobuf_oneof:"item"`
+	// On a queue watch, where this item sits in the server's window; pass the
+	// last one back as `resume_cursor`. Opaque. Empty on an id watch.
+	Cursor        string `protobuf:"bytes,3,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchJobsResponse) Reset() {
+	*x = WatchJobsResponse{}
+	mi := &file_flexiq_v1_producer_service_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchJobsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchJobsResponse) ProtoMessage() {}
+
+func (x *WatchJobsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_v1_producer_service_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchJobsResponse.ProtoReflect.Descriptor instead.
+func (*WatchJobsResponse) Descriptor() ([]byte, []int) {
+	return file_flexiq_v1_producer_service_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *WatchJobsResponse) GetItem() isWatchJobsResponse_Item {
+	if x != nil {
+		return x.Item
+	}
+	return nil
+}
+
+func (x *WatchJobsResponse) GetTransition() *JobTransition {
+	if x != nil {
+		if x, ok := x.Item.(*WatchJobsResponse_Transition); ok {
+			return x.Transition
+		}
+	}
+	return nil
+}
+
+func (x *WatchJobsResponse) GetNotFoundJobId() string {
+	if x != nil {
+		if x, ok := x.Item.(*WatchJobsResponse_NotFoundJobId); ok {
+			return x.NotFoundJobId
+		}
+	}
+	return ""
+}
+
+func (x *WatchJobsResponse) GetCursor() string {
+	if x != nil {
+		return x.Cursor
+	}
+	return ""
+}
+
+type isWatchJobsResponse_Item interface {
+	isWatchJobsResponse_Item()
+}
+
+type WatchJobsResponse_Transition struct {
+	// A job's state, or a change to it.
+	Transition *JobTransition `protobuf:"bytes,1,opt,name=transition,proto3,oneof"`
+}
+
+type WatchJobsResponse_NotFoundJobId struct {
+	// An id with no job this caller can see. Sent once, in place of its
+	// snapshot; the id is then finished with.
+	NotFoundJobId string `protobuf:"bytes,2,opt,name=not_found_job_id,json=notFoundJobId,proto3,oneof"`
+}
+
+func (*WatchJobsResponse_Transition) isWatchJobsResponse_Item() {}
+
+func (*WatchJobsResponse_NotFoundJobId) isWatchJobsResponse_Item() {}
+
+// One job's state as of one transition.
+//
+// Carries neither payload nor result. A client that wants the result reads it
+// with GetJob once it sees `terminal`.
+type JobTransition struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	JobId    string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	Queue    string                 `protobuf:"bytes,2,opt,name=queue,proto3" json:"queue,omitempty"`
+	TaskName string                 `protobuf:"bytes,3,opt,name=task_name,json=taskName,proto3" json:"task_name,omitempty"`
+	Kind     JobTransitionKind      `protobuf:"varint,4,opt,name=kind,proto3,enum=flexiq.v1.JobTransitionKind" json:"kind,omitempty"`
+	// The status the job is in after this transition.
+	Status JobStatus `protobuf:"varint,5,opt,name=status,proto3,enum=flexiq.v1.JobStatus" json:"status,omitempty"`
+	// The attempt this transition belongs to: the job's retry_count, zero for
+	// the first run.
+	Attempt int32 `protobuf:"varint,6,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	// When the server observed the transition.
+	Time *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=time,proto3" json:"time,omitempty"`
+	// This is the job's last item on this stream. The server decides, so a
+	// client never has to know which statuses are terminal — FAILED, for one, is
+	// not while RETRYING or DEAD is still to come.
+	Terminal bool `protobuf:"varint,8,opt,name=terminal,proto3" json:"terminal,omitempty"`
+	// Error message of a failed attempt.
+	Error *string `protobuf:"bytes,16,opt,name=error,proto3,oneof" json:"error,omitempty"`
+	// Why a job was dead-lettered without running out of retries, or cancelled
+	// without running.
+	Reason *string `protobuf:"bytes,17,opt,name=reason,proto3,oneof" json:"reason,omitempty"`
+	// A failed attempt was an execution timeout.
+	TimedOut *bool `protobuf:"varint,18,opt,name=timed_out,json=timedOut,proto3,oneof" json:"timed_out,omitempty"`
+	// The instant a sleeping job is rescheduled to.
+	WakeAt        *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=wake_at,json=wakeAt,proto3" json:"wake_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JobTransition) Reset() {
+	*x = JobTransition{}
+	mi := &file_flexiq_v1_producer_service_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JobTransition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JobTransition) ProtoMessage() {}
+
+func (x *JobTransition) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_v1_producer_service_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JobTransition.ProtoReflect.Descriptor instead.
+func (*JobTransition) Descriptor() ([]byte, []int) {
+	return file_flexiq_v1_producer_service_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *JobTransition) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *JobTransition) GetQueue() string {
+	if x != nil {
+		return x.Queue
+	}
+	return ""
+}
+
+func (x *JobTransition) GetTaskName() string {
+	if x != nil {
+		return x.TaskName
+	}
+	return ""
+}
+
+func (x *JobTransition) GetKind() JobTransitionKind {
+	if x != nil {
+		return x.Kind
+	}
+	return JobTransitionKind_JOB_TRANSITION_KIND_UNSPECIFIED
+}
+
+func (x *JobTransition) GetStatus() JobStatus {
+	if x != nil {
+		return x.Status
+	}
+	return JobStatus_JOB_STATUS_UNSPECIFIED
+}
+
+func (x *JobTransition) GetAttempt() int32 {
+	if x != nil {
+		return x.Attempt
+	}
+	return 0
+}
+
+func (x *JobTransition) GetTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Time
+	}
+	return nil
+}
+
+func (x *JobTransition) GetTerminal() bool {
+	if x != nil {
+		return x.Terminal
+	}
+	return false
+}
+
+func (x *JobTransition) GetError() string {
+	if x != nil && x.Error != nil {
+		return *x.Error
+	}
+	return ""
+}
+
+func (x *JobTransition) GetReason() string {
+	if x != nil && x.Reason != nil {
+		return *x.Reason
+	}
+	return ""
+}
+
+func (x *JobTransition) GetTimedOut() bool {
+	if x != nil && x.TimedOut != nil {
+		return *x.TimedOut
+	}
+	return false
+}
+
+func (x *JobTransition) GetWakeAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.WakeAt
+	}
+	return nil
+}
+
 var File_flexiq_v1_producer_service_proto protoreflect.FileDescriptor
 
 const file_flexiq_v1_producer_service_proto_rawDesc = "" +
 	"\n" +
-	" flexiq/v1/producer_service.proto\x12\tflexiq.v1\x1a\x13flexiq/v1/job.proto\x1a\x18flexiq/v1/workflow.proto\x1a\x1cgoogle/api/annotations.proto\x1a\x17google/rpc/status.proto\"\xbb\x01\n" +
+	" flexiq/v1/producer_service.proto\x12\tflexiq.v1\x1a\x13flexiq/v1/job.proto\x1a\x18flexiq/v1/workflow.proto\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x17google/rpc/status.proto\"\xbb\x01\n" +
 	"\x0eEnqueueRequest\x12\x1b\n" +
 	"\ttask_name\x18\x01 \x01(\tR\btaskName\x12\x12\n" +
 	"\x03raw\x18\x02 \x01(\fH\x00R\x03raw\x12;\n" +
@@ -918,7 +1421,49 @@ const file_flexiq_v1_producer_service_proto_rawDesc = "" +
 	"\tcompleted\x18\x03 \x01(\x03R\tcompleted\x12\x16\n" +
 	"\x06failed\x18\x04 \x01(\x03R\x06failed\x12\x12\n" +
 	"\x04dead\x18\x05 \x01(\x03R\x04dead\x12\x1c\n" +
-	"\tcancelled\x18\x06 \x01(\x03R\tcancelled2\xe7\x06\n" +
+	"\tcancelled\x18\x06 \x01(\x03R\tcancelled\"\x8c\x01\n" +
+	"\x10WatchJobsRequest\x121\n" +
+	"\ajob_ids\x18\x01 \x01(\v2\x16.flexiq.v1.WatchJobIdsH\x00R\x06jobIds\x12\x16\n" +
+	"\x05queue\x18\x02 \x01(\tH\x00R\x05queue\x12#\n" +
+	"\rresume_cursor\x18\x03 \x01(\tR\fresumeCursorB\b\n" +
+	"\x06target\"&\n" +
+	"\vWatchJobIds\x12\x17\n" +
+	"\ajob_ids\x18\x01 \x03(\tR\x06jobIds\"\x9a\x01\n" +
+	"\x11WatchJobsResponse\x12:\n" +
+	"\n" +
+	"transition\x18\x01 \x01(\v2\x18.flexiq.v1.JobTransitionH\x00R\n" +
+	"transition\x12)\n" +
+	"\x10not_found_job_id\x18\x02 \x01(\tH\x00R\rnotFoundJobId\x12\x16\n" +
+	"\x06cursor\x18\x03 \x01(\tR\x06cursorB\x06\n" +
+	"\x04item\"\xd1\x03\n" +
+	"\rJobTransition\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x14\n" +
+	"\x05queue\x18\x02 \x01(\tR\x05queue\x12\x1b\n" +
+	"\ttask_name\x18\x03 \x01(\tR\btaskName\x120\n" +
+	"\x04kind\x18\x04 \x01(\x0e2\x1c.flexiq.v1.JobTransitionKindR\x04kind\x12,\n" +
+	"\x06status\x18\x05 \x01(\x0e2\x14.flexiq.v1.JobStatusR\x06status\x12\x18\n" +
+	"\aattempt\x18\x06 \x01(\x05R\aattempt\x12.\n" +
+	"\x04time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x04time\x12\x1a\n" +
+	"\bterminal\x18\b \x01(\bR\bterminal\x12\x19\n" +
+	"\x05error\x18\x10 \x01(\tH\x00R\x05error\x88\x01\x01\x12\x1b\n" +
+	"\x06reason\x18\x11 \x01(\tH\x01R\x06reason\x88\x01\x01\x12 \n" +
+	"\ttimed_out\x18\x12 \x01(\bH\x02R\btimedOut\x88\x01\x01\x123\n" +
+	"\awake_at\x18\x13 \x01(\v2\x1a.google.protobuf.TimestampR\x06wakeAtB\b\n" +
+	"\x06_errorB\t\n" +
+	"\a_reasonB\f\n" +
+	"\n" +
+	"_timed_out*\xe5\x02\n" +
+	"\x11JobTransitionKind\x12#\n" +
+	"\x1fJOB_TRANSITION_KIND_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cJOB_TRANSITION_KIND_SNAPSHOT\x10\x01\x12 \n" +
+	"\x1cJOB_TRANSITION_KIND_ENQUEUED\x10\x02\x12\x1f\n" +
+	"\x1bJOB_TRANSITION_KIND_STARTED\x10\x03\x12!\n" +
+	"\x1dJOB_TRANSITION_KIND_COMPLETED\x10\x04\x12\x1e\n" +
+	"\x1aJOB_TRANSITION_KIND_FAILED\x10\x05\x12 \n" +
+	"\x1cJOB_TRANSITION_KIND_RETRYING\x10\x06\x12\x1c\n" +
+	"\x18JOB_TRANSITION_KIND_DEAD\x10\a\x12!\n" +
+	"\x1dJOB_TRANSITION_KIND_CANCELLED\x10\b\x12 \n" +
+	"\x1cJOB_TRANSITION_KIND_SLEEPING\x10\t2\xb6\a\n" +
 	"\x0fProducerService\x12U\n" +
 	"\aEnqueue\x12\x19.flexiq.v1.EnqueueRequest\x1a\x1a.flexiq.v1.EnqueueResponse\"\x13\x82\xd3\xe4\x93\x02\r:\x01*\"\b/v1/jobs\x12q\n" +
 	"\fEnqueueBatch\x12\x1e.flexiq.v1.EnqueueBatchRequest\x1a\x1f.flexiq.v1.EnqueueBatchResponse\" \x82\xd3\xe4\x93\x02\x1a:\x01*\"\x15/v1/jobs:batchEnqueue\x12[\n" +
@@ -929,7 +1474,8 @@ const file_flexiq_v1_producer_service_proto_rawDesc = "" +
 	"\n" +
 	"QueueStats\x12\x1c.flexiq.v1.QueueStatsRequest\x1a\x1d.flexiq.v1.QueueStatsResponse\"0\x82\xd3\xe4\x93\x02'Z\v\x12\t/v1/stats\x12\x18/v1/queues/{queue}/stats\x90\x02\x01\x12o\n" +
 	"\x0eSubmitWorkflow\x12 .flexiq.v1.SubmitWorkflowRequest\x1a!.flexiq.v1.SubmitWorkflowResponse\"\x18\x82\xd3\xe4\x93\x02\x12:\x01*\"\r/v1/workflows\x12x\n" +
-	"\x0eGetWorkflowRun\x12 .flexiq.v1.GetWorkflowRunRequest\x1a!.flexiq.v1.GetWorkflowRunResponse\"!\x82\xd3\xe4\x93\x02\x18\x12\x16/v1/workflows/{run_id}\x90\x02\x01B\xb0\x01\n" +
+	"\x0eGetWorkflowRun\x12 .flexiq.v1.GetWorkflowRunRequest\x1a!.flexiq.v1.GetWorkflowRunResponse\"!\x82\xd3\xe4\x93\x02\x18\x12\x16/v1/workflows/{run_id}\x90\x02\x01\x12M\n" +
+	"\tWatchJobs\x12\x1b.flexiq.v1.WatchJobsRequest\x1a\x1c.flexiq.v1.WatchJobsResponse\"\x03\x90\x02\x010\x01B\xb0\x01\n" +
 	"\rcom.flexiq.v1B\x14ProducerServiceProtoP\x01ZDgithub.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1;flexiqv1\xa2\x02\x03FXX\xaa\x02\tFlexiq.V1\xca\x02\tFlexiq\\V1\xe2\x02\x15Flexiq\\V1\\GPBMetadata\xea\x02\n" +
 	"Flexiq::V1b\x06proto3"
 
@@ -945,64 +1491,79 @@ func file_flexiq_v1_producer_service_proto_rawDescGZIP() []byte {
 	return file_flexiq_v1_producer_service_proto_rawDescData
 }
 
-var file_flexiq_v1_producer_service_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_flexiq_v1_producer_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_flexiq_v1_producer_service_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_flexiq_v1_producer_service_proto_goTypes = []any{
-	(*EnqueueRequest)(nil),         // 0: flexiq.v1.EnqueueRequest
-	(*EnqueueResponse)(nil),        // 1: flexiq.v1.EnqueueResponse
-	(*EnqueueBatchRequest)(nil),    // 2: flexiq.v1.EnqueueBatchRequest
-	(*EnqueueBatchResponse)(nil),   // 3: flexiq.v1.EnqueueBatchResponse
-	(*EnqueueBatchItemResult)(nil), // 4: flexiq.v1.EnqueueBatchItemResult
-	(*GetJobRequest)(nil),          // 5: flexiq.v1.GetJobRequest
-	(*GetJobResponse)(nil),         // 6: flexiq.v1.GetJobResponse
-	(*ListJobsRequest)(nil),        // 7: flexiq.v1.ListJobsRequest
-	(*ListJobsResponse)(nil),       // 8: flexiq.v1.ListJobsResponse
-	(*CancelJobRequest)(nil),       // 9: flexiq.v1.CancelJobRequest
-	(*CancelJobResponse)(nil),      // 10: flexiq.v1.CancelJobResponse
-	(*QueueStatsRequest)(nil),      // 11: flexiq.v1.QueueStatsRequest
-	(*QueueStatsResponse)(nil),     // 12: flexiq.v1.QueueStatsResponse
-	(*StructuredArgs)(nil),         // 13: flexiq.v1.StructuredArgs
-	(*EnqueueOptions)(nil),         // 14: flexiq.v1.EnqueueOptions
-	(*Job)(nil),                    // 15: flexiq.v1.Job
-	(*status.Status)(nil),          // 16: google.rpc.Status
-	(JobStatus)(0),                 // 17: flexiq.v1.JobStatus
-	(*SubmitWorkflowRequest)(nil),  // 18: flexiq.v1.SubmitWorkflowRequest
-	(*GetWorkflowRunRequest)(nil),  // 19: flexiq.v1.GetWorkflowRunRequest
-	(*SubmitWorkflowResponse)(nil), // 20: flexiq.v1.SubmitWorkflowResponse
-	(*GetWorkflowRunResponse)(nil), // 21: flexiq.v1.GetWorkflowRunResponse
+	(JobTransitionKind)(0),         // 0: flexiq.v1.JobTransitionKind
+	(*EnqueueRequest)(nil),         // 1: flexiq.v1.EnqueueRequest
+	(*EnqueueResponse)(nil),        // 2: flexiq.v1.EnqueueResponse
+	(*EnqueueBatchRequest)(nil),    // 3: flexiq.v1.EnqueueBatchRequest
+	(*EnqueueBatchResponse)(nil),   // 4: flexiq.v1.EnqueueBatchResponse
+	(*EnqueueBatchItemResult)(nil), // 5: flexiq.v1.EnqueueBatchItemResult
+	(*GetJobRequest)(nil),          // 6: flexiq.v1.GetJobRequest
+	(*GetJobResponse)(nil),         // 7: flexiq.v1.GetJobResponse
+	(*ListJobsRequest)(nil),        // 8: flexiq.v1.ListJobsRequest
+	(*ListJobsResponse)(nil),       // 9: flexiq.v1.ListJobsResponse
+	(*CancelJobRequest)(nil),       // 10: flexiq.v1.CancelJobRequest
+	(*CancelJobResponse)(nil),      // 11: flexiq.v1.CancelJobResponse
+	(*QueueStatsRequest)(nil),      // 12: flexiq.v1.QueueStatsRequest
+	(*QueueStatsResponse)(nil),     // 13: flexiq.v1.QueueStatsResponse
+	(*WatchJobsRequest)(nil),       // 14: flexiq.v1.WatchJobsRequest
+	(*WatchJobIds)(nil),            // 15: flexiq.v1.WatchJobIds
+	(*WatchJobsResponse)(nil),      // 16: flexiq.v1.WatchJobsResponse
+	(*JobTransition)(nil),          // 17: flexiq.v1.JobTransition
+	(*StructuredArgs)(nil),         // 18: flexiq.v1.StructuredArgs
+	(*EnqueueOptions)(nil),         // 19: flexiq.v1.EnqueueOptions
+	(*Job)(nil),                    // 20: flexiq.v1.Job
+	(*status.Status)(nil),          // 21: google.rpc.Status
+	(JobStatus)(0),                 // 22: flexiq.v1.JobStatus
+	(*timestamppb.Timestamp)(nil),  // 23: google.protobuf.Timestamp
+	(*SubmitWorkflowRequest)(nil),  // 24: flexiq.v1.SubmitWorkflowRequest
+	(*GetWorkflowRunRequest)(nil),  // 25: flexiq.v1.GetWorkflowRunRequest
+	(*SubmitWorkflowResponse)(nil), // 26: flexiq.v1.SubmitWorkflowResponse
+	(*GetWorkflowRunResponse)(nil), // 27: flexiq.v1.GetWorkflowRunResponse
 }
 var file_flexiq_v1_producer_service_proto_depIdxs = []int32{
-	13, // 0: flexiq.v1.EnqueueRequest.structured:type_name -> flexiq.v1.StructuredArgs
-	14, // 1: flexiq.v1.EnqueueRequest.options:type_name -> flexiq.v1.EnqueueOptions
-	15, // 2: flexiq.v1.EnqueueResponse.job:type_name -> flexiq.v1.Job
-	0,  // 3: flexiq.v1.EnqueueBatchRequest.items:type_name -> flexiq.v1.EnqueueRequest
-	4,  // 4: flexiq.v1.EnqueueBatchResponse.results:type_name -> flexiq.v1.EnqueueBatchItemResult
-	1,  // 5: flexiq.v1.EnqueueBatchItemResult.enqueued:type_name -> flexiq.v1.EnqueueResponse
-	16, // 6: flexiq.v1.EnqueueBatchItemResult.error:type_name -> google.rpc.Status
-	15, // 7: flexiq.v1.GetJobResponse.job:type_name -> flexiq.v1.Job
-	17, // 8: flexiq.v1.ListJobsRequest.status:type_name -> flexiq.v1.JobStatus
-	15, // 9: flexiq.v1.ListJobsResponse.jobs:type_name -> flexiq.v1.Job
-	15, // 10: flexiq.v1.CancelJobResponse.job:type_name -> flexiq.v1.Job
-	0,  // 11: flexiq.v1.ProducerService.Enqueue:input_type -> flexiq.v1.EnqueueRequest
-	2,  // 12: flexiq.v1.ProducerService.EnqueueBatch:input_type -> flexiq.v1.EnqueueBatchRequest
-	5,  // 13: flexiq.v1.ProducerService.GetJob:input_type -> flexiq.v1.GetJobRequest
-	7,  // 14: flexiq.v1.ProducerService.ListJobs:input_type -> flexiq.v1.ListJobsRequest
-	9,  // 15: flexiq.v1.ProducerService.CancelJob:input_type -> flexiq.v1.CancelJobRequest
-	11, // 16: flexiq.v1.ProducerService.QueueStats:input_type -> flexiq.v1.QueueStatsRequest
-	18, // 17: flexiq.v1.ProducerService.SubmitWorkflow:input_type -> flexiq.v1.SubmitWorkflowRequest
-	19, // 18: flexiq.v1.ProducerService.GetWorkflowRun:input_type -> flexiq.v1.GetWorkflowRunRequest
-	1,  // 19: flexiq.v1.ProducerService.Enqueue:output_type -> flexiq.v1.EnqueueResponse
-	3,  // 20: flexiq.v1.ProducerService.EnqueueBatch:output_type -> flexiq.v1.EnqueueBatchResponse
-	6,  // 21: flexiq.v1.ProducerService.GetJob:output_type -> flexiq.v1.GetJobResponse
-	8,  // 22: flexiq.v1.ProducerService.ListJobs:output_type -> flexiq.v1.ListJobsResponse
-	10, // 23: flexiq.v1.ProducerService.CancelJob:output_type -> flexiq.v1.CancelJobResponse
-	12, // 24: flexiq.v1.ProducerService.QueueStats:output_type -> flexiq.v1.QueueStatsResponse
-	20, // 25: flexiq.v1.ProducerService.SubmitWorkflow:output_type -> flexiq.v1.SubmitWorkflowResponse
-	21, // 26: flexiq.v1.ProducerService.GetWorkflowRun:output_type -> flexiq.v1.GetWorkflowRunResponse
-	19, // [19:27] is the sub-list for method output_type
-	11, // [11:19] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	18, // 0: flexiq.v1.EnqueueRequest.structured:type_name -> flexiq.v1.StructuredArgs
+	19, // 1: flexiq.v1.EnqueueRequest.options:type_name -> flexiq.v1.EnqueueOptions
+	20, // 2: flexiq.v1.EnqueueResponse.job:type_name -> flexiq.v1.Job
+	1,  // 3: flexiq.v1.EnqueueBatchRequest.items:type_name -> flexiq.v1.EnqueueRequest
+	5,  // 4: flexiq.v1.EnqueueBatchResponse.results:type_name -> flexiq.v1.EnqueueBatchItemResult
+	2,  // 5: flexiq.v1.EnqueueBatchItemResult.enqueued:type_name -> flexiq.v1.EnqueueResponse
+	21, // 6: flexiq.v1.EnqueueBatchItemResult.error:type_name -> google.rpc.Status
+	20, // 7: flexiq.v1.GetJobResponse.job:type_name -> flexiq.v1.Job
+	22, // 8: flexiq.v1.ListJobsRequest.status:type_name -> flexiq.v1.JobStatus
+	20, // 9: flexiq.v1.ListJobsResponse.jobs:type_name -> flexiq.v1.Job
+	20, // 10: flexiq.v1.CancelJobResponse.job:type_name -> flexiq.v1.Job
+	15, // 11: flexiq.v1.WatchJobsRequest.job_ids:type_name -> flexiq.v1.WatchJobIds
+	17, // 12: flexiq.v1.WatchJobsResponse.transition:type_name -> flexiq.v1.JobTransition
+	0,  // 13: flexiq.v1.JobTransition.kind:type_name -> flexiq.v1.JobTransitionKind
+	22, // 14: flexiq.v1.JobTransition.status:type_name -> flexiq.v1.JobStatus
+	23, // 15: flexiq.v1.JobTransition.time:type_name -> google.protobuf.Timestamp
+	23, // 16: flexiq.v1.JobTransition.wake_at:type_name -> google.protobuf.Timestamp
+	1,  // 17: flexiq.v1.ProducerService.Enqueue:input_type -> flexiq.v1.EnqueueRequest
+	3,  // 18: flexiq.v1.ProducerService.EnqueueBatch:input_type -> flexiq.v1.EnqueueBatchRequest
+	6,  // 19: flexiq.v1.ProducerService.GetJob:input_type -> flexiq.v1.GetJobRequest
+	8,  // 20: flexiq.v1.ProducerService.ListJobs:input_type -> flexiq.v1.ListJobsRequest
+	10, // 21: flexiq.v1.ProducerService.CancelJob:input_type -> flexiq.v1.CancelJobRequest
+	12, // 22: flexiq.v1.ProducerService.QueueStats:input_type -> flexiq.v1.QueueStatsRequest
+	24, // 23: flexiq.v1.ProducerService.SubmitWorkflow:input_type -> flexiq.v1.SubmitWorkflowRequest
+	25, // 24: flexiq.v1.ProducerService.GetWorkflowRun:input_type -> flexiq.v1.GetWorkflowRunRequest
+	14, // 25: flexiq.v1.ProducerService.WatchJobs:input_type -> flexiq.v1.WatchJobsRequest
+	2,  // 26: flexiq.v1.ProducerService.Enqueue:output_type -> flexiq.v1.EnqueueResponse
+	4,  // 27: flexiq.v1.ProducerService.EnqueueBatch:output_type -> flexiq.v1.EnqueueBatchResponse
+	7,  // 28: flexiq.v1.ProducerService.GetJob:output_type -> flexiq.v1.GetJobResponse
+	9,  // 29: flexiq.v1.ProducerService.ListJobs:output_type -> flexiq.v1.ListJobsResponse
+	11, // 30: flexiq.v1.ProducerService.CancelJob:output_type -> flexiq.v1.CancelJobResponse
+	13, // 31: flexiq.v1.ProducerService.QueueStats:output_type -> flexiq.v1.QueueStatsResponse
+	26, // 32: flexiq.v1.ProducerService.SubmitWorkflow:output_type -> flexiq.v1.SubmitWorkflowResponse
+	27, // 33: flexiq.v1.ProducerService.GetWorkflowRun:output_type -> flexiq.v1.GetWorkflowRunResponse
+	16, // 34: flexiq.v1.ProducerService.WatchJobs:output_type -> flexiq.v1.WatchJobsResponse
+	26, // [26:35] is the sub-list for method output_type
+	17, // [17:26] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_flexiq_v1_producer_service_proto_init() }
@@ -1022,18 +1583,28 @@ func file_flexiq_v1_producer_service_proto_init() {
 	}
 	file_flexiq_v1_producer_service_proto_msgTypes[7].OneofWrappers = []any{}
 	file_flexiq_v1_producer_service_proto_msgTypes[11].OneofWrappers = []any{}
+	file_flexiq_v1_producer_service_proto_msgTypes[13].OneofWrappers = []any{
+		(*WatchJobsRequest_JobIds)(nil),
+		(*WatchJobsRequest_Queue)(nil),
+	}
+	file_flexiq_v1_producer_service_proto_msgTypes[15].OneofWrappers = []any{
+		(*WatchJobsResponse_Transition)(nil),
+		(*WatchJobsResponse_NotFoundJobId)(nil),
+	}
+	file_flexiq_v1_producer_service_proto_msgTypes[16].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flexiq_v1_producer_service_proto_rawDesc), len(file_flexiq_v1_producer_service_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   13,
+			NumEnums:      1,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_flexiq_v1_producer_service_proto_goTypes,
 		DependencyIndexes: file_flexiq_v1_producer_service_proto_depIdxs,
+		EnumInfos:         file_flexiq_v1_producer_service_proto_enumTypes,
 		MessageInfos:      file_flexiq_v1_producer_service_proto_msgTypes,
 	}.Build()
 	File_flexiq_v1_producer_service_proto = out.File

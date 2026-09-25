@@ -33,6 +33,7 @@ pub mod cursor;
 pub mod enqueue;
 pub mod reads;
 pub mod structured;
+pub mod watch;
 pub mod workflows;
 
 use std::sync::Arc;
@@ -48,13 +49,16 @@ use crate::grpc::pb;
 use crate::grpc::pb::producer_service_server::{ProducerService, ProducerServiceServer};
 use crate::grpc::status::WireError;
 
-/// The producer door's state: the two storage handles this process holds, and
-/// the event hub its writes are announced on.
+use watch::Watches;
+
+/// The producer door's state: the two storage handles this process holds, the
+/// event hub its writes are announced on, and the watch streams it serves.
 #[derive(Clone)]
 pub struct Producer {
     storage: StorageBackend,
     workflows: WorkflowStorageBackend,
     events: Events,
+    watches: Arc<Watches>,
 }
 
 // Hand-written rather than derived: `StorageBackend` is not `Debug`, and it
@@ -68,12 +72,19 @@ impl std::fmt::Debug for Producer {
 
 impl Producer {
     /// Serve out of `storage` and `workflows`, announcing enqueues and cancels
-    /// on `events` when set. The namespace arrives per request.
-    pub fn new(storage: StorageBackend, workflows: WorkflowStorageBackend, events: Events) -> Self {
+    /// on `events` when set, and `WatchJobs` out of `watches`. The namespace
+    /// arrives per request.
+    pub fn new(
+        storage: StorageBackend,
+        workflows: WorkflowStorageBackend,
+        events: Events,
+        watches: Arc<Watches>,
+    ) -> Self {
         Self {
             storage,
             workflows,
             events,
+            watches,
         }
     }
 
@@ -91,20 +102,7 @@ impl Producer {
     /// mean either cloning the principal or borrowing a request that has been
     /// consumed.
     fn scope<T>(&self, request: Request<T>) -> Result<(Scoped<'_>, T), Status> {
-        let principal = request
-            .extensions()
-            .get::<Principal>()
-            // Only reachable if this service is registered without the auth
-            // layer. There is no caller to blame and nothing useful to say, and
-            // the alternative — falling back to some namespace — is the
-            // cross-tenant read the whole design refuses.
-            .ok_or_else(|| {
-                log::error!(
-                    "grpc: a producer request carried no principal; the service \
-                     is registered without the auth layer"
-                );
-                Status::from(WireError::internal())
-            })?;
+        let principal = principal(&request)?;
         let scoped = Scoped {
             storage: &self.storage,
             workflows: &self.workflows,
@@ -113,6 +111,24 @@ impl Producer {
         };
         Ok((scoped, request.into_inner()))
     }
+}
+
+/// The caller the auth layer established.
+fn principal<T>(request: &Request<T>) -> Result<&Principal, Status> {
+    request
+        .extensions()
+        .get::<Principal>()
+        // Only reachable if this service is registered without the auth
+        // layer. There is no caller to blame and nothing useful to say, and
+        // the alternative — falling back to some namespace — is the
+        // cross-tenant read the whole design refuses.
+        .ok_or_else(|| {
+            log::error!(
+                "grpc: a producer request carried no principal; the service \
+                 is registered without the auth layer"
+            );
+            Status::from(WireError::internal())
+        })
 }
 
 /// One request's view of the door: the storage handles, and the namespace
@@ -218,5 +234,17 @@ impl ProducerService for Producer {
     ) -> Result<Response<pb::GetWorkflowRunResponse>, Status> {
         let (scoped, message) = self.scope(request)?;
         workflows::get_workflow_run(&scoped, message).await
+    }
+
+    type WatchJobsStream = watch::stream::Outlet;
+
+    async fn watch_jobs(
+        &self,
+        request: Request<pb::WatchJobsRequest>,
+    ) -> Result<Response<Self::WatchJobsStream>, Status> {
+        // The credential as well as the namespace: the stream cap counts per
+        // credential.
+        let principal = principal(&request)?.clone();
+        self.watches.watch(&principal, request.into_inner())
     }
 }

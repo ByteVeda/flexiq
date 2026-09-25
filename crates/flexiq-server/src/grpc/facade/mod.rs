@@ -36,9 +36,9 @@
 //! HTTP" once per worker RPC; here it is a property of which packages the
 //! facade covers, and a test.
 //!
-//! Streaming is not transcoded either, and there is nothing to transcode: v1
-//! has no server stream. A completion watch is a real feature deserving its own
-//! design rather than a field.
+//! Streaming is not transcoded either. `WatchJobs` is a server stream, and a
+//! stream has no request/response HTTP mapping; an HTTP client that wants one
+//! needs Server-Sent Events, which is a door of its own rather than a route.
 //!
 //! ## One listener, two doors
 //!

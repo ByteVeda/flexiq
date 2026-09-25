@@ -18,6 +18,7 @@ import "flexiq/v1/workflow.proto";
 // them and contracts/openapi.json is generated from them, so a path here that
 // nothing serves fails the build.
 import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
 import "google/rpc/status.proto";
 
 // The producer door: submit work, read it back, cancel it, count it.
@@ -43,8 +44,9 @@ import "google/rpc/status.proto";
 //   * No batch atomicity. See EnqueueBatchResponse.
 //   * No task-name validation. The server holds no task registry, so enqueuing
 //     a task nobody implements succeeds and the job eventually dead-letters.
-//   * No completion notification. There is no watch and no server stream in v1;
-//     poll GetJob or use a webhook subscription.
+//   * No complete history. WatchJobs reports transitions as they happen and a
+//     job's current state on (re)connect; it is not a log of every transition
+//     a job has ever made.
 //   * No permanent job ids. Retention archives and then deletes, so a NOT_FOUND
 //     does not mean the job never existed.
 //   * No safe blind retry of a write. UNAVAILABLE, DEADLINE_EXCEEDED and
@@ -123,6 +125,17 @@ service ProducerService {
   rpc GetWorkflowRun(GetWorkflowRunRequest) returns (GetWorkflowRunResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
     option (google.api.http) = {get: "/v1/workflows/{run_id}"};
+  }
+
+  // Follow jobs as they change state, instead of polling GetJob.
+  //
+  // Watch a set of job ids, or a queue. See WatchJobsRequest for what each
+  // reports, how to resume after a dropped stream, and the limits.
+  //
+  // The only streaming RPC in the package, and the only one with no JSON
+  // facade path: a server stream has no request/response HTTP mapping.
+  rpc WatchJobs(WatchJobsRequest) returns (stream WatchJobsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
   }
 }
 
@@ -260,4 +273,130 @@ message QueueStatsResponse {
   int64 dead = 5;
   // Cancelled.
   int64 cancelled = 6;
+}
+
+// What to watch, and where a resumed queue watch left off.
+//
+// **Watching ids.** The stream opens with one item per id: a SNAPSHOT of the
+// job's current state, or `not_found_job_id` for an id that does not exist or
+// is in another namespace — the two are indistinguishable, as they are to
+// GetJob. Live transitions follow. Once a job's `terminal` item is sent that
+// id is finished with, and when every id is, the stream ends with OK. So a
+// watch on a job that is already terminal sends that one item and closes.
+//
+// Resuming an id watch needs no cursor: open it again. The snapshot is read
+// from storage, so a job that finished while the client was away comes back
+// terminal.
+//
+// **Watching a queue.** Live transitions of the queue's jobs, and no snapshot
+// — a queue has no "current state" small enough to send. Every item carries a
+// `cursor`; pass the last one back as `resume_cursor` to replay what the stream
+// missed. The server keeps a bounded window of recent transitions in memory,
+// per process: a cursor from another process, from before a restart, or older
+// than the window fails FAILED_PRECONDITION with reason WATCH_CURSOR_EXPIRED.
+// The client then reads what it needs with ListJobs and watches again without
+// a cursor.
+//
+// **Coverage.** A transition reaches a watch the moment this server process
+// handles it. One handled by another process — another replica, or a worker
+// that reads the database directly — reaches an id watch within the server's
+// reconcile interval (seconds), because the server re-reads every watched id
+// on that cadence. A queue watch sees only this process's transitions.
+//
+// **Limits.** At most 100 ids per watch, and a per-credential cap on
+// concurrent watches (RESOURCE_EXHAUSTED, reason WATCH_LIMIT). A client that
+// stops reading is not waited for: once it falls behind the server's buffer,
+// the stream ends RESOURCE_EXHAUSTED with reason WATCH_OVERFLOW, and the client
+// resumes as above. A server shutting down ends every stream UNAVAILABLE.
+message WatchJobsRequest {
+  // Setting no arm is an error.
+  oneof target {
+    // Between 1 and 100 ids.
+    WatchJobIds job_ids = 1;
+    // A queue name. Empty means "default", as in EnqueueOptions.queue.
+    string queue = 2;
+  }
+
+  // A queue watch's last `cursor`, to replay what came after it. Opaque.
+  // Refused on an id watch, which resumes by snapshot.
+  string resume_cursor = 3;
+}
+
+// A set of job ids to watch.
+message WatchJobIds {
+  // Duplicates are watched once.
+  repeated string job_ids = 1;
+}
+
+message WatchJobsResponse {
+  oneof item {
+    // A job's state, or a change to it.
+    JobTransition transition = 1;
+    // An id with no job this caller can see. Sent once, in place of its
+    // snapshot; the id is then finished with.
+    string not_found_job_id = 2;
+  }
+
+  // On a queue watch, where this item sits in the server's window; pass the
+  // last one back as `resume_cursor`. Opaque. Empty on an id watch.
+  string cursor = 3;
+}
+
+// What a JobTransition reports.
+//
+// A reader that does not recognise a value treats it like SNAPSHOT: the item
+// still carries the job's status, and `terminal` still decides.
+enum JobTransitionKind {
+  JOB_TRANSITION_KIND_UNSPECIFIED = 0;
+  // The job's current state, read from storage when the watch opened or when
+  // the server's reconcile found it had moved on.
+  JOB_TRANSITION_KIND_SNAPSHOT = 1;
+  // Written to the queue.
+  JOB_TRANSITION_KIND_ENQUEUED = 2;
+  // Claimed and handed to a worker.
+  JOB_TRANSITION_KIND_STARTED = 3;
+  // Finished successfully.
+  JOB_TRANSITION_KIND_COMPLETED = 4;
+  // An attempt failed. Always followed by RETRYING or DEAD.
+  JOB_TRANSITION_KIND_FAILED = 5;
+  // Rescheduled for another attempt.
+  JOB_TRANSITION_KIND_RETRYING = 6;
+  // Dead-lettered: out of retries, not retryable, or shed.
+  JOB_TRANSITION_KIND_DEAD = 7;
+  // Cancelled, before or during its run.
+  JOB_TRANSITION_KIND_CANCELLED = 8;
+  // An attempt ended in a durable step sleep; the job is pending again.
+  JOB_TRANSITION_KIND_SLEEPING = 9;
+}
+
+// One job's state as of one transition.
+//
+// Carries neither payload nor result. A client that wants the result reads it
+// with GetJob once it sees `terminal`.
+message JobTransition {
+  string job_id = 1;
+  string queue = 2;
+  string task_name = 3;
+  JobTransitionKind kind = 4;
+  // The status the job is in after this transition.
+  JobStatus status = 5;
+  // The attempt this transition belongs to: the job's retry_count, zero for
+  // the first run.
+  int32 attempt = 6;
+  // When the server observed the transition.
+  google.protobuf.Timestamp time = 7;
+  // This is the job's last item on this stream. The server decides, so a
+  // client never has to know which statuses are terminal — FAILED, for one, is
+  // not while RETRYING or DEAD is still to come.
+  bool terminal = 8;
+
+  // Error message of a failed attempt.
+  optional string error = 16;
+  // Why a job was dead-lettered without running out of retries, or cancelled
+  // without running.
+  optional string reason = 17;
+  // A failed attempt was an execution timeout.
+  optional bool timed_out = 18;
+  // The instant a sleeping job is rescheduled to.
+  google.protobuf.Timestamp wake_at = 19;
 }

@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use flexiq_core::{
-    JobStatus, NewJob, RemoteConfig, RemoteDispatcher, SchedulerMessage, Storage,
+    EventHub, JobStatus, NewJob, RemoteConfig, RemoteDispatcher, SchedulerMessage, Storage,
     StorageSideChannel, CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
 };
 use flexiq_server::config::grpc::GrpcConfig;
@@ -118,20 +118,32 @@ struct Harness {
 
 impl Harness {
     async fn start(label: &str) -> Self {
-        Self::build(label, Rotation::new(None), false).await
+        Self::build(label, Rotation::new(None), false, None).await
     }
 
     /// A harness whose executor streams end after `max_age`.
     async fn rotating(label: &str, max_age: Duration) -> Self {
-        Self::build(label, Rotation::new(Some(max_age)), false).await
+        Self::build(label, Rotation::new(Some(max_age)), false, None).await
     }
 
     /// A harness serving both doors on the same dispatcher.
     async fn with_socket_door(label: &str) -> Self {
-        Self::build(label, Rotation::new(None), true).await
+        Self::build(label, Rotation::new(None), true, None).await
     }
 
-    async fn build(label: &str, rotation: Rotation, socket_door: bool) -> Self {
+    /// A harness whose scheduler and doors share one event hub, as
+    /// `runtime::run` wires them, so a watch hears the scheduler.
+    async fn with_hub(label: &str) -> Self {
+        let hub = Arc::new(EventHub::without_sinks());
+        Self::build(label, Rotation::new(None), false, Some(hub)).await
+    }
+
+    async fn build(
+        label: &str,
+        rotation: Rotation,
+        socket_door: bool,
+        hub: Option<Arc<EventHub>>,
+    ) -> Self {
         capture_logs();
         let storage = temp_storage(label);
         let token = mint_token(&storage, NAMESPACE, ScopeSet::of(&[Scope::Execute]));
@@ -154,7 +166,7 @@ impl Harness {
                 workers: Some(2),
                 maintenance: false,
                 push_dispatch: None,
-                events: None,
+                events: hub.clone(),
             },
         ));
         let shutdown = Shutdown::default();
@@ -182,6 +194,10 @@ impl Harness {
         })
         .await
         .expect("bind");
+        let listener = match hub {
+            Some(hub) => listener.events(hub),
+            None => listener,
+        };
         let addr = listener
             .local_addr()
             .expect("a TCP listener knows what it bound");
@@ -489,6 +505,71 @@ async fn an_attached_executor_runs_a_queued_job() {
     );
 
     executor.close();
+    harness.stop().await;
+}
+
+/// The scheduler's own transitions reach a `WatchJobs` stream the moment it
+/// makes them, off the hub it shares with the doors — no re-read involved, the
+/// interval being the default five seconds and the whole run far shorter.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_watch_hears_the_scheduler_start_and_complete_a_job() {
+    use flexiq_server::grpc::pb::{
+        producer_service_client::ProducerServiceClient, watch_jobs_request, watch_jobs_response,
+        JobTransitionKind, WatchJobIds, WatchJobsRequest,
+    };
+
+    let harness = Harness::with_hub("grpc-attach-watch").await;
+    let job_id = harness.enqueue("greet");
+
+    let produce = mint_token(&harness.storage, NAMESPACE, ScopeSet::of(&[Scope::Produce]));
+    let channel = Channel::from_shared(format!("http://{}", harness.addr))
+        .expect("a valid endpoint")
+        .connect()
+        .await
+        .expect("connect");
+    let mut producer = ProducerServiceClient::with_interceptor(channel, Bearer::new(&produce));
+    let mut stream = producer
+        .watch_jobs(WatchJobsRequest {
+            target: Some(watch_jobs_request::Target::JobIds(WatchJobIds {
+                job_ids: vec![job_id.clone()],
+            })),
+            resume_cursor: String::new(),
+        })
+        .await
+        .expect("watch")
+        .into_inner();
+
+    let mut kinds = Vec::new();
+    let mut executor = None;
+    loop {
+        let response = tokio::time::timeout(Duration::from_secs(15), stream.message())
+            .await
+            .expect("the watch must answer in time")
+            .expect("no error");
+        let Some(response) = response else { break };
+        let Some(watch_jobs_response::Item::Transition(t)) = response.item else {
+            panic!("expected a transition");
+        };
+        kinds.push(JobTransitionKind::try_from(t.kind).expect("a known kind"));
+        // Attach once the snapshot is in: the scheduler stays off until then,
+        // so everything after it is live.
+        if kinds.len() == 1 {
+            let mut attached = Executor::attach(&harness, "exec-1", &["greet"]).await;
+            let dispatched = attached.expect_job().await;
+            attached.succeed(&dispatched).await;
+            executor = Some(attached);
+        }
+    }
+    assert_eq!(
+        kinds,
+        [
+            JobTransitionKind::Snapshot,
+            JobTransitionKind::Started,
+            JobTransitionKind::Completed
+        ]
+    );
+
+    drop(executor);
     harness.stop().await;
 }
 

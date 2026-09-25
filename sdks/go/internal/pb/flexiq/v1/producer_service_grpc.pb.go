@@ -36,6 +36,7 @@ const (
 	ProducerService_QueueStats_FullMethodName     = "/flexiq.v1.ProducerService/QueueStats"
 	ProducerService_SubmitWorkflow_FullMethodName = "/flexiq.v1.ProducerService/SubmitWorkflow"
 	ProducerService_GetWorkflowRun_FullMethodName = "/flexiq.v1.ProducerService/GetWorkflowRun"
+	ProducerService_WatchJobs_FullMethodName      = "/flexiq.v1.ProducerService/WatchJobs"
 )
 
 // ProducerServiceClient is the client API for ProducerService service.
@@ -65,8 +66,9 @@ const (
 //   - No batch atomicity. See EnqueueBatchResponse.
 //   - No task-name validation. The server holds no task registry, so enqueuing
 //     a task nobody implements succeeds and the job eventually dead-letters.
-//   - No completion notification. There is no watch and no server stream in v1;
-//     poll GetJob or use a webhook subscription.
+//   - No complete history. WatchJobs reports transitions as they happen and a
+//     job's current state on (re)connect; it is not a log of every transition
+//     a job has ever made.
 //   - No permanent job ids. Retention archives and then deletes, so a NOT_FOUND
 //     does not mean the job never existed.
 //   - No safe blind retry of a write. UNAVAILABLE, DEADLINE_EXCEEDED and
@@ -102,6 +104,14 @@ type ProducerServiceClient interface {
 	SubmitWorkflow(ctx context.Context, in *SubmitWorkflowRequest, opts ...grpc.CallOption) (*SubmitWorkflowResponse, error)
 	// Read a workflow run's state and every node's.
 	GetWorkflowRun(ctx context.Context, in *GetWorkflowRunRequest, opts ...grpc.CallOption) (*GetWorkflowRunResponse, error)
+	// Follow jobs as they change state, instead of polling GetJob.
+	//
+	// Watch a set of job ids, or a queue. See WatchJobsRequest for what each
+	// reports, how to resume after a dropped stream, and the limits.
+	//
+	// The only streaming RPC in the package, and the only one with no JSON
+	// facade path: a server stream has no request/response HTTP mapping.
+	WatchJobs(ctx context.Context, in *WatchJobsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchJobsResponse], error)
 }
 
 type producerServiceClient struct {
@@ -192,6 +202,25 @@ func (c *producerServiceClient) GetWorkflowRun(ctx context.Context, in *GetWorkf
 	return out, nil
 }
 
+func (c *producerServiceClient) WatchJobs(ctx context.Context, in *WatchJobsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchJobsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ProducerService_ServiceDesc.Streams[0], ProducerService_WatchJobs_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchJobsRequest, WatchJobsResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ProducerService_WatchJobsClient = grpc.ServerStreamingClient[WatchJobsResponse]
+
 // ProducerServiceServer is the server API for ProducerService service.
 // All implementations must embed UnimplementedProducerServiceServer
 // for forward compatibility.
@@ -219,8 +248,9 @@ func (c *producerServiceClient) GetWorkflowRun(ctx context.Context, in *GetWorkf
 //   - No batch atomicity. See EnqueueBatchResponse.
 //   - No task-name validation. The server holds no task registry, so enqueuing
 //     a task nobody implements succeeds and the job eventually dead-letters.
-//   - No completion notification. There is no watch and no server stream in v1;
-//     poll GetJob or use a webhook subscription.
+//   - No complete history. WatchJobs reports transitions as they happen and a
+//     job's current state on (re)connect; it is not a log of every transition
+//     a job has ever made.
 //   - No permanent job ids. Retention archives and then deletes, so a NOT_FOUND
 //     does not mean the job never existed.
 //   - No safe blind retry of a write. UNAVAILABLE, DEADLINE_EXCEEDED and
@@ -256,6 +286,14 @@ type ProducerServiceServer interface {
 	SubmitWorkflow(context.Context, *SubmitWorkflowRequest) (*SubmitWorkflowResponse, error)
 	// Read a workflow run's state and every node's.
 	GetWorkflowRun(context.Context, *GetWorkflowRunRequest) (*GetWorkflowRunResponse, error)
+	// Follow jobs as they change state, instead of polling GetJob.
+	//
+	// Watch a set of job ids, or a queue. See WatchJobsRequest for what each
+	// reports, how to resume after a dropped stream, and the limits.
+	//
+	// The only streaming RPC in the package, and the only one with no JSON
+	// facade path: a server stream has no request/response HTTP mapping.
+	WatchJobs(*WatchJobsRequest, grpc.ServerStreamingServer[WatchJobsResponse]) error
 	mustEmbedUnimplementedProducerServiceServer()
 }
 
@@ -289,6 +327,9 @@ func (UnimplementedProducerServiceServer) SubmitWorkflow(context.Context, *Submi
 }
 func (UnimplementedProducerServiceServer) GetWorkflowRun(context.Context, *GetWorkflowRunRequest) (*GetWorkflowRunResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetWorkflowRun not implemented")
+}
+func (UnimplementedProducerServiceServer) WatchJobs(*WatchJobsRequest, grpc.ServerStreamingServer[WatchJobsResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method WatchJobs not implemented")
 }
 func (UnimplementedProducerServiceServer) mustEmbedUnimplementedProducerServiceServer() {}
 func (UnimplementedProducerServiceServer) testEmbeddedByValue()                         {}
@@ -455,6 +496,17 @@ func _ProducerService_GetWorkflowRun_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ProducerService_WatchJobs_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchJobsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ProducerServiceServer).WatchJobs(m, &grpc.GenericServerStream[WatchJobsRequest, WatchJobsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ProducerService_WatchJobsServer = grpc.ServerStreamingServer[WatchJobsResponse]
+
 // ProducerService_ServiceDesc is the grpc.ServiceDesc for ProducerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -495,6 +547,12 @@ var ProducerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ProducerService_GetWorkflowRun_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchJobs",
+			Handler:       _ProducerService_WatchJobs_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "flexiq/v1/producer_service.proto",
 }

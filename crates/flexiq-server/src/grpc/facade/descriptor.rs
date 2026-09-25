@@ -32,6 +32,9 @@ pub struct Rpc {
     pub method: String,
     /// Whether the method declares `idempotency_level = NO_SIDE_EFFECTS`.
     pub no_side_effects: bool,
+    /// Whether either side streams. A stream has no request/response HTTP
+    /// mapping, so the facade does not transcode one.
+    pub streaming: bool,
 }
 
 fn files() -> Vec<FileDescriptorProto> {
@@ -57,6 +60,7 @@ pub fn rpcs(package: &str) -> Vec<Rpc> {
                     no_side_effects: method.options.as_ref().is_some_and(|options| {
                         options.idempotency_level() == IdempotencyLevel::NoSideEffects
                     }),
+                    streaming: method.client_streaming() || method.server_streaming(),
                 });
             }
         }
@@ -127,6 +131,12 @@ mod tests {
         assert!(rpcs
             .iter()
             .any(|rpc| rpc.method == "Enqueue" && !rpc.no_side_effects));
+        assert!(rpcs
+            .iter()
+            .any(|rpc| rpc.method == "WatchJobs" && rpc.streaming));
+        assert!(rpcs
+            .iter()
+            .any(|rpc| rpc.method == "GetJob" && !rpc.streaming));
     }
 
     #[test]

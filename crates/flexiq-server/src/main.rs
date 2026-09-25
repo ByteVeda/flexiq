@@ -71,6 +71,16 @@ Configuration (environment only):
                                  attach stream (default: 30; 0 is unbounded)
   FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS  calls one connection may have in flight
                                  (default: 256; 0 is unlimited)
+  FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN  WatchJobs streams one API token may hold at
+                                 once (default: 16; 0 is unlimited)
+  FLEXIQ_GRPC_WATCH_RECONCILE   seconds between re-reads of every watched job
+                                 id, which is how a watch learns of a job
+                                 another process finished (default: 5; 0 turns
+                                 the re-read off)
+  FLEXIQ_GRPC_WATCH_BUFFER      job transitions kept in memory for streams to
+                                 catch up on and resume from (default: 4096)
+  FLEXIQ_GRPC_WATCH_STALL       seconds a watch waits on a client that stopped
+                                 reading before ending it (default: 30)
   FLEXIQ_PUSH_TARGET_URL        where the scheduler POSTs a claimed job, e.g.
                                  https://executor.internal/run (default: off).
                                  Requires a build with the `http-target` cargo
