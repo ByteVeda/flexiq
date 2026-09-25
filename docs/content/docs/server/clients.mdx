@@ -95,13 +95,14 @@ protoc --descriptor_set_in="flexiq-descriptor-${VERSION}.binpb" \
   flexiq/v1/producer_service.proto flexiq/v1/job.proto flexiq/v1/workflow.proto
 ```
 
-Either way you get `flexiq.v1.ProducerService` with eight RPCs: `Enqueue`,
+Either way you get `flexiq.v1.ProducerService` with nine RPCs: `Enqueue`,
 `EnqueueBatch`, `GetJob`, `ListJobs`, `CancelJob`, `QueueStats`,
-`SubmitWorkflow` and `GetWorkflowRun`.
+`SubmitWorkflow`, `GetWorkflowRun` and the server stream `WatchJobs`.
 
 With neither, generate against the JSON facade instead:
 [`contracts/openapi.json`](https://github.com/ByteVeda/flexiq/blob/master/contracts/openapi.json)
-describes the same eight RPCs as HTTP paths, in OpenAPI 3.1. It is generated
+describes the eight unary RPCs as HTTP paths, in OpenAPI 3.1. `WatchJobs` has no
+HTTP path, because a stream has no request/response mapping. It is generated
 from the `.proto` files above and gated against them, so it is the same contract
 read through a different generator ecosystem — not a second one. What it costs
 is the payload envelope: see
@@ -210,7 +211,7 @@ does not promise the write did not land:
 |---|---|
 | `Enqueue`, `EnqueueBatch`, `SubmitWorkflow` | **No.** Set `unique_key` yourself and retry with the same value. |
 | `CancelJob` | Yes — it is idempotent. |
-| `GetJob`, `ListJobs`, `QueueStats`, `GetWorkflowRun` | Yes — they have no side effects. |
+| `GetJob`, `ListJobs`, `QueueStats`, `GetWorkflowRun`, `WatchJobs` | Yes — they have no side effects. |
 
 `unique_key` dedupes against the **active** job, so once the original completes
 or dead-letters the key is released. Your total retry deadline has to be shorter
@@ -237,5 +238,5 @@ is a working producer in `bash`, `grpcurl` and `jq`.
 | No task registration, middleware or worker — this is a producer, not an SDK | Run the workers in a language that has an SDK, or write a [custom executor](/server/custom-executors) |
 | Nothing warns you that a task name is misspelled until the job dead-letters | Enqueue one job by hand against a running worker before wiring the client in |
 | `Job.result` is bytes your generated client will not decode for you | Assert your decoder against `wire-vectors.json` once, then forget it |
-| No completion notification — `v1` has no watch stream | Poll `GetJob`, or subscribe a webhook |
+| Completion arrives on a stream, not a callback | Watch the job with `WatchJobs` and read the result with `GetJob` once it is terminal. See [Watching jobs](/server/operate/grpc#watching-jobs) |
 | TLS is not terminated by `flexiq-server` | Put a sidecar proxy or service mesh in front of the listener |

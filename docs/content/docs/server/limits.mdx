@@ -21,7 +21,7 @@ it can expect.
 | Reaches the whole admin surface | Reaches what an `inspect` or `admin` token opens | Queues, dead letters, workers, periodic tasks and overrides are [the admin door](/server/operate/admin), behind scopes a producer token never carries. Settings, webhook secrets and token minting stay behind the dashboard's session and role check |
 | Chooses its namespace in your own configuration | Is fixed to one at mint time | The namespace comes from the credential, and no RPC in either package has a field for it. A read for a job in another namespace is indistinguishable from a job that does not exist |
 | Decodes a result for you | Hands you bytes | `Job.result` is the tagged envelope; assert your decoder against `wire-vectors.json` once |
-| Can await completion | Cannot | There is no watch and no server stream in `v1`. Poll `GetJob`, or subscribe a webhook |
+| Awaits completion in process | Watches for it | `WatchJobs` streams a job's transitions and closes once it is terminal. A job another process finishes arrives within the server's reconcile interval. See [Watching jobs](/server/operate/grpc#watching-jobs) |
 
 Four more that hold for an SDK too, but that a network caller meets sooner
 because it is the one writing the retry loop:
