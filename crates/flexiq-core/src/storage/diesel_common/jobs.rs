@@ -1625,6 +1625,43 @@ macro_rules! impl_diesel_job_ops {
                     .map(Job::from))
             }
 
+            /// Blob-free rows for many ids — see `Storage::get_jobs_by_ids`.
+            ///
+            /// Live table first, then the archive: a job archived between the
+            /// two reads shows up in both, and the archived (newer) row wins.
+            pub fn get_jobs_by_ids(
+                &self,
+                ids: &[&str],
+                namespace: Option<&str>,
+            ) -> Result<Vec<Job>> {
+                let mut conn = self.conn()?;
+                let mut found: std::collections::HashMap<String, Job> =
+                    std::collections::HashMap::with_capacity(ids.len());
+                // Under SQLite's 999-parameter limit, with room to spare.
+                for chunk in ids.chunks(crate::storage::diesel_common::purge::DELETE_ID_CHUNK) {
+                    let live: Vec<NarrowJobRow> = jobs::table
+                        .filter(jobs::id.eq_any(chunk))
+                        .select(NarrowJobRow::as_select())
+                        .load(&mut conn)?;
+                    for row in live {
+                        let job = Job::from_narrow(row, Vec::new(), None);
+                        found.insert(job.id.clone(), job);
+                    }
+                    let archived: Vec<NarrowArchivedJobRow> = archived_jobs::table
+                        .filter(archived_jobs::id.eq_any(chunk))
+                        .select(NarrowArchivedJobRow::as_select())
+                        .load(&mut conn)?;
+                    for row in archived {
+                        let job = Job::from_narrow_archived(row);
+                        found.insert(job.id.clone(), job);
+                    }
+                }
+                Ok(found
+                    .into_values()
+                    .filter(|job| Self::job_in_namespace(job.namespace.as_deref(), namespace))
+                    .collect())
+            }
+
             /// Get queue statistics. Pending/Running counts come from the live
             /// `jobs` table; terminal counts come from `archived_jobs`.
             /// `namespace` of `None` counts every namespace, matching

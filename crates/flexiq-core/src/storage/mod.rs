@@ -718,6 +718,13 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Option<$crate::job::Job>> {
                 self.get_job(id, namespace)
             }
+            fn get_jobs_by_ids(
+                &self,
+                ids: &[&str],
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<Vec<$crate::job::Job>> {
+                self.get_jobs_by_ids(ids, namespace)
+            }
             fn stats(
                 &self,
                 namespace: Option<&str>,
@@ -1882,6 +1889,9 @@ impl Storage for StorageBackend {
     }
     fn get_job(&self, id: &str, namespace: Option<&str>) -> Result<Option<Job>> {
         delegate!(self, get_job, id, namespace)
+    }
+    fn get_jobs_by_ids(&self, ids: &[&str], namespace: Option<&str>) -> Result<Vec<Job>> {
+        delegate!(self, get_jobs_by_ids, ids, namespace)
     }
     fn stats(&self, namespace: Option<&str>) -> Result<QueueStats> {
         delegate!(self, stats, namespace)

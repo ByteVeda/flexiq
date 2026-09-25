@@ -319,6 +319,11 @@ pub trait Storage: Send + Sync + Clone {
     /// Fetch a job by id, blobs included — live `jobs` first, then
     /// `archived_jobs`. A job in another namespace reads as missing.
     fn get_job(&self, id: &str, namespace: Option<&str>) -> Result<Option<Job>>;
+    /// Blob-free rows for `ids`, live or archived, in no particular order. An
+    /// id that does not exist, or is in another namespace, is simply absent.
+    /// A bounded number of round trips however many ids, so one caller can
+    /// re-read everything it is watching at once.
+    fn get_jobs_by_ids(&self, ids: &[&str], namespace: Option<&str>) -> Result<Vec<Job>>;
     /// Global queue statistics: live counts from `jobs`, terminal counts from
     /// `archived_jobs`.
     /// `namespace` of `None` counts every namespace, matching `list_jobs`.

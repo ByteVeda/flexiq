@@ -108,19 +108,19 @@ impl RedisStorage {
     ) -> Result<Option<Job>> {
         let archived_key = self.key(&["archived", id]);
         let data: Option<String> = conn.get(&archived_key).map_err(map_err)?;
-        match data {
-            Some(d) => {
-                let mut job: Job = serde_json::from_str(&d)?;
-                // The archive stores the whole `Job` document, so it keeps a
-                // field the Diesel `archived_jobs` table has no column for.
-                // Normalize on read — this is the Redis seam that matches
-                // `From<ArchivedJobRow> for Job`, and it also corrects rows
-                // archived before the column existed.
-                job.debounce_key = None;
-                Ok(Some(job))
-            }
-            None => Ok(None),
-        }
+        data.as_deref().map(Self::archived_from_json).transpose()
+    }
+
+    /// Decode an archived job document.
+    pub(in crate::storage::redis_backend) fn archived_from_json(data: &str) -> Result<Job> {
+        let mut job: Job = serde_json::from_str(data)?;
+        // The archive stores the whole `Job` document, so it keeps a
+        // field the Diesel `archived_jobs` table has no column for.
+        // Normalize on read — this is the Redis seam that matches
+        // `From<ArchivedJobRow> for Job`, and it also corrects rows
+        // archived before the column existed.
+        job.debounce_key = None;
+        Ok(job)
     }
 
     /// Live-only required lookup for write/mutator paths. Resolves `job:<id>`

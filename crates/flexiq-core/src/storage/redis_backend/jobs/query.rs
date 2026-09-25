@@ -7,6 +7,9 @@ use crate::job::{Job, JobStatus};
 use crate::storage::redis_backend::{map_err, strip_list_blobs, RedisConnection, RedisStorage};
 use crate::storage::QueueStats;
 
+/// Ids per `get_jobs_by_ids` `MGET`; two keys each.
+const GET_BY_IDS_CHUNK: usize = 256;
+
 impl RedisStorage {
     /// List jobs by filter. Rows are blob-free — fetch the full job with
     /// [`get_job`](Self::get_job).
@@ -165,6 +168,33 @@ impl RedisStorage {
         };
         Ok(found
             .filter(|job| namespace.is_none_or(|scope| job.namespace.as_deref() == Some(scope))))
+    }
+
+    /// Blob-free rows for many ids, one `MGET` per chunk over each id's live
+    /// and archived key. The archived (newer) document wins when both exist.
+    pub fn get_jobs_by_ids(&self, ids: &[&str], namespace: Option<&str>) -> Result<Vec<Job>> {
+        let mut conn = self.conn()?;
+        let mut jobs = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(GET_BY_IDS_CHUNK) {
+            let keys: Vec<String> = chunk
+                .iter()
+                .flat_map(|id| [self.key(&["job", id]), self.key(&["archived", id])])
+                .collect();
+            let docs: Vec<Option<String>> = conn.mget(&keys).map_err(map_err)?;
+            for pair in docs.chunks(2) {
+                let job = match pair {
+                    [_, Some(archived)] => Self::archived_from_json(archived)?,
+                    [Some(live), None] => serde_json::from_str(live)?,
+                    _ => continue,
+                };
+                jobs.push(job);
+            }
+        }
+        jobs.retain(|job| namespace.is_none_or(|scope| job.namespace.as_deref() == Some(scope)));
+        for job in &mut jobs {
+            strip_list_blobs(job);
+        }
+        Ok(jobs)
     }
 
     /// Global queue statistics: live counts plus terminal counts from the
