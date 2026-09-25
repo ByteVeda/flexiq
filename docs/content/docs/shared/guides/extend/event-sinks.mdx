@@ -205,14 +205,23 @@ API is not one of them: it is first seen at its `job.started`. If the
 consumer needs every such enqueue, enqueue through the server instead.
 
 The worker also sends `job.cancelled` for a pending job on its own, without a
-door: `reason: "expired"` from its reaper sweep (only for its own namespace,
-when the worker has one), `reason: "expired before
+door: `reason: "expired"` from its reaper sweep, `reason: "expired before
 execution"` when it finds a job already expired as it goes to claim it, and
 `reason: "dependency failed"` for a dependent cascaded behind a job it just
 dead-lettered. A pending job cancelled by calling `cancel_job` in this
 process still emits nothing — for that job or any dependent — since only a
 `flexiq-server` cancel door reports a pending cancel outright; a running job
 always emits `job.cancelled` once its attempt ends.
+
+**A worker's events stay in its own namespace.** A worker with a namespace
+announces that namespace's jobs only, and one with no namespace announces the
+default namespace's only — the jobs it dispatches. No worker announces
+another namespace's transitions, even where its maintenance reaches them: the
+expiry sweep covers every namespace, and a worker with no namespace also
+times out, recovers and fires periodic schedules for all of them. That work
+still happens, unannounced, so a namespace's maintenance events come only from
+a worker of that namespace and are missed when another namespace's worker did
+the work first.
 
 Delivery is **at-most-once overall, and an accepted event may still arrive more
 than once**, so the consumer dedupes on the CloudEvents `id`. Emitting never

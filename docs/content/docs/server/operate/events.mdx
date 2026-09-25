@@ -172,18 +172,27 @@ A pending job cancelled through a cancel door emits `job.cancelled` there,
 and cascades to any dependent with `reason: "dependency cancelled"`. A
 running job emits it from the scheduler once the attempt ends. The scheduler
 also emits `job.cancelled` on its own for a pending job: `reason: "expired"`
-from the reaper sweep (a namespaced scheduler announces only its own
-namespace's), `reason: "expired before execution"` when the poller
+from the reaper sweep, `reason: "expired before execution"` when the poller
 finds it already expired at claim, and `reason: "dependency failed"` for a
 dependent cascaded behind a dead-lettered parent (a DLQ move or a shed).
+
+**A scheduler's events stay in its own namespace.** A scheduler with a
+namespace announces that namespace's jobs only, and one with no namespace
+announces the default namespace's only — the jobs its dispatch serves. No
+scheduler announces another namespace's transitions, even where its
+maintenance reaches them: the expiry sweep covers every namespace, and a
+scheduler with no namespace also times out, recovers and fires periodic
+schedules for all of them. That work still happens, unannounced, so a
+namespace's maintenance events come only from a scheduler of that namespace
+and are missed when another namespace's scheduler did the work first.
 
 **The stream is still not a complete audit of the queue.** A job an embedded
 SDK enqueues through its own process's enqueue API, the node jobs of a
 submitted workflow, and a pending-job cancel made through an embedded SDK
 (including its cascades) emit nothing. Neither do bulk purges or revokes of a
 queue's or a task's pending jobs, a cancel written to storage directly by any
-tool other than a cancel door, nor another tenant's expiry swept by a
-namespaced scheduler. Nor does anything a runtime with no sinks settles. The
+tool other than a cancel door, nor maintenance a scheduler of another
+namespace did. Nor does anything a runtime with no sinks settles. The
 contract lists
 [everything that is not seen](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md#what-is-not-seen).
 

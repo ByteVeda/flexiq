@@ -26,7 +26,10 @@ their entries below keep that name.
   job's expiry (`reason: "expired"` from the reaper, `"expired before execution"` from the
   poller) and a dead-letter cascade (`reason: "dependency failed"`) as `job.cancelled`, and a
   periodic firing or a DLQ auto-retry as `job.enqueued` with attempt `0` — the only enqueues an
-  embedded worker reports on its own. Delivery is at-most-once overall and may repeat an
+  embedded worker reports on its own. A scheduler announces only its own namespace's jobs —
+  the default namespace's when it has none — even where its maintenance reaches other
+  namespaces, so a namespace's maintenance events come only from a scheduler of that namespace.
+  Delivery is at-most-once overall and may repeat an
   event, so consumers dedupe on the CloudEvents `id`; emitting never blocks the queue. The HTTP
   sink goes through push dispatch's egress guard (a required allowlist, no proxy, no
   redirects) and signs with `x-flexiq-event-signature` when given a secret; job payloads are

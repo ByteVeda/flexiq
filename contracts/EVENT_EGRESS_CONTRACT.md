@@ -203,9 +203,8 @@ The CloudEvents `type` is `org.byteveda.flexiq.` followed by the short name.
   causes, each naming the row's own `attempt` (its `retry_count`) and
   carrying no epoch:
   - the scheduler's reaper sweep expired it: `reason: "expired"`. The sweep
-    archives every namespace's expired rows, but a scheduler scoped to a
-    namespace announces only its own; one with no namespace announces them
-    all, each in the row's own namespace.
+    archives every namespace's expired rows, but a scheduler announces only
+    its own namespace's (below).
   - the poller found it already expired as it went to claim it:
     `reason: "expired before execution"`.
   - the scheduler dead-lettered its parent — a DLQ move (out of retries, not
@@ -219,6 +218,21 @@ The CloudEvents `type` is `org.byteveda.flexiq.` followed by the short name.
 
   An embedded SDK's own `cancel_job` still emits nothing, neither for the job
   it cancels nor for any dependent.
+
+### A scheduler's events stay in its namespace
+
+A scheduler announces only the transitions of jobs in its own namespace, by
+the rule its dispatch already follows: a scheduler with a namespace announces
+that namespace's jobs, and one with **no namespace announces the default
+namespace's only** (jobs written with no namespace). No scheduler announces
+another namespace's transitions.
+
+Some of its maintenance work spans every namespace all the same: the expiry
+sweep, and — for a scheduler with no namespace — its reaper's execution
+timeouts, its dead-worker recovery and its periodic firings. That work is
+unchanged; it is only not announced. So a namespace's maintenance events come
+only from a scheduler of that namespace, and are missed when a scheduler of
+another namespace did the work first (see [What is not seen](#what-is-not-seen)).
 
 An expiry sweep's `job.cancelled` and a dead-letter cascade's, captured from a
 test (`include_payload: false`, so no `payload_base64`):
@@ -250,12 +264,14 @@ transitions emit nothing:
   dependent it cascades to.
 - **A result that lost its claim** (another scheduler or a requeue has taken
   the job over). That attempt's events belong to whichever claim settles it.
-- **Another namespace's expiry, swept by a namespaced scheduler.** The expiry
-  sweep is not elected: every scheduler runs it over every namespace on each
-  reaper tick, and the first to reach an expired row archives it. A
-  namespaced scheduler never announces another tenant's row, so no scheduler
-  is guaranteed to announce a given namespace's expiries — the one whose
-  namespace owns the row, or one with no namespace, has to sweep it first.
+- **Maintenance a scheduler of another namespace did.** The expiry sweep is
+  not elected: every scheduler runs it over every namespace on each reaper
+  tick, and the first to reach an expired row archives it. A scheduler with
+  no namespace also times out, recovers and fires periodic schedules for
+  every namespace. A scheduler never announces another namespace's
+  transitions, so no scheduler is guaranteed to announce a given namespace's
+  expiries, timeouts, recoveries or periodic firings — a scheduler of that
+  namespace has to do the work first.
 - **Bulk pending cancels, and cancels made outside the server's doors.**
   Purging or revoking every pending job of a queue or a task, and any tool
   that cancels a job by writing to storage directly rather than through a
