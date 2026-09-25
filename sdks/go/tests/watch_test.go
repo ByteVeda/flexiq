@@ -169,6 +169,45 @@ func TestWaitGivesUpOnARefusalThatWillNotClear(t *testing.T) {
 	}
 }
 
+// TestWaitTreatsTheWatchCapAsTransientOnlyAfterAWatchOpened: the cap refusing
+// the first open is real, but refusing a reopen can be the dropped stream's
+// slot the server has not released yet.
+func TestWaitTreatsTheWatchCapAsTransientOnlyAfterAWatchOpened(t *testing.T) {
+	first := serve(t, &fakeProducer{
+		watchJobs: func(*pb.WatchJobsRequest, pb.ProducerService_WatchJobsServer) error {
+			return refusal(t, codes.ResourceExhausted, flexiq.ReasonWatchLimit)
+		},
+	})
+	if _, err := first.Wait(context.Background(), "j"); !errors.Is(err, flexiq.ReasonWatchLimit) {
+		t.Fatalf("Wait returned %v, want WATCH_LIMIT at once", err)
+	}
+
+	var opened atomic.Int32
+	reopened := serve(t, &fakeProducer{
+		watchJobs: func(_ *pb.WatchJobsRequest, stream pb.ProducerService_WatchJobsServer) error {
+			switch opened.Add(1) {
+			case 1:
+				if err := stream.Send(transitionItem("j", pb.JobStatus_JOB_STATUS_RUNNING, false)); err != nil {
+					return err
+				}
+				return status.Error(codes.Unavailable, "connection dropped")
+			case 2:
+				return refusal(t, codes.ResourceExhausted, flexiq.ReasonWatchLimit)
+			default:
+				return stream.Send(transitionItem("j", pb.JobStatus_JOB_STATUS_COMPLETE, true))
+			}
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := reopened.Wait(ctx, "j"); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if opened.Load() != 3 {
+		t.Errorf("opened %d watches, want 3", opened.Load())
+	}
+}
+
 // TestEnqueueAndWaitWaitsForTheJobItEnqueued.
 func TestEnqueueAndWaitWaitsForTheJobItEnqueued(t *testing.T) {
 	var watched string

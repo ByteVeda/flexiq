@@ -189,15 +189,16 @@ const (
 // is in another namespace, fails with [ReasonJobNotFound]. Bound it with ctx.
 func (c *Client) Wait(ctx context.Context, jobID string) (Job, error) {
 	backoff := waitBackoffStart
+	opened := false
 	for {
-		finished, err := c.waitOnce(ctx, jobID, &backoff)
+		finished, err := c.waitOnce(ctx, jobID, &backoff, &opened)
 		if finished {
 			// The result is read, not streamed: a watch carries no payload or
 			// result. GetJob also answers the not-found case with the
 			// server's own error.
 			return c.GetJob(ctx, jobID, GetJobOptions{IncludeResult: true})
 		}
-		if err != nil && !reopenable(err) {
+		if err != nil && !reopenable(err, opened) {
 			return Job{}, err
 		}
 		select {
@@ -210,13 +211,15 @@ func (c *Client) Wait(ctx context.Context, jobID string) (Job, error) {
 }
 
 // waitOnce follows one stream until the job finishes or the stream ends.
-func (c *Client) waitOnce(ctx context.Context, jobID string, backoff *time.Duration) (bool, error) {
+// opened records that a watch delivered an item at least once.
+func (c *Client) waitOnce(ctx context.Context, jobID string, backoff *time.Duration, opened *bool) (bool, error) {
 	for transition, err := range c.WatchJobs(ctx, jobID) {
 		if err != nil {
 			return false, err
 		}
 		// An item arrived, so the connection works again.
 		*backoff = waitBackoffStart
+		*opened = true
 		if transition.Terminal || transition.NotFound {
 			return true, nil
 		}
@@ -227,14 +230,20 @@ func (c *Client) waitOnce(ctx context.Context, jobID string, backoff *time.Durat
 
 // reopenable reports whether a watch that failed with err is worth opening
 // again. Reopening is always safe — the RPC writes nothing.
-func reopenable(err error) bool {
+//
+// [ReasonWatchLimit] counts only once a watch has opened: after a dropped
+// connection the server may still hold the old stream's slot until it
+// notices. Before that, the credential really is at its cap.
+func reopenable(err error, openedBefore bool) bool {
 	wireErr, ok := AsError(err)
 	if !ok {
 		return false
 	}
 	switch wireErr.Reason {
-	case ReasonWatchOverflow, ReasonShuttingDown, ReasonWatchLimit:
+	case ReasonWatchOverflow, ReasonShuttingDown:
 		return true
+	case ReasonWatchLimit:
+		return openedBefore
 	}
 	return wireErr.Code == codes.Unavailable
 }
