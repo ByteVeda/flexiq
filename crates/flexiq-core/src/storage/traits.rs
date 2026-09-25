@@ -210,7 +210,16 @@ pub trait Storage: Send + Sync + Clone {
     /// A job in another namespace reports `false`, the same answer an unknown
     /// or already-terminal id gets: a caller scoped to one namespace learns
     /// nothing about ids outside it. `None` addresses every namespace.
-    fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool>;
+    ///
+    /// The flag of [`cancel_job_reporting`](Self::cancel_job_reporting), with
+    /// the cascaded dependents dropped.
+    fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
+        Ok(self.cancel_job_reporting(id, namespace)?.0)
+    }
+    /// [`cancel_job`](Self::cancel_job), also returning every dependent the
+    /// cascade cancelled, as [`cascade_cancel_reporting`](Self::cascade_cancel_reporting)
+    /// reports them. The list is empty whenever the flag is `false`.
+    fn cancel_job_reporting(&self, id: &str, namespace: Option<&str>) -> Result<(bool, Vec<Job>)>;
     /// Set the cancel-requested flag on a `Running` job — the task must poll
     /// for it. Returns `false` when no running job matched, which is also the
     /// answer for a job in another namespace.
@@ -243,7 +252,21 @@ pub trait Storage: Send + Sync + Clone {
         failed_job_id: &str,
         reason: &str,
         namespace: Option<&str>,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        self.cascade_cancel_reporting(failed_job_id, reason, namespace)
+            .map(drop)
+    }
+    /// [`cascade_cancel`](Self::cascade_cancel), returning every dependent it
+    /// cancelled. Each is the archived row — status `Cancelled`,
+    /// `completed_at` set, error `"<reason>: <failed_job_id>"` — payload
+    /// included, since archiving already loaded it. A dependent that was no
+    /// longer pending, or sat outside `namespace`, was left alone and is absent.
+    fn cascade_cancel_reporting(
+        &self,
+        failed_job_id: &str,
+        reason: &str,
+        namespace: Option<&str>,
+    ) -> Result<Vec<Job>>;
     /// Ids of the jobs `job_id` depends on.
     ///
     /// A dependency may not cross namespaces — [`enqueue`](Self::enqueue) and
@@ -353,7 +376,22 @@ pub trait Storage: Send + Sync + Clone {
     /// Move a job to the dead-letter queue and cascade-cancel its dependents.
     /// Records an ordinary failure; a job the scheduler threw away on purpose
     /// goes through [`shed_to_dlq`](Self::shed_to_dlq) instead.
-    fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()>;
+    ///
+    /// [`move_to_dlq_reporting`](Self::move_to_dlq_reporting) with the
+    /// cascaded dependents dropped.
+    fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
+        self.move_to_dlq_reporting(job, error, metadata).map(drop)
+    }
+    /// [`move_to_dlq`](Self::move_to_dlq), returning every dependent the
+    /// cascade cancelled (reason `"dependency failed"`), as
+    /// [`cascade_cancel_reporting`](Self::cascade_cancel_reporting) reports
+    /// them.
+    fn move_to_dlq_reporting(
+        &self,
+        job: &Job,
+        error: &str,
+        metadata: Option<&str>,
+    ) -> Result<Vec<Job>>;
     /// Dead-letter a job the scheduler shed rather than ran, marking the entry
     /// so [`list_dead_for_retry`](Self::list_dead_for_retry) never offers it.
     ///
@@ -362,12 +400,26 @@ pub trait Storage: Send + Sync + Clone {
     /// the scheduler's vocabulary — storage is told "shed", never asked to
     /// parse — and `move_to_dlq` keeps the signature it published.
     ///
-    /// Defaults to [`move_to_dlq`](Self::move_to_dlq) so an out-of-tree backend
-    /// keeps compiling. Such a backend records the entry as an ordinary failure
-    /// and leans on the sweep's reason-prefix guard, exactly as every backend
-    /// did before the `shed` flag existed.
+    /// [`shed_to_dlq_reporting`](Self::shed_to_dlq_reporting) with the
+    /// cascaded dependents dropped.
     fn shed_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
-        self.move_to_dlq(job, error, metadata)
+        self.shed_to_dlq_reporting(job, error, metadata).map(drop)
+    }
+    /// [`shed_to_dlq`](Self::shed_to_dlq), returning the cascaded dependents
+    /// like [`move_to_dlq_reporting`](Self::move_to_dlq_reporting).
+    ///
+    /// Defaults to [`move_to_dlq_reporting`](Self::move_to_dlq_reporting) so an
+    /// out-of-tree backend keeps compiling. Such a backend records the entry as
+    /// an ordinary failure and leans on the sweep's reason-prefix guard,
+    /// exactly as every backend did before the `shed` flag existed. Override
+    /// this one, not `shed_to_dlq`: the plain method routes through it.
+    fn shed_to_dlq_reporting(
+        &self,
+        job: &Job,
+        error: &str,
+        metadata: Option<&str>,
+    ) -> Result<Vec<Job>> {
+        self.move_to_dlq_reporting(job, error, metadata)
     }
     /// Dead-letter entries, newest first, paginated.
     /// `namespace` of `None` returns every namespace, matching `list_jobs`.

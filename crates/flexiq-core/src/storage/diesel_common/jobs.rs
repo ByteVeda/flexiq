@@ -1246,6 +1246,16 @@ macro_rules! impl_diesel_job_ops {
             /// unknown or already-terminal id gets: a caller scoped to one
             /// tenant learns nothing about ids outside it.
             pub fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
+                Ok(self.cancel_job_reporting(id, namespace)?.0)
+            }
+
+            /// [`cancel_job`](Self::cancel_job), also returning every dependent
+            /// the cascade cancelled.
+            pub fn cancel_job_reporting(
+                &self,
+                id: &str,
+                namespace: Option<&str>,
+            ) -> Result<(bool, Vec<Job>)> {
                 let now = now_millis();
 
                 let archived = self.write_transaction(|conn| {
@@ -1270,11 +1280,12 @@ macro_rules! impl_diesel_job_ops {
                     Ok(true)
                 })?;
 
-                if archived {
-                    self.cascade_cancel(id, "dependency cancelled", namespace)?;
+                if !archived {
+                    return Ok((false, Vec::new()));
                 }
-
-                Ok(archived)
+                let cascaded =
+                    self.cascade_cancel_reporting(id, "dependency cancelled", namespace)?;
+                Ok((true, cascaded))
             }
 
             /// Request cancellation of a running job. The task must check for this.
@@ -1393,6 +1404,18 @@ macro_rules! impl_diesel_job_ops {
                 reason: &str,
                 namespace: Option<&str>,
             ) -> Result<()> {
+                self.cascade_cancel_reporting(failed_job_id, reason, namespace)
+                    .map(drop)
+            }
+
+            /// [`cascade_cancel`](Self::cascade_cancel), returning every
+            /// dependent it archived, as archived.
+            pub fn cascade_cancel_reporting(
+                &self,
+                failed_job_id: &str,
+                reason: &str,
+                namespace: Option<&str>,
+            ) -> Result<Vec<Job>> {
                 let mut conn = self.conn()?;
                 let now = now_millis();
 
@@ -1425,29 +1448,30 @@ macro_rules! impl_diesel_job_ops {
                 // its own (single-connection pools would otherwise deadlock).
                 drop(conn);
 
-                if !queue.is_empty() {
-                    let error_msg = format!("{reason}: {failed_job_id}");
-                    self.write_transaction(|conn| {
-                        let mut select = jobs::table
-                            .filter(jobs::id.eq_any(&queue))
-                            .filter(jobs::status.eq(JobStatus::Pending as i32))
-                            .into_boxed();
-                        if let Some(ns) = namespace {
-                            select = select.filter(jobs::namespace.eq(ns));
-                        }
-                        let rows: Vec<JobRow> = select.select(JobRow::as_select()).load(conn)?;
-
-                        for mut row in rows {
-                            row.status = JobStatus::Cancelled as i32;
-                            row.completed_at = Some(now);
-                            row.error = Some(error_msg.clone());
-                            Self::archive_job_row(conn, &row)?;
-                        }
-                        Ok(())
-                    })?;
+                if queue.is_empty() {
+                    return Ok(Vec::new());
                 }
+                let error_msg = format!("{reason}: {failed_job_id}");
+                self.write_transaction(|conn| {
+                    let mut select = jobs::table
+                        .filter(jobs::id.eq_any(&queue))
+                        .filter(jobs::status.eq(JobStatus::Pending as i32))
+                        .into_boxed();
+                    if let Some(ns) = namespace {
+                        select = select.filter(jobs::namespace.eq(ns));
+                    }
+                    let rows: Vec<JobRow> = select.select(JobRow::as_select()).load(conn)?;
 
-                Ok(())
+                    let mut cancelled = Vec::with_capacity(rows.len());
+                    for mut row in rows {
+                        row.status = JobStatus::Cancelled as i32;
+                        row.completed_at = Some(now);
+                        row.error = Some(error_msg.clone());
+                        Self::archive_job_row(conn, &row)?;
+                        cancelled.push(Job::from(row));
+                    }
+                    Ok(cancelled)
+                })
             }
 
             /// Get the IDs of jobs that a given job depends on.

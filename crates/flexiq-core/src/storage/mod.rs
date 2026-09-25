@@ -624,12 +624,12 @@ macro_rules! impl_storage {
             fn requeue_stuck(&self, id: &str, now: i64) -> $crate::error::Result<bool> {
                 self.requeue_stuck(id, now)
             }
-            fn cancel_job(
+            fn cancel_job_reporting(
                 &self,
                 id: &str,
                 namespace: Option<&str>,
-            ) -> $crate::error::Result<bool> {
-                self.cancel_job(id, namespace)
+            ) -> $crate::error::Result<(bool, Vec<$crate::job::Job>)> {
+                self.cancel_job_reporting(id, namespace)
             }
             fn request_cancel(
                 &self,
@@ -659,13 +659,13 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<()> {
                 self.mark_cancelled(id, namespace)
             }
-            fn cascade_cancel(
+            fn cascade_cancel_reporting(
                 &self,
                 failed_job_id: &str,
                 reason: &str,
                 namespace: Option<&str>,
-            ) -> $crate::error::Result<()> {
-                self.cascade_cancel(failed_job_id, reason, namespace)
+            ) -> $crate::error::Result<Vec<$crate::job::Job>> {
+                self.cascade_cancel_reporting(failed_job_id, reason, namespace)
             }
             fn get_dependencies(
                 &self,
@@ -774,21 +774,21 @@ macro_rules! impl_storage {
             fn purge_job_errors(&self, older_than_ms: i64) -> $crate::error::Result<u64> {
                 self.purge_job_errors(older_than_ms)
             }
-            fn move_to_dlq(
+            fn move_to_dlq_reporting(
                 &self,
                 job: &$crate::job::Job,
                 error: &str,
                 metadata: Option<&str>,
-            ) -> $crate::error::Result<()> {
-                self.move_to_dlq(job, error, metadata)
+            ) -> $crate::error::Result<Vec<$crate::job::Job>> {
+                self.move_to_dlq_reporting(job, error, metadata)
             }
-            fn shed_to_dlq(
+            fn shed_to_dlq_reporting(
                 &self,
                 job: &$crate::job::Job,
                 error: &str,
                 metadata: Option<&str>,
-            ) -> $crate::error::Result<()> {
-                self.shed_to_dlq(job, error, metadata)
+            ) -> $crate::error::Result<Vec<$crate::job::Job>> {
+                self.shed_to_dlq_reporting(job, error, metadata)
             }
             fn list_dead(
                 &self,
@@ -1803,8 +1803,8 @@ impl Storage for StorageBackend {
     fn requeue_stuck(&self, id: &str, now: i64) -> Result<bool> {
         delegate!(self, requeue_stuck, id, now)
     }
-    fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
-        delegate!(self, cancel_job, id, namespace)
+    fn cancel_job_reporting(&self, id: &str, namespace: Option<&str>) -> Result<(bool, Vec<Job>)> {
+        delegate!(self, cancel_job_reporting, id, namespace)
     }
     fn request_cancel(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
         delegate!(self, request_cancel, id, namespace)
@@ -1822,13 +1822,19 @@ impl Storage for StorageBackend {
     fn mark_cancelled(&self, id: &str, namespace: Option<&str>) -> Result<()> {
         delegate!(self, mark_cancelled, id, namespace)
     }
-    fn cascade_cancel(
+    fn cascade_cancel_reporting(
         &self,
         failed_job_id: &str,
         reason: &str,
         namespace: Option<&str>,
-    ) -> Result<()> {
-        delegate!(self, cascade_cancel, failed_job_id, reason, namespace)
+    ) -> Result<Vec<Job>> {
+        delegate!(
+            self,
+            cascade_cancel_reporting,
+            failed_job_id,
+            reason,
+            namespace
+        )
     }
     fn get_dependencies(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<String>> {
         delegate!(self, get_dependencies, job_id, namespace)
@@ -1915,11 +1921,21 @@ impl Storage for StorageBackend {
     fn purge_job_errors(&self, older_than_ms: i64) -> Result<u64> {
         delegate!(self, purge_job_errors, older_than_ms)
     }
-    fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
-        delegate!(self, move_to_dlq, job, error, metadata)
+    fn move_to_dlq_reporting(
+        &self,
+        job: &Job,
+        error: &str,
+        metadata: Option<&str>,
+    ) -> Result<Vec<Job>> {
+        delegate!(self, move_to_dlq_reporting, job, error, metadata)
     }
-    fn shed_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
-        delegate!(self, shed_to_dlq, job, error, metadata)
+    fn shed_to_dlq_reporting(
+        &self,
+        job: &Job,
+        error: &str,
+        metadata: Option<&str>,
+    ) -> Result<Vec<Job>> {
+        delegate!(self, shed_to_dlq_reporting, job, error, metadata)
     }
     fn list_dead(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<DeadJob>> {
         delegate!(self, list_dead, limit, offset, namespace)

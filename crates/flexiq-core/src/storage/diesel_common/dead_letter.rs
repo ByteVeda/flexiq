@@ -12,6 +12,17 @@ macro_rules! impl_diesel_dead_letter_ops {
                 error: &str,
                 metadata: Option<&str>,
             ) -> Result<()> {
+                self.dead_letter(job, error, metadata, false).map(drop)
+            }
+
+            /// [`move_to_dlq`](Self::move_to_dlq), returning every dependent
+            /// the cascade cancelled.
+            pub fn move_to_dlq_reporting(
+                &self,
+                job: &Job,
+                error: &str,
+                metadata: Option<&str>,
+            ) -> Result<Vec<Job>> {
                 self.dead_letter(job, error, metadata, false)
             }
 
@@ -23,18 +34,29 @@ macro_rules! impl_diesel_dead_letter_ops {
                 error: &str,
                 metadata: Option<&str>,
             ) -> Result<()> {
+                self.dead_letter(job, error, metadata, true).map(drop)
+            }
+
+            /// [`shed_to_dlq`](Self::shed_to_dlq), returning every dependent
+            /// the cascade cancelled.
+            pub fn shed_to_dlq_reporting(
+                &self,
+                job: &Job,
+                error: &str,
+                metadata: Option<&str>,
+            ) -> Result<Vec<Job>> {
                 self.dead_letter(job, error, metadata, true)
             }
 
             /// Shared body of `move_to_dlq`/`shed_to_dlq`; `shed` is the only
-            /// difference between them.
+            /// difference between them. Returns the cascaded dependents.
             fn dead_letter(
                 &self,
                 job: &Job,
                 error: &str,
                 metadata: Option<&str>,
                 shed: bool,
-            ) -> Result<()> {
+            ) -> Result<Vec<Job>> {
                 let now = now_millis();
                 let dlq_id = uuid::Uuid::now_v7().to_string();
                 let job_id = job.id.clone();
@@ -116,9 +138,11 @@ macro_rules! impl_diesel_dead_letter_ops {
 
                 // Cascade cancel dependents (opens its own connection, so the
                 // archive transaction above must already be committed).
-                self.cascade_cancel(&job_id, "dependency failed", job.namespace.as_deref())?;
-
-                Ok(())
+                self.cascade_cancel_reporting(
+                    &job_id,
+                    "dependency failed",
+                    job.namespace.as_deref(),
+                )
             }
 
             /// List dead letter entries. `namespace` of `None` returns every

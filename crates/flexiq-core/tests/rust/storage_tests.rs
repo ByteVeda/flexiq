@@ -246,6 +246,85 @@ fn test_expire_pending_jobs_reports_rows(s: &impl Storage) {
         .all(|job| job.queue != q));
 }
 
+/// A namespace-scoped cancel reports every dependent it cascaded into, down a
+/// multi-level chain and across a fan-out.
+fn test_cancel_job_reports_cascade(s: &impl Storage) {
+    let q = "q-cancel-report-cascade";
+    let ns = Some("cascade-tenant");
+    let scoped = |task: &str, depends_on: Vec<String>| {
+        let mut job = make_job(q, task);
+        job.namespace = ns.map(str::to_string);
+        job.depends_on = depends_on;
+        job
+    };
+
+    let root = s.enqueue(scoped("cascade_root", vec![])).unwrap();
+    let child = s
+        .enqueue(scoped("cascade_child", vec![root.id.clone()]))
+        .unwrap();
+    let grandchild = s
+        .enqueue(scoped("cascade_grandchild", vec![child.id.clone()]))
+        .unwrap();
+    let sibling = s
+        .enqueue(scoped("cascade_sibling", vec![root.id.clone()]))
+        .unwrap();
+
+    // Another namespace addresses nothing, so nothing cascades.
+    let (cancelled, cascaded) = s.cancel_job_reporting(&root.id, Some("other")).unwrap();
+    assert!(!cancelled);
+    assert!(cascaded.is_empty());
+
+    let (cancelled, cascaded) = s.cancel_job_reporting(&root.id, ns).unwrap();
+    assert!(cancelled);
+    let error = format!("dependency cancelled: {}", root.id);
+    let cascaded = by_id(cascaded);
+    let expected = by_id(vec![child, grandchild, sibling]);
+    assert_eq!(cascaded.len(), 3, "every level of the chain is reported");
+    for (got, want) in cascaded.iter().zip(&expected) {
+        assert_reported(got, want, &error);
+    }
+
+    let (cancelled, cascaded) = s.cancel_job_reporting(&root.id, ns).unwrap();
+    assert!(!cancelled);
+    assert!(cascaded.is_empty());
+}
+
+/// Dead-lettering reports the dependents it cascaded into, on both the
+/// failure and the shed path.
+fn test_dead_letter_reports_cascade(s: &impl Storage) {
+    for shed in [false, true] {
+        let q = if shed {
+            "q-shed-report-cascade"
+        } else {
+            "q-dlq-report-cascade"
+        };
+        let parent = s.enqueue(make_job(q, "dlq_parent")).unwrap();
+        let mut child = make_job(q, "dlq_child");
+        child.depends_on = vec![parent.id.clone()];
+        let child = s.enqueue(child).unwrap();
+        let mut grandchild = make_job(q, "dlq_grandchild");
+        grandchild.depends_on = vec![child.id.clone()];
+        let grandchild = s.enqueue(grandchild).unwrap();
+
+        let running = s.dequeue(q, now_millis() + 1000, None).unwrap().unwrap();
+        assert_eq!(running.id, parent.id);
+        let cascaded = if shed {
+            s.shed_to_dlq_reporting(&running, "codel: shed", None)
+        } else {
+            s.move_to_dlq_reporting(&running, "boom", None)
+        }
+        .unwrap();
+
+        let error = format!("dependency failed: {}", parent.id);
+        let cascaded = by_id(cascaded);
+        let expected = by_id(vec![child, grandchild]);
+        assert_eq!(cascaded.len(), 2, "shed = {shed}");
+        for (got, want) in cascaded.iter().zip(&expected) {
+            assert_reported(got, want, &error);
+        }
+    }
+}
+
 /// #836: terminal jobs in a window, per queue and per namespace. Pending and
 /// running jobs are not throughput.
 fn test_queue_throughput(s: &impl Storage) {
@@ -2951,6 +3030,8 @@ fn run_storage_tests(s: &impl Storage) {
     test_dequeue_batch_archives_expired_jobs(s);
     test_dequeue_reports_expired_jobs(s);
     test_expire_pending_jobs_reports_rows(s);
+    test_cancel_job_reports_cascade(s);
+    test_dead_letter_reports_cascade(s);
     test_dispatch_order_lifo_map(s);
     test_complete(s);
     test_queue_throughput(s);
