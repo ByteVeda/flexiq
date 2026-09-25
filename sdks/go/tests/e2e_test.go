@@ -254,6 +254,43 @@ func TestCancelReportsTheStateItLeaves(t *testing.T) {
 	}
 }
 
+// TestWaitReturnsAJobThatIsAlreadyFinished: a watch on a terminal job emits it
+// and closes, so Wait answers at once rather than hanging.
+func TestWaitReturnsAJobThatIsAlreadyFinished(t *testing.T) {
+	ctx := testContext(t)
+
+	result, err := producer.Enqueue(ctx, flexiq.EnqueueRequest{
+		Task:    "orders.process",
+		Args:    []any{order{OrderID: "ord-wait", AmountCents: 1}},
+		Options: flexiq.EnqueueOptions{Queue: "e2e-wait"},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err = producer.CancelJob(ctx, result.Job.ID); err != nil {
+		t.Fatalf("CancelJob: %v", err)
+	}
+
+	job, err := producer.Wait(ctx, result.Job.ID)
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if job.Status != flexiq.StatusCancelled {
+		t.Errorf("Wait returned a %s job, want CANCELLED", job.Status)
+	}
+
+	var items []flexiq.Transition
+	for transition, err := range producer.WatchJobs(ctx, result.Job.ID, "0192f3c4-0000-7000-8000-000000000000") {
+		if err != nil {
+			t.Fatalf("WatchJobs: %v", err)
+		}
+		items = append(items, transition)
+	}
+	if len(items) != 2 || !items[0].Terminal || !items[1].NotFound {
+		t.Errorf("watch yielded %+v, want a terminal snapshot then a not-found", items)
+	}
+}
+
 // TestQueueStatsCountsTheNamespacesOwnJobs proves the counts are per queue,
 // which is what makes the number readable at all on a shared namespace.
 func TestQueueStatsCountsTheNamespacesOwnJobs(t *testing.T) {
