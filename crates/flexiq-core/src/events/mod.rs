@@ -30,7 +30,8 @@ pub mod reason;
 pub(crate) mod sink;
 
 pub use config::{
-    Delivery, EventsConfig, EventsConfigError, Filter, HttpSinkConfig, RedisSinkConfig, SinkConfig,
+    Delivery, EventsConfig, EventsConfigError, Filter, HttpSinkConfig, KafkaSasl,
+    KafkaSaslMechanism, KafkaSinkConfig, RedisSinkConfig, SinkConfig,
 };
 pub use event::{EventType, JobEvent, CLOUDEVENTS_TYPE_PREFIX, DEFAULT_SOURCE};
 pub use hub::{EventHub, SinkStats};

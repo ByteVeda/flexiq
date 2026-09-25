@@ -10,13 +10,20 @@ use super::event::JobEvent;
 
 #[cfg(feature = "events-http")]
 mod http;
+#[cfg(feature = "events-kafka")]
+mod kafka;
 #[cfg(feature = "redis")]
 mod redis_streams;
+#[cfg(feature = "events-kafka")]
+mod tls;
 
 /// How one delivery attempt of one batch went.
 // Only feature-gated backends construct the first two; the hub matches on
 // them in every build, including one compiled with no sink kind at all.
-#[cfg_attr(not(any(feature = "events-http", feature = "redis")), allow(dead_code))]
+#[cfg_attr(
+    not(any(feature = "events-http", feature = "events-kafka", feature = "redis")),
+    allow(dead_code)
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DeliveryResult {
     /// The destination accepted the whole batch.
@@ -41,7 +48,10 @@ pub(crate) trait SinkBackend: Send + 'static {
 ///
 /// A kind this build was compiled without is refused here, at hub start, so a
 /// config that cannot deliver never looks healthy.
-#[cfg_attr(not(feature = "events-http"), allow(unused_variables))]
+#[cfg_attr(
+    not(any(feature = "events-http", feature = "events-kafka", feature = "redis")),
+    allow(unused_variables)
+)]
 pub(crate) fn build_backend(
     sink: &SinkConfig,
     source: &str,
@@ -57,11 +67,18 @@ pub(crate) fn build_backend(
         )?)),
         #[cfg(not(feature = "redis"))]
         SinkConfig::RedisStreams(_) => Err(not_compiled(sink, "redis")),
+        #[cfg(feature = "events-kafka")]
+        SinkConfig::Kafka(config) => Ok(Box::new(kafka::KafkaSink::new(config, source)?)),
+        #[cfg(not(feature = "events-kafka"))]
+        SinkConfig::Kafka(_) => Err(not_compiled(sink, "events-kafka")),
     }
 }
 
 // Unused only when every sink kind is compiled in, and so never refused.
-#[cfg_attr(all(feature = "events-http", feature = "redis"), allow(dead_code))]
+#[cfg_attr(
+    all(feature = "events-http", feature = "events-kafka", feature = "redis"),
+    allow(dead_code)
+)]
 fn not_compiled(sink: &SinkConfig, feature: &'static str) -> EventsConfigError {
     EventsConfigError::NotCompiled {
         sink: sink.name().to_string(),

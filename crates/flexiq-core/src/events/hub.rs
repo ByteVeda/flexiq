@@ -1072,6 +1072,24 @@ flexiq_events_queued{sink=\"we\\\"b\"} 0
         );
     }
 
+    #[cfg(not(feature = "events-kafka"))]
+    #[test]
+    fn a_kafka_sink_needs_the_events_kafka_feature() {
+        let doc = r#"{"sinks":[{"kind":"kafka","name":"k","brokers":["b:9092"],"topic":"t"}]}"#;
+        let error = EventHub::from_json(doc).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                EventsConfigError::NotCompiled {
+                    kind: "kafka",
+                    feature: "events-kafka",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+    }
+
     #[test]
     fn start_revalidates_a_hand_built_config() {
         let config = EventsConfig {
