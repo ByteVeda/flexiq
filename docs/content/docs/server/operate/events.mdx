@@ -180,8 +180,11 @@ dependent cascaded behind a dead-lettered parent (a DLQ move or a shed).
 **The stream is still not a complete audit of the queue.** A job an embedded
 SDK enqueues through its own process's enqueue API, the node jobs of a
 submitted workflow, and a pending-job cancel made through an embedded SDK
-(including its cascades) emit nothing. Nor does anything a runtime with no
-sinks settles. The contract lists
+(including its cascades) emit nothing. Neither do bulk purges or revokes of a
+queue's or a task's pending jobs, a cancel written to storage directly by any
+tool other than a cancel door, nor another tenant's expiry swept by a
+namespaced scheduler. Nor does anything a runtime with no sinks settles. The
+contract lists
 [everything that is not seen](https://github.com/ByteVeda/flexiq/blob/master/contracts/EVENT_EGRESS_CONTRACT.md#what-is-not-seen).
 
 Job arguments stay in the process unless a sink sets `include_payload: true`,
@@ -196,8 +199,9 @@ holds the row.
 **At-most-once overall, and each accepted event may still arrive more than
 once. Never exactly-once.**
 
-- **Lost** when a sink's buffer is full, when its `max_attempts` run out, or
-  when the process dies — the buffer is in memory.
+- **Lost** when a sink's buffer is full, when its `max_attempts` run out,
+  when the process dies — the buffer is in memory — or when a storage error
+  interrupts an operation after part of it has committed.
 - **Repeated** when a response is lost after the endpoint accepted, or when a
   batch is retried after part of it landed.
 - **Unordered** — emits race across threads, so a fast task's `job.completed`

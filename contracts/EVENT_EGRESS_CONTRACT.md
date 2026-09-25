@@ -256,8 +256,14 @@ transitions emit nothing:
   namespaced scheduler never announces another tenant's row, so no scheduler
   is guaranteed to announce a given namespace's expiries — the one whose
   namespace owns the row, or one with no namespace, has to sweep it first.
-- **Anything in a runtime with no sinks.** Each scheduler emits only for jobs
-  it dispatched and results it settled, into its own hub.
+- **Bulk pending cancels, and cancels made outside the server's doors.**
+  Purging or revoking every pending job of a queue or a task, and any tool
+  that cancels a job by writing to storage directly rather than through a
+  `flexiq-server` cancel door, archive their jobs without an event.
+- **Anything in a runtime with no sinks.** Each scheduler emits into its own
+  hub only: for jobs it dispatched and results it settled, and for the
+  expiries, cascades, periodic firings and dead-letter auto-retries it
+  performs itself (above).
 
 ## The event
 
@@ -351,7 +357,9 @@ id; one transition delivered twice always does.
 ## Delivery semantics
 
 **At-most-once overall**: an event is lost when its sink's buffer is full,
-when its delivery attempts run out, or when the process dies. **Each accepted
+when its delivery attempts run out, when the process dies, or when a storage
+error interrupts an operation after part of it has committed but before its
+events are emitted. **Each accepted
 event may also be delivered more than once**, so consumers dedupe on the
 CloudEvents `id`. **Never exactly-once.**
 
