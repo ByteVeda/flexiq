@@ -204,7 +204,7 @@ mod tests {
     const POST: http::Method = http::Method::POST;
 
     fn grants_everything() -> Fixed {
-        Fixed(Principal::new("prod", ScopeSet::ALL))
+        Fixed(Principal::new("tok", "prod", ScopeSet::ALL))
     }
 
     #[tokio::test]
@@ -250,7 +250,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_credential_without_the_package_scope_is_refused() {
-        let produce_only = Fixed(Principal::new("prod", ScopeSet::of(&[Scope::Produce])));
+        let produce_only = Fixed(Principal::new(
+            "tok",
+            "prod",
+            ScopeSet::of(&[Scope::Produce]),
+        ));
         assert!(authorize(
             &produce_only,
             &POST,

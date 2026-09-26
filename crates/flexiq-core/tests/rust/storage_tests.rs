@@ -446,6 +446,54 @@ fn test_cancel_job(s: &impl Storage) {
     assert!(!s.cancel_job(&job.id, None).unwrap());
 }
 
+fn test_get_jobs_by_ids(s: &impl Storage) {
+    let q = "q-get-by-ids";
+    let first = s.enqueue(make_job(q, "t")).unwrap();
+    let second = s.enqueue(make_job(q, "t")).unwrap();
+    let done = s.dequeue(q, now_millis() + 1000, None).unwrap().unwrap();
+    s.complete(&done.id, Some(vec![42]), None).unwrap();
+    let pending = if done.id == first.id { second } else { first };
+    let mut foreign = make_job(q, "t");
+    foreign.namespace = Some("gbi-other".into());
+    let foreign = s.enqueue(foreign).unwrap();
+    let mut own = make_job(q, "t");
+    own.namespace = Some("gbi-own".into());
+    let own = s.enqueue(own).unwrap();
+
+    let ids = [
+        done.id.as_str(),
+        pending.id.as_str(),
+        foreign.id.as_str(),
+        "no-such-job",
+    ];
+    let mut rows = s.get_jobs_by_ids(&ids, None).unwrap();
+    rows.sort_by_key(|job| ids.iter().position(|id| *id == job.id));
+    let seen: Vec<_> = rows
+        .iter()
+        .map(|job| (job.id.as_str(), job.status))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (done.id.as_str(), JobStatus::Complete),
+            (pending.id.as_str(), JobStatus::Pending),
+            (foreign.id.as_str(), JobStatus::Pending),
+        ]
+    );
+    assert!(
+        rows.iter()
+            .all(|job| job.payload.is_empty() && job.result.is_none()),
+        "rows are blob-free"
+    );
+
+    let scoped = s
+        .get_jobs_by_ids(&[own.id.as_str(), foreign.id.as_str()], Some("gbi-own"))
+        .unwrap();
+    assert_eq!(scoped.len(), 1, "another namespace's id reads as absent");
+    assert_eq!(scoped[0].id, own.id);
+    assert!(s.get_jobs_by_ids(&[], None).unwrap().is_empty());
+}
+
 fn test_cancel_requested_among(s: &impl Storage) {
     // One running job with a cancel request, one running without, one unknown
     // id: only the first comes back.
@@ -3050,6 +3098,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_retry(s);
     test_reschedule(s);
     test_cancel_job(s);
+    test_get_jobs_by_ids(s);
     test_cancel_requested_among(s);
     test_stats(s);
     test_stats_by_queue_and_task(s);

@@ -10,6 +10,7 @@ pub mod jobs;
 pub mod overrides;
 pub mod periodic;
 pub mod queues;
+pub mod tail;
 pub mod throughput;
 pub mod workers;
 

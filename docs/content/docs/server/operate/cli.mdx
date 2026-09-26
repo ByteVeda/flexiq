@@ -14,10 +14,10 @@ opens the database off a DSN, which is the wrong door for an operator holding a
 scoped API token and no database credential. `fq` holds a token and nothing
 else.
 
-<Callout title="What it cannot do yet">
+<Callout title="Bounded by the wire">
 Talking to the server instead of the database means `fq` can only do what the
-wire exposes. There is no `fq tail`. [What the
-wire cannot do yet](#what-the-wire-cannot-do-yet) is the full list.
+wire exposes. [What the wire cannot do yet](#what-the-wire-cannot-do-yet) says
+where that stops.
 </Callout>
 
 ## Getting it
@@ -191,6 +191,48 @@ already finished is unchanged. Running it twice is not an error.
 A job in another namespace reads as not found, indistinguishable from one that
 never existed — the door refuses to be an existence oracle.
 
+## `fq tail`
+
+```bash
+fq tail <id> [<id>...]
+fq tail --queue orders
+fq tail <id> --json
+```
+
+Follows jobs as they change state, over the `WatchJobs` stream. It never polls.
+
+- **With ids** (at most 100), it prints each job's current state, then every
+  transition, and **exits once every job is finished**. A job that already
+  finished prints one line and exits, so `fq tail <id>` on a done job returns
+  at once. An id that does not exist, or belongs to another namespace, prints
+  `not found`.
+- **With `--queue`**, it prints every transition of the queue's jobs until
+  interrupted. It sees only what the server process it reaches handles itself.
+
+```text
+2026-09-25T19:20:14.389Z  01a0da02-d734-7505-9467-d76f976470c8  orders  send  enqueued -> pending  attempt 0
+2026-09-25T19:20:14.402Z  01a0da02-d734-7505-9467-d76f976470c8  orders  send  cancelled -> cancelled  attempt 0
+```
+
+Each line is the time, the job, its queue and task, what happened, the status
+that left it in, and the attempt. `--json` prints one proto3 JSON object per
+line.
+
+`tail` reconnects on its own when the connection drops, such as when a laptop
+sleeps or the server restarts. It says so on stderr, backing off from 1 to 30
+seconds:
+
+```text
+fq: stream lost (Unavailable: the server is shutting down (SHUTTING_DOWN)); reconnecting in 1s
+fq: missed transitions while disconnected; following from now
+```
+
+An id tail reopens with the jobs still unfinished, and the server's snapshot
+reports anything that finished while it was away. A queue tail resumes from its
+last position. If the server no longer holds that position (a restart, another
+replica, or too long away), `tail` prints the second line above and carries on
+from now. A refusal that retrying cannot fix, such as a bad token, exits `1`.
+
 ## `fq queues`
 
 ```bash
@@ -343,7 +385,5 @@ subcommand here:
 
 | Missing | Why |
 | --- | --- |
-| Follow a job or a queue as it changes (`fq tail`) | [#837](https://github.com/ByteVeda/flexiq/issues/837) — there is no `WatchJobs` stream, and a poll loop hidden behind a subcommand is the cost that issue exists to remove. |
-
-Until then, following a job needs the dashboard or an SDK with a database
-connection.
+| Follow a queue across every replica (`fq tail --queue`) | A queue watch hears only the server process it reaches. An id watch also re-reads every watched job on a timer, so it covers every process; a queue has no bounded set of ids to re-read. Tail ids, or run one replica. |
+| Follow a workflow run | `WatchJobs` follows jobs. A run is not one, so `fq` has no verb for it. |

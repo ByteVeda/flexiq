@@ -64,6 +64,10 @@ const (
 	ReasonStorageUnavailable           Reason = "STORAGE_UNAVAILABLE"
 	ReasonStorageConstraint            Reason = "STORAGE_CONSTRAINT"
 	ReasonServerMisconfigured          Reason = "SERVER_MISCONFIGURED"
+	ReasonWatchLimit                   Reason = "WATCH_LIMIT"
+	ReasonWatchOverflow                Reason = "WATCH_OVERFLOW"
+	ReasonWatchCursorExpired           Reason = "WATCH_CURSOR_EXPIRED"
+	ReasonShuttingDown                 Reason = "SHUTTING_DOWN"
 	ReasonInternal                     Reason = "INTERNAL"
 	ReasonUnknown                      Reason = "UNKNOWN"
 )
@@ -218,7 +222,8 @@ func (e *Error) Scope() (string, bool) {
 }
 
 // Retryable reports whether the server described a condition that clears on its
-// own: a full queue, a rate limit, a storage blip, a lock another writer holds.
+// own: a full queue, a rate limit, a storage blip, a lock another writer holds,
+// a watch cap or buffer, a server shutting down.
 //
 // It says nothing about whether it is safe to retry. On a write, UNAVAILABLE
 // and DEADLINE_EXCEEDED may both mean the write landed and the connection
@@ -227,7 +232,8 @@ func (e *Error) Scope() (string, bool) {
 func (e *Error) Retryable() bool {
 	switch e.Reason {
 	case ReasonQueueFull, ReasonRateLimited, ReasonStorageUnavailable,
-		ReasonLockHeld, ReasonSettingConflict:
+		ReasonLockHeld, ReasonSettingConflict,
+		ReasonWatchLimit, ReasonWatchOverflow, ReasonShuttingDown:
 		return true
 	}
 	return e.Reason == "" && (e.Code == codes.Unavailable || e.Code == codes.DeadlineExceeded)

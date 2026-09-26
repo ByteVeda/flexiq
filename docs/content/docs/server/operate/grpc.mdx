@@ -299,8 +299,8 @@ Three things this door does not do. It serves the producer service and, under
 token's scope decides which of the two a call reaches. It **does not expose the
 executor API** — a worker surface has different credentials and different
 failure modes, and no reason to be reachable from a browser. And it **transcodes
-no streams**, because there are none: `v1` has no server stream and no
-completion watch. Poll `GetJob` or use a webhook subscription.
+no streams**: `WatchJobs` is a server stream, and a stream has no
+request/response HTTP mapping. Watch over gRPC, or poll `GET /v1/jobs/{job_id}`.
 
 A request without a credential comes back `401` with `"reason":
 "UNAUTHENTICATED"` rather than a gRPC trailer. TLS is not terminated here
@@ -412,6 +412,82 @@ The same holds for `Health/Watch` and reflection.
 cannot crowd out another's. Raising it does not buy throughput on its own: every
 RPC here is answered out of a bounded storage pool, and more calls in flight
 than the pool can serve is a queue in front of it that nothing reports on.
+
+## Watching jobs
+
+`WatchJobs` is a server stream that follows jobs as they change state, so a
+client waits for a job without polling `GetJob`. It watches either a set of up
+to 100 job ids, or a queue.
+
+**An id watch** starts with the current state of every id: a `SNAPSHOT`, or
+`not_found_job_id` for an id that does not exist or belongs to another
+namespace. The two look the same on purpose. Live transitions follow. When a
+job's item has `terminal` set, that job is done. When every job is done the
+stream ends with `OK`. So a watch on a job that already finished sends one item
+and closes:
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  -d '{"jobIds": {"jobIds": ["'"$JOB_ID"'"]}}' \
+  localhost:50051 flexiq.v1.ProducerService/WatchJobs
+```
+
+Decide that a job is finished by `terminal`, not by `status`. `FAILED` is not
+terminal while a `RETRYING` or `DEAD` is still to come. The stream carries no
+payload or result; read the result with `GetJob` once the job is terminal.
+
+**A queue watch** sends live transitions of the queue's jobs and no snapshot.
+It opens with a checkpoint, an item that carries only the `cursor` the watch
+starts from. Every item after it carries a `cursor` too. Keep the last one,
+checkpoint included, so a stream lost before its first transition resumes with
+no gap.
+
+### Where transitions come from
+
+Transitions reach a watch in two ways:
+
+- **Instantly, from this process.** The server taps the same event hub its
+  scheduler and doors already announce on, so a job this process runs or cancels
+  reaches the stream with no database read.
+- **Within the reconcile interval, from anywhere else.** A job run by another
+  replica, or by a worker that reads the database directly, changes nothing this
+  process can hear. So one task per process re-reads every watched id in a single
+  batched query every `FLEXIQ_GRPC_WATCH_RECONCILE` seconds and sends what moved
+  on. That is one query per tick however many clients are watching.
+
+The re-read covers id watches only. **A queue watch sees only this process's
+transitions**, because a queue has no bounded set of ids to re-read. Run the
+producer door on the same process as the scheduler, or watch ids.
+
+### Resuming a stream
+
+- **An id watch**: open it again. The snapshot is read from storage, so a job
+  that finished while you were disconnected comes back terminal.
+- **A queue watch**: send the last `cursor` back as `resumeCursor`. The server
+  keeps the last `FLEXIQ_GRPC_WATCH_BUFFER` transitions in memory, per process.
+  A cursor from another replica, from before a restart, or older than that
+  window fails `FAILED_PRECONDITION` with reason `WATCH_CURSOR_EXPIRED`. The
+  transitions in that gap are gone. Watch again without a cursor, and read the
+  jobs' current state with `ListJobs` if you need it.
+
+### Limits
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN` | `16` | Concurrent watches one API token may hold. `0` is unlimited |
+| `FLEXIQ_GRPC_WATCH_RECONCILE` | `5` | Seconds between re-reads of watched ids. `0` turns the re-read off, and with it every transition another process makes |
+| `FLEXIQ_GRPC_WATCH_BUFFER` | `4096` | Transitions kept in memory for streams to catch up on and resume from |
+| `FLEXIQ_GRPC_WATCH_STALL` | `30` | Seconds a stream waits on a client that stopped reading |
+
+A token over its cap is refused `RESOURCE_EXHAUSTED` with reason `WATCH_LIMIT`.
+The server never slows down for a client that stops reading. When the client
+falls behind the buffer, or a send waits longer than the stall bound, the stream
+ends `RESOURCE_EXHAUSTED` with reason `WATCH_OVERFLOW`, and the client resumes as
+above. On shutdown every stream ends `UNAVAILABLE` with reason `SHUTTING_DOWN`,
+so clients reconnect to another replica.
+
+`FLEXIQ_GRPC_REQUEST_TIMEOUT` does not bound a watch, for the same reason it
+does not bound `Attach`.
 
 ## The executor door
 

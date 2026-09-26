@@ -55,7 +55,9 @@ pub use contract::{
     MIN_CONTRACT_VERSION,
 };
 pub use error::{QueueError, Result, StepDivergence};
-pub use events::{EventHub, EventType, EventsConfig, EventsConfigError, JobEvent, SinkStats};
+pub use events::{
+    EventHub, EventTap, EventType, EventsConfig, EventsConfigError, JobEvent, SinkStats,
+};
 #[cfg(feature = "http-target")]
 pub use http::auth::{AuthError, OutboundAuth, Signer, SigningRequest};
 #[cfg(feature = "http-target")]

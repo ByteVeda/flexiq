@@ -43,10 +43,12 @@ const OTHER: &str = "other";
 ///
 /// Written out rather than derived: the executor package is not transcoded, so
 /// the facade's closed set does not name its RPCs, and health and reflection
-/// come from crates that publish no such list. Five names is cheaper than a
-/// lookup that could go stale silently, and a name missing from here degrades
-/// to `other` rather than misreporting.
-const OTHER_SERVED_METHODS: [&str; 5] = [
+/// come from crates that publish no such list. `WatchJobs` is here because a
+/// stream has no facade route. Six names is cheaper than a lookup that could go
+/// stale silently, and a name missing from here degrades to `other` rather than
+/// misreporting.
+const OTHER_SERVED_METHODS: [&str; 6] = [
+    "flexiq.v1.ProducerService/WatchJobs",
     "flexiq.executor.v1.ExecutorService/Attach",
     "flexiq.executor.v1.ExecutorService/Heartbeat",
     "grpc.health.v1.Health/Check",

@@ -52,8 +52,8 @@ type QueueStats struct {
 
 // GetJob reads one job by id.
 //
-// There is no completion notification anywhere on this door: no watch, and no
-// server stream. Poll this, or subscribe a webhook on the server side.
+// To wait for a job to finish, watch it with [Client.Wait] or
+// [Client.WatchJobs] rather than polling this.
 //
 // A job in another namespace answers [ReasonJobNotFound], indistinguishable
 // from a job that never existed. So does a job that retention has already

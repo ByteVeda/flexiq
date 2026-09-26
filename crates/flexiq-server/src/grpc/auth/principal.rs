@@ -14,20 +14,34 @@ use std::sync::Arc;
 // module, and where a scope is *defined* is not their concern.
 pub use crate::tokens::scope::{Scope, ScopeSet};
 
-/// An authenticated caller: one namespace, and what it may do in it.
+/// An authenticated caller: one credential, one namespace, and what it may do
+/// in it.
 #[derive(Debug, Clone)]
 pub struct Principal {
+    credential: Arc<str>,
     namespace: Arc<str>,
     scopes: ScopeSet,
 }
 
 impl Principal {
-    /// A principal scoped to `namespace` with exactly `scopes`.
-    pub fn new(namespace: impl Into<Arc<str>>, scopes: ScopeSet) -> Self {
+    /// A principal presenting `credential`, scoped to `namespace` with exactly
+    /// `scopes`.
+    pub fn new(
+        credential: impl Into<Arc<str>>,
+        namespace: impl Into<Arc<str>>,
+        scopes: ScopeSet,
+    ) -> Self {
         Self {
+            credential: credential.into(),
             namespace: namespace.into(),
             scopes,
         }
+    }
+
+    /// The public id of the credential presented — never its secret. What a
+    /// per-caller limit counts against.
+    pub fn credential(&self) -> &Arc<str> {
+        &self.credential
     }
 
     /// The namespace every `Storage` call made for this caller is scoped to.
@@ -50,22 +64,23 @@ mod tests {
 
     #[test]
     fn a_principal_grants_every_scope_its_token_carried() {
-        let principal = Principal::new("prod", ScopeSet::ALL);
+        let principal = Principal::new("tok", "prod", ScopeSet::ALL);
         assert!(principal.grants(Scope::Produce));
         assert!(principal.grants(Scope::Execute));
         assert_eq!(&**principal.namespace(), "prod");
+        assert_eq!(&**principal.credential(), "tok");
     }
 
     #[test]
     fn a_narrower_set_grants_only_what_it_lists() {
-        let principal = Principal::new("prod", ScopeSet::of(&[Scope::Produce]));
+        let principal = Principal::new("tok", "prod", ScopeSet::of(&[Scope::Produce]));
         assert!(principal.grants(Scope::Produce));
         assert!(!principal.grants(Scope::Execute));
     }
 
     #[test]
     fn an_empty_set_grants_nothing() {
-        let principal = Principal::new("prod", ScopeSet::of(&[]));
+        let principal = Principal::new("tok", "prod", ScopeSet::of(&[]));
         assert!(!principal.grants(Scope::Produce));
         assert!(!principal.grants(Scope::Execute));
     }

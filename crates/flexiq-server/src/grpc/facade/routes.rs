@@ -1017,7 +1017,8 @@ mod tests {
     /// The check the issue asks for, and the one §11 fails the PR without:
     /// every RPC a served package declares is routed. Read off the descriptor,
     /// so there is no second list to keep in step — adding an RPC to the
-    /// `.proto` fails here until it has a binding.
+    /// `.proto` fails here until it has a binding. A streaming RPC is the one
+    /// exception: it has no request/response HTTP mapping to transcode.
     #[test]
     fn every_served_rpc_has_a_route() {
         for service in SERVED {
@@ -1027,7 +1028,7 @@ mod tests {
                 "{} declares no RPCs",
                 service.package()
             );
-            for rpc in declared {
+            for rpc in declared.into_iter().filter(|rpc| !rpc.streaming) {
                 assert!(
                     ROUTES
                         .iter()
@@ -1098,9 +1099,31 @@ mod tests {
             Rpc::ALL.len(),
             SERVED
                 .iter()
-                .map(|service| descriptor::rpcs(service.package()).len())
-                .sum::<usize>()
+                .flat_map(|service| descriptor::rpcs(service.package()))
+                .filter(|rpc| !rpc.streaming)
+                .count()
         );
+    }
+
+    /// And the exception above stays exactly that: no stream has a route.
+    #[test]
+    fn no_streaming_rpc_is_routed() {
+        for service in SERVED {
+            for rpc in descriptor::rpcs(service.package()) {
+                if rpc.streaming {
+                    assert!(
+                        !ROUTES.iter().any(|binding| calls(
+                            binding,
+                            service.package(),
+                            &rpc.method
+                        )),
+                        "{}.{} streams and must not have a route",
+                        rpc.service,
+                        rpc.method
+                    );
+                }
+            }
+        }
     }
 
     /// The worker surface has different credentials and different failure

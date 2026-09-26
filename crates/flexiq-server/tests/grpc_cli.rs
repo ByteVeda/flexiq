@@ -398,6 +398,59 @@ async fn every_command_runs_against_a_real_door() {
     harness.stop().await;
 }
 
+/// `fq tail <ids>` on jobs that are already finished prints them and exits,
+/// rather than hanging — the first thing an operator types.
+#[tokio::test]
+async fn tail_on_finished_jobs_prints_them_and_exits() {
+    let mut harness = Harness::start("tail-finished").await;
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let enqueued = harness
+            .client
+            .enqueue(
+                commands::enqueue::request(&enqueue_args("tailed", &[], &[]), now_millis())
+                    .expect("builds"),
+            )
+            .await
+            .expect("enqueue")
+            .into_inner();
+        let id = enqueued.job.expect("a job").id;
+        harness
+            .client
+            .cancel_job(flexiq_cli::pb::CancelJobRequest { job_id: id.clone() })
+            .await
+            .expect("cancel");
+        ids.push(id);
+    }
+    ids.push("no-such-job".to_string());
+
+    for json in [false, true] {
+        let args = flexiq_cli::cli::TailArgs {
+            ids: ids.clone(),
+            queue: None,
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            commands::tail::run(&mut harness.client, &args, json),
+        )
+        .await
+        .expect("tail must exit once every job is finished")
+        .expect("tail succeeds");
+    }
+
+    // A refusal that retrying cannot fix is an error, not a reconnect loop.
+    let too_many = flexiq_cli::cli::TailArgs {
+        ids: (0..101).map(|i| i.to_string()).collect(),
+        queue: None,
+    };
+    let error = commands::tail::run(&mut harness.client, &too_many, false)
+        .await
+        .expect_err("over the id cap");
+    assert!(error.to_string().contains("INVALID_REQUEST"), "{error}");
+
+    harness.stop().await;
+}
+
 // ── The admin door ───────────────────────────────────────────────────
 
 /// A job in this door's namespace, written straight to storage.

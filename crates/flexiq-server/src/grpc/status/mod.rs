@@ -263,6 +263,52 @@ impl WireError {
         }
     }
 
+    /// A `WatchJobs` call from a credential already holding `cap` streams.
+    pub fn watch_limit(cap: usize) -> Self {
+        Self {
+            code: Code::ResourceExhausted,
+            reason: reason::WATCH_LIMIT,
+            message: format!("this credential already holds {cap} watches, the most allowed"),
+            metadata: HashMap::from([(reason::KEY_CAP.to_string(), cap.to_string())]),
+            retry_after: Some(RETRY_AFTER),
+        }
+    }
+
+    /// A watch whose client fell further behind than the server buffers.
+    pub fn watch_overflow() -> Self {
+        Self {
+            code: Code::ResourceExhausted,
+            reason: reason::WATCH_OVERFLOW,
+            message: "the watch fell behind what the server buffers; resume it".to_string(),
+            metadata: HashMap::new(),
+            retry_after: None,
+        }
+    }
+
+    /// A queue watch's cursor that this process no longer holds.
+    pub fn watch_cursor_expired() -> Self {
+        Self {
+            code: Code::FailedPrecondition,
+            reason: reason::WATCH_CURSOR_EXPIRED,
+            message: "this cursor is outside what the server still holds; watch again \
+                      without a cursor, and read current state with ListJobs if needed"
+                .to_string(),
+            metadata: HashMap::new(),
+            retry_after: None,
+        }
+    }
+
+    /// A stream ended because this process is stopping.
+    pub fn shutting_down() -> Self {
+        Self {
+            code: Code::Unavailable,
+            reason: reason::SHUTTING_DOWN,
+            message: "the server is shutting down".to_string(),
+            metadata: HashMap::new(),
+            retry_after: None,
+        }
+    }
+
     /// Name the batch item this error belongs to.
     ///
     /// `index` rides alongside whatever reason the item raised rather than

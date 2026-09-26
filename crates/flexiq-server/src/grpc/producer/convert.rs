@@ -21,7 +21,7 @@ use crate::grpc::status::WireError;
 ///
 /// Substituted here rather than left empty: it is the name every SDK already
 /// defaults to, and a queue literally called `""` is not addressable anyway.
-const DEFAULT_QUEUE: &str = "default";
+pub(crate) const DEFAULT_QUEUE: &str = "default";
 
 /// Milliseconds per second, as the two integer widths the conversions need.
 const MILLIS_PER_SEC: i64 = 1_000;

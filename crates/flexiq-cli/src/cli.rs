@@ -10,7 +10,7 @@
 //! integers for the same reason: a second spelling of the same value buys
 //! nothing.
 //!
-//! Two doors behind one binary. `enqueue`, `jobs` and `queues [NAME]` speak
+//! Two doors behind one binary. `enqueue`, `jobs`, `tail` and `queues [NAME]` speak
 //! `flexiq.v1.ProducerService` and need a `produce` token; everything else
 //! speaks `flexiq.admin.v1.AdminService` and needs `inspect` to read and
 //! `admin` to change anything.
@@ -48,6 +48,10 @@ pub enum Command {
     /// Read and cancel jobs.
     #[command(subcommand)]
     Jobs(JobsCommand),
+    /// Follow jobs, or a queue, as they change state. With ids, exits once
+    /// every job is finished; with `--queue`, runs until interrupted.
+    /// Reconnects on its own after a dropped connection.
+    Tail(TailArgs),
     /// Job counts, for one queue or for the whole namespace. `--list` lists
     /// every queue with whether it is paused.
     Queues(QueuesArgs),
@@ -164,6 +168,18 @@ pub struct JobsGetArgs {
     /// Also fetch the return value.
     #[arg(long)]
     pub result: bool,
+}
+
+/// `fq tail`.
+#[derive(Debug, Args)]
+pub struct TailArgs {
+    /// Job ids to follow, at most 100.
+    #[arg(required_unless_present = "queue", conflicts_with = "queue")]
+    pub ids: Vec<String>,
+    /// Follow every job in this queue instead. Sees only the transitions the
+    /// server process you reach handles itself.
+    #[arg(short, long)]
+    pub queue: Option<String>,
 }
 
 /// `fq jobs cancel`.

@@ -29,6 +29,7 @@ mod hub;
 pub mod reason;
 pub(crate) mod sink;
 mod subject;
+mod tap;
 
 pub use config::{
     Delivery, EventsConfig, EventsConfigError, Filter, HttpSinkConfig, KafkaSasl,
@@ -36,6 +37,7 @@ pub use config::{
 };
 pub use event::{EventType, JobEvent, CLOUDEVENTS_TYPE_PREFIX, DEFAULT_SOURCE};
 pub use hub::{EventHub, SinkStats};
+pub use tap::EventTap;
 
 #[cfg(test)]
 pub(crate) use hub::test_support;

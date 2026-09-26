@@ -29,6 +29,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 
 use crate::config::listen::{parse, ListenAddress};
+use crate::config::watch::{self, WatchConfig};
 use crate::config::{value, Env};
 
 /// The variable that turns the role on, named once.
@@ -129,6 +130,8 @@ pub struct GrpcConfig {
     pub request_timeout: Duration,
     /// Calls one connection may have in flight. Zero leaves it unbounded.
     pub max_concurrent_requests: usize,
+    /// The bounds on `WatchJobs` streams.
+    pub watch: WatchConfig,
 }
 
 impl GrpcConfig {
@@ -147,6 +150,7 @@ impl GrpcConfig {
             keepalive_interval: DEFAULT_KEEPALIVE_INTERVAL,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
+            watch: WatchConfig::default(),
         }
     }
 
@@ -243,6 +247,7 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<GrpcConfig>
         keepalive_interval,
         request_timeout,
         max_concurrent_requests,
+        watch: watch::from_env(env)?,
         ..GrpcConfig::new(listen, namespace)
     }))
 }

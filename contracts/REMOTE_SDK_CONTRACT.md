@@ -132,13 +132,14 @@ producer door stays compilable on its own.
 | RPC | Level | Idempotency | Notes |
 |---|---|---|---|
 | `Enqueue` | **MUST** | none | The door. |
-| `GetJob` | **MUST** | `NO_SIDE_EFFECTS` | There is no completion notification anywhere in `v1`; a client that cannot read a job back cannot observe an outcome at all. |
+| `GetJob` | **MUST** | `NO_SIDE_EFFECTS` | The only way to read a job's result. A client that cannot read a job back cannot observe an outcome at all. |
 | `CancelJob` | **SHOULD** | `IDEMPOTENT` | Cheap, and without it there is no way to stop work already submitted. |
 | `EnqueueBatch` | MAY | none | An optimisation over N `Enqueue` calls, and a harder one: no atomicity, a result per item, one `unique_key` per item. |
 | `ListJobs` | MAY | `NO_SIDE_EFFECTS` | Needs cursor handling. |
 | `QueueStats` | MAY | `NO_SIDE_EFFECTS` | |
 | `SubmitWorkflow` | MAY | none | Static graphs only — see below. |
 | `GetWorkflowRun` | MAY | `NO_SIDE_EFFECTS` | |
+| `WatchJobs` | **SHOULD** | `NO_SIDE_EFFECTS` | A server stream. The way to wait for a job without polling `GetJob` — see below. |
 
 Whatever subset it implements, a producer client:
 
@@ -186,6 +187,57 @@ token that does not decode is `INVALID_ARGUMENT` with reason `INVALID_REQUEST`.
 reason `WORKFLOW_CONSTRUCT_UNSUPPORTED`, carrying `node` and `field`. The
 message can carry all five; nothing outside a live SDK process can advance a run
 that uses them.
+
+`WatchJobs` follows jobs as they change state. A client that waits for a job
+**SHOULD** watch it rather than poll `GetJob`. It watches either a set of ids or
+a queue:
+
+- **An id watch** opens with one item per id: a `SNAPSHOT` of the job's current
+  state, or `not_found_job_id` for an id that does not exist or is in another
+  namespace. The two are indistinguishable. Live transitions follow. **A client
+  MUST decide that a job is finished by `JobTransition.terminal`, never by
+  `status`.** `FAILED` in particular is not terminal while a `RETRYING` or `DEAD`
+  is still to come. When every id is finished the stream ends with `OK`, so a
+  watch on a job that is already terminal sends one item and closes.
+- **A queue watch** sends live transitions only, with no snapshot. It opens with
+  a checkpoint: an item with no `item` arm set, carrying only the cursor the
+  watch starts from. Every item carries an opaque `cursor`. A client **MUST**
+  keep the cursor of an item whose arm it skips, the checkpoint included, or a
+  stream lost before its first transition resumes with a gap.
+
+Resuming after a dropped stream:
+
+- **An id watch** resumes by opening again. The snapshot is read from storage,
+  so a job that finished while the client was away comes back terminal. Sending
+  `resume_cursor` on an id watch is `INVALID_ARGUMENT`.
+- **A queue watch** resumes by sending its last `cursor` back as
+  `resume_cursor`. The server keeps a bounded window of recent transitions in
+  memory, per process. A cursor from another process, from before a restart, or
+  older than the window is refused with `FAILED_PRECONDITION`, reason
+  `WATCH_CURSOR_EXPIRED`. The transitions in the gap are gone, and `ListJobs`
+  cannot replay them — it reads current rows. On that error a client **MUST**
+  watch again without a cursor and **MUST NOT** assume it saw every
+  transition. A client that needs the jobs' current state reads it with
+  `ListJobs`. A cursor is opaque exactly as a `page_token` is.
+
+Coverage and bounds:
+
+- A transition reaches a watch the moment the serving process handles it.
+- A transition another process handles reaches an **id** watch within the
+  server's reconcile interval. That covers another replica, and a worker that
+  reads the database directly. A queue watch sees only the serving process's
+  transitions.
+- One watch names at most 100 ids.
+- Each credential has a cap on concurrent watches, `RESOURCE_EXHAUSTED` with
+  reason `WATCH_LIMIT`.
+- The server does not wait for a client that stops reading. The stream ends
+  `RESOURCE_EXHAUSTED` with reason `WATCH_OVERFLOW`, and the client resumes as
+  above.
+- A shutting-down server ends every stream `UNAVAILABLE` with reason
+  `SHUTTING_DOWN`. Reopening is always safe: the RPC reads and writes nothing.
+
+`WatchJobs` has no JSON facade path, because a server stream has no
+request/response HTTP mapping.
 
 ### An executor client — `flexiq.executor.v1.ExecutorService`
 
@@ -473,6 +525,10 @@ The closed list, with the code each arrives under:
 | `STEP_REFUSED` | `FAILED_PRECONDITION` | |
 | `LOCK_HELD` | `ABORTED` | Read again and retry. |
 | `SETTING_CONFLICT` | `ABORTED` | Read again and retry. |
+| `WATCH_LIMIT` | `RESOURCE_EXHAUSTED` | The credential already holds its cap of `WatchJobs` streams. Carries `cap`. Retry once one has ended. |
+| `WATCH_OVERFLOW` | `RESOURCE_EXHAUSTED` | A `WatchJobs` client fell further behind than the server buffers. Resume the watch. |
+| `WATCH_CURSOR_EXPIRED` | `FAILED_PRECONDITION` | A queue watch's `resume_cursor` is not held by this process. `ListJobs`, then watch without a cursor. |
+| `SHUTTING_DOWN` | `UNAVAILABLE` | The server is stopping. Retry, against another replica if there is one. |
 | `STORAGE_UNAVAILABLE` | `UNAVAILABLE` | Retryable with backoff. |
 | `STORAGE_CONSTRAINT` | `INTERNAL` | A write violated a database constraint. It will violate it again. |
 | `SERVER_MISCONFIGURED` | `INTERNAL` | |
@@ -744,7 +800,6 @@ them:
 | Direct storage access | The point of the door. |
 | Durable steps as a callable operation | `step.run` and `step.sleep` exist on this wire **only** as frames inside an already-attached executor stream. There is no unary step RPC, and a producer client cannot reach one. |
 | Task registration | The server holds no task registry. **A task name is a string, and enqueuing a name nobody implements succeeds** — the job dead-letters later. |
-| Completion notification | No watch, no server stream in `v1`. Poll `GetJob`, or subscribe a webhook. |
 
 Four more hold for an in-process SDK too, but a network client meets them sooner
 because it is the one writing the retry loop:

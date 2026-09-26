@@ -98,6 +98,20 @@ pub const SETTING_CONFLICT: &str = "SETTING_CONFLICT";
 /// `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`). Carries `node` and
 /// `field`. Never retryable as sent; resubmitting without that field succeeds.
 pub const WORKFLOW_CONSTRUCT_UNSUPPORTED: &str = "WORKFLOW_CONSTRUCT_UNSUPPORTED";
+/// The credential already holds as many `WatchJobs` streams as the server
+/// allows. Carries `cap`. Retry once one of them has ended.
+pub const WATCH_LIMIT: &str = "WATCH_LIMIT";
+/// A `WatchJobs` stream fell further behind than the server buffers, because
+/// its client stopped reading. Resume: reopen an id watch, or pass the last
+/// cursor back on a queue watch.
+pub const WATCH_OVERFLOW: &str = "WATCH_OVERFLOW";
+/// A queue watch's `resume_cursor` points outside what this process still
+/// holds — another process's, one from before a restart, or one too old. The
+/// gap's transitions are gone: watch again without a cursor.
+pub const WATCH_CURSOR_EXPIRED: &str = "WATCH_CURSOR_EXPIRED";
+/// The server is shutting down. Retry against another replica, or this one
+/// once it is back.
+pub const SHUTTING_DOWN: &str = "SHUTTING_DOWN";
 /// Nothing above matched.
 pub const UNKNOWN: &str = "UNKNOWN";
 
@@ -114,7 +128,8 @@ pub const UNKNOWN: &str = "UNKNOWN";
 pub const KEY_QUEUE: &str = "queue";
 /// Jobs currently pending, `int64`. `QUEUE_FULL`.
 pub const KEY_PENDING: &str = "pending";
-/// The admission cap, `int64`. `QUEUE_FULL`.
+/// The admission cap, `int64`. `QUEUE_FULL`; for `WATCH_LIMIT`, the watches
+/// one credential may hold, `uint64`.
 pub const KEY_CAP: &str = "cap";
 /// The contract level this build speaks, `uint32`. `CONTRACT_TOO_OLD`.
 pub const KEY_SPEAKS: &str = "speaks";

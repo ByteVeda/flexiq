@@ -12,6 +12,7 @@ pub mod grpc;
 pub mod listen;
 pub mod push;
 pub mod trigger;
+pub mod watch;
 pub mod webhook;
 
 use std::collections::HashMap;

@@ -58,11 +58,11 @@ if err != nil {
     return err
 }
 
-job, err := client.GetJob(ctx, result.Job.ID, flexiq.GetJobOptions{IncludeResult: true})
+job, err := client.Wait(ctx, result.Job.ID)
 ```
 
-There is no completion notification anywhere on this door — no watch, no server stream. Poll
-`GetJob`, or subscribe a webhook on the server side.
+`Wait` watches the job over `WatchJobs` instead of polling, reopens the watch if the connection
+drops, and returns the finished job with its result. `EnqueueAndWait` does both steps in one call.
 
 ## The surface
 
@@ -73,6 +73,8 @@ There is no completion notification anywhere on this door — no watch, no serve
 | `GetJob` | Read one job by id |
 | `ListJobs` / `AllJobs` | Page through jobs, newest first |
 | `CancelJob` | Cancel, and report the state that leaves it in |
+| `WatchJobs` / `WatchQueue` | Follow jobs by id, or a queue, as they change state |
+| `Wait` / `EnqueueAndWait` | Block until a job is finished, then read it with its result |
 | `QueueStats` | Per-status counts for one queue or the namespace |
 | `SubmitWorkflow` | Submit a graph of steps, one job per node |
 | `GetWorkflowRun` | Read a run and every node it has |
@@ -122,8 +124,8 @@ for _, node := range run.Nodes {
 }
 ```
 
-Poll `GetWorkflowRun` and stop when `run.State.IsTerminal()` says to. As
-everywhere else on this door, there is no watch and no server stream.
+Poll `GetWorkflowRun` and stop when `run.State.IsTerminal()` says to. A run has
+no watch: `WatchJobs` follows jobs, and a run is not one.
 
 **Static graphs only.** A node may set `Gate`, `Cache`, `FanOut`, `FanIn` or
 `SubWorkflow` — the wire carries all five — but this door refuses a graph that

@@ -45,6 +45,8 @@ type fakeProducer struct {
 	submitWorkflow func(context.Context, *pb.SubmitWorkflowRequest) (*pb.SubmitWorkflowResponse, error)
 	getWorkflowRun func(context.Context, *pb.GetWorkflowRunRequest) (*pb.GetWorkflowRunResponse, error)
 
+	watchJobs func(*pb.WatchJobsRequest, pb.ProducerService_WatchJobsServer) error
+
 	// calls counts every RPC that reached the server, so a test can prove a
 	// request never went out.
 	calls int
@@ -107,6 +109,11 @@ func (f *fakeProducer) GetWorkflowRun(ctx context.Context, req *pb.GetWorkflowRu
 		return &pb.GetWorkflowRunResponse{Run: &pb.WorkflowRun{Id: req.GetRunId()}}, nil
 	}
 	return f.getWorkflowRun(ctx, req)
+}
+
+func (f *fakeProducer) WatchJobs(req *pb.WatchJobsRequest, stream pb.ProducerService_WatchJobsServer) error {
+	f.record(stream.Context())
+	return f.watchJobs(req, stream)
 }
 
 // serve starts the double and returns a client connected to it. Both are torn

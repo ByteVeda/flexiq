@@ -175,6 +175,15 @@ async fn drain(mut roles: tokio::task::JoinSet<Result<()>>, shutdown: &Shutdown)
 /// its sinks read their secrets before `main` scrubs them from the
 /// environment. `run` hands it to every emitter and shuts it down last.
 pub fn run(config: Config, events: Option<Arc<EventHub>>) -> Result<()> {
+    // `WatchJobs` streams tap the hub, so the gRPC door needs one even with no
+    // sinks configured — and it must be the scheduler's too, or the streams
+    // would hear only the doors.
+    let events = events.or_else(|| {
+        config
+            .grpc
+            .is_some()
+            .then(|| Arc::new(EventHub::without_sinks()))
+    });
     // A webhook-only deployment rewrites pod specs and reads no jobs, so it
     // opens no storage. Config validation has already established that every
     // other role came with a DSN.

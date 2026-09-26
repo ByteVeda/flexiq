@@ -13,6 +13,7 @@ use log::warn;
 use super::config::{EventsConfig, EventsConfigError, Filter, SinkConfig};
 use super::event::JobEvent;
 use super::sink::{build_backend, DeliveryResult, SinkBackend};
+use super::tap::EventTap;
 use crate::resilience::retry::full_jitter;
 
 /// First retry's backoff ceiling; doubles per attempt.
@@ -26,10 +27,15 @@ const BACKOFF_CAP_MS: u64 = 10_000;
 /// destination can only lose its own events: it never blocks [`emit`], the
 /// host runtime, or another sink.
 ///
+/// In-process [`EventTap`]s see every event as well, before any filter.
+///
 /// [`emit`]: EventHub::emit
 pub struct EventHub {
     source: String,
     sinks: Vec<Sink>,
+    /// Written only while the process wires itself up; `emit` takes the read
+    /// side, which a writer holds for one push.
+    taps: RwLock<Vec<Arc<dyn EventTap>>>,
     wants_payload: bool,
     lifecycle: Arc<Lifecycle>,
     shut_down: AtomicBool,
@@ -92,6 +98,7 @@ impl EventHub {
         let mut hub = Self {
             source,
             sinks: Vec::with_capacity(backends.len()),
+            taps: RwLock::default(),
             wants_payload: false,
             lifecycle: Arc::clone(&lifecycle),
             shut_down: AtomicBool::new(false),
@@ -106,6 +113,27 @@ impl EventHub {
         Ok(hub)
     }
 
+    /// A hub with no sinks, for a process whose only consumers are
+    /// [taps](Self::add_tap). Starts no thread.
+    pub fn without_sinks() -> Self {
+        Self {
+            source: super::event::DEFAULT_SOURCE.to_string(),
+            sinks: Vec::new(),
+            taps: RwLock::default(),
+            wants_payload: false,
+            lifecycle: Arc::default(),
+            shut_down: AtomicBool::new(false),
+        }
+    }
+
+    /// Register an in-process observer of every event from now on.
+    pub fn add_tap(&self, tap: Arc<dyn EventTap>) {
+        self.taps
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(tap);
+    }
+
     /// The CloudEvents `source` this hub's sinks stamp.
     pub fn source(&self) -> &str {
         &self.source
@@ -117,6 +145,14 @@ impl EventHub {
     /// event and counts it. Sinks that do not send payloads get one shared,
     /// payload-free copy, so the bytes never reach their thread.
     pub fn emit(&self, event: JobEvent) {
+        for tap in self
+            .taps
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+        {
+            tap.observe(&event);
+        }
         let full = Arc::new(event);
         let mut stripped: Option<Arc<JobEvent>> = None;
         for sink in &self.sinks {
@@ -147,7 +183,13 @@ impl EventHub {
     ///
     /// Every drop reason is rendered for every sink, zero included, so a rate
     /// query has a series from boot rather than from the first drop.
+    ///
+    /// Empty for a hub with no sinks, so a process that only taps events
+    /// exposes no `flexiq_events_*` families with no series in them.
     pub fn render_prometheus(&self) -> String {
+        if self.sinks.is_empty() {
+            return String::new();
+        }
         let stats = self.stats();
         let mut body = String::from(
             "# HELP flexiq_events_delivered_total Events a sink delivered.\n\
@@ -1015,6 +1057,44 @@ flexiq_events_dropped_total{sink=\"we\\\"b\",reason=\"shutdown\"} 0
 flexiq_events_queued{sink=\"we\\\"b\"} 0
 ";
         assert_eq!(hub.render_prometheus(), expected);
+    }
+
+    /// Records every job id it observes.
+    #[derive(Default)]
+    struct Recorder(Mutex<Vec<String>>);
+
+    impl EventTap for Recorder {
+        fn observe(&self, event: &JobEvent) {
+            lock(&self.0).push(event.job_id.clone());
+        }
+    }
+
+    #[test]
+    fn a_tap_sees_every_event_whatever_the_sink_filters_admit() {
+        let (backend, attempts) = fake(vec![], DeliveryResult::Delivered);
+        let hub = hub(vec![(
+            sink("dead", r#","filter":{"types":["job.dead"]}"#),
+            backend,
+        )]);
+        let tap = Arc::new(Recorder::default());
+        hub.add_tap(tap.clone());
+        hub.emit(event(EventType::JobStarted, "a", "q"));
+        hub.emit(event(EventType::JobDead, "b", "q"));
+        hub.shutdown(WAIT);
+        assert_eq!(*lock(&tap.0), ["a", "b"]);
+        assert_eq!(ids(&attempts), ["b"]);
+    }
+
+    #[test]
+    fn a_hub_without_sinks_feeds_its_taps_and_renders_no_metrics() {
+        let hub = EventHub::without_sinks();
+        let tap = Arc::new(Recorder::default());
+        hub.add_tap(tap.clone());
+        hub.emit(event(EventType::JobCompleted, "a", "q"));
+        assert_eq!(*lock(&tap.0), ["a"]);
+        assert!(!hub.wants_payload());
+        assert_eq!(hub.render_prometheus(), "");
+        hub.shutdown(WAIT);
     }
 
     #[test]
