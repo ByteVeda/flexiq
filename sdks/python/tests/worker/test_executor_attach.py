@@ -17,10 +17,11 @@ import json
 import os
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +63,10 @@ FRAME_TIMEOUT = 60.0
 class FakeScheduler:
     """The scheduler end of an attach, driven frame by frame."""
 
-    def __init__(self) -> None:
+    def __init__(self, tls: ssl.SSLContext | None = None) -> None:
+        # Server-side TLS for the accepted connection, when the test wants a
+        # `tls://` scheduler; the frames inside are the same either way.
+        self._tls = tls
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._listener.bind(("127.0.0.1", 0))
@@ -84,9 +88,7 @@ class FakeScheduler:
         the side-channel existed, which is the compatibility case worth having
         as the default rather than the exception.
         """
-        self._listener.settimeout(timeout)
-        self._conn, _ = self._listener.accept()
-        self._conn.settimeout(FRAME_TIMEOUT)
+        self._conn = self._accept(timeout)
         self._rfile = self._conn.makefile("rb")
         self._wfile = self._conn.makefile("wb")
 
@@ -104,13 +106,20 @@ class FakeScheduler:
 
     def refuse(self, timeout: float = ATTACH_TIMEOUT) -> dict[str, Any]:
         """Accept, read the hello, then close without acking — a rejected peer."""
-        self._listener.settimeout(timeout)
-        conn, _ = self._listener.accept()
-        conn.settimeout(FRAME_TIMEOUT)
+        conn = self._accept(timeout)
         with conn.makefile("rb") as rfile:
             hello, _ = read_frame(rfile)
         conn.close()
         return hello
+
+    def _accept(self, timeout: float) -> socket.socket:
+        """Accept one connection, handshaking TLS first when configured."""
+        self._listener.settimeout(timeout)
+        conn, _ = self._listener.accept()
+        conn.settimeout(FRAME_TIMEOUT)
+        if self._tls is not None:
+            conn = self._tls.wrap_socket(conn, server_side=True)
+        return conn
 
     def send(self, header: dict[str, Any], payload: bytes = b"") -> None:
         write_frame(self._wfile, header, payload)
@@ -255,8 +264,14 @@ def spawn_executor(
     executor_id: str | None = None,
     markers: Path | None = None,
     app_path: str = APP_PATH,
+    address: str | None = None,
+    extra_args: Sequence[str] = (),
 ) -> subprocess.Popen[str]:
-    """Run ``flexiq executor`` against ``port`` as a real subprocess."""
+    """Run ``flexiq executor`` against ``port`` as a real subprocess.
+
+    ``address`` replaces the default ``127.0.0.1:<port>`` — a ``tls://`` one,
+    say — and ``extra_args`` are appended to the command line.
+    """
     env = dict(os.environ)
     env["FLEXIQ_EXECUTOR_TEST_DB"] = str(db_path)
     if markers is not None:
@@ -277,12 +292,13 @@ def spawn_executor(
         "--app",
         app_path,
         "--attach",
-        f"127.0.0.1:{port}",
+        address or f"127.0.0.1:{port}",
         "--slots",
         str(slots),
     ]
     if executor_id is not None:
         command += ["--executor-id", executor_id]
+    command += extra_args
 
     return subprocess.Popen(
         command,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 class PyTaskConfig:
@@ -680,7 +681,18 @@ class Executor:
         slots: int,
         token: str | None = None,
         executor_id: str | None = None,
-    ) -> None: ...
+        tls_ca: str | os.PathLike[str] | None = None,
+        tls_cert: str | os.PathLike[str] | None = None,
+        tls_key: str | os.PathLike[str] | None = None,
+    ) -> None:
+        """Attach to ``address``.
+
+        ``tls_ca``, ``tls_cert`` and ``tls_key`` are PEM paths for a ``tls://``
+        address: the CAs the scheduler's certificate must chain to (the bundled
+        web roots when unset), and the client certificate a scheduler requiring
+        mTLS asks for. Setting any of them beside a plaintext address raises.
+        """
+        ...
     @property
     def scheduler_id(self) -> str:
         """Identity the scheduler announced when it accepted this attach."""
