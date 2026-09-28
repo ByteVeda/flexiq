@@ -96,8 +96,12 @@ wrapper over the SDK.
   `FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE`. The scheduler drains the executor
   before ending one, so nothing in flight is lost — but a client that logs a
   rotation as a failure will page someone at 30-minute intervals.
-- **`flexiq-server` terminates no TLS**, on either door. The bearer token is a
-  credential, not transport security; put a proxy or a service mesh in front.
+- **TLS on this listener is opt-in, off by default.** The bearer token is a
+  credential, not transport security on its own — set `FLEXIQ_GRPC_TLS_CERT`/
+  `_TLS_KEY` to terminate TLS in process
+  ([TLS and mTLS](/server/operate/grpc#tls-and-mtls)), or put a proxy or a
+  service mesh in front instead. Either way it covers both doors, since they
+  share the one listener.
 
 ## What is not on this list
 

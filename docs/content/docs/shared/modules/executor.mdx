@@ -174,16 +174,77 @@ The attach port dispatches code, so the defaults are strict:
 
 <Callout type="warn">
 The token is a bearer credential, not transport security. It proves who is
-attaching; it does not encrypt or integrity-protect the frames, and those frames
-carry task payloads on a port that dispatches code. On anything but loopback or
-a Unix socket, terminate mTLS in a proxy in front of the listener and treat the
-token as the second factor.
-
-`flexiq-server` does not terminate TLS itself. Setting
-`FLEXIQ_LISTEN_TLS_CERT` or `FLEXIQ_LISTEN_TLS_KEY` fails at startup rather
-than being ignored, so a deployment cannot come up believing it is encrypted
-when it is not.
+attaching; it does not encrypt or integrity-protect the frames on its own, and
+those frames carry task payloads on a port that dispatches code. TLS — below —
+is what fixes that; mTLS, where it is on, sits beside the token, never instead
+of it.
 </Callout>
+
+### TLS
+
+`flexiq-server` can terminate TLS on this listener itself:
+`FLEXIQ_LISTEN_TLS_CERT` and `FLEXIQ_LISTEN_TLS_KEY` turn it on, and
+`FLEXIQ_LISTEN_TLS_CLIENT_CA` turns on mTLS beside it — see
+[Running flexiq-server](/server/operate) for the server side in full. An
+executor then dials `tls://host:port` instead of `host:port`; the token still
+rides `hello` as the second factor.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```bash
+FLEXIQ_ATTACH=tls://scheduler:7777 \
+FLEXIQ_ATTACH_TOKEN=... \
+flexiq executor --app myapp:queue --slots 4 \
+  --tls-ca ca.pem --tls-cert client.pem --tls-key client-key.pem
+```
+
+`--tls-ca`, `--tls-cert` and `--tls-key` default to `FLEXIQ_ATTACH_TLS_CA`,
+`FLEXIQ_ATTACH_TLS_CERT` and `FLEXIQ_ATTACH_TLS_KEY`. Only `--tls-ca` is
+needed against a listener with no mTLS.
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.runExecutor({
+  attach: "tls://scheduler:7777",
+  tls: { ca: "ca.pem", cert: "client.pem", key: "client-key.pem" },
+});
+```
+
+`ExecutorTlsOptions` is exported, and each field falls back to the matching
+`FLEXIQ_ATTACH_TLS_*` variable when omitted. The CLI takes the same three
+flags: `flexiq executor app.js --tls-ca ca.pem --tls-cert client.pem --tls-key client-key.pem`.
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Executor.builder()
+    .attach("tls://scheduler:7777")
+    .tls(Path.of("ca.pem"), Path.of("client.pem"), Path.of("client-key.pem"))
+    .start();
+```
+
+`tls()` takes any of the three as `null`. The CLI takes
+`--tls-ca`/`--tls-cert`/`--tls-key`, defaulting to the same
+`FLEXIQ_ATTACH_TLS_*` variables.
+
+  </Tab>
+</CodeTabs>
+
+Without a CA bundle the executor trusts the web PKI roots compiled into the
+SDK (not the operating system's store), so `tls://` against a listener with a
+certificate from a public CA needs no `--tls-ca` at all — set it for a private
+one. A client certificate needs its key, and
+either one set beside a plaintext `host:port`/`tcp://` or `unix:` address is
+**refused**, never silently ignored. The server name checked against the
+certificate is the host in the address, so dial the name the certificate was
+issued for.
+
+The session still ends with a TLS `close_notify`, so a refused attach — a wrong
+or missing token — still reads as a refusal rather than a network error.
 
 ## What a task can do on an executor
 
@@ -327,4 +388,4 @@ need.
 | CPU-heavy tasks compete with request latency in the app container | Cap `--slots`; or run a second replica set from the same image with the HTTP server off |
 | A network hop per job | Use a Unix socket for same-pod sidecars; attach is a poor fit for microsecond-scale tasks |
 | A round trip per durable step | Checkpoint around what you would hate to repeat, not around every iteration |
-| The attach port dispatches code | A Unix socket where the peer is same-pod; off loopback, proxy-terminated mTLS *and* the token, never the token alone |
+| The attach port dispatches code | A Unix socket where the peer is same-pod; off loopback, TLS — terminated by `flexiq-server` itself or by a proxy in front of it — *and* the token, never the token alone |

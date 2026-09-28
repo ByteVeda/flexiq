@@ -100,7 +100,7 @@ the same producer door. The Java worker still opens the database file directly.
 | No CPU-parallelism story — a remote executor is a network hop from the scheduler | Colocate the executor with its scheduler when raw throughput matters more than isolation |
 | A second process to deploy, watch and restart | Reach for it only when local mode's constraint — a native binding, or the credential itself — is the actual blocker |
 | The executor door has no SDK client yet | Use TCP/Unix attach for an SDK-based executor; the gRPC stream is for a custom one |
-| TLS is not terminated by `flexiq-server` on either door | Put a sidecar proxy or service mesh in front of both listeners |
+| TLS is opt-in, not on by default | Set `FLEXIQ_GRPC_TLS_CERT`/`_TLS_KEY` to terminate it in process ([TLS and mTLS](/server/operate/grpc#tls-and-mtls)), or put a proxy or mesh in front — either way it covers both doors, since they share one listener |
 
 ## The rest of this tier
 

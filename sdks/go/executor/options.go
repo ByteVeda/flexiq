@@ -181,10 +181,11 @@ func WithTransportCredentials(creds credentials.TransportCredentials) Option {
 
 // WithInsecureTransport sends the token over an unencrypted connection.
 //
-// flexiq-server terminates no TLS, so a deployment puts a proxy or a mesh in
-// front of it. This option is for the two hops that have no network to observe
-// — a Unix-domain socket, and a loopback bind whose peers are on the same host
-// — and for tests.
+// For TLS, either flexiq-server terminates it (FLEXIQ_GRPC_TLS_CERT; pass
+// [WithTLS] with its CA, and a client certificate for mTLS) or a proxy or a
+// mesh in front of it does. This option is for the two hops that have no
+// network to observe — a Unix-domain socket, and a loopback bind whose peers
+// are on the same host — and for tests.
 func WithInsecureTransport() Option {
 	return func(c *config) { c.insecure = true }
 }

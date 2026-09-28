@@ -12,6 +12,18 @@ their entries below keep that name.
 
 ### Added
 
+- **In-process TLS and mTLS on the server's credentialled listeners** (#838). The gRPC door
+  (`FLEXIQ_GRPC_TLS_CERT`, `…_KEY`, `…_CLIENT_CA`) and the attach listener
+  (`FLEXIQ_LISTEN_TLS_CERT`, `…_KEY`, `…_CLIENT_CA`) terminate TLS themselves when configured, and
+  verify client certificates against a CA bundle when one is set — beside the API token or the
+  attach token, never instead of it. Certificates reload without a restart: the files are
+  re-read when their content changes, and a broken renewal keeps the pair in force. Executors
+  dial `tls://host:port` from every SDK (`--tls-ca`/`--tls-cert`/`--tls-key`, or
+  `FLEXIQ_ATTACH_TLS_*`; `tls` options on the Node and Java executor APIs), `fq` takes the same
+  three flags, and the Helm chart mounts `attach.tls` / `grpc.tls` Secrets. Unset, both listeners
+  stay plaintext, so a mesh deployment configures TLS once, in the mesh. TLS material beside a
+  plaintext or Unix address is refused on both sides rather than ignored.
+
 - **More than one push target per process.** `FLEXIQ_PUSH_TARGETS` names several targets, each
   with its own URL and queues (`FLEXIQ_PUSH_<NAME>_URL`, `FLEXIQ_PUSH_<NAME>_QUEUES`) and any
   push setting of its own (`FLEXIQ_PUSH_<NAME>_CAPACITY`, `…_OIDC_AUDIENCE`, …), falling back to

@@ -1,6 +1,6 @@
 ---
 title: The gRPC door
-description: "The producer and executor doors on the network: what they serve, the JSON facade, reflection, tuning, metrics, and the TLS gap."
+description: "The producer and executor doors on the network: what they serve, the JSON facade, reflection, tuning, metrics, and TLS/mTLS termination."
 ---
 
 `flexiq-server` binds one listener per role, and `FLEXIQ_GRPC_LISTEN` adds a
@@ -303,8 +303,10 @@ no streams**: `WatchJobs` is a server stream, and a stream has no
 request/response HTTP mapping. Watch over gRPC, or poll `GET /v1/jobs/{job_id}`.
 
 A request without a credential comes back `401` with `"reason":
-"UNAUTHENTICATED"` rather than a gRPC trailer. TLS is not terminated here
-either.
+"UNAUTHENTICATED"` rather than a gRPC trailer. Where this listener terminates
+TLS ([TLS and mTLS](#tls-and-mtls), below), the JSON facade is served over the
+same certificate — ALPN offers both `h2` and `http/1.1`, so `curl https://`
+reaches it with nothing extra configured.
 
 ### The OpenAPI document
 
@@ -572,10 +574,12 @@ else.
 
 Same posture as the attach listener:
 
-- **No TLS is terminated here.** `FLEXIQ_GRPC_TLS_CERT` and
-  `FLEXIQ_GRPC_TLS_KEY` are rejected outright rather than accepted and ignored,
-  because a variable that looks like it encrypts the connection and does not is
-  worse than no variable. Terminate TLS in a sidecar proxy or a service mesh.
+- **TLS is optional, and terminated in process when it is set.**
+  `FLEXIQ_GRPC_TLS_CERT` and `FLEXIQ_GRPC_TLS_KEY` turn it on;
+  `FLEXIQ_GRPC_TLS_CLIENT_CA` turns on mTLS beside it. Unset, the listener is
+  exactly the plaintext door above — the right shape behind a sidecar proxy or
+  a service mesh, where TLS is configured once for the cluster rather than per
+  listener. [TLS and mTLS](#tls-and-mtls), below, covers the rest.
 - **The credential is a bearer token, and it is one factor.** It proves the peer
   holds a string; it does not encrypt the connection. What it is *not* is a
   shared secret: each token is named, scoped, expiring and revocable on its own,
@@ -600,16 +604,76 @@ Same posture as the attach listener:
   that revocation, not scoping, is the control over who can enumerate this
   door.
 
-<Callout type="warn" title="The TLS gap, stated plainly">
-A sidecar proxy or a service mesh is a reasonable answer for a cluster that
-already has one, and an unreasonable one for a VM, a single box or a small
-cluster with no mesh — which are the deployments this door is most useful to. A
-bearer token sent in the clear is a bearer token in a packet capture. Until
-in-process TLS and mTLS land
-([#838](https://github.com/ByteVeda/flexiq/issues/838)), keep a plaintext bind
-on loopback or a Unix socket, and put a terminating proxy in front of anything
-wider.
+## TLS and mTLS
+
+Three variables, all optional, all unset by default — which leaves the
+listener exactly as plaintext as it has always been:
+
+| Variable | Meaning |
+| --- | --- |
+| `FLEXIQ_GRPC_TLS_CERT` | PEM certificate chain |
+| `FLEXIQ_GRPC_TLS_KEY` | PEM private key, matching the certificate |
+| `FLEXIQ_GRPC_TLS_CLIENT_CA` | PEM CA bundle. Present, it turns on mTLS: every connection must present a certificate this bundle verifies |
+
+A cert without a key, a key without a cert, or a client CA bundle with
+neither, refuses to start — a boot with half a TLS configuration is one
+nobody meant. So does a path that is not a readable file (the error names the
+variable), a key that does not match its certificate, and a PEM file that
+parses but holds no certificates.
+
+```bash
+FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
+FLEXIQ_GRPC_TLS_CERT=/etc/flexiq/grpc-tls/tls.crt \
+FLEXIQ_GRPC_TLS_KEY=/etc/flexiq/grpc-tls/tls.key \
+flexiq-server
+```
+
+logs `gRPC listener on https://0.0.0.0:50051 (TLS)` at boot —
+`(TLS, client certificates required)` once `FLEXIQ_GRPC_TLS_CLIENT_CA` is also
+set. Dial it as `https://`:
+
+```bash
+curl --cacert ca.pem -H "authorization: Bearer $FLEXIQ_TOKEN" https://grpc.example:50051/v1/stats
+```
+
+The JSON facade above rides the same certificate, on the same port — ALPN
+offers both `h2` and `http/1.1`, and `curl` negotiates whichever it speaks.
+There is no separate TLS configuration for the two.
+
+**mTLS is defence in depth beside the token, never instead of it.** The
+certificate says the connection may exist; the token — still checked on every
+call the same way — says which principal it is. A handshake that fails
+against `FLEXIQ_GRPC_TLS_CLIENT_CA` is refused before any credential on the
+request is even read.
+
+Each connection handshakes in its own task, with a 10 s timeout and at most
+64 pending handshakes at once, so one slow or silent peer cannot block every
+other connection from being accepted. A plaintext client dialling a TLS
+listener is not served — there is no fallback.
+
+**Reload without a restart.** The server polls the files' *content* every
+30 seconds — not their modification time, because a projected Kubernetes
+Secret is a symlink swap that does not reliably move one — and on a change
+builds a new TLS configuration and swaps it in whole. A new connection gets
+the new certificate; a connection already open keeps the session it
+negotiated. A reload that fails, a half-written file mid-copy for instance,
+keeps serving the previous configuration and logs an error rather than
+dropping the listener, and tries again on the next poll.
+`FLEXIQ_GRPC_TLS_CLIENT_CA` reloads the same way — it is the same mechanism
+the admission webhook already uses for its own certificate.
+
+<Callout type="warn" title="A gRPC readiness probe cannot speak TLS">
+A Kubernetes `grpc:` probe has no TLS mode. With `FLEXIQ_GRPC_TLS_CERT` set,
+readiness has to be a TCP probe instead — the Helm chart does this
+automatically once `grpc.tls.secretName` is set, see [With Helm](#with-helm)
+below.
 </Callout>
+
+**Behind a mesh, set nothing.** A cluster that already terminates TLS for
+every listener through a sidecar or a mesh gains nothing from setting these
+three here — TLS configured once, there, covers this door for free, and the
+plaintext posture described through the rest of this page still applies to
+the loopback hop between the sidecar and this process.
 
 ## With Helm
 
@@ -635,3 +699,8 @@ The door gets its own `ClusterIP` Service — never merged with the
 dashboard's, for the same reason attach is separate — with `appProtocol: grpc`
 so a mesh or an Ingress keyed off it speaks HTTP/2 rather than downgrading and
 breaking every stream.
+
+`grpc.tls.secretName` terminates TLS on this Service from a
+`kubernetes.io/tls` Secret, with the readiness-probe fallback that needs — see
+<SdkLink to="operate/kubernetes">Kubernetes</SdkLink> for the values and what
+they mount.
