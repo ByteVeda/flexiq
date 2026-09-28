@@ -61,6 +61,8 @@ attach:
   tls:
     # A kubernetes.io/tls Secret (tls.crt / tls.key), e.g. one cert-manager
     # issues. Renewed in place, it is picked up within a minute, no restart.
+    # Its certificate must name the host executors dial — the attach Service's
+    # <fullname>-attach.<namespace>.svc — since that is the name they verify.
     secretName: ""
     # A Secret holding the CA bundle executors' client certificates must chain
     # to. Setting it turns on mTLS; it needs secretName too.
