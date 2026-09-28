@@ -43,6 +43,10 @@ events-http = ["http-target"]
 events-kafka = ["dep:rskafka", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
 # NATS event sink (#971): core NATS or JetStream publish.
 events-nats = ["dep:async-nats", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
+# TLS on the executor attach connection (#838): `tls://` addresses on the dial
+# side, and the transport flexiq-server wraps an accepted socket in. Every
+# shipped SDK artifact carries it.
+attach-tls = ["dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
 
 [dependencies]
 diesel = { workspace = true }

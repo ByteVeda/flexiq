@@ -21,6 +21,8 @@ pub mod remote;
 pub mod runner;
 pub mod side_channel;
 mod step_pump;
+#[cfg(feature = "attach-tls")]
+pub mod tls;
 pub mod transport;
 
 pub use auth::Secret;
@@ -41,6 +43,8 @@ pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};
 pub use remote::{AttachError, AttachedExecutor, Capacity, RemoteConfig, RemoteDispatcher};
 pub use runner::{Worker, WorkerHandle};
 pub use side_channel::{SideChannel, StorageSideChannel};
+#[cfg(feature = "attach-tls")]
+pub use tls::TlsTransport;
 #[cfg(unix)]
 pub use transport::UnixTransport;
 pub use transport::{MemoryTransport, TcpTransport, Transport};
