@@ -93,7 +93,9 @@ impl ServerTls {
             shutdown,
             move || {
                 let tls = tls.clone();
-                async move { tls.reload() }
+                // The PEM readers are blocking `std::fs`; off the runtime so a
+                // slow mount cannot stall a handshake task on the same worker.
+                async move { tokio::task::spawn_blocking(move || tls.reload()).await? }
             },
         ));
     }
