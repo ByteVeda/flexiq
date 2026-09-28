@@ -13,12 +13,18 @@
 
 use std::io::{self, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use rustls::pki_types::ServerName;
-use rustls::{ClientConfig, ClientConnection, Connection, ServerConfig, ServerConnection};
+use rustls::crypto::CryptoProvider;
+use rustls::pki_types::pem::{self, PemObject};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use rustls::{
+    ClientConfig, ClientConnection, Connection, RootCertStore, ServerConfig, ServerConnection,
+};
 
+use super::dial::AttachTls;
 use super::transport::{Connection as Controls, ReadHalf, Transport, WriteHalf};
 
 /// Bytes read off the socket per `read` call. One maximum-size TLS record.
@@ -233,35 +239,103 @@ fn tls_error(error: rustls::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error)
 }
 
+/// The crypto provider every attach TLS config is built with.
+///
+/// The workspace compiles rustls with both ring and aws-lc-rs, and with two
+/// compiled in the `builder()` shorthands have no default to pick and panic, so
+/// the provider is always named.
+pub fn provider() -> Arc<CryptoProvider> {
+    Arc::new(rustls::crypto::ring::default_provider())
+}
+
+/// Every certificate in the PEM file at `path`, refusing a file that holds
+/// none — an empty bundle trusts nothing and would fail every handshake with
+/// an error far from its cause.
+pub fn read_certs(path: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
+    let unreadable = |error: pem::Error| invalid(format!("{}: {error}", path.display()));
+    let certs = CertificateDer::pem_file_iter(path)
+        .map_err(unreadable)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(unreadable)?;
+    if certs.is_empty() {
+        return Err(invalid(format!(
+            "{} holds no PEM certificates",
+            path.display()
+        )));
+    }
+    Ok(certs)
+}
+
+/// The first private key in the PEM file at `path`.
+pub fn read_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
+    PrivateKeyDer::from_pem_file(path)
+        .map_err(|error| invalid(format!("{}: {error}", path.display())))
+}
+
+/// A root store holding every certificate in the PEM bundle at `path`.
+pub fn read_roots(path: &Path) -> io::Result<RootCertStore> {
+    let mut roots = RootCertStore::empty();
+    for cert in read_certs(path)? {
+        roots
+            .add(cert)
+            .map_err(|error| invalid(format!("{}: {error}", path.display())))?;
+    }
+    Ok(roots)
+}
+
+/// The executor's client config for `tls`: its CA bundle or the bundled web
+/// roots, and its client certificate when the scheduler asks for mTLS.
+///
+/// A certificate without its key (or the reverse) is refused rather than
+/// dropped: the scheduler would refuse the handshake anyway, with an error that
+/// names neither file.
+pub fn client_config(tls: &AttachTls) -> io::Result<Arc<ClientConfig>> {
+    let roots = match &tls.ca {
+        Some(ca) => read_roots(ca)?,
+        None => RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        },
+    };
+    let builder = ClientConfig::builder_with_provider(provider())
+        .with_safe_default_protocol_versions()
+        .map_err(tls_error)?
+        .with_root_certificates(roots);
+    let config = match (&tls.cert, &tls.key) {
+        (Some(cert), Some(key)) => builder
+            .with_client_auth_cert(read_certs(cert)?, read_key(key)?)
+            .map_err(|error| {
+                invalid(format!(
+                    "the client certificate {} and key {} do not form a pair: {error}",
+                    cert.display(),
+                    key.display()
+                ))
+            })?,
+        (None, None) => builder.with_no_client_auth(),
+        _ => {
+            return Err(invalid(
+                "a client certificate and its key are set together or not at all",
+            ))
+        }
+    };
+    Ok(Arc::new(config))
+}
+
+fn invalid(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::net::TcpListener;
     use std::path::PathBuf;
 
-    use rustls::pki_types::pem::PemObject;
-    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-    use rustls::RootCertStore;
+    use rustls::server::WebPkiClientVerifier;
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/tls")
             .join(name)
-    }
-
-    fn certs(name: &str) -> Vec<CertificateDer<'static>> {
-        CertificateDer::pem_file_iter(fixture(name))
-            .expect("read")
-            .collect::<Result<_, _>>()
-            .expect("parse")
-    }
-
-    fn key(name: &str) -> PrivateKeyDer<'static> {
-        PrivateKeyDer::from_pem_file(fixture(name)).expect("key")
-    }
-
-    fn provider() -> Arc<rustls::crypto::CryptoProvider> {
-        Arc::new(rustls::crypto::ring::default_provider())
     }
 
     fn server_config() -> Arc<ServerConfig> {
@@ -270,23 +344,131 @@ mod tests {
                 .with_safe_default_protocol_versions()
                 .expect("versions")
                 .with_no_client_auth()
-                .with_single_cert(certs("server.pem"), key("server-key.pem"))
+                .with_single_cert(
+                    read_certs(&fixture("server.pem")).expect("certs"),
+                    read_key(&fixture("server-key.pem")).expect("key"),
+                )
                 .expect("server config"),
         )
     }
 
-    fn client_config() -> Arc<ClientConfig> {
-        let mut roots = RootCertStore::empty();
-        for cert in certs("ca.pem") {
-            roots.add(cert).expect("root");
-        }
+    /// A server that demands a client certificate chaining to the test CA.
+    fn mtls_server_config() -> Arc<ServerConfig> {
+        let roots = Arc::new(read_roots(&fixture("ca.pem")).expect("roots"));
+        let verifier = WebPkiClientVerifier::builder_with_provider(roots, provider())
+            .build()
+            .expect("verifier");
         Arc::new(
-            ClientConfig::builder_with_provider(provider())
+            ServerConfig::builder_with_provider(provider())
                 .with_safe_default_protocol_versions()
                 .expect("versions")
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
+                .with_client_cert_verifier(verifier)
+                .with_single_cert(
+                    read_certs(&fixture("server.pem")).expect("certs"),
+                    read_key(&fixture("server-key.pem")).expect("key"),
+                )
+                .expect("server config"),
         )
+    }
+
+    fn trusting(ca: &str) -> AttachTls {
+        AttachTls {
+            ca: Some(fixture(ca)),
+            ..AttachTls::default()
+        }
+    }
+
+    fn with_client_cert(ca: &str, cert: &str, key: &str) -> AttachTls {
+        AttachTls {
+            ca: Some(fixture(ca)),
+            cert: Some(fixture(cert)),
+            key: Some(fixture(key)),
+        }
+    }
+
+    fn client_config() -> Arc<ClientConfig> {
+        super::client_config(&trusting("ca.pem")).expect("client config")
+    }
+
+    /// Send one byte from a client configured by `tls` to an echoing server
+    /// configured by `server`, and return what came back.
+    ///
+    /// A whole round trip rather than the handshake alone: under TLS 1.3 the
+    /// client considers the handshake done before the server has judged its
+    /// certificate, so a refusal only reaches the client on its next read.
+    fn echo(server: Arc<ServerConfig>, tls: &AttachTls) -> io::Result<u8> {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            let (socket, _) = listener.accept().expect("accept");
+            if let Ok(transport) = TlsTransport::accept(socket, server, Duration::from_secs(5)) {
+                let (mut read, mut write, _) = Box::new(transport).split().expect("split");
+                let mut byte = [0u8; 1];
+                if read.read_exact(&mut byte).is_ok() {
+                    let _ = write.write_all(&byte);
+                }
+            }
+        });
+        let socket = TcpStream::connect(addr).expect("connect");
+        let name = ServerName::try_from("localhost").expect("name");
+        let config = super::client_config(tls)?;
+        let client = TlsTransport::connect(socket, config, name, Duration::from_secs(5))?;
+        let (mut read, mut write, _) = Box::new(client).split()?;
+        write.write_all(&[9])?;
+        let mut byte = [0u8; 1];
+        read.read_exact(&mut byte)?;
+        Ok(byte[0])
+    }
+
+    #[test]
+    fn a_trusted_client_certificate_passes_mtls() {
+        let tls = with_client_cert("ca.pem", "client.pem", "client-key.pem");
+        assert_eq!(echo(mtls_server_config(), &tls).expect("round trip"), 9);
+    }
+
+    #[test]
+    fn mtls_refuses_a_client_without_a_certificate() {
+        assert!(echo(mtls_server_config(), &trusting("ca.pem")).is_err());
+    }
+
+    #[test]
+    fn mtls_refuses_a_certificate_from_another_ca() {
+        let tls = with_client_cert("ca.pem", "rogue-client.pem", "rogue-client-key.pem");
+        assert!(echo(mtls_server_config(), &tls).is_err());
+    }
+
+    #[test]
+    fn a_client_certificate_without_its_key_is_refused() {
+        let tls = AttachTls {
+            cert: Some(fixture("client.pem")),
+            ..trusting("ca.pem")
+        };
+        let error = super::client_config(&tls).expect_err("must refuse");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("together"), "{error}");
+    }
+
+    #[test]
+    fn a_mismatched_client_key_is_refused_naming_both_files() {
+        let tls = with_client_cert("ca.pem", "client.pem", "server-key.pem");
+        let error = super::client_config(&tls).expect_err("must refuse");
+        assert!(error.to_string().contains("client.pem"), "{error}");
+    }
+
+    #[test]
+    fn a_ca_file_without_certificates_is_refused() {
+        let empty = tempfile::NamedTempFile::new().expect("temp");
+        let tls = AttachTls {
+            ca: Some(empty.path().to_path_buf()),
+            ..AttachTls::default()
+        };
+        let error = super::client_config(&tls).expect_err("must refuse");
+        assert!(error.to_string().contains("no PEM certificates"), "{error}");
+    }
+
+    #[test]
+    fn no_material_trusts_the_web_roots() {
+        super::client_config(&AttachTls::default()).expect("web roots");
     }
 
     /// A handshaken client and server over loopback.
@@ -402,17 +584,7 @@ mod tests {
             let (socket, _) = listener.accept().expect("accept");
             let _ = TlsTransport::accept(socket, server_config(), Duration::from_secs(5));
         });
-        let mut roots = RootCertStore::empty();
-        for cert in certs("rogue-ca.pem") {
-            roots.add(cert).expect("root");
-        }
-        let config = Arc::new(
-            ClientConfig::builder_with_provider(provider())
-                .with_safe_default_protocol_versions()
-                .expect("versions")
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
-        );
+        let config = super::client_config(&trusting("rogue-ca.pem")).expect("config");
         let socket = TcpStream::connect(addr).expect("connect");
         let name = ServerName::try_from("localhost").expect("name");
         let error = TlsTransport::connect(socket, config, name, Duration::from_secs(5))

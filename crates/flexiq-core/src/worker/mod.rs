@@ -27,7 +27,7 @@ pub mod transport;
 
 pub use auth::Secret;
 pub use cancel::CancelSignals;
-pub use dial::AttachAddress;
+pub use dial::{AttachAddress, AttachTls};
 pub use dispatcher::NativeDispatcher;
 pub use executor::{
     ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorSession,
