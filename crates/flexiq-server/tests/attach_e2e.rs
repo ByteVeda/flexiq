@@ -254,6 +254,7 @@ impl Harness {
         let listener = listener::spawn(
             // Port 0: the OS picks a free port, so parallel tests never clash.
             ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
+            None,
             dispatcher,
             supervisor.clone(),
             shutdown.clone(),

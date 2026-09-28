@@ -9,9 +9,11 @@
 //! An attach connection receives jobs, so the listener is deliberately harder
 //! to expose than the dashboard: there is no insecure escape hatch. A bind
 //! reachable off-host requires `FLEXIQ_ATTACH_TOKEN`, and the token is a
-//! bearer credential, not transport security — for production, terminate mTLS
-//! in front of the listener (sidecar proxy or service mesh) and keep the token
-//! as the second factor.
+//! bearer credential, not transport security. For that, set
+//! `FLEXIQ_LISTEN_TLS_CERT` and `FLEXIQ_LISTEN_TLS_KEY` (plus
+//! `FLEXIQ_LISTEN_TLS_CLIENT_CA` for mTLS) and executors dial `tls://`, or
+//! terminate it in a sidecar proxy or service mesh. Either way the token stays
+//! required: a certificate says the connection may exist, not who is on it.
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
@@ -20,14 +22,14 @@ use anyhow::{bail, Context, Result};
 use flexiq_core::Secret;
 
 use crate::config::{value, Env};
+use crate::tls::{self, TlsFiles};
 
 /// Shortest token accepted. Long enough that a token generated the documented
 /// way passes and a hand-typed word does not.
 const MIN_TOKEN_LEN: usize = 16;
 
-/// TLS variables the listener does not yet terminate. Accepting them would let
-/// an operator believe the connection is encrypted when it is not.
-const UNHONOURED_TLS_VARS: [&str; 2] = ["FLEXIQ_LISTEN_TLS_CERT", "FLEXIQ_LISTEN_TLS_KEY"];
+/// The prefix of the listener's `_TLS_CERT` / `_TLS_KEY` / `_TLS_CLIENT_CA`.
+pub const TLS_PREFIX: &str = "FLEXIQ_LISTEN";
 
 /// The attach listener's address and credential.
 #[derive(Debug, Clone)]
@@ -36,6 +38,8 @@ pub struct AttachConfig {
     pub listen: ListenAddress,
     /// Secret an executor must present in its `hello`.
     pub token: Option<Secret>,
+    /// The key material TLS is terminated with. `None` serves plaintext.
+    pub tls: Option<TlsFiles>,
 }
 
 /// An address a role binds: either half of one `FLEXIQ_*_LISTEN` variable.
@@ -63,18 +67,8 @@ pub fn from_env(env: &Env) -> Result<Option<AttachConfig>> {
     let Some(spec) = value(env, "FLEXIQ_LISTEN") else {
         return Ok(None);
     };
-    for name in UNHONOURED_TLS_VARS {
-        if value(env, name).is_some() {
-            bail!(
-                "{name} is set, but this build does not terminate TLS on the attach \
-                 listener. Terminate mTLS in a proxy in front of it and authenticate \
-                 executors with FLEXIQ_ATTACH_TOKEN, rather than running with a \
-                 security control that does nothing."
-            );
-        }
-    }
-
     let listen = parse("FLEXIQ_LISTEN", &spec)?;
+    let tls = tls::config::from_env(env, TLS_PREFIX, &listen)?;
     let token = secret(env, "FLEXIQ_ATTACH_TOKEN")?;
     if let ListenAddress::Tcp(addr) = &listen {
         if !addr.ip().is_loopback() && token.is_none() {
@@ -85,7 +79,7 @@ pub fn from_env(env: &Env) -> Result<Option<AttachConfig>> {
             );
         }
     }
-    Ok(Some(AttachConfig { listen, token }))
+    Ok(Some(AttachConfig { listen, token, tls }))
 }
 
 /// Parse the shared secret named by `var`, rejecting one too short to be one.
@@ -240,15 +234,30 @@ mod tests {
     }
 
     #[test]
-    fn an_unhonoured_tls_variable_fails_loudly() {
-        for name in UNHONOURED_TLS_VARS {
-            let error = from_env(&env(&[
-                ("FLEXIQ_LISTEN", "127.0.0.1:7777"),
-                (name, "/certs/x"),
-            ]))
-            .expect_err("must refuse");
-            assert!(error.to_string().contains(name));
-        }
+    fn the_tls_variables_are_honoured_and_the_token_is_still_required() {
+        let fixture = |name: &str| {
+            format!(
+                "{}/../flexiq-core/tests/fixtures/tls/{name}",
+                env!("CARGO_MANIFEST_DIR")
+            )
+        };
+        let (cert, key) = (fixture("server.pem"), fixture("server-key.pem"));
+        let config = attach(&[
+            ("FLEXIQ_LISTEN", "0.0.0.0:7777"),
+            ("FLEXIQ_ATTACH_TOKEN", TOKEN),
+            ("FLEXIQ_LISTEN_TLS_CERT", cert.as_str()),
+            ("FLEXIQ_LISTEN_TLS_KEY", key.as_str()),
+        ]);
+        assert!(config.tls.is_some());
+
+        // TLS encrypts the connection; it does not say who is on it.
+        let error = from_env(&env(&[
+            ("FLEXIQ_LISTEN", "0.0.0.0:7777"),
+            ("FLEXIQ_LISTEN_TLS_CERT", cert.as_str()),
+            ("FLEXIQ_LISTEN_TLS_KEY", key.as_str()),
+        ]))
+        .expect_err("must refuse");
+        assert!(error.to_string().contains("FLEXIQ_ATTACH_TOKEN"), "{error}");
     }
 
     #[test]
