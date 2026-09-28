@@ -128,6 +128,9 @@ def test_run_executor_advertises_the_deferred_tasks(
         slots: int,
         token: str | None = None,
         executor_id: str | None = None,
+        tls_ca: str | None = None,
+        tls_cert: str | None = None,
+        tls_key: str | None = None,
     ) -> object:
         advertised.append(tasks)
         # What an unreachable scheduler raises, so the CLI exits here rather
