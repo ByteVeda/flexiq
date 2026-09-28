@@ -9,6 +9,7 @@
 //! storage. That is the point of the split — the scheduler image holds the
 //! database credentials, the app image holds the task bodies.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,8 +19,8 @@ use jni::JNIEnv;
 use serde::Deserialize;
 
 use flexiq_core::worker::{
-    AttachAddress, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorSession,
-    ExecutorSideChannel, ExecutorSteps, WorkerDispatcher, CAP_STEPS,
+    AttachAddress, AttachTls, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle,
+    ExecutorSession, ExecutorSideChannel, ExecutorSteps, WorkerDispatcher, CAP_STEPS,
 };
 
 use crate::attached_steps::RunningJobs;
@@ -33,7 +34,8 @@ use crate::handle::{self, into_handle};
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExecutorOptions {
-    /// Scheduler address: `host:port`, `:port`, or `unix:/run/flexiq.sock`.
+    /// Scheduler address: `host:port`, `:port`, `tls://host:port`, or
+    /// `unix:/run/flexiq.sock`.
     address: String,
     /// Task names this executor can run. The scheduler sends it nothing else.
     tasks: Vec<String>,
@@ -49,6 +51,14 @@ struct ExecutorOptions {
     heartbeat_interval_ms: Option<u64>,
     #[serde(default)]
     shutdown_drain_ms: Option<u64>,
+    /// PEM paths for a `tls://` address: the CAs the scheduler must chain to,
+    /// and the client certificate a scheduler requiring mTLS asks for.
+    #[serde(default)]
+    tls_ca: Option<PathBuf>,
+    #[serde(default)]
+    tls_cert: Option<PathBuf>,
+    #[serde(default)]
+    tls_key: Option<PathBuf>,
 }
 
 /// How long to wait for the connection when the caller gave no budget.
@@ -123,11 +133,18 @@ fn attach(options: ExecutorOptions, callbacks: GlobalRef) -> Result<AttachedHand
             .connect_timeout_ms
             .unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS),
     );
-    let transport = target.connect(connect_timeout).map_err(|error| {
-        BindingError::new(format!(
-            "could not reach the scheduler at {target}: {error}"
-        ))
-    })?;
+    let tls = AttachTls {
+        ca: options.tls_ca,
+        cert: options.tls_cert,
+        key: options.tls_key,
+    };
+    let transport = target
+        .connect_with(connect_timeout, Some(&tls))
+        .map_err(|error| {
+            BindingError::new(format!(
+                "could not reach the scheduler at {target}: {error}"
+            ))
+        })?;
     let client = ExecutorClient::connect(transport, config).map_err(|error| match error {
         // Named so a wrong token reads as a refusal rather than a network fault.
         ExecutorError::Refused => BindingError::new(error.to_string()),

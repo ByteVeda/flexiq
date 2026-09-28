@@ -28,7 +28,8 @@ events-kafka = ["flexiq-core/events-kafka"]
 events-nats = ["flexiq-core/events-nats"]
 
 [dependencies]
-flexiq-core = { workspace = true }
+# `attach-tls`: the executor dials `tls://` schedulers.
+flexiq-core = { workspace = true, features = ["attach-tls"] }
 flexiq-workflows = { workspace = true, optional = true }
 flexiq-mesh = { workspace = true, optional = true }
 base64 = "0.23"

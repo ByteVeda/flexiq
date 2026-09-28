@@ -1,6 +1,7 @@
 package org.byteveda.flexiq.cli;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Callable;
@@ -297,9 +298,25 @@ public final class Cli {
 
         @Option(
                 names = "--attach",
-                description = "Scheduler address: host:port, :port, or unix:/path (env: FLEXIQ_ATTACH).")
+                description = "Scheduler address: host:port, :port, tls://host:port, or unix:/path "
+                        + "(env: FLEXIQ_ATTACH).")
         @Nullable
         String attach;
+
+        @Option(
+                names = "--tls-ca",
+                description = "PEM bundle the scheduler's certificate must chain to, for a tls:// address "
+                        + "(env: FLEXIQ_ATTACH_TLS_CA).")
+        @Nullable
+        Path tlsCa;
+
+        @Option(names = "--tls-cert", description = "PEM client certificate, for mTLS (env: FLEXIQ_ATTACH_TLS_CERT).")
+        @Nullable
+        Path tlsCert;
+
+        @Option(names = "--tls-key", description = "PEM key for --tls-cert (env: FLEXIQ_ATTACH_TLS_KEY).")
+        @Nullable
+        Path tlsKey;
 
         @Option(names = "--slots", description = "Jobs to run concurrently (env: FLEXIQ_SLOTS).")
         @Nullable
@@ -337,7 +354,11 @@ public final class Cli {
                     // Env only, never a flag: a token in argv is visible in `ps`
                     // output and lands in shell history.
                     .token(envOrNull("FLEXIQ_ATTACH_TOKEN"))
-                    .executorId(executorId);
+                    .executorId(executorId)
+                    .tls(
+                            pathOrEnv(tlsCa, "FLEXIQ_ATTACH_TLS_CA"),
+                            pathOrEnv(tlsCert, "FLEXIQ_ATTACH_TLS_CERT"),
+                            pathOrEnv(tlsKey, "FLEXIQ_ATTACH_TLS_KEY"));
             if (configuredSerializer != null) {
                 builder.serializer(configuredSerializer);
             }
@@ -407,6 +428,15 @@ public final class Cli {
         private static @Nullable String envOrNull(String name) {
             String value = System.getenv(name);
             return value == null || value.isBlank() ? null : value;
+        }
+
+        /** The flag's path, else the environment variable's, else {@code null}. */
+        private static @Nullable Path pathOrEnv(@Nullable Path flag, String name) {
+            if (flag != null) {
+                return flag;
+            }
+            String value = envOrNull(name);
+            return value == null ? null : Path.of(value);
         }
 
         /**
