@@ -104,6 +104,7 @@ impl Transport for TlsTransport {
         let control = Arc::new(self.socket.try_clone()?);
         let writer_control = Arc::clone(&control);
         let closer = Arc::clone(&control);
+        let closing = Arc::clone(&tls);
         let writer = TlsWriter {
             socket: self.socket,
             tls,
@@ -115,6 +116,11 @@ impl Transport for TlsTransport {
                 move |timeout| control.set_read_timeout(timeout),
                 move |timeout| writer_control.set_write_timeout(timeout),
                 move || {
+                    // `try_lock`: close exists to unblock a stuck peer, so it
+                    // must never wait behind a writer that is itself stuck.
+                    if let Ok(mut tls) = closing.try_lock() {
+                        say_goodbye(&mut tls, &mut &*closer);
+                    }
                     let _ = closer.shutdown(std::net::Shutdown::Both);
                 },
             ),
@@ -217,6 +223,21 @@ impl Write for TlsWriter {
         tls.writer().flush()?;
         flush(&mut tls, &mut self.socket)
     }
+}
+
+impl Drop for TlsWriter {
+    /// End the session the way TLS expects. Without a `close_notify` the peer
+    /// cannot tell a deliberate close — a refused handshake, a finished
+    /// session — from a truncation, and reports every one as an I/O error.
+    fn drop(&mut self) {
+        say_goodbye(&mut lock(&self.tls), &mut self.socket);
+    }
+}
+
+/// Queue and send a `close_notify`, best-effort: the peer may be gone.
+fn say_goodbye(tls: &mut Connection, socket: &mut impl Write) {
+    tls.send_close_notify();
+    let _ = flush(tls, socket);
 }
 
 /// Send every encrypted byte rustls is holding.
@@ -533,6 +554,16 @@ mod tests {
 
         server_write.write_all(&[42]).expect("wake the reader");
         assert_eq!(parked.join().expect("reader"), 42);
+    }
+
+    /// A peer that hangs up on purpose reads as a clean end of stream, as it
+    /// would on plain TCP — the executor tells a refusal from a fault by it.
+    #[test]
+    fn dropping_a_session_reads_as_a_clean_close() {
+        let (client, server) = pair();
+        let (mut client_read, _, _) = client.split().expect("split");
+        drop(server.split().expect("split"));
+        assert_eq!(client_read.read(&mut [0u8; 1]).expect("clean EOF"), 0);
     }
 
     #[test]
