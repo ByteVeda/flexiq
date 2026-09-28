@@ -36,6 +36,7 @@ pub mod pb;
 pub mod producer;
 pub mod reflection;
 pub mod status;
+pub mod tls;
 
 use anyhow::Result;
 use flexiq_core::StorageBackend;
