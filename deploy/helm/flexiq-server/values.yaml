@@ -54,6 +54,18 @@ attach:
   token: ""
   existingSecret: ""
   existingSecretKey: attach-token
+  # In-process TLS on the attach port; executors then dial tls://host:port.
+  # Leave empty behind a service mesh that already encrypts pod traffic — a
+  # mesh deployment configures TLS once, there. The token stays required either
+  # way: a certificate says the connection may exist, not who is on it.
+  tls:
+    # A kubernetes.io/tls Secret (tls.crt / tls.key), e.g. one cert-manager
+    # issues. Renewed in place, it is picked up within a minute, no restart.
+    secretName: ""
+    # A Secret holding the CA bundle executors' client certificates must chain
+    # to. Setting it turns on mTLS; it needs secretName too.
+    clientCaSecretName: ""
+    clientCaKey: ca.crt
   # Extra annotations for the Service that fronts the attach port.
   service:
     annotations: {}
@@ -137,8 +149,20 @@ grpc:
   # Readiness by gRPC health rather than a bare TCP connect. The health check is
   # the better signal, because the server answers it out of storage. Turn it off
   # for a cluster older than Kubernetes 1.24, whose API server rejects the
-  # `grpc` probe field outright.
+  # `grpc` probe field outright. A kubelet gRPC probe cannot speak TLS, so with
+  # grpc.tls.secretName set readiness falls back to a TCP connect regardless.
   healthProbe: true
+  # In-process TLS on the gRPC port, the JSON facade included; clients dial
+  # https://. Leave empty behind a mesh or an ingress that terminates TLS.
+  tls:
+    # A kubernetes.io/tls Secret (tls.crt / tls.key). Renewed in place, it is
+    # picked up within a minute, no restart.
+    secretName: ""
+    # A Secret holding the CA bundle client certificates must chain to. Setting
+    # it turns on mTLS — beside the API token, never instead of it — and needs
+    # secretName too.
+    clientCaSecretName: ""
+    clientCaKey: ca.crt
   # Its own Service, like attach: the door clients dial and the port people
   # browse should not be one object an annotation can widen by accident.
   service:
