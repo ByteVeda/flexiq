@@ -415,9 +415,11 @@ def run_executor(args: argparse.Namespace) -> None:
             # and lands in shell history.
             os.environ.get("FLEXIQ_ATTACH_TOKEN"),
             args.executor_id,
-            tls_ca=args.tls_ca or os.environ.get("FLEXIQ_ATTACH_TLS_CA"),
-            tls_cert=args.tls_cert or os.environ.get("FLEXIQ_ATTACH_TLS_CERT"),
-            tls_key=args.tls_key or os.environ.get("FLEXIQ_ATTACH_TLS_KEY"),
+            # `or None`: a blank variable, as Compose sets freely, is unset —
+            # not a path, which would make a plaintext attach refuse.
+            tls_ca=args.tls_ca or os.environ.get("FLEXIQ_ATTACH_TLS_CA") or None,
+            tls_cert=args.tls_cert or os.environ.get("FLEXIQ_ATTACH_TLS_CERT") or None,
+            tls_key=args.tls_key or os.environ.get("FLEXIQ_ATTACH_TLS_KEY") or None,
         )
     except (RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

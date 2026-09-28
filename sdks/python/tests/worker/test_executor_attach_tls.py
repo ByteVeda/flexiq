@@ -129,3 +129,16 @@ def test_tls_options_beside_a_plaintext_address_are_refused(tmp_path: Path) -> N
         assert "tls://" in read_stderr(process)
     finally:
         terminate(process)
+
+
+def test_blank_tls_variables_are_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Compose sets variables to "" freely; that must not read as TLS material."""
+    for name in ("FLEXIQ_ATTACH_TLS_CA", "FLEXIQ_ATTACH_TLS_CERT", "FLEXIQ_ATTACH_TLS_KEY"):
+        monkeypatch.setenv(name, "")
+    fake = FakeScheduler()
+    process = spawn_executor(fake.port, tmp_path / "t.db")
+    try:
+        run_one_job(fake)
+    finally:
+        terminate(process)
+        fake.close()
