@@ -10,6 +10,7 @@ mod support;
 
 use std::path::PathBuf;
 
+use flexiq_cli::connect::ClientTls;
 use flexiq_server::config::grpc::GrpcConfig;
 use flexiq_server::config::listen::ListenAddress;
 use flexiq_server::grpc::pb::producer_service_client::ProducerServiceClient;
@@ -237,4 +238,62 @@ async fn mtls_refuses_a_certificate_from_another_ca() {
         "an untrusted certificate must not connect"
     );
     harness.stop().await;
+}
+
+/// `fq`'s own dialler, with its `--tls-ca/--tls-cert/--tls-key` files, against
+/// an mTLS door.
+#[tokio::test]
+async fn fq_dials_an_mtls_door_with_its_certificate() {
+    let harness = Harness::start("mtls-fq", true).await;
+    let endpoint = format!("https://localhost:{}", harness.port);
+    let token = harness.mint();
+    let tls = ClientTls {
+        ca: Some(fixture("ca.pem")),
+        cert: Some(fixture("client.pem")),
+        key: Some(fixture("client-key.pem")),
+    };
+    let mut client = flexiq_cli::connect::connect(&endpoint, &token, &tls)
+        .await
+        .expect("fq connects over mTLS");
+    client
+        .enqueue(flexiq_cli::pb::EnqueueRequest {
+            task_name: "send_email".to_string(),
+            body: Some(flexiq_cli::pb::enqueue_request::Body::Raw(vec![1])),
+            options: Some(flexiq_cli::pb::EnqueueOptions {
+                queue: "emails".to_string(),
+                ..Default::default()
+            }),
+        })
+        .await
+        .expect("an enqueue over mTLS");
+
+    // Without its certificate the same call is refused before the token is read.
+    let anonymous = ClientTls {
+        ca: Some(fixture("ca.pem")),
+        ..ClientTls::default()
+    };
+    let refused = match flexiq_cli::connect::connect(&endpoint, &token, &anonymous).await {
+        Ok(mut client) => client
+            .enqueue(flexiq_cli::pb::EnqueueRequest::default())
+            .await
+            .map(|_| ())
+            .map_err(|status| status.to_string()),
+        Err(error) => Err(error.to_string()),
+    };
+    assert!(refused.is_err(), "no certificate, no call");
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn fq_refuses_tls_files_beside_a_plaintext_endpoint() {
+    let tls = ClientTls {
+        ca: Some(fixture("ca.pem")),
+        ..ClientTls::default()
+    };
+    // Matched rather than `expect_err`: the client is not `Debug`, because the
+    // credential it carries must never be printed.
+    let Err(error) = flexiq_cli::connect::connect("http://127.0.0.1:1", "token", &tls).await else {
+        panic!("must refuse rather than send in the clear");
+    };
+    assert!(error.to_string().contains("https://"), "{error}");
 }

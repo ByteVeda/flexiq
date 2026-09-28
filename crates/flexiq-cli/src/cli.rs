@@ -15,7 +15,11 @@
 //! speaks `flexiq.admin.v1.AdminService` and needs `inspect` to read and
 //! `admin` to change anything.
 
+use std::path::PathBuf;
+
 use clap::{ArgGroup, Args, Parser, Subcommand};
+
+use crate::connect::ClientTls;
 
 /// A standalone command line for a FlexiQ server.
 #[derive(Debug, Parser)]
@@ -31,6 +35,19 @@ pub struct Cli {
     )]
     pub endpoint: String,
 
+    /// PEM CA bundle an `https://` server's certificate must chain to, in place
+    /// of the platform's root store — for a server with a private CA.
+    #[arg(long, global = true, env = "FLEXIQ_TLS_CA", value_name = "PATH")]
+    pub tls_ca: Option<PathBuf>,
+
+    /// PEM client certificate, for a server that requires mTLS.
+    #[arg(long, global = true, env = "FLEXIQ_TLS_CERT", value_name = "PATH")]
+    pub tls_cert: Option<PathBuf>,
+
+    /// PEM private key for `--tls-cert`.
+    #[arg(long, global = true, env = "FLEXIQ_TLS_KEY", value_name = "PATH")]
+    pub tls_key: Option<PathBuf>,
+
     /// Print proto3 JSON instead of a table.
     #[arg(long, global = true)]
     pub json: bool,
@@ -38,6 +55,17 @@ pub struct Cli {
     /// What to do.
     #[command(subcommand)]
     pub command: Command,
+}
+
+impl Cli {
+    /// The TLS files the flags or their variables named.
+    pub fn tls(&self) -> ClientTls {
+        ClientTls {
+            ca: self.tls_ca.clone(),
+            cert: self.tls_cert.clone(),
+            key: self.tls_key.clone(),
+        }
+    }
 }
 
 /// The top-level verbs.
