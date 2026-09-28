@@ -28,7 +28,8 @@ events-kafka = ["flexiq-core/events-kafka"]
 events-nats = ["flexiq-core/events-nats"]
 
 [dependencies]
-flexiq-core = { workspace = true }
+# `attach-tls`: `runExecutor` dials `tls://` schedulers.
+flexiq-core = { workspace = true, features = ["attach-tls"] }
 # `dyn-symbols` is a napi 3 default that `default-features = false` drops; it
 # resolves the Node symbols at load time rather than linking against them.
 # The floor tracks what `napi-derive` expands to — cargo can't see that

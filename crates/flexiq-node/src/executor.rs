@@ -9,12 +9,14 @@
 //! concurrency, timeouts and the cancel signal behave identically; only the
 //! transport differs.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use flexiq_core::worker::{
-    AttachAddress, CancelSignals, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle,
-    ExecutorSession, ExecutorSideChannel, ExecutorSteps, WorkerDispatcher, CAP_STEPS,
+    AttachAddress, AttachTls, CancelSignals, ExecutorClient, ExecutorConfig, ExecutorError,
+    ExecutorHandle, ExecutorSession, ExecutorSideChannel, ExecutorSteps, WorkerDispatcher,
+    CAP_STEPS,
 };
 use napi::bindgen_prelude::{spawn_blocking, Promise, Result, Status};
 use napi::threadsafe_function::ThreadsafeFunction;
@@ -32,7 +34,8 @@ const DEFAULT_CONNECT_TIMEOUT_MS: u32 = 10_000;
 /// How an executor attaches. Durations are milliseconds, per Node convention.
 #[napi(object)]
 pub struct ExecutorOptions {
-    /// Scheduler address: `host:port`, `:port`, or `unix:/run/flexiq.sock`.
+    /// Scheduler address: `host:port`, `:port`, `tls://host:port`, or
+    /// `unix:/run/flexiq.sock`.
     pub address: String,
     /// Task names this executor can run. The scheduler sends it nothing else,
     /// so a name missing here is a job that never arrives.
@@ -50,6 +53,13 @@ pub struct ExecutorOptions {
     /// How long a drain waits for in-flight jobs before disconnecting anyway
     /// (default 30000).
     pub shutdown_drain_ms: Option<u32>,
+    /// PEM bundle the scheduler's certificate must chain to, for a `tls://`
+    /// address (default: the bundled web roots).
+    pub tls_ca: Option<String>,
+    /// PEM client certificate, for a scheduler that requires mTLS.
+    pub tls_cert: Option<String>,
+    /// PEM key for `tls_cert`.
+    pub tls_key: Option<String>,
 }
 
 /// A running attachment to a scheduler.
@@ -255,13 +265,20 @@ pub async fn start_executor(
     );
     let target = AttachAddress::parse(&options.address)
         .map_err(|error| invalid_arg(format!("invalid attach address: {error}")))?;
+    let tls = AttachTls {
+        ca: options.tls_ca.map(PathBuf::from),
+        cert: options.tls_cert.map(PathBuf::from),
+        key: options.tls_key.map(PathBuf::from),
+    };
 
     spawn_blocking(move || {
-        let transport = target.connect(connect_timeout).map_err(|error| {
-            napi::Error::from_reason(format!(
-                "could not reach the scheduler at {target}: {error}"
-            ))
-        })?;
+        let transport = target
+            .connect_with(connect_timeout, Some(&tls))
+            .map_err(|error| {
+                napi::Error::from_reason(format!(
+                    "could not reach the scheduler at {target}: {error}"
+                ))
+            })?;
         let client = ExecutorClient::connect(transport, config).map_err(|error| match error {
             // Named so a wrong token reads as a refusal rather than a network fault.
             ExecutorError::Refused => napi::Error::from_reason(error.to_string()),

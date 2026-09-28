@@ -8,6 +8,7 @@
  */
 
 import { createServer, type Server, type Socket } from "node:net";
+import { createServer as createTlsServer, type TlsOptions } from "node:tls";
 
 /** Frame-format version this build speaks; mirrored from the core. */
 export const PROTOCOL_VERSION = 1;
@@ -61,8 +62,12 @@ export class FakeScheduler {
     this.connected = connected;
   }
 
-  static async listen(options?: { refuse?: boolean }): Promise<FakeScheduler> {
-    const server = createServer();
+  /**
+   * `tls` makes this a `tls://` scheduler: the executor handshakes first, and
+   * the frames inside are the same either way.
+   */
+  static async listen(options?: { refuse?: boolean; tls?: TlsOptions }): Promise<FakeScheduler> {
+    const server = options?.tls ? createTlsServer(options.tls) : createServer();
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (address === null || typeof address === "string") {
@@ -78,7 +83,9 @@ export class FakeScheduler {
       fake.refuse = true;
     }
 
-    server.on("connection", (socket) => {
+    // A TLS server's "connection" is the raw socket; its frames arrive on the
+    // handshaken one.
+    server.on(options?.tls ? "secureConnection" : "connection", (socket: Socket) => {
       fake.socket = socket;
       socket.on("data", (chunk: Buffer) => {
         fake.buffer = Buffer.concat([fake.buffer, chunk]);

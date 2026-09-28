@@ -87,7 +87,7 @@ export {
   type WorkerUnhealthyEvent,
   type WorkflowEvent,
 } from "./events";
-export { Executor, type ExecutorRunOptions } from "./executor";
+export { Executor, type ExecutorRunOptions, type ExecutorTlsOptions } from "./executor";
 export {
   checkHealth,
   checkReadiness,
