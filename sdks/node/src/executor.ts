@@ -184,9 +184,11 @@ export class Executor {
       connectTimeoutMs: run?.connectTimeoutMs,
       heartbeatIntervalMs: run?.heartbeatIntervalMs,
       shutdownDrainMs: run?.shutdownDrainMs,
-      tlsCa: run?.tls?.ca ?? process.env.FLEXIQ_ATTACH_TLS_CA,
-      tlsCert: run?.tls?.cert ?? process.env.FLEXIQ_ATTACH_TLS_CERT,
-      tlsKey: run?.tls?.key ?? process.env.FLEXIQ_ATTACH_TLS_KEY,
+      // `||`, not `??`: a blank variable, as Compose sets freely, is unset —
+      // not a path, which would make a plaintext attach refuse.
+      tlsCa: run?.tls?.ca || process.env.FLEXIQ_ATTACH_TLS_CA || undefined,
+      tlsCert: run?.tls?.cert || process.env.FLEXIQ_ATTACH_TLS_CERT || undefined,
+      tlsKey: run?.tls?.key || process.env.FLEXIQ_ATTACH_TLS_KEY || undefined,
     });
 
     attached = native;

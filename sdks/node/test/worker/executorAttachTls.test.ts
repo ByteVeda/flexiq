@@ -101,3 +101,19 @@ it("refuses TLS options beside a plaintext address", async () => {
     echoQueue().runExecutor({ attach: "127.0.0.1:1", tls: { ca: fixture("ca.pem") } }),
   ).rejects.toThrow(/tls:\/\//);
 });
+
+it("treats blank TLS variables as unset", async () => {
+  // Compose sets variables to "" freely; that must not read as TLS material.
+  scheduler = await FakeScheduler.listen();
+  const restore = withEnv({
+    FLEXIQ_ATTACH_TLS_CA: "",
+    FLEXIQ_ATTACH_TLS_CERT: "",
+    FLEXIQ_ATTACH_TLS_KEY: "",
+  });
+  try {
+    executor = await echoQueue().runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
+    await scheduler.attached();
+  } finally {
+    restore();
+  }
+});
