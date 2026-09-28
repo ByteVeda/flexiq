@@ -29,6 +29,9 @@ events-http = ["flexiq-core/events-http"]
 # The Kafka and NATS event sinks.
 events-kafka = ["flexiq-core/events-kafka"]
 events-nats = ["flexiq-core/events-nats"]
+# `tls://` attach addresses for an executor built on `ExecutorClient`. Off by
+# default: it compiles a TLS stack, and only an executor dials one.
+attach-tls = ["flexiq-core/attach-tls"]
 # The companion engines, off by default. The other SDKs ship them inside a single
 # compiled artifact; Rust resolves source crates, so the equivalent is an opt-in
 # dependency — no consumer pays for a DAG engine or a gossip mesh unasked.
