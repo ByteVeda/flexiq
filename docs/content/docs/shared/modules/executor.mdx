@@ -232,6 +232,27 @@ Executor.builder()
 `FLEXIQ_ATTACH_TLS_*` variables.
 
   </Tab>
+  <Tab sdk="rust">
+
+With the `attach-tls` feature on (`flexiq = { version = "2", features =
+["attach-tls"] }`), the hand-built executor above dials with `connect_with`:
+
+```rust
+use flexiq::{AttachAddress, AttachTls};
+
+let tls = AttachTls {
+    ca: Some("ca.pem".into()),
+    cert: Some("client.pem".into()),
+    key: Some("client-key.pem".into()),
+};
+let transport = AttachAddress::parse("tls://scheduler:7777")?
+    .connect_with(Duration::from_secs(10), Some(&tls))?;
+```
+
+Without the feature, a `tls://` dial fails with `Unsupported` rather than
+falling back to plaintext.
+
+  </Tab>
 </CodeTabs>
 
 Without a CA bundle the executor trusts the web PKI roots compiled into the

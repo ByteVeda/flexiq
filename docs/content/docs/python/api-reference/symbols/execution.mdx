@@ -22,7 +22,10 @@ Executor(
     tasks: list[str],
     slots: int,
     token: str | None = None,
-    executor_id: str | None = None
+    executor_id: str | None = None,
+    tls_ca: str | os.PathLike[str] | None = None,
+    tls_cert: str | os.PathLike[str] | None = None,
+    tls_key: str | os.PathLike[str] | None = None
 )
 ```
 
