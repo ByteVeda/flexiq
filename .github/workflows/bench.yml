@@ -70,7 +70,7 @@ jobs:
       # runner; publishing it would put a number on the site that nobody chose.
       - name: Upload the artifact
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-result
           path: bench-result.json
