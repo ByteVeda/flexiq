@@ -644,7 +644,9 @@ There is no separate TLS configuration for the two.
 certificate says the connection may exist; the token — still checked on every
 call the same way — says which principal it is. A handshake that fails
 against `FLEXIQ_GRPC_TLS_CLIENT_CA` is refused before any credential on the
-request is even read.
+request is even read. The two `grpc.health.v1` methods stay exempt from the
+token as before; under mTLS a probe still needs a trusted client certificate
+to connect at all.
 
 Each connection handshakes in its own task, with a 10 s timeout and at most
 64 pending handshakes at once, so one slow or silent peer cannot block every

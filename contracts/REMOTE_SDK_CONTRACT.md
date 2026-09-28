@@ -652,8 +652,10 @@ it is presenting the token to rather than trust the name it dialled. The server
 terminates TLS itself when `FLEXIQ_GRPC_TLS_CERT` and `FLEXIQ_GRPC_TLS_KEY` are
 set, and can demand a client certificate chaining to `FLEXIQ_GRPC_TLS_CLIENT_CA`
 (mTLS); otherwise it is a TLS-terminating proxy or a service mesh in front of
-the listener. A client certificate never replaces the token: every call on
-either door **MUST** still present one.
+the listener. A client certificate never replaces the token: every
+authenticated call on either door **MUST** still present one. mTLS changes
+nothing about which calls those are — `grpc.health.v1` `Check` and `Watch`
+stay exempt, as they are without it.
 
 The exemptions are the hops with no network to observe: a Unix-domain socket,
 and a loopback bind whose peers are on the same host. Both still present a

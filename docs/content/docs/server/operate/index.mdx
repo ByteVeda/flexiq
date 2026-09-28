@@ -134,8 +134,10 @@ poll — see that page for the boot refusals, the reload mechanics and the
 handshake limits, which are shared between the two listeners.
 
 With TLS on, an executor dials `tls://host:port` rather than `host:port`, and
-the boot log prints `attach listener on tls://ADDR` — paste it straight into
-`FLEXIQ_ATTACH`. Each connection's handshake runs on its own handshake thread
+the boot log prints `attach listener on tls://ADDR`. That is the bind address;
+`FLEXIQ_ATTACH` takes `tls://` with the reachable host name the certificate
+was issued for, since that name is what the executor verifies — a
+`tls://0.0.0.0:7777` copied from the log fails the handshake. Each connection's handshake runs on its own handshake thread
 with a 10 s timeout, so a slow or silent peer stalls only itself. mTLS sits
 beside `FLEXIQ_ATTACH_TOKEN`, never instead of it: the certificate says the
 connection may exist, and the token — read only once the handshake succeeds —

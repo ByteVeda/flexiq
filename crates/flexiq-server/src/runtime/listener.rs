@@ -83,8 +83,8 @@ pub fn spawn(
             listener.set_nonblocking(true)?;
             // Report what was bound, not what was asked for: port 0 resolves
             // to an ephemeral port only the listener knows. The scheme is the
-            // one an executor dials, so the line can be pasted into
-            // FLEXIQ_ATTACH as it stands.
+            // one an executor dials; under TLS the host it dials must be the
+            // name on the certificate, not this bind address.
             let bound = listener.local_addr().unwrap_or(addr);
             let scheme = if tls.is_some() { "tls" } else { "tcp" };
             log::info!("[flexiq] attach listener on {scheme}://{bound}");
