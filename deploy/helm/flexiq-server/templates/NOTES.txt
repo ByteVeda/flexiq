@@ -62,7 +62,7 @@ Sidecar injection is on. Annotate a pod template:
         flexiq.dev/command: "<the command that runs an executor in your image>"
         flexiq.dev/slots: "4"
 {{- if .Values.attach.enabled }}
-        flexiq.dev/attach: "{{ include "flexiq-server.fullname" . }}-attach.{{ .Release.Namespace }}.svc:{{ .Values.attach.port }}"
+        flexiq.dev/attach: "{{ if .Values.attach.tls.secretName }}tls://{{ end }}{{ include "flexiq-server.fullname" . }}-attach.{{ .Release.Namespace }}.svc:{{ .Values.attach.port }}"
 {{- if or .Values.attach.token .Values.attach.existingSecret }}
         flexiq.dev/token-secret: "{{ if .Values.attach.existingSecret }}{{ .Values.attach.existingSecret }}{{ else }}{{ include "flexiq-server.secretName" . }}{{ end }}"
         flexiq.dev/token-key: "{{ if .Values.attach.existingSecret }}{{ .Values.attach.existingSecretKey }}{{ else }}attach-token{{ end }}"
@@ -75,6 +75,12 @@ Sidecar injection is on. Annotate a pod template:
         flexiq.dev/attach: "<scheduler host:port>"
         flexiq.dev/token-secret: "<secret holding its attach token>"
         flexiq.dev/token-key: "<key within it>"
+{{- end }}
+{{- if and .Values.attach.enabled .Values.attach.tls.secretName }}
+
+The sidecar dials tls:// and trusts the web PKI roots built into the SDK. It
+inherits the app container's environment but none of its volume mounts, so
+for a private CA, FLEXIQ_ATTACH_TLS_CA must name a file baked into the image.
 {{- end }}
 
 The sidecar reuses the pod's own image, so nothing new is pulled.
