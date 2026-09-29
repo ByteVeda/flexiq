@@ -14,6 +14,7 @@
 //!
 //! [`AuthLayer`]: crate::grpc::auth::AuthLayer
 
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -100,17 +101,43 @@ where
             metrics::labels(request.method(), request.uri().path(), request.headers());
         let context = AuditContext::default();
         request.extensions_mut().insert(context.clone());
-        let sink = self.sink.clone();
+        let mut pending = Pending {
+            call: Some((context, operation, self.sink.clone())),
+        };
 
         Box::pin(async move {
             let answered = inner.call(request).await;
-            if let Ok(response) = &answered {
-                for record in records(&context, &operation, answered_code(response)) {
-                    sink.record(record);
-                }
-            }
+            pending.settle(match &answered {
+                Ok(response) => answered_code(response),
+                // The service failed below the gRPC layer; no status was sent.
+                Err(_) => Code::Unknown,
+            });
             answered
         })
+    }
+}
+
+/// A call whose records are still owed. Settled with the answer's code; if
+/// the future is dropped first — a deadline, a client that hung up — the drop
+/// settles it `CANCELLED`, because the handler may already have committed a
+/// write that must not go unrecorded.
+struct Pending {
+    call: Option<(AuditContext, Cow<'static, str>, AuditSink)>,
+}
+
+impl Pending {
+    fn settle(&mut self, code: Code) {
+        if let Some((context, operation, sink)) = self.call.take() {
+            for record in records(&context, &operation, code) {
+                sink.record(record);
+            }
+        }
+    }
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        self.settle(Code::Cancelled);
     }
 }
 
@@ -151,6 +178,9 @@ mod tests {
     use super::*;
     use crate::grpc::audit::TargetKind;
     use crate::grpc::auth::{Principal, ScopeSet};
+    use crate::runtime::shutdown::Shutdown;
+    use flexiq_core::storage::sqlite::SqliteStorage;
+    use flexiq_core::{AuditFilter, Storage, StorageBackend};
 
     const POST: http::Method = http::Method::POST;
     const GET: http::Method = http::Method::GET;
@@ -223,5 +253,54 @@ mod tests {
         let context = AuditContext::default();
         context.target(TargetKind::Job, "j1");
         assert!(records(&context, operation(), Code::Unauthenticated).is_empty());
+    }
+
+    /// The trail as the sink's writer stored it, once `count` records are in.
+    async fn stored(storage: &StorageBackend, count: usize) -> Vec<AuditRecord> {
+        for _ in 0..100 {
+            let records = storage
+                .list_audit_after("prod", &AuditFilter::default(), 100, None)
+                .expect("list");
+            if records.len() >= count {
+                return records;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the writer never stored {count} record(s)");
+    }
+
+    fn pending(storage: &StorageBackend) -> Pending {
+        let context = AuditContext::default();
+        context.identify(&Principal::new("tok", "prod", ScopeSet::ALL));
+        context.target(TargetKind::Job, "j1");
+        let (sink, _writer) = AuditSink::start(storage.clone(), Shutdown::default());
+        Pending {
+            call: Some((context, Cow::Borrowed(operation()), sink)),
+        }
+    }
+
+    /// A deadline or a client hanging up drops the call's future; a write the
+    /// handler already committed must still be attributed.
+    #[tokio::test]
+    async fn a_dropped_call_is_recorded_cancelled() {
+        let storage = StorageBackend::Sqlite(SqliteStorage::in_memory().expect("sqlite"));
+        drop(pending(&storage));
+        let records = stored(&storage, 1).await;
+        assert_eq!(records[0].outcome, "CANCELLED");
+        assert_eq!(records[0].target.as_deref(), Some("j1"));
+    }
+
+    #[tokio::test]
+    async fn a_settled_call_is_recorded_once_with_its_code() {
+        let storage = StorageBackend::Sqlite(SqliteStorage::in_memory().expect("sqlite"));
+        let mut call = pending(&storage);
+        call.settle(Code::Ok);
+        drop(call);
+        let records = stored(&storage, 1).await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let records_after = stored(&storage, 1).await;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records, records_after, "the drop adds nothing");
+        assert_eq!(records[0].outcome, "OK");
     }
 }
