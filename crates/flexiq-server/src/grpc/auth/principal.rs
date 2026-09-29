@@ -54,7 +54,7 @@ impl Principal {
 
     /// Whether this caller may call `scope`'s package.
     pub fn grants(&self, scope: Scope) -> bool {
-        self.scopes.contains(scope)
+        self.scopes.opens(scope)
     }
 }
 

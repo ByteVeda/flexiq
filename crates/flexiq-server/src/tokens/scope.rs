@@ -5,7 +5,8 @@
 //! A package is the right unit because the audiences differ — a producer
 //! submits work and an executor runs it — and because a scope that named an RPC
 //! would have to grow every time the service does. The operator split is drawn
-//! by each method's idempotency level for the same reason (#836).
+//! by each method's idempotency level for the same reason (#836), and so is the
+//! producer's: `read` reaches its read-only methods, `produce` all of them.
 //!
 //! This lives outside `grpc/` because a scope is a property of a *token*, and
 //! tokens are minted, listed and revoked by builds compiled without the `grpc`
@@ -23,6 +24,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub enum Scope {
     /// `flexiq.v1` — submit, read and cancel work.
     Produce,
+    /// `flexiq.v1`, read-only methods — look at jobs, queue stats and workflow
+    /// runs, never submit or cancel. A `produce` grant covers it too.
+    Read,
     /// `flexiq.executor.v1` — claim work and report on it.
     Execute,
     /// `flexiq.admin.v1`, read-only methods — look at queues, dead letters,
@@ -35,7 +39,13 @@ pub enum Scope {
 
 impl Scope {
     /// Every scope there is, in the order a listing shows them.
-    pub const ALL: [Self; 4] = [Self::Produce, Self::Execute, Self::Inspect, Self::Admin];
+    pub const ALL: [Self; 5] = [
+        Self::Produce,
+        Self::Read,
+        Self::Execute,
+        Self::Inspect,
+        Self::Admin,
+    ];
 
     /// This scope's bit in a [`ScopeSet`].
     const fn bit(self) -> u8 {
@@ -44,13 +54,25 @@ impl Scope {
             Self::Execute => 1 << 1,
             Self::Inspect => 1 << 2,
             Self::Admin => 1 << 3,
+            Self::Read => 1 << 4,
         }
+    }
+
+    /// Whether a grant of `granted` opens what this scope guards.
+    ///
+    /// `produce` has always reached the producer's reads, so it still does:
+    /// narrowing it would take reads away from every token minted before `read`
+    /// existed. That is the only implication; `inspect` is not implied by
+    /// `admin`.
+    pub fn is_granted_by(self, granted: Self) -> bool {
+        granted == self || (self == Self::Read && granted == Self::Produce)
     }
 
     /// The scope's name, for a log line, a token definition or the wire.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Produce => "produce",
+            Self::Read => "read",
             Self::Execute => "execute",
             Self::Inspect => "inspect",
             Self::Admin => "admin",
@@ -93,7 +115,11 @@ pub struct ScopeSet(u8);
 impl ScopeSet {
     /// Every scope this build knows.
     pub const ALL: Self = Self(
-        Scope::Produce.bit() | Scope::Execute.bit() | Scope::Inspect.bit() | Scope::Admin.bit(),
+        Scope::Produce.bit()
+            | Scope::Read.bit()
+            | Scope::Execute.bit()
+            | Scope::Inspect.bit()
+            | Scope::Admin.bit(),
     );
 
     /// No scopes at all. A credential carrying this opens nothing.
@@ -104,9 +130,15 @@ impl ScopeSet {
         Self(scopes.iter().fold(0, |bits, scope| bits | scope.bit()))
     }
 
-    /// Whether this set grants `scope`.
+    /// Whether this set lists `scope` itself.
     pub fn contains(self, scope: Scope) -> bool {
         self.0 & scope.bit() != 0
+    }
+
+    /// Whether some scope in this set opens what `scope` guards — `contains`,
+    /// plus the one implication [`Scope::is_granted_by`] draws.
+    pub fn opens(self, scope: Scope) -> bool {
+        self.iter().any(|granted| scope.is_granted_by(granted))
     }
 
     /// Whether this set grants nothing.
@@ -249,5 +281,23 @@ mod tests {
         assert!(!write.contains(Scope::Inspect));
         let produce = ScopeSet::of(&[Scope::Produce]);
         assert!(!produce.contains(Scope::Inspect) && !produce.contains(Scope::Admin));
+        assert!(!write.opens(Scope::Inspect), "admin does not imply inspect");
+    }
+
+    /// Every token minted before `read` existed reached the producer's reads
+    /// through `produce`; it still must. The reverse would be a write grant.
+    #[test]
+    fn produce_opens_the_reads_and_read_opens_nothing_else() {
+        let produce = ScopeSet::of(&[Scope::Produce]);
+        assert!(produce.opens(Scope::Read));
+        assert!(
+            !produce.contains(Scope::Read),
+            "the implication is not a listing"
+        );
+        let read = ScopeSet::of(&[Scope::Read]);
+        assert!(read.opens(Scope::Read));
+        for scope in [Scope::Produce, Scope::Execute, Scope::Inspect, Scope::Admin] {
+            assert!(!read.opens(scope), "read must not open {scope}");
+        }
     }
 }

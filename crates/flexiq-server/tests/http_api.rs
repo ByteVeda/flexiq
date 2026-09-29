@@ -488,7 +488,10 @@ async fn the_grpc_scope_list_is_served() {
         .iter()
         .map(|scope| scope["name"].as_str().expect("a name"))
         .collect();
-    assert_eq!(names, vec!["produce", "execute", "inspect", "admin"]);
+    assert_eq!(
+        names,
+        vec!["produce", "read", "execute", "inspect", "admin"]
+    );
 }
 
 #[tokio::test]

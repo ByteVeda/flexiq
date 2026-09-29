@@ -63,6 +63,8 @@ enum Action {
 enum ScopeArg {
     /// `flexiq.v1` — submit, read and cancel work.
     Produce,
+    /// `flexiq.v1`, read-only methods — see jobs, never submit or cancel.
+    Read,
     /// `flexiq.executor.v1` — claim work and report on it.
     Execute,
     /// `flexiq.admin.v1`, read-only methods.
@@ -75,6 +77,7 @@ impl From<ScopeArg> for Scope {
     fn from(arg: ScopeArg) -> Self {
         match arg {
             ScopeArg::Produce => Self::Produce,
+            ScopeArg::Read => Self::Read,
             ScopeArg::Execute => Self::Execute,
             ScopeArg::Inspect => Self::Inspect,
             ScopeArg::Admin => Self::Admin,
@@ -251,8 +254,8 @@ mod tests {
     #[test]
     fn scopes_repeat_and_are_spelled_as_the_wire_spells_them() {
         let cli = parse(&[
-            "token", "create", "--name", "ci", "--scope", "produce", "--scope", "execute",
-            "--scope", "inspect", "--scope", "admin",
+            "token", "create", "--name", "ci", "--scope", "produce", "--scope", "read", "--scope",
+            "execute", "--scope", "inspect", "--scope", "admin",
         ])
         .expect("every scope");
         let Wrapper::Token(TokenCommand {
