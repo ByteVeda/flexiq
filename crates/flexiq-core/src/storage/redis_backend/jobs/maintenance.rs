@@ -192,6 +192,10 @@ impl RedisStorage {
                         .ignore();
                     }
                 }
+                // An empty pipeline is an error reply, not a no-op.
+                if pipe.is_empty() {
+                    return Ok(());
+                }
                 pipe.query::<()>(conn).map_err(map_err)
             },
         )?;
@@ -257,7 +261,11 @@ impl RedisStorage {
                         .ignore();
                 }
             }
-            pipe.query::<()>(&mut conn).map_err(map_err)?;
+            // An empty store scans to nothing, and an empty pipeline is an
+            // error reply rather than a no-op.
+            if !pipe.is_empty() {
+                pipe.query::<()>(&mut conn).map_err(map_err)?;
+            }
             if next == 0 {
                 break;
             }
