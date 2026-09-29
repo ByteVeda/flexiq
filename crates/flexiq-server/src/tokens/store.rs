@@ -457,6 +457,17 @@ mod tests {
         let (row, _) = create(&storage, request).expect("create");
         let stored = get(&storage, &row.id).expect("read").expect("present");
         assert_eq!(stored.expires_at, row.expires_at);
-        assert_eq!(stored.scopes, ScopeSet::ALL);
+        assert_eq!(stored.scopes, ScopeSet::ALL.into());
+    }
+
+    #[test]
+    fn a_narrowed_grant_survives_a_round_trip() {
+        let storage = storage();
+        let grants = crate::tokens::Grants::parse_all(["produce:queue=emails-*,task=send_receipt"])
+            .expect("valid");
+        let request = NewToken::new("edge", grants.clone(), "prod", None, None).expect("valid");
+        let (row, _) = create(&storage, request).expect("create");
+        let stored = get(&storage, &row.id).expect("read").expect("present");
+        assert_eq!(stored.scopes, grants);
     }
 }

@@ -12,6 +12,7 @@ use std::sync::Arc;
 // `grpc` feature, so the types live outside this gate. They are re-exported
 // here because the gate and the layer have always named them through this
 // module, and where a scope is *defined* is not their concern.
+pub use crate::tokens::grant::{Access, Grants};
 pub use crate::tokens::scope::{Scope, ScopeSet};
 
 /// An authenticated caller: one credential, one namespace, and what it may do
@@ -20,7 +21,9 @@ pub use crate::tokens::scope::{Scope, ScopeSet};
 pub struct Principal {
     credential: Arc<str>,
     namespace: Arc<str>,
-    scopes: ScopeSet,
+    /// Behind an `Arc` because a principal is cloned into every request's
+    /// extensions and narrowed grants are a `Vec`.
+    scopes: Arc<Grants>,
 }
 
 impl Principal {
@@ -29,12 +32,12 @@ impl Principal {
     pub fn new(
         credential: impl Into<Arc<str>>,
         namespace: impl Into<Arc<str>>,
-        scopes: ScopeSet,
+        scopes: impl Into<Grants>,
     ) -> Self {
         Self {
             credential: credential.into(),
             namespace: namespace.into(),
-            scopes,
+            scopes: Arc::new(scopes.into()),
         }
     }
 

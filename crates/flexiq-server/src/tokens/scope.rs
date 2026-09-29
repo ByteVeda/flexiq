@@ -15,10 +15,6 @@
 
 use std::fmt;
 
-use serde::de::{SeqAccess, Visitor};
-use serde::ser::SerializeSeq;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
 /// A door a credential may open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Scope {
@@ -106,9 +102,9 @@ impl fmt::Display for Scope {
 /// once per request, so the allocation would buy nothing, and `Copy` keeps a
 /// principal cheap to clone into a request's extensions.
 ///
-/// It serialises as an array of names rather than as the bits, because the
-/// stored form is read by builds that may know a different set of scopes than
-/// the one that wrote it.
+/// It holds whole scopes only. A token's stored form is its
+/// [`Grants`](super::grant::Grants), which keeps one of these beside any
+/// narrowed grants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ScopeSet(u8);
 
@@ -170,53 +166,6 @@ impl fmt::Display for ScopeSet {
     }
 }
 
-impl Serialize for ScopeSet {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let names = self.names();
-        let mut seq = serializer.serialize_seq(Some(names.len()))?;
-        for name in names {
-            seq.serialize_element(name)?;
-        }
-        seq.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for ScopeSet {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_seq(NameVisitor)
-    }
-}
-
-/// Reads the stored array of names.
-struct NameVisitor;
-
-impl<'de> Visitor<'de> for NameVisitor {
-    type Value = ScopeSet;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "an array of scope names")
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<ScopeSet, A::Error> {
-        let mut set = ScopeSet::NONE;
-        while let Some(name) = seq.next_element::<String>()? {
-            // A name this build does not know is dropped, not refused. Dropping
-            // it can only *narrow* what the credential opens, and a stored row
-            // written by a newer build must not lock an older one out of the
-            // scopes they agree on. The log is how the operator learns the two
-            // disagree.
-            match Scope::parse(&name) {
-                Some(scope) => set.insert(scope),
-                None => log::warn!(
-                    "gRPC token carries scope '{name}', which this build does not \
-                     know; ignoring it"
-                ),
-            }
-        }
-        Ok(set)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,24 +193,6 @@ mod tests {
         assert_eq!(Scope::parse("teleport"), None);
         assert_eq!(Scope::parse("Admin"), None);
         assert_eq!(Scope::parse(""), None);
-    }
-
-    #[test]
-    fn a_set_round_trips_through_json() {
-        let set = ScopeSet::of(&[Scope::Execute, Scope::Produce]);
-        let encoded = serde_json::to_string(&set).expect("encode");
-        assert_eq!(encoded, r#"["produce","execute"]"#);
-        let decoded: ScopeSet = serde_json::from_str(&encoded).expect("decode");
-        assert_eq!(decoded, set);
-    }
-
-    /// A row written by a build that knows more scopes than this one must still
-    /// grant the scopes both builds understand.
-    #[test]
-    fn an_unknown_scope_name_narrows_rather_than_failing() {
-        let decoded: ScopeSet =
-            serde_json::from_str(r#"["produce","teleport"]"#).expect("unknown names are ignored");
-        assert_eq!(decoded, ScopeSet::of(&[Scope::Produce]));
     }
 
     #[test]
