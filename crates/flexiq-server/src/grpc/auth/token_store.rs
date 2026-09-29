@@ -219,11 +219,7 @@ impl Authenticator for TokenStore {
 
         // The namespace is the listener's `Arc`, not a fresh allocation from the
         // row: the check above proved they are the same string.
-        Ok(Principal::new(
-            token.id,
-            Arc::clone(&self.namespace),
-            token.scopes,
-        ))
+        Ok(Principal::new(token.id, Arc::clone(&self.namespace), token.scopes).named(token.name))
     }
 }
 
@@ -270,6 +266,7 @@ mod tests {
             id,
             "the public id, never the secret"
         );
+        assert_eq!(&**principal.name(), "test", "named as minted");
         assert!(principal.grants(Scope::Produce));
         assert!(
             !principal.grants(Scope::Execute),
