@@ -3341,8 +3341,50 @@ fn test_count_by_namespace(s: &impl Storage) {
     assert_eq!(count(a, JobStatus::Pending), 2);
 }
 
+/// #841: a job shed at enqueue goes straight to the DLQ and the archive —
+/// never live, never counted, and its unique key stays with the live job.
+fn test_shed_new_jobs_never_go_live(s: &impl Storage) {
+    let q = "q-shed-new";
+    let ns = Some("shed-new-ns");
+    let mut live = make_job(q, "shed_task");
+    live.namespace = ns.map(str::to_string);
+    live.unique_key = Some("shed-uk".to_string());
+    let live = s.enqueue_unique(live).unwrap();
+
+    let mut shed = make_job(q, "shed_task");
+    shed.namespace = ns.map(str::to_string);
+    shed.unique_key = Some("shed-uk".to_string());
+    let shed = shed.into_job();
+    s.shed_new_jobs(std::slice::from_ref(&shed), "quota:max_pending", None)
+        .unwrap();
+
+    assert_eq!(s.count_by_namespace(ns, JobStatus::Pending).unwrap(), 1);
+    let archived = s.get_job(&shed.id, ns).unwrap().expect("archived");
+    assert_eq!(archived.status, JobStatus::Dead);
+    let dead = s.list_dead(100, 0, ns).unwrap();
+    let entry = dead
+        .iter()
+        .find(|d| d.original_job_id == shed.id)
+        .expect("dead-letter entry");
+    assert_eq!(entry.error.as_deref(), Some("quota:max_pending"));
+
+    // The live job still owns the key: a same-key enqueue dedupes onto it.
+    let mut again = make_job(q, "shed_task");
+    again.namespace = ns.map(str::to_string);
+    again.unique_key = Some("shed-uk".to_string());
+    let (job, deduplicated) = s.enqueue_unique_reporting(again).unwrap();
+    assert!(deduplicated);
+    assert_eq!(job.id, live.id);
+    assert!(s.dequeue(q, now_millis() + 1, ns).unwrap().is_some());
+    assert!(
+        s.dequeue(q, now_millis() + 1, ns).unwrap().is_none(),
+        "the shed job must never be claimable"
+    );
+}
+
 fn run_storage_tests(s: &impl Storage) {
     test_count_by_namespace(s);
+    test_shed_new_jobs_never_go_live(s);
     test_enqueue_and_get(s);
     test_dequeue(s);
     test_dequeue_batch(s);

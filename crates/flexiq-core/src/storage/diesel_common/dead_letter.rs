@@ -3,7 +3,7 @@
 /// All four methods (`move_to_dlq`, `list_dead`, `retry_dead`, `purge_dead`) are
 /// identical between SQLite and Postgres, so the entire file is macro-generated.
 macro_rules! impl_diesel_dead_letter_ops {
-    ($storage_type:ty) => {
+    ($storage_type:ty, $conn_type:ty) => {
         impl $storage_type {
             /// Move a job to the dead letter queue and cascade-cancel dependents.
             pub fn move_to_dlq(
@@ -58,12 +58,64 @@ macro_rules! impl_diesel_dead_letter_ops {
                 shed: bool,
             ) -> Result<Vec<Job>> {
                 let now = now_millis();
-                let dlq_id = uuid::Uuid::now_v7().to_string();
-                let job_id = job.id.clone();
 
                 // Write-priority transaction: this reads the job row then writes
                 // it to `archived_jobs`, which would deadlock under SQLite's
                 // deferred lock-upgrade. See `write_transaction`.
+                self.write_transaction(|conn| {
+                    Self::dead_letter_in(conn, job, error, metadata, shed, now)
+                })?;
+
+                // Cascade cancel dependents (opens its own connection, so the
+                // archive transaction above must already be committed).
+                self.cascade_cancel_reporting(
+                    &job.id,
+                    $crate::events::reason::DEPENDENCY_FAILED,
+                    job.namespace.as_deref(),
+                )
+            }
+
+            /// Dead-letter jobs an over-quota enqueue shed (#841). Each is
+            /// inserted and dead-lettered inside one transaction, so no
+            /// scheduler ever sees it live. Unique and debounce keys are not
+            /// recorded: a job that never went live never held its key, and
+            /// the insert must not collide with the live job that does.
+            pub fn shed_new_jobs(
+                &self,
+                jobs: &[Job],
+                error: &str,
+                metadata: Option<&str>,
+            ) -> Result<()> {
+                let now = now_millis();
+                self.write_transaction(|conn| {
+                    for job in jobs {
+                        let mut job = job.clone();
+                        job.unique_key = None;
+                        job.debounce_key = None;
+                        let attribution = $crate::storage::diesel_common::JobAttribution::of(&job);
+                        diesel::insert_into(jobs::table)
+                            .values(&$crate::storage::diesel_common::new_job_row(
+                                &job,
+                                &attribution,
+                            ))
+                            .execute(conn)?;
+                        Self::dead_letter_in(conn, &job, error, metadata, true, now)?;
+                    }
+                    Ok::<(), QueueError>(())
+                })
+            }
+
+            /// The transactional half of `dead_letter`: write the DLQ entry
+            /// and archive the job as `Dead` if it is still live.
+            fn dead_letter_in(
+                conn: &mut $conn_type,
+                job: &Job,
+                error: &str,
+                metadata: Option<&str>,
+                shed: bool,
+                now: i64,
+            ) -> Result<()> {
+                let dlq_id = uuid::Uuid::now_v7().to_string();
                 let dlq_retry_count = job
                     .metadata
                     .as_deref()
@@ -81,68 +133,57 @@ macro_rules! impl_diesel_dead_letter_ops {
                 // See `m0014_dead_letter_origin`.
                 let origin_job_id = $crate::step::run_key(job);
 
-                self.write_transaction(|conn| {
-                    let dlq_row = NewDeadLetterRow {
-                        id: &dlq_id,
-                        original_job_id: &job.id,
-                        queue: &job.queue,
-                        task_name: &job.task_name,
-                        payload: &job.payload,
-                        error: Some(error),
-                        retry_count: job.retry_count,
-                        failed_at: now,
-                        // Preserve the job's own metadata so it survives the
-                        // round trip; an explicit `metadata` arg overrides it.
-                        metadata: metadata.or(job.metadata.as_deref()),
-                        notes: job.notes.as_deref(),
-                        priority: job.priority,
-                        max_retries: job.max_retries,
-                        timeout_ms: job.timeout_ms,
-                        result_ttl_ms: job.result_ttl_ms,
-                        namespace: job.namespace.as_deref(),
-                        dlq_retry_count,
-                        topic: topic.as_deref(),
-                        subscription_name: subscription_name.as_deref(),
-                        shed,
-                        origin_job_id: Some(&origin_job_id),
-                        // Only when the replacement would otherwise displace
-                        // it: with no replacement, `metadata` already is the
-                        // job's own and copying an unbounded blob twice buys
-                        // nothing. See `m0015_dead_letter_job_metadata`.
-                        job_metadata: metadata.and(job.metadata.as_deref()),
-                    };
+                let dlq_row = NewDeadLetterRow {
+                    id: &dlq_id,
+                    original_job_id: &job.id,
+                    queue: &job.queue,
+                    task_name: &job.task_name,
+                    payload: &job.payload,
+                    error: Some(error),
+                    retry_count: job.retry_count,
+                    failed_at: now,
+                    // Preserve the job's own metadata so it survives the
+                    // round trip; an explicit `metadata` arg overrides it.
+                    metadata: metadata.or(job.metadata.as_deref()),
+                    notes: job.notes.as_deref(),
+                    priority: job.priority,
+                    max_retries: job.max_retries,
+                    timeout_ms: job.timeout_ms,
+                    result_ttl_ms: job.result_ttl_ms,
+                    namespace: job.namespace.as_deref(),
+                    dlq_retry_count,
+                    topic: topic.as_deref(),
+                    subscription_name: subscription_name.as_deref(),
+                    shed,
+                    origin_job_id: Some(&origin_job_id),
+                    // Only when the replacement would otherwise displace
+                    // it: with no replacement, `metadata` already is the
+                    // job's own and copying an unbounded blob twice buys
+                    // nothing. See `m0015_dead_letter_job_metadata`.
+                    job_metadata: metadata.and(job.metadata.as_deref()),
+                };
 
-                    diesel::insert_into(dead_letter::table)
-                        .values(&dlq_row)
-                        .execute(conn)?;
+                diesel::insert_into(dead_letter::table)
+                    .values(&dlq_row)
+                    .execute(conn)?;
 
-                    // Archive the now-Dead job: move it out of the live `jobs`
-                    // table into `archived_jobs` so the dequeue index and stats
-                    // scans no longer see it. The row may already be absent if a
-                    // prior terminal transition archived it; only archive when
-                    // it is still live.
-                    if let Some(mut row) = jobs::table
-                        .find(&job.id)
-                        .select(JobRow::as_select())
-                        .first(conn)
-                        .optional()?
-                    {
-                        row.status = JobStatus::Dead as i32;
-                        row.error = Some(error.to_string());
-                        row.completed_at = Some(now);
-                        <$storage_type>::archive_job_row(conn, &row)?;
-                    }
-
-                    Ok::<(), QueueError>(())
-                })?;
-
-                // Cascade cancel dependents (opens its own connection, so the
-                // archive transaction above must already be committed).
-                self.cascade_cancel_reporting(
-                    &job_id,
-                    $crate::events::reason::DEPENDENCY_FAILED,
-                    job.namespace.as_deref(),
-                )
+                // Archive the now-Dead job: move it out of the live `jobs`
+                // table into `archived_jobs` so the dequeue index and stats
+                // scans no longer see it. The row may already be absent if a
+                // prior terminal transition archived it; only archive when
+                // it is still live.
+                if let Some(mut row) = jobs::table
+                    .find(&job.id)
+                    .select(JobRow::as_select())
+                    .first(conn)
+                    .optional()?
+                {
+                    row.status = JobStatus::Dead as i32;
+                    row.error = Some(error.to_string());
+                    row.completed_at = Some(now);
+                    <$storage_type>::archive_job_row(conn, &row)?;
+                }
+                Ok(())
             }
 
             /// List dead letter entries. `namespace` of `None` returns every

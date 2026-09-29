@@ -797,6 +797,14 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Vec<$crate::job::Job>> {
                 self.shed_to_dlq_reporting(job, error, metadata)
             }
+            fn shed_new_jobs(
+                &self,
+                jobs: &[$crate::job::Job],
+                error: &str,
+                metadata: Option<&str>,
+            ) -> $crate::error::Result<()> {
+                self.shed_new_jobs(jobs, error, metadata)
+            }
             fn list_dead(
                 &self,
                 limit: i64,
@@ -1988,6 +1996,9 @@ impl Storage for StorageBackend {
         metadata: Option<&str>,
     ) -> Result<Vec<Job>> {
         delegate!(self, shed_to_dlq_reporting, job, error, metadata)
+    }
+    fn shed_new_jobs(&self, jobs: &[Job], error: &str, metadata: Option<&str>) -> Result<()> {
+        delegate!(self, shed_new_jobs, jobs, error, metadata)
     }
     fn list_dead(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<DeadJob>> {
         delegate!(self, list_dead, limit, offset, namespace)

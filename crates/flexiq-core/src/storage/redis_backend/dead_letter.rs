@@ -50,6 +50,57 @@ struct DeadJobEntry {
     pub job_metadata: Option<String>,
 }
 
+impl DeadJobEntry {
+    /// The entry dead-lettering `job` writes, under a fresh id.
+    fn of(job: &Job, error: &str, metadata: Option<&str>, shed: bool, now: i64) -> Self {
+        let dlq_retry_count = job
+            .metadata
+            .as_deref()
+            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+            .and_then(|v| v.get("__dlq_retry_count")?.as_i64())
+            .unwrap_or(0) as i32;
+
+        Self {
+            id: uuid::Uuid::now_v7().to_string(),
+            original_job_id: job.id.clone(),
+            queue: job.queue.clone(),
+            task_name: job.task_name.clone(),
+            payload: job.payload.clone(),
+            error: Some(error.to_string()),
+            retry_count: job.retry_count,
+            failed_at: now,
+            // Preserve the job's own metadata so it survives the round trip;
+            // an explicit `metadata` arg overrides it. The run's origin rides
+            // its own field instead, out of reach of that replacement.
+            metadata: metadata
+                .map(str::to_string)
+                .or_else(|| job.metadata.clone()),
+            notes: job.notes.clone(),
+            priority: job.priority,
+            max_retries: job.max_retries,
+            timeout_ms: job.timeout_ms,
+            result_ttl_ms: job.result_ttl_ms,
+            namespace: job.namespace.clone(),
+            dlq_retry_count,
+            shed,
+            origin_job_id: Some(crate::step::run_key(job)),
+            // Only when the replacement would otherwise displace it: with no
+            // replacement, `metadata` already is the job's own and copying an
+            // unbounded blob twice buys nothing.
+            job_metadata: metadata.and(job.metadata.as_deref()).map(str::to_string),
+        }
+    }
+}
+
+/// `job` as the archive records it once dead-lettered.
+fn dead_copy(job: &Job, error: &str, now: i64) -> Job {
+    let mut dead = job.clone();
+    dead.status = JobStatus::Dead;
+    dead.error = Some(error.to_string());
+    dead.completed_at = Some(now);
+    dead
+}
+
 impl From<DeadJobEntry> for DeadJob {
     fn from(e: DeadJobEntry) -> Self {
         Self {
@@ -108,6 +159,38 @@ impl RedisStorage {
         self.dead_letter(job, error, metadata, true)
     }
 
+    /// Dead-letter jobs an over-quota enqueue shed (#841): the DLQ entries and
+    /// archived `Dead` rows in one `MULTI`, never the live indexes, so no
+    /// scheduler ever sees them. Unique and debounce keys are dropped — a job
+    /// that never went live never held its key, and archiving one that names a
+    /// key would touch the index entries of the live job that does.
+    pub fn shed_new_jobs(&self, jobs: &[Job], error: &str, metadata: Option<&str>) -> Result<()> {
+        if jobs.is_empty() {
+            return Ok(());
+        }
+        let now = now_millis();
+        let dlq_all = self.key(&["dlq", "all"]);
+        let pipe = &mut redis::pipe();
+        pipe.atomic();
+        for job in jobs {
+            let mut job = job.clone();
+            job.unique_key = None;
+            job.debounce_key = None;
+            let entry = DeadJobEntry::of(&job, error, metadata, true, now);
+            pipe.set(
+                self.key(&["dlq", &entry.id]),
+                serde_json::to_string(&entry)?,
+            )
+            .ignore();
+            pipe.zadd(&dlq_all, &entry.id, now as f64).ignore();
+            let dead_job = dead_copy(&job, error, now);
+            let dead_json = serde_json::to_string(&dead_job)?;
+            self.push_archive_ops(pipe, &dead_job, JobStatus::Pending, &dead_json);
+        }
+        let mut conn = self.conn()?;
+        pipe.query::<()>(&mut conn).map_err(map_err)
+    }
+
     /// Shared body of `move_to_dlq`/`shed_to_dlq`; `shed` is the only
     /// difference between them. Returns the cascaded dependents.
     fn dead_letter(
@@ -118,56 +201,17 @@ impl RedisStorage {
         shed: bool,
     ) -> Result<Vec<Job>> {
         let now = now_millis();
-        let dlq_id = uuid::Uuid::now_v7().to_string();
+        let entry = DeadJobEntry::of(job, error, metadata, shed, now);
+        let dlq_id = entry.id.clone();
         let mut conn = self.conn()?;
-
-        let dlq_retry_count = job
-            .metadata
-            .as_deref()
-            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
-            .and_then(|v| v.get("__dlq_retry_count")?.as_i64())
-            .unwrap_or(0) as i32;
-
-        let entry = DeadJobEntry {
-            id: dlq_id.clone(),
-            original_job_id: job.id.clone(),
-            queue: job.queue.clone(),
-            task_name: job.task_name.clone(),
-            payload: job.payload.clone(),
-            error: Some(error.to_string()),
-            retry_count: job.retry_count,
-            failed_at: now,
-            // Preserve the job's own metadata so it survives the round trip;
-            // an explicit `metadata` arg overrides it. The run's origin rides
-            // its own field instead, out of reach of that replacement.
-            metadata: metadata
-                .map(str::to_string)
-                .or_else(|| job.metadata.clone()),
-            notes: job.notes.clone(),
-            priority: job.priority,
-            max_retries: job.max_retries,
-            timeout_ms: job.timeout_ms,
-            result_ttl_ms: job.result_ttl_ms,
-            namespace: job.namespace.clone(),
-            dlq_retry_count,
-            shed,
-            origin_job_id: Some(crate::step::run_key(job)),
-            // Only when the replacement would otherwise displace it: with no
-            // replacement, `metadata` already is the job's own and copying an
-            // unbounded blob twice buys nothing.
-            job_metadata: metadata.and(job.metadata.as_deref()).map(str::to_string),
-        };
 
         let json = serde_json::to_string(&entry)?;
 
         let dlq_key = self.key(&["dlq", &dlq_id]);
         let dlq_all = self.key(&["dlq", "all"]);
 
-        let mut dead_job = job.clone();
-        let old_status = dead_job.status;
-        dead_job.status = JobStatus::Dead;
-        dead_job.error = Some(error.to_string());
-        dead_job.completed_at = Some(now);
+        let old_status = job.status;
+        let dead_job = dead_copy(job, error, now);
         let dead_json = serde_json::to_string(&dead_job)?;
 
         // Commit the DLQ entry and the live→archive move together, but only if the

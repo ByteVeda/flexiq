@@ -428,6 +428,11 @@ pub trait Storage: Send + Sync + Clone {
     ) -> Result<Vec<Job>> {
         self.move_to_dlq_reporting(job, error, metadata)
     }
+    /// Dead-letter never-enqueued jobs as shed — the `drop` answer to an
+    /// over-quota enqueue (#841). Each lands in the DLQ (`shed`) and the
+    /// archive (`Dead`) in one write and is never live, so no scheduler can
+    /// claim it first. Unique and debounce keys are not recorded.
+    fn shed_new_jobs(&self, jobs: &[Job], error: &str, metadata: Option<&str>) -> Result<()>;
     /// Dead-letter entries, newest first, paginated.
     /// `namespace` of `None` returns every namespace, matching `list_jobs`.
     fn list_dead(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<DeadJob>>;
