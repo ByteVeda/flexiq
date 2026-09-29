@@ -33,7 +33,7 @@ single untargeted record when it was refused before naming any.
 | `tokenId` | The token's public id |
 | `principal` | The token's name when the call was made — a label, since two tokens may share one |
 | `operation` | The RPC, e.g. `flexiq.v1.ProducerService/Enqueue` |
-| `targetKind`, `target` | What it acted on: `job`, `workflow_run`, `queue`, `dead_letter`, `worker`, `periodic` or `task`, and its id or name |
+| `targetKind`, `target` | What it acted on: `job`, `workflow_run`, `queue`, `dead_letter`, `worker`, `periodic`, `task` or `namespace`, and its id or name |
 | `outcome` | The `google.rpc.Code` the call ended with: `OK`, `PERMISSION_DENIED`, `NOT_FOUND`, … `CANCELLED` means the call never answered — a deadline or a client that hung up — so its write may or may not have landed |
 
 `EnqueueBatch`
