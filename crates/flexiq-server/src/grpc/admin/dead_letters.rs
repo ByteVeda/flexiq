@@ -9,6 +9,7 @@ use flexiq_core::Storage;
 use tonic::{Response, Status};
 
 use super::{convert, require, Scoped};
+use crate::grpc::audit::TargetKind;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::pb::admin as pb;
 use crate::grpc::pb::admin::purge_dead_letters_request::Filter;
@@ -90,6 +91,7 @@ pub(crate) async fn replay(
     request: pb::ReplayDeadLetterRequest,
 ) -> Result<Response<pb::ReplayDeadLetterResponse>, Status> {
     let id = require("dead_letter_id", request.dead_letter_id)?;
+    scoped.audit(TargetKind::DeadLetter, id.clone());
     let namespace = scoped.namespace_owned();
     let lookup = id.clone();
     let events = scoped.events();
@@ -110,6 +112,8 @@ pub(crate) async fn replay(
     })
     .await?
     .ok_or_else(|| not_found(&id))?;
+    // The replay is a fresh job, so "who enqueued it" has an answer too.
+    scoped.audit(TargetKind::Job, job.id.clone());
 
     Ok(Response::new(pb::ReplayDeadLetterResponse {
         job: Some(job_to_wire(job, Blobs::NONE)),
@@ -123,6 +127,7 @@ pub(crate) async fn delete(
     request: pb::DeleteDeadLetterRequest,
 ) -> Result<Response<pb::DeleteDeadLetterResponse>, Status> {
     let id = require("dead_letter_id", request.dead_letter_id)?;
+    scoped.audit(TargetKind::DeadLetter, id.clone());
     let namespace = scoped.namespace_owned();
     let lookup = id.clone();
     let deleted = on_storage(scoped.storage(), move |storage| {
@@ -144,6 +149,7 @@ pub(crate) async fn purge(
     let purged = match request.filter {
         Some(Filter::TaskName(task)) => {
             let task = require("task_name", task)?;
+            scoped.audit(TargetKind::Task, task.clone());
             on_storage(scoped.storage(), move |storage| {
                 storage.purge_dead_by_task(&task, Some(&namespace))
             })

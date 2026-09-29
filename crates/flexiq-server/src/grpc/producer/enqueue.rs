@@ -14,6 +14,7 @@ use tonic::{Response, Status};
 use super::convert::{self, Blobs};
 use super::structured;
 use super::Scoped;
+use crate::grpc::audit::TargetKind;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::pb;
 use crate::grpc::status::WireError;
@@ -30,6 +31,7 @@ pub(crate) async fn one(
         prepared.submit(storage, events.as_deref())
     })
     .await?;
+    scoped.audit(TargetKind::Job, job.id.clone());
     if deduplicated {
         conceal(scoped, &job)?;
     }
@@ -100,6 +102,13 @@ pub(crate) async fn batch(
     match results {
         Ok(mut results) => {
             for (index, result) in results.iter_mut().enumerate() {
+                if let Some(pb::enqueue_batch_item_result::Outcome::Enqueued(enqueued)) =
+                    &result.outcome
+                {
+                    if let Some(job) = &enqueued.job {
+                        scoped.audit(TargetKind::Job, job.id.clone());
+                    }
+                }
                 conceal_item(scoped, result, index);
             }
             Ok(Response::new(pb::EnqueueBatchResponse { results }))

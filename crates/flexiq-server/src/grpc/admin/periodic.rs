@@ -8,6 +8,7 @@ use flexiq_core::{now_millis, NewPeriodicTask, PeriodicTask, Storage, StorageBac
 use tonic::{Response, Status};
 
 use super::{convert, require, Scoped};
+use crate::grpc::audit::TargetKind;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::pb;
 use crate::grpc::pb::admin::put_periodic_task_request::Body;
@@ -57,6 +58,7 @@ pub(crate) async fn put(
     request: pb::admin::PutPeriodicTaskRequest,
 ) -> Result<Response<pb::admin::PutPeriodicTaskResponse>, Status> {
     let name = require("name", request.name)?;
+    scoped.audit(TargetKind::Periodic, name.clone());
     let task_name = require("task_name", request.task_name)?;
     let cron = require("cron", request.cron)?;
     let queue = if request.queue.is_empty() {
@@ -108,6 +110,7 @@ pub(crate) async fn delete(
     request: pb::admin::DeletePeriodicTaskRequest,
 ) -> Result<Response<pb::admin::DeletePeriodicTaskResponse>, Status> {
     let name = require("name", request.name)?;
+    scoped.audit(TargetKind::Periodic, name.clone());
     let namespace = scoped.namespace_owned();
     let lookup = name.clone();
     let deleted = on_storage(scoped.storage(), move |storage| {
@@ -127,6 +130,7 @@ pub(crate) async fn set_enabled(
     enabled: bool,
 ) -> Result<pb::admin::PeriodicTask, Status> {
     let name = require("name", name)?;
+    scoped.audit(TargetKind::Periodic, name.clone());
     let namespace = scoped.namespace_owned();
     let lookup = name.clone();
     let found = on_storage(scoped.storage(), move |storage| {
@@ -150,6 +154,7 @@ pub(crate) async fn trigger(
     request: pb::admin::TriggerPeriodicTaskRequest,
 ) -> Result<Response<pb::admin::TriggerPeriodicTaskResponse>, Status> {
     let name = require("name", request.name)?;
+    scoped.audit(TargetKind::Periodic, name.clone());
     let task = read(scoped, name).await?;
     let events = scoped.events();
     let job = on_storage(scoped.storage(), move |storage| {
@@ -158,6 +163,7 @@ pub(crate) async fn trigger(
         Ok(job)
     })
     .await?;
+    scoped.audit(TargetKind::Job, job.id.clone());
     Ok(Response::new(pb::admin::TriggerPeriodicTaskResponse {
         job: Some(job_to_wire(job, Blobs::NONE)),
     }))

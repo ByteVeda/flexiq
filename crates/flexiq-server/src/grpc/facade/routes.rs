@@ -56,6 +56,7 @@ use super::admin as operator;
 use super::error;
 use super::json::{request as read, response as write};
 use crate::grpc::admin::Admin;
+use crate::grpc::audit::AuditContext;
 use crate::grpc::auth::Principal;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
 use crate::grpc::pb;
@@ -987,6 +988,11 @@ pub(super) fn scoped<T>(parts: &Parts, message: T) -> Result<tonic::Request<T>, 
     };
     let mut request = tonic::Request::new(message);
     request.extensions_mut().insert(principal.clone());
+    // The audit slot rides along too, so a handler names its targets on the
+    // record this facade call leaves, exactly as over gRPC.
+    if let Some(audit) = AuditContext::of(&parts.extensions) {
+        request.extensions_mut().insert(audit);
+    }
     Ok(request)
 }
 

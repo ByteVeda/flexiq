@@ -18,6 +18,7 @@ use tonic::{Response, Status};
 use super::convert::{self, DEFAULT_TIMEOUT_MS};
 use super::structured;
 use super::Scoped;
+use crate::grpc::audit::TargetKind;
 use crate::grpc::blocking::{on_storage_and_workflows, on_workflows};
 use crate::grpc::pb;
 use crate::grpc::status::WireError;
@@ -77,6 +78,7 @@ pub(crate) async fn submit_workflow(
         move |storage, workflows| lifecycle::submit_workflow(storage, workflows, submit_request),
     )
     .await?;
+    scoped.audit(TargetKind::WorkflowRun, handle.run_id.clone());
 
     Ok(Response::new(pb::SubmitWorkflowResponse {
         run_id: handle.run_id,

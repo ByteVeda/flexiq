@@ -4,6 +4,7 @@ use flexiq_core::Storage;
 use tonic::{Response, Status};
 
 use super::{convert, require, Scoped};
+use crate::grpc::audit::TargetKind;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::pb::admin as pb;
 use crate::grpc::status::{reason, WireError};
@@ -37,6 +38,7 @@ pub(crate) async fn drain(
     request: pb::DrainWorkerRequest,
 ) -> Result<Response<pb::DrainWorkerResponse>, Status> {
     let worker_id = require("worker_id", request.worker_id)?;
+    scoped.audit(TargetKind::Worker, worker_id.clone());
     let namespace = scoped.namespace_owned();
     let lookup = worker_id.clone();
     let worker = on_storage(scoped.storage(), move |storage| {
