@@ -8,7 +8,7 @@
 //! `quota:` is a [reserved prefix](crate::settings::RESERVED_SETTING_PREFIXES):
 //! a tenant's generic settings surface must never be able to raise its own
 //! limit. Enforcement is the core's — depth and rate at enqueue
-//! ([`admission`]), concurrency at dispatch, row ceilings in the retention
+//! (`admission`), concurrency at dispatch, row ceilings in the retention
 //! sweep — so no shell enforces a quota its own way.
 
 pub(crate) mod admission;

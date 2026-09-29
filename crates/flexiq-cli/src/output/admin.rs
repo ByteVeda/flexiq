@@ -642,7 +642,7 @@ fn overflow_name(value: i32) -> String {
     }
 }
 
-/// A `NamespaceQuota` as rows of [`QUOTA_COLUMNS`], an unset limit as [`UNSET`].
+/// A `NamespaceQuota` as rows of [`QUOTA_COLUMNS`], an unset limit as `-`.
 pub fn quota_rows(value: &pb::NamespaceQuota) -> Vec<Vec<String>> {
     vec![
         vec![
