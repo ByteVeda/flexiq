@@ -104,6 +104,51 @@ pub enum Command {
     /// start, so a change reaches the next worker start, not running ones.
     #[command(subcommand)]
     Overrides(OverridesCommand),
+    /// Read the audit trail: which token made each write, refusals included.
+    #[command(subcommand)]
+    Audit(AuditCommand),
+}
+
+/// `fq audit`.
+#[derive(Debug, Subcommand)]
+pub enum AuditCommand {
+    /// List audit records, newest first.
+    List(AuditListArgs),
+}
+
+/// `fq audit list`.
+#[derive(Debug, Args)]
+pub struct AuditListArgs {
+    /// Only records made with this token id — the public id, as `flexiq-server
+    /// token list` shows it. Not a credential: `fq` reads its own from
+    /// `FLEXIQ_TOKEN`.
+    #[arg(long, value_name = "ID")]
+    pub token_id: Option<String>,
+    /// Only records naming this job: who enqueued it, who cancelled it.
+    #[arg(long, value_name = "JOB_ID", conflicts_with_all = ["target", "kind"])]
+    pub job: Option<String>,
+    /// Only records naming this target, as `kind:id` — `queue:emails`,
+    /// `worker:w-1`, `dead_letter:…`.
+    #[arg(long, value_name = "KIND:ID", conflicts_with = "kind")]
+    pub target: Option<String>,
+    /// Only records whose target is of this kind, whatever its id.
+    #[arg(long)]
+    pub kind: Option<String>,
+    /// Only records at or after this RFC 3339 instant.
+    #[arg(long, value_name = "RFC3339")]
+    pub since: Option<String>,
+    /// Only records before this RFC 3339 instant.
+    #[arg(long, value_name = "RFC3339")]
+    pub until: Option<String>,
+    /// Rows per page. Omitted is the server's default; the server may cap it.
+    #[arg(long)]
+    pub page_size: Option<i32>,
+    /// The `nextPageToken` from a previous call.
+    #[arg(long, conflicts_with = "all")]
+    pub page_token: Option<String>,
+    /// Follow every page and print them as one listing.
+    #[arg(long)]
+    pub all: bool,
 }
 
 /// `fq enqueue`.

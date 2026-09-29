@@ -46,6 +46,16 @@ pub const THROUGHPUT_COLUMNS: [&str; 7] = [
     "finished/min",
 ];
 
+/// The columns of an audit listing.
+pub const AUDIT_COLUMNS: [&str; 6] = [
+    "time",
+    "token",
+    "principal",
+    "operation",
+    "target",
+    "outcome",
+];
+
 /// The columns of a dead-letter listing.
 pub const DEAD_LETTER_COLUMNS: [&str; 7] =
     ["id", "job", "queue", "task", "failed", "retries", "replays"];
@@ -158,6 +168,24 @@ pub fn dead_letter_row(entry: &pb::DeadLetter) -> Vec<String> {
         instant_cell(entry.failed_at.as_ref()),
         format!("{}/{}", entry.retry_count, entry.max_retries),
         entry.replay_count.to_string(),
+    ]
+}
+
+/// One audit record as a row of [`AUDIT_COLUMNS`]. The target reads
+/// `kind:id`, the spelling `fq audit list --target` takes back.
+pub fn audit_row(record: &pb::AuditRecord) -> Vec<String> {
+    let target = if record.target_kind.is_empty() {
+        UNSET.to_string()
+    } else {
+        format!("{}:{}", record.target_kind, record.target)
+    };
+    vec![
+        instant_cell(record.time.as_ref()),
+        record.token_id.clone(),
+        record.principal.clone(),
+        record.operation.clone(),
+        target,
+        record.outcome.clone(),
     ]
 }
 
@@ -380,6 +408,38 @@ pub fn dead_letter_json(entry: &pb::DeadLetter) -> Value {
     if let Some(payload) = entry.payload.as_ref() {
         object.insert("payload".to_string(), BASE64.encode(payload).into());
     }
+    Value::Object(object)
+}
+
+/// `ListAuditRecordsResponse`.
+pub fn list_audit_records_json(response: &pb::ListAuditRecordsResponse) -> Value {
+    Value::Object(Map::from_iter([
+        (
+            "records".to_string(),
+            response
+                .records
+                .iter()
+                .map(audit_record_json)
+                .collect::<Value>(),
+        ),
+        (
+            "nextPageToken".to_string(),
+            response.next_page_token.clone().into(),
+        ),
+    ]))
+}
+
+/// `AuditRecord`.
+pub fn audit_record_json(record: &pb::AuditRecord) -> Value {
+    let mut object = Map::new();
+    object.insert("id".to_string(), record.id.clone().into());
+    insert_timestamp(&mut object, "time", record.time.as_ref());
+    object.insert("tokenId".to_string(), record.token_id.clone().into());
+    object.insert("principal".to_string(), record.principal.clone().into());
+    object.insert("operation".to_string(), record.operation.clone().into());
+    object.insert("targetKind".to_string(), record.target_kind.clone().into());
+    object.insert("target".to_string(), record.target.clone().into());
+    object.insert("outcome".to_string(), record.outcome.clone().into());
     Value::Object(object)
 }
 
