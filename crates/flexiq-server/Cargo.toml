@@ -81,7 +81,7 @@ hmac = "0.12"
 # Twilio signs its webhooks with HMAC-SHA1 — the one trigger verifier that
 # needs it. Same `digest` generation as `sha2`, so `hmac` takes either. SNS
 # signature version 1 is SHA1withRSA, which is what `oid` is for.
-sha1 = { version = "0.10", features = ["oid"] }
+sha1 = { version = "0.11", features = ["oid"] }
 # SNS signs every message with RSA over a certificate it publishes. `rsa` is
 # already in the lock through jsonwebtoken's rust_crypto backend, and
 # `x509-cert` shares its `der`/`spki` generation, so the certificate's key
