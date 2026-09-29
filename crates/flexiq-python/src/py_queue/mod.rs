@@ -1000,14 +1000,16 @@ impl PyQueue {
     /// A declaration, not an overwrite (#919): an existing schedule keeps an
     /// operator's pause and its last run, and its next run moves only when the
     /// cron expression or timezone changed. A new one is inserted enabled.
-    #[pyo3(signature = (name, task_name, cron_expr, args=None, kwargs=None, queue="default", timezone=None))]
+    ///
+    /// `args` is the whole `(args, kwargs)` payload; the stored `kwargs`
+    /// column is reserved (#922), so there is no separate parameter for it.
+    #[pyo3(signature = (name, task_name, cron_expr, args=None, queue="default", timezone=None))]
     pub fn register_periodic(
         &self,
         name: &str,
         task_name: &str,
         cron_expr: &str,
         args: Option<Vec<u8>>,
-        kwargs: Option<Vec<u8>>,
         queue: &str,
         timezone: Option<&str>,
     ) -> PyResult<()> {
@@ -1019,7 +1021,7 @@ impl PyQueue {
             task_name: task_name.to_string(),
             cron_expr: cron_expr.to_string(),
             args,
-            kwargs,
+            kwargs: None,
             queue: queue.to_string(),
             enabled: true,
             next_run,

@@ -65,6 +65,7 @@ macro_rules! impl_diesel_periodic_ops {
 
             /// Register or update the schedule named by `(namespace, name)`.
             pub fn register_periodic(&self, task: &NewPeriodicTask) -> Result<()> {
+                $crate::periodic::ensure_kwargs_unset(task)?;
                 Self::with_registration_retry(|| self.register_periodic_once(task))
             }
 
@@ -142,6 +143,7 @@ macro_rules! impl_diesel_periodic_ops {
             /// Write a declared schedule, leaving `enabled`, `last_run` and —
             /// unless the schedule itself changed — `next_run` alone.
             pub fn declare_periodic(&self, task: &NewPeriodicTask) -> Result<()> {
+                $crate::periodic::ensure_kwargs_unset(task)?;
                 Self::with_registration_retry(|| self.declare_periodic_once(task))
             }
 

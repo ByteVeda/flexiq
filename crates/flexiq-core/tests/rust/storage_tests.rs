@@ -2241,6 +2241,29 @@ fn periodic_row(name: &str, namespace: Option<&str>) -> flexiq_core::NewPeriodic
     }
 }
 
+/// `kwargs` is reserved (#922): nothing reads it at fire time, so every
+/// backend refuses both writes rather than store a value it would ignore.
+fn test_periodic_writes_refuse_reserved_kwargs(s: &impl Storage) {
+    let task = flexiq_core::NewPeriodicTask {
+        kwargs: Some(vec![1]),
+        ..periodic_row("pc-kwargs", None)
+    };
+    for (path, outcome) in [
+        ("register", s.register_periodic(&task)),
+        ("declare", s.declare_periodic(&task)),
+    ] {
+        match outcome {
+            Err(QueueError::Config(msg)) => assert!(msg.contains("reserved"), "{path}: {msg}"),
+            other => panic!("{path}: expected a Config refusal, got {other:?}"),
+        }
+    }
+    assert!(!s
+        .list_periodic(None)
+        .unwrap()
+        .iter()
+        .any(|p| p.name == "pc-kwargs"));
+}
+
 fn test_periodic_crud(s: &impl Storage) {
     s.register_periodic(&periodic_row("pc-a", None)).unwrap();
     s.register_periodic(&periodic_row("pc-b", None)).unwrap();
@@ -3535,6 +3558,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_pause_resume_queue(s);
     test_pause_resume_queue_is_namespace_scoped(s);
     test_periodic_crud(s);
+    test_periodic_writes_refuse_reserved_kwargs(s);
     test_periodic_is_namespace_scoped(s);
     test_periodic_re_registration_keeps_last_run(s);
     test_periodic_declaration_preserves_operator_state(s);

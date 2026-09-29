@@ -52,9 +52,11 @@ pub struct PeriodicTask {
     pub task_name: String,
     /// Cron expression driving the schedule.
     pub cron_expr: String,
-    /// Serialized positional arguments.
+    /// Serialized call payload — positional and keyword arguments both —
+    /// that every firing enqueues as the job's payload.
     pub args: Option<Vec<u8>>,
-    /// Serialized keyword arguments.
+    /// Reserved (#922): never read at fire time. New writes refuse a value;
+    /// a row written before that may still carry one, and it is ignored.
     pub kwargs: Option<Vec<u8>>,
     /// Queue to enqueue into.
     pub queue: String,
@@ -81,9 +83,11 @@ pub struct NewPeriodicTask {
     pub task_name: String,
     /// Cron expression driving the schedule.
     pub cron_expr: String,
-    /// Serialized positional arguments.
+    /// Serialized call payload — positional and keyword arguments both —
+    /// that every firing enqueues as the job's payload.
     pub args: Option<Vec<u8>>,
-    /// Serialized keyword arguments.
+    /// Reserved (#922): must be `None`. Every backend refuses a value, since
+    /// nothing would ever read it.
     pub kwargs: Option<Vec<u8>>,
     /// Queue to enqueue into.
     pub queue: String,

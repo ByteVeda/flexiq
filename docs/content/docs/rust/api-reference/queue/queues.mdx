@@ -100,7 +100,8 @@ Four methods, all on `FlexiQ`:
 `PeriodicTask` carries `name`, `task_name`, `cron_expr`, `args`, `kwargs`,
 `queue`, `enabled`, `last_run`, `next_run`, `timezone` and `namespace`. Both
 timestamps are Unix milliseconds; `namespace` is the handle's own on every row
-a listing returns.
+a listing returns. `args` is the whole call payload each firing enqueues;
+`kwargs` is reserved and never read, and a write that sets it is refused.
 
 ```rust
 for task in queue.list_periodic()? {

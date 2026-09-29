@@ -5,7 +5,7 @@ use cron::Schedule;
 
 use crate::error::{QueueError, Result};
 use crate::job::NewJob;
-use crate::storage::records::PeriodicTask;
+use crate::storage::records::{NewPeriodicTask, PeriodicTask};
 
 /// Retry cap of a job a periodic task fires.
 const PERIODIC_DEFAULT_MAX_RETRIES: i32 = 3;
@@ -18,7 +18,8 @@ const PERIODIC_DEFAULT_TIMEOUT_MS: i64 = 300_000;
 /// One builder for the scheduler's firing and an operator's manual trigger, so
 /// the two cannot drift. The job inherits the *row's* namespace (#918). The
 /// stored `args` blob is the whole payload, opaque to the core; `kwargs` is
-/// never read, because the shells fold keyword arguments into `args`.
+/// reserved and never read, because the shells fold keyword arguments into
+/// `args` (#922).
 pub fn periodic_job(task: &PeriodicTask, now: i64, unique_key: Option<String>) -> NewJob {
     NewJob {
         queue: task.queue.clone(),
@@ -36,6 +37,20 @@ pub fn periodic_job(task: &PeriodicTask, now: i64, unique_key: Option<String>) -
         result_ttl_ms: None,
         namespace: task.namespace.clone(),
         debounce_key: None,
+    }
+}
+
+/// Refuse a schedule that sets the reserved `kwargs` column (#922).
+///
+/// Nothing reads it at fire time, so a stored value would be kept and then
+/// silently dropped from every job the schedule fires.
+pub(crate) fn ensure_kwargs_unset(task: &NewPeriodicTask) -> Result<()> {
+    match task.kwargs {
+        None => Ok(()),
+        Some(_) => Err(QueueError::Config(format!(
+            "periodic task '{}': kwargs is reserved; fold keyword arguments into args",
+            task.name
+        ))),
     }
 }
 
@@ -123,6 +138,31 @@ mod tests {
             ("reports", "report")
         );
         assert_eq!((job.scheduled_at, job.unique_key), (42, None));
+    }
+
+    fn declaration(kwargs: Option<Vec<u8>>) -> NewPeriodicTask {
+        NewPeriodicTask {
+            name: "nightly".into(),
+            task_name: "report".into(),
+            cron_expr: "0 0 0 * * *".into(),
+            args: Some(vec![9]),
+            kwargs,
+            queue: "default".into(),
+            enabled: true,
+            next_run: 0,
+            timezone: None,
+            namespace: None,
+        }
+    }
+
+    // Each backend's refusal is pinned by the cross-backend storage suite.
+    #[test]
+    fn reserved_kwargs_is_refused_only_when_set() {
+        match ensure_kwargs_unset(&declaration(Some(vec![1]))) {
+            Err(QueueError::Config(msg)) => assert!(msg.contains("'nightly'"), "{msg}"),
+            other => panic!("expected a Config refusal, got {other:?}"),
+        }
+        assert!(ensure_kwargs_unset(&declaration(None)).is_ok());
     }
 
     #[test]

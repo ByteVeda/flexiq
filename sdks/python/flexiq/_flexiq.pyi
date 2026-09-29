@@ -223,7 +223,6 @@ class PyQueue:
         task_name: str,
         cron_expr: str,
         args: bytes | None = None,
-        kwargs: bytes | None = None,
         queue: str = "default",
         timezone: str | None = None,
     ) -> None: ...
