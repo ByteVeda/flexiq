@@ -15,7 +15,7 @@ use flexiq_core::{AuditFilter, AuditRecord};
 use flexiq_server::config::grpc::GrpcConfig;
 use flexiq_server::config::listen::ListenAddress;
 use flexiq_server::grpc::pb::admin::admin_service_client::AdminServiceClient;
-use flexiq_server::grpc::pb::admin::PauseQueueRequest;
+use flexiq_server::grpc::pb::admin::{ListAuditRecordsRequest, PauseQueueRequest};
 use flexiq_server::grpc::pb::producer_service_client::ProducerServiceClient;
 use flexiq_server::grpc::pb::{
     enqueue_request, CancelJobRequest, EnqueueBatchRequest, EnqueueOptions, EnqueueRequest,
@@ -357,5 +357,114 @@ async fn the_json_facade_leaves_the_same_record() {
     assert_eq!(records[0].target.as_deref(), Some(job_id.as_str()));
     assert_eq!(records[0].token_id, token.id);
     assert_no_secret(&records, &token);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn an_inspect_token_reads_the_trail_by_token_and_by_target() {
+    let harness = Harness::start("audit-list").await;
+    let (alice, bob) = (
+        harness.mint("alice", produce()),
+        harness.mint("bob", produce()),
+    );
+    let mut first = None;
+    for token in [&alice, &bob, &alice] {
+        let id = harness
+            .producer(token)
+            .enqueue(job("emails", "send_receipt"))
+            .await
+            .expect("enqueue")
+            .into_inner()
+            .job
+            .expect("a job")
+            .id;
+        first.get_or_insert(id);
+    }
+    harness.trail(3).await;
+
+    let inspector = harness.mint("auditor", ScopeSet::of(&[Scope::Inspect]));
+    let mut admin = AdminServiceClient::with_interceptor(
+        harness.channel.clone(),
+        Bearer::new(&inspector.plaintext),
+    );
+
+    let by_token = admin
+        .list_audit_records(ListAuditRecordsRequest {
+            token_id: alice.id.clone(),
+            ..Default::default()
+        })
+        .await
+        .expect("inspect reaches the trail")
+        .into_inner();
+    assert_eq!(by_token.records.len(), 2);
+    assert!(by_token.records.iter().all(|r| r.principal == "alice"));
+    assert!(
+        by_token.next_page_token.is_empty(),
+        "a short page is the last"
+    );
+
+    let by_job = admin
+        .list_audit_records(ListAuditRecordsRequest {
+            target_kind: "job".into(),
+            target: first.clone().expect("enqueued"),
+            ..Default::default()
+        })
+        .await
+        .expect("list by job")
+        .into_inner();
+    assert_eq!(by_job.records.len(), 1, "who enqueued this job");
+    assert_eq!(by_job.records[0].token_id, alice.id);
+
+    // Paging: one at a time walks all three, newest first, then stops.
+    let mut seen = Vec::new();
+    let mut token = String::new();
+    loop {
+        let page = admin
+            .list_audit_records(ListAuditRecordsRequest {
+                page_size: 1,
+                page_token: token,
+                ..Default::default()
+            })
+            .await
+            .expect("page")
+            .into_inner();
+        seen.extend(page.records.into_iter().map(|r| r.principal));
+        if page.next_page_token.is_empty() {
+            break;
+        }
+        token = page.next_page_token;
+    }
+    assert_eq!(seen, ["alice", "bob", "alice"]);
+
+    // The same read over the facade, under the same `inspect` credential.
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/admin/auditRecords?tokenId={}",
+            harness.base, bob.id
+        ))
+        .bearer_auth(&inspector.plaintext)
+        .send()
+        .await
+        .expect("the listener answers");
+    assert!(response.status().is_success(), "{}", response.status());
+    let body: serde_json::Value = response.json().await.expect("a JSON body");
+    assert_eq!(body["records"].as_array().map(Vec::len), Some(1), "{body}");
+    assert_eq!(body["records"][0]["principal"], "bob");
+    assert_eq!(body["records"][0]["targetKind"], "job");
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_produce_token_cannot_read_the_trail() {
+    let harness = Harness::start("audit-list-denied").await;
+    let token = harness.mint("ci", produce());
+    let status = AdminServiceClient::with_interceptor(
+        harness.channel.clone(),
+        Bearer::new(&token.plaintext),
+    )
+    .list_audit_records(ListAuditRecordsRequest::default())
+    .await
+    .expect_err("the trail is an operator read");
+    assert_eq!(status.code(), Code::PermissionDenied);
     harness.stop().await;
 }

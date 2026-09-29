@@ -12,6 +12,7 @@
 //! scope a method needs is the gate's business (`auth::gate`), not this
 //! module's: by the time a handler runs, the caller may call it.
 
+pub mod audit_trail;
 pub mod convert;
 pub mod dead_letters;
 pub mod overrides;
@@ -328,5 +329,13 @@ impl AdminService for Admin {
     ) -> Result<Response<pb::ClearQueueOverrideResponse>, Status> {
         let (scoped, message) = self.scope(request)?;
         overrides::clear_queue(&scoped, message).await
+    }
+
+    async fn list_audit_records(
+        &self,
+        request: Request<pb::ListAuditRecordsRequest>,
+    ) -> Result<Response<pb::ListAuditRecordsResponse>, Status> {
+        let (scoped, message) = self.scope(request)?;
+        audit_trail::list(&scoped, message).await
     }
 }

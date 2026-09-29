@@ -149,6 +149,33 @@ pub fn list_dead_letters(response: &pb::ListDeadLettersResponse) -> Value {
     ]))
 }
 
+/// `ListAuditRecordsResponse`.
+pub fn list_audit_records(response: &pb::ListAuditRecordsResponse) -> Value {
+    Value::Object(Map::from_iter([
+        (
+            "records".to_string(),
+            response.records.iter().map(audit_record).collect::<Value>(),
+        ),
+        (
+            "nextPageToken".to_string(),
+            response.next_page_token.clone().into(),
+        ),
+    ]))
+}
+
+fn audit_record(record: &pb::AuditRecord) -> Value {
+    let mut object = Map::new();
+    object.insert("id".to_string(), record.id.clone().into());
+    insert_timestamp(&mut object, "time", record.time.as_ref());
+    object.insert("tokenId".to_string(), record.token_id.clone().into());
+    object.insert("principal".to_string(), record.principal.clone().into());
+    object.insert("operation".to_string(), record.operation.clone().into());
+    object.insert("targetKind".to_string(), record.target_kind.clone().into());
+    object.insert("target".to_string(), record.target.clone().into());
+    object.insert("outcome".to_string(), record.outcome.clone().into());
+    Value::Object(object)
+}
+
 /// `GetDeadLetterResponse`.
 pub fn get_dead_letter(response: &pb::GetDeadLetterResponse) -> Value {
     wrapping("deadLetter", response.dead_letter.as_ref(), dead_letter)

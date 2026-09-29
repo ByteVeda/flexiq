@@ -58,6 +58,49 @@ impl ListDeadLetters {
     }
 }
 
+/// `GET /v1/admin/auditRecords` — a `ListAuditRecordsRequest`, as a query
+/// string.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ListAuditRecords {
+    /// Rows per page, `pageSize=`. Omitting it takes the server's default.
+    #[serde(default, alias = "page_size")]
+    pub page_size: Option<i32>,
+    /// The previous response's `nextPageToken`, `pageToken=`. Opaque.
+    #[serde(default, alias = "page_token")]
+    pub page_token: Option<String>,
+    /// Only records made with this token id, `tokenId=`.
+    #[serde(default, alias = "token_id")]
+    pub token_id: Option<String>,
+    /// Only records whose target is of this kind, `targetKind=`.
+    #[serde(default, alias = "target_kind")]
+    pub target_kind: Option<String>,
+    /// Only records naming this target, `target=`.
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Only records at or after this instant, `since=`, RFC 3339.
+    #[serde(default)]
+    pub since: Option<JsonTimestamp>,
+    /// Only records before this instant, `until=`, RFC 3339.
+    #[serde(default)]
+    pub until: Option<JsonTimestamp>,
+}
+
+impl ListAuditRecords {
+    /// The request message.
+    pub fn into_message(self) -> pb::ListAuditRecordsRequest {
+        pb::ListAuditRecordsRequest {
+            page_size: self.page_size.unwrap_or_default(),
+            page_token: self.page_token.unwrap_or_default(),
+            token_id: self.token_id.unwrap_or_default(),
+            target_kind: self.target_kind.unwrap_or_default(),
+            target: self.target.unwrap_or_default(),
+            since: self.since.map(|since| since.0),
+            until: self.until.map(|until| until.0),
+        }
+    }
+}
+
 /// The one query parameter a single dead letter or periodic task takes.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

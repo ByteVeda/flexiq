@@ -212,6 +212,14 @@ service AdminService {
     option idempotency_level = IDEMPOTENT;
     option (google.api.http) = {post: "/v1/admin/queues/{queue}/override:clear"};
   }
+
+  // Page through the audit trail, newest first: one record per
+  // token-authorised write this namespace's doors answered, refusals included.
+  // Reads are not recorded.
+  rpc ListAuditRecords(ListAuditRecordsRequest) returns (ListAuditRecordsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/admin/auditRecords"};
+  }
 }
 
 // ── Queues ─────────────────────────────────────────────────────────────
@@ -590,3 +598,52 @@ message ClearQueueOverrideRequest {
 }
 
 message ClearQueueOverrideResponse {}
+
+// ── Audit trail ────────────────────────────────────────────────────────
+
+// One token-authorised write. Names the token by its public id only — never
+// the token, never its digest.
+message AuditRecord {
+  // Opaque; orders records answered in the same millisecond.
+  string id = 1;
+  // When the call was answered.
+  google.protobuf.Timestamp time = 2;
+  // The public id of the token that made the call.
+  string token_id = 3;
+  // The token's name when the call was made. A label: two tokens may share it.
+  string principal = 4;
+  // The RPC, as `package.Service/Method`, however it was reached.
+  string operation = 5;
+  // What the call acted on: `job`, `workflow_run`, `queue`, `dead_letter`,
+  // `worker`, `periodic` or `task`. Empty when it was refused before naming
+  // one. A call acting on several writes one record per target.
+  string target_kind = 6;
+  // The target's id or name, in `target_kind`'s terms.
+  string target = 7;
+  // The google.rpc.Code name the call ended with: `OK`, `PERMISSION_DENIED`, …
+  string outcome = 8;
+}
+
+message ListAuditRecordsRequest {
+  // Rows per page. Zero takes the server's default; the server may cap it.
+  int32 page_size = 1;
+  // The previous response's next_page_token. Opaque.
+  string page_token = 2;
+  // Only records made with this token id.
+  string token_id = 3;
+  // Only records whose target is of this kind.
+  string target_kind = 4;
+  // Only records naming this target.
+  string target = 5;
+  // Only records at or after this instant.
+  google.protobuf.Timestamp since = 6;
+  // Only records before this instant.
+  google.protobuf.Timestamp until = 7;
+}
+
+message ListAuditRecordsResponse {
+  // Newest first.
+  repeated AuditRecord records = 1;
+  // Empty when this is the last page.
+  string next_page_token = 2;
+}

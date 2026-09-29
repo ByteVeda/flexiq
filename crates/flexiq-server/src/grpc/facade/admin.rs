@@ -107,6 +107,19 @@ pub(super) async fn get_throughput(State(admin): State<Admin>, parts: Parts) -> 
     .await
 }
 
+// ── Audit trail ──────────────────────────────────────────────────────
+
+pub(super) async fn list_audit_records(State(admin): State<Admin>, parts: Parts) -> Response {
+    let message = query::<read::ListAuditRecords>(&parts).map(read::ListAuditRecords::into_message);
+    answer(
+        &parts,
+        message,
+        |request| admin.list_audit_records(request),
+        write::list_audit_records,
+    )
+    .await
+}
+
 // ── Dead letters ─────────────────────────────────────────────────────
 
 pub(super) async fn list_dead_letters(State(admin): State<Admin>, parts: Parts) -> Response {
