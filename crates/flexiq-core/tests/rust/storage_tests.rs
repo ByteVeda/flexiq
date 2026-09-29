@@ -11,8 +11,8 @@ use flexiq_core::error::QueueError;
 use flexiq_core::job::{now_millis, JobCompletion, JobStatus, NewJob};
 use flexiq_core::step::{classify_step_failure, StepLimits, StepSession, StepSleep};
 use flexiq_core::storage::records::{
-    DebounceOptions, NewJobStep, SettleClaimant, SettleGrant, SleepOutcome, StepCommit, StepKind,
-    SubscriptionMode, WorkerRegistration, WorkerStatus,
+    AuditFilter, AuditRecord, DebounceOptions, NewJobStep, SettleClaimant, SettleGrant,
+    SleepOutcome, StepCommit, StepKind, SubscriptionMode, WorkerRegistration, WorkerStatus,
 };
 use flexiq_core::storage::{DeadJob, RetentionCutoffs, Storage};
 use flexiq_core::{SqliteStorage, RETRY_BUDGET_EXHAUSTED};
@@ -3082,6 +3082,227 @@ fn test_dispatch_order_lifo_map(s: &impl Storage) {
     );
 }
 
+// ── Audit trail (#840) ───────────────────────────────────────────────
+
+fn audit(
+    ns: &str,
+    id: &str,
+    at_ms: i64,
+    token_id: &str,
+    target: Option<(&str, &str)>,
+) -> AuditRecord {
+    AuditRecord {
+        // Ids are global; the namespace prefix keeps each test's seed distinct
+        // without changing the id order within a namespace.
+        id: format!("{ns}/{id}"),
+        namespace: ns.to_string(),
+        at_ms,
+        token_id: token_id.to_string(),
+        principal: format!("{token_id}-name"),
+        operation: "flexiq.producer.v1.Producer/Enqueue".to_string(),
+        target_kind: target.map(|(kind, _)| kind.to_string()),
+        target: target.map(|(_, id)| id.to_string()),
+        outcome: "OK".to_string(),
+    }
+}
+
+/// The records' seed ids, namespace prefix stripped.
+fn audit_ids(records: &[AuditRecord]) -> Vec<&str> {
+    records
+        .iter()
+        .map(|r| r.id.rsplit_once('/').map_or(r.id.as_str(), |(_, id)| id))
+        .collect()
+}
+
+/// Seeds one namespace's trail: two tokens, a same-millisecond tie (ordered by
+/// id descending), an untargeted refusal, and one row in a second namespace.
+fn seed_audit(s: &impl Storage, ns: &str, other: &str) {
+    s.append_audit(&[
+        audit(ns, "a1", 1_000, "tok-a", Some(("job", "j1"))),
+        audit(ns, "a2", 2_000, "tok-b", Some(("job", "j2"))),
+        audit(ns, "a3", 3_000, "tok-a", Some(("queue", "emails"))),
+        audit(ns, "a4", 3_000, "tok-a", Some(("job", "j1"))),
+        audit(ns, "a5", 4_000, "tok-b", None),
+        audit(other, "b1", 2_500, "tok-a", Some(("job", "j1"))),
+    ])
+    .unwrap();
+}
+
+fn test_audit_list_orders_and_scopes_by_namespace(s: &impl Storage) {
+    let (ns, other) = ("audit-list", "audit-list-other");
+    seed_audit(s, ns, other);
+    s.append_audit(&[]).unwrap();
+
+    let all = s
+        .list_audit_after(ns, &AuditFilter::default(), 100, None)
+        .unwrap();
+    assert_eq!(audit_ids(&all), ["a5", "a4", "a3", "a2", "a1"]);
+    assert_eq!(all[0], audit(ns, "a5", 4_000, "tok-b", None));
+
+    let theirs = s
+        .list_audit_after(other, &AuditFilter::default(), 100, None)
+        .unwrap();
+    assert_eq!(audit_ids(&theirs), ["b1"]);
+}
+
+fn test_audit_list_filters(s: &impl Storage) {
+    let (ns, other) = ("audit-filter", "audit-filter-other");
+    seed_audit(s, ns, other);
+    let list = |filter: AuditFilter| s.list_audit_after(ns, &filter, 100, None).unwrap();
+
+    let by_token = list(AuditFilter {
+        token_id: Some("tok-a".into()),
+        ..Default::default()
+    });
+    assert_eq!(audit_ids(&by_token), ["a4", "a3", "a1"]);
+
+    let by_target = list(AuditFilter {
+        target_kind: Some("job".into()),
+        target: Some("j1".into()),
+        ..Default::default()
+    });
+    assert_eq!(audit_ids(&by_target), ["a4", "a1"]);
+
+    let by_kind = list(AuditFilter {
+        target_kind: Some("job".into()),
+        ..Default::default()
+    });
+    assert_eq!(audit_ids(&by_kind), ["a4", "a2", "a1"]);
+
+    let token_and_target = list(AuditFilter {
+        token_id: Some("tok-b".into()),
+        target_kind: Some("job".into()),
+        target: Some("j1".into()),
+        ..Default::default()
+    });
+    assert!(token_and_target.is_empty());
+
+    // `since` is inclusive, `until` exclusive.
+    let window = list(AuditFilter {
+        since_ms: Some(2_000),
+        until_ms: Some(4_000),
+        ..Default::default()
+    });
+    assert_eq!(audit_ids(&window), ["a4", "a3", "a2"]);
+}
+
+fn test_audit_keyset_pages_walk_every_record_once(s: &impl Storage) {
+    let (ns, other) = ("audit-page", "audit-page-other");
+    seed_audit(s, ns, other);
+
+    let mut seen = Vec::new();
+    let mut after: Option<(i64, String)> = None;
+    loop {
+        let cursor = after.as_ref().map(|(at, id)| (*at, id.as_str()));
+        let page = s
+            .list_audit_after(ns, &AuditFilter::default(), 2, cursor)
+            .unwrap();
+        seen.extend(audit_ids(&page).into_iter().map(str::to_string));
+        match page.last() {
+            Some(last) if page.len() == 2 => after = Some((last.at_ms, last.id.clone())),
+            _ => break,
+        }
+    }
+    assert_eq!(seen, ["a5", "a4", "a3", "a2", "a1"]);
+
+    // A cursor combines with `until`: the tighter bound wins.
+    let page = s
+        .list_audit_after(
+            ns,
+            &AuditFilter {
+                until_ms: Some(3_000),
+                ..Default::default()
+            },
+            100,
+            Some((4_000, &format!("{ns}/a5"))),
+        )
+        .unwrap();
+    assert_eq!(audit_ids(&page), ["a2", "a1"]);
+}
+
+fn test_audit_append_never_overwrites(s: &impl Storage) {
+    let ns = "audit-dup";
+    s.append_audit(&[audit(ns, "d1", 1_000, "tok-a", None)])
+        .unwrap();
+    let mut forged = audit(ns, "d1", 2_000, "tok-b", Some(("job", "j9")));
+    forged.outcome = "PERMISSION_DENIED".to_string();
+    // The duplicate is skipped; the record beside it in the batch still lands.
+    s.append_audit(&[forged, audit(ns, "d2", 3_000, "tok-a", None)])
+        .unwrap();
+
+    let rows = s
+        .list_audit_after(ns, &AuditFilter::default(), 100, None)
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            audit(ns, "d2", 3_000, "tok-a", None),
+            audit(ns, "d1", 1_000, "tok-a", None)
+        ]
+    );
+}
+
+/// A duplicate id is not indexed under the fields it tried to claim: those
+/// entries would name a token and target the stored record does not have, so
+/// the purge — which reads the stored record — could never remove them.
+#[cfg(feature = "redis")]
+fn redis_duplicate_audit_id_leaves_no_index_entry(s: &flexiq_core::RedisStorage) {
+    use redis::Commands;
+    let ns = "audit-redis-dup";
+    s.append_audit(&[audit(ns, "d1", 1_000, "tok-a", None)])
+        .unwrap();
+    s.append_audit(&[audit(ns, "d1", 2_000, "tok-b", Some(("job", "j9")))])
+        .unwrap();
+
+    let mut conn = s.conn().unwrap();
+    for index in [
+        rkey(s, &["audit", "token", ns, "tok-b"]),
+        rkey(s, &["audit", "target", ns, "job", "j9"]),
+    ] {
+        let entries: usize = conn.zcard(&index).unwrap();
+        assert_eq!(entries, 0, "{index} indexed a duplicate");
+    }
+    let all: usize = conn.zcard(rkey(s, &["audit", "all", ns])).unwrap();
+    assert_eq!(all, 1, "the original is indexed once");
+}
+
+fn test_audit_purge_is_namespace_scoped(s: &impl Storage) {
+    let (ns, other) = ("audit-purge", "audit-purge-other");
+    seed_audit(s, ns, other);
+
+    // Strictly older than the cutoff: the two rows at 3_000 survive.
+    assert_eq!(s.purge_audit(ns, 3_000).unwrap(), 2);
+    let left = s
+        .list_audit_after(ns, &AuditFilter::default(), 100, None)
+        .unwrap();
+    assert_eq!(audit_ids(&left), ["a5", "a4", "a3"]);
+
+    // The per-token and per-target reads lose the purged rows too.
+    let j1 = s
+        .list_audit_after(
+            ns,
+            &AuditFilter {
+                target_kind: Some("job".into()),
+                target: Some("j1".into()),
+                ..Default::default()
+            },
+            100,
+            None,
+        )
+        .unwrap();
+    assert_eq!(audit_ids(&j1), ["a4"]);
+
+    let theirs = s
+        .list_audit_after(other, &AuditFilter::default(), 100, None)
+        .unwrap();
+    assert_eq!(
+        audit_ids(&theirs),
+        ["b1"],
+        "another namespace keeps its trail"
+    );
+    assert_eq!(s.purge_audit(ns, 3_000).unwrap(), 0, "purge is idempotent");
+}
+
 fn run_storage_tests(s: &impl Storage) {
     test_enqueue_and_get(s);
     test_dequeue(s);
@@ -3123,6 +3344,11 @@ fn run_storage_tests(s: &impl Storage) {
     test_list_dead_for_retry(s);
     test_list_dead_for_retry_excludes_shed(s);
     test_progress_tracking(s);
+    test_audit_list_orders_and_scopes_by_namespace(s);
+    test_audit_list_filters(s);
+    test_audit_keyset_pages_walk_every_record_once(s);
+    test_audit_append_never_overwrites(s);
+    test_audit_purge_is_namespace_scoped(s);
     test_record_and_get_errors(s);
     test_workers(s);
     test_workers_are_namespace_scoped(s);
@@ -4498,6 +4724,7 @@ fn redis_storage_tests() {
     redis_move_to_dlq_leaves_consistent_state(&storage);
     redis_move_to_dlq_skips_already_archived(&storage);
     redis_purge_dead_drains_across_batches(&storage);
+    redis_duplicate_audit_id_leaves_no_index_entry(&storage);
     redis_keyset_pages_a_large_tie_bucket(&storage);
     redis_backfills_expiry_for_preupgrade_rows(&storage);
     redis_debounce_index_never_outlives_its_job(&storage);

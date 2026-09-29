@@ -12,6 +12,7 @@
 //! scope a method needs is the gate's business (`auth::gate`), not this
 //! module's: by the time a handler runs, the caller may call it.
 
+pub mod audit_trail;
 pub mod convert;
 pub mod dead_letters;
 pub mod overrides;
@@ -25,6 +26,7 @@ use flexiq_core::StorageBackend;
 use tonic::{Request, Response, Status};
 
 use crate::events::Events;
+use crate::grpc::audit::{self, AuditContext, TargetKind};
 use crate::grpc::auth::{Principal, Scope};
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
 use crate::grpc::pb::admin as pb;
@@ -88,6 +90,7 @@ impl Admin {
             storage: self.storage.clone(),
             events: self.events.clone(),
             namespace: Arc::clone(principal.namespace()),
+            audit: AuditContext::of(request.extensions()),
         };
         Ok((scoped, request.into_inner()))
     }
@@ -99,9 +102,16 @@ pub(crate) struct Scoped {
     storage: StorageBackend,
     events: Events,
     namespace: Arc<str>,
+    /// The audit slot, on a call the audit layer records.
+    audit: Option<AuditContext>,
 }
 
 impl Scoped {
+    /// Name one thing this call acted on, for the audit trail.
+    pub(crate) fn audit(&self, kind: TargetKind, id: impl Into<String>) {
+        audit::target(self.audit.as_ref(), kind, id);
+    }
+
     /// The namespace every storage call is scoped to, owned for a closure that
     /// runs on the blocking pool. Never empty: the role refuses to start
     /// without one.
@@ -319,5 +329,13 @@ impl AdminService for Admin {
     ) -> Result<Response<pb::ClearQueueOverrideResponse>, Status> {
         let (scoped, message) = self.scope(request)?;
         overrides::clear_queue(&scoped, message).await
+    }
+
+    async fn list_audit_records(
+        &self,
+        request: Request<pb::ListAuditRecordsRequest>,
+    ) -> Result<Response<pb::ListAuditRecordsResponse>, Status> {
+        let (scoped, message) = self.scope(request)?;
+        audit_trail::list(&scoped, message).await
     }
 }

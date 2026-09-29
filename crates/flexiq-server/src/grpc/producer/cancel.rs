@@ -12,6 +12,7 @@ use tonic::{Response, Status};
 use super::convert::{self, Blobs};
 use super::reads::{not_found, require_job_id, within_grants};
 use super::Scoped;
+use crate::grpc::audit::TargetKind;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::pb;
 
@@ -21,6 +22,9 @@ pub(crate) async fn cancel_job(
     request: pb::CancelJobRequest,
 ) -> Result<Response<pb::CancelJobResponse>, Status> {
     let id = require_job_id(&request.job_id)?;
+    // Named before any refusal, so an attempt on a job outside the grants is
+    // attributed to the job it aimed at.
+    scoped.audit(TargetKind::Job, id.clone());
     let namespace = scoped.namespace().to_string();
     let events = scoped.events();
 

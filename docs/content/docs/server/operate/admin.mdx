@@ -16,7 +16,7 @@ share a credential:
 
 | Scope | Reaches |
 | --- | --- |
-| `inspect` | Every read-only method: `ListQueues`, `GetThroughput`, `ListDeadLetters`, `GetDeadLetter`, `ListWorkers`, `ListPeriodicTasks`, `GetPeriodicTask`, `ListOverrides` |
+| `inspect` | Every read-only method: `ListQueues`, `GetThroughput`, `ListDeadLetters`, `GetDeadLetter`, `ListWorkers`, `ListPeriodicTasks`, `GetPeriodicTask`, `ListOverrides`, `ListAuditRecords` |
 | `admin` | Every other method |
 
 The split is not a list someone keeps: a method that declares
@@ -157,6 +157,14 @@ The server's scheduler applies the fields a scheduler consumes: `retryBackoff`,
 on a queue. `timeout`, `priority` and a task's pause are applied where jobs are
 enqueued, by an SDK, so an override of them does not reach a job enqueued
 through this door.
+
+## Audit trail
+
+`GET /v1/admin/auditRecords` pages the namespace's
+[audit trail](/server/operate/audit), newest first: a record for each target of
+every token-authorised write — this door's included — naming the token, the
+RPC, the target and the outcome. It filters by `tokenId`, `targetKind`, `target`, `since`
+and `until`, and pages with `pageSize` and `pageToken`.
 
 ## Errors
 

@@ -1156,6 +1156,28 @@ macro_rules! impl_storage {
             fn purge_task_logs(&self, older_than_ms: i64) -> $crate::error::Result<u64> {
                 self.purge_task_logs(older_than_ms)
             }
+            fn append_audit(
+                &self,
+                records: &[$crate::storage::records::AuditRecord],
+            ) -> $crate::error::Result<()> {
+                self.append_audit(records)
+            }
+            fn list_audit_after(
+                &self,
+                namespace: &str,
+                filter: &$crate::storage::records::AuditFilter,
+                limit: i64,
+                after: Option<(i64, &str)>,
+            ) -> $crate::error::Result<Vec<$crate::storage::records::AuditRecord>> {
+                self.list_audit_after(namespace, filter, limit, after)
+            }
+            fn purge_audit(
+                &self,
+                namespace: &str,
+                older_than_ms: i64,
+            ) -> $crate::error::Result<u64> {
+                self.purge_audit(namespace, older_than_ms)
+            }
             fn get_circuit_breaker(
                 &self,
                 task_name: &str,
@@ -2273,6 +2295,21 @@ impl Storage for StorageBackend {
     }
     fn purge_task_logs(&self, older_than_ms: i64) -> Result<u64> {
         delegate!(self, purge_task_logs, older_than_ms)
+    }
+    fn append_audit(&self, records: &[records::AuditRecord]) -> Result<()> {
+        delegate!(self, append_audit, records)
+    }
+    fn list_audit_after(
+        &self,
+        namespace: &str,
+        filter: &records::AuditFilter,
+        limit: i64,
+        after: Option<(i64, &str)>,
+    ) -> Result<Vec<records::AuditRecord>> {
+        delegate!(self, list_audit_after, namespace, filter, limit, after)
+    }
+    fn purge_audit(&self, namespace: &str, older_than_ms: i64) -> Result<u64> {
+        delegate!(self, purge_audit, namespace, older_than_ms)
     }
     fn get_circuit_breaker(&self, task_name: &str) -> Result<Option<records::CircuitBreakerState>> {
         delegate!(self, get_circuit_breaker, task_name)

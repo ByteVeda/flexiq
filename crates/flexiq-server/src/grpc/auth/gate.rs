@@ -51,7 +51,7 @@ const ADMIN_SERVICE: &str = "/flexiq.admin.v1.AdminService/";
 /// — including one this list has not heard of — needs `admin`, so a method
 /// added without updating this list fails closed. A test holds the list to the
 /// descriptor's idempotency levels, both ways.
-pub const INSPECT_METHODS: [&str; 8] = [
+pub const INSPECT_METHODS: [&str; 9] = [
     "ListQueues",
     "GetThroughput",
     "ListDeadLetters",
@@ -60,6 +60,7 @@ pub const INSPECT_METHODS: [&str; 8] = [
     "ListPeriodicTasks",
     "GetPeriodicTask",
     "ListOverrides",
+    "ListAuditRecords",
 ];
 /// The JSON facade's operator namespace: `GET` is `inspect`, anything else
 /// `admin`, which is the same split because the facade serves `GET` exactly

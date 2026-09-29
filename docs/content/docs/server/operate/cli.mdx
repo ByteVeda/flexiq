@@ -332,6 +332,14 @@ fq overrides clear-task send_email
 longer overridden — and a worker reads overrides when it starts, so a change
 reaches no worker already running.
 
+The [audit trail](/server/operate/audit) — which token made each write:
+
+```bash
+fq audit list --job <JOB_ID>          # who enqueued it, who cancelled it
+fq audit list --token-id <TOKEN_ID>   # everything one token did; --all follows every page
+fq audit list --target queue:emails   # or --kind, --since, --until
+```
+
 ## Output
 
 Without `--json`, every command prints an aligned table, and an empty result

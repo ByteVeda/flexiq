@@ -20,6 +20,8 @@ pub use crate::tokens::scope::{Scope, ScopeSet};
 #[derive(Debug, Clone)]
 pub struct Principal {
     credential: Arc<str>,
+    /// The token's human-readable name, for an audit record (#840).
+    name: Arc<str>,
     namespace: Arc<str>,
     /// Behind an `Arc` because a principal is cloned into every request's
     /// extensions and narrowed grants are a `Vec`.
@@ -31,24 +33,39 @@ pub struct Principal {
 
 impl Principal {
     /// A principal presenting `credential`, scoped to `namespace` with exactly
-    /// `scopes`.
+    /// `scopes`. Named by the credential's id until [`Self::named`] says
+    /// otherwise.
     pub fn new(
         credential: impl Into<Arc<str>>,
         namespace: impl Into<Arc<str>>,
         scopes: impl Into<Grants>,
     ) -> Self {
+        let credential = credential.into();
         Self {
-            credential: credential.into(),
+            name: Arc::clone(&credential),
+            credential,
             namespace: namespace.into(),
             scopes: Arc::new(scopes.into()),
             door: None,
         }
     }
 
+    /// This principal, known by `name`.
+    pub fn named(mut self, name: impl Into<Arc<str>>) -> Self {
+        self.name = name.into();
+        self
+    }
+
     /// The public id of the credential presented — never its secret. What a
     /// per-caller limit counts against.
     pub fn credential(&self) -> &Arc<str> {
         &self.credential
+    }
+
+    /// The name the credential was minted under — a label, not an identity:
+    /// two tokens may share one, so the audit trail keys on [`Self::credential`].
+    pub fn name(&self) -> &Arc<str> {
+        &self.name
     }
 
     /// The namespace every `Storage` call made for this caller is scoped to.
@@ -105,6 +122,15 @@ mod tests {
         assert!(principal.grants(Scope::Execute));
         assert_eq!(&**principal.namespace(), "prod");
         assert_eq!(&**principal.credential(), "tok");
+    }
+
+    #[test]
+    fn a_principal_is_known_by_its_id_until_named() {
+        let principal = Principal::new("tok", "prod", ScopeSet::ALL);
+        assert_eq!(&**principal.name(), "tok");
+        let named = principal.named("billing-api");
+        assert_eq!(&**named.name(), "billing-api");
+        assert_eq!(&**named.credential(), "tok");
     }
 
     #[test]

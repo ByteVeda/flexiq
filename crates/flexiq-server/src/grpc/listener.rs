@@ -28,6 +28,7 @@ use crate::config::grpc::GrpcConfig;
 use crate::config::listen::ListenAddress;
 use crate::events::Events;
 use crate::grpc::admin::Admin;
+use crate::grpc::audit::{self, AuditLayer, AuditSink};
 use crate::grpc::auth::{self, AuthLayer};
 use crate::grpc::executor::ExecutorDoor;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
@@ -198,6 +199,12 @@ impl Listener {
         .await;
 
         let rpc_metrics = metrics::RpcMetrics::new();
+        audit::retention::start(
+            storage.clone(),
+            self.config.namespace.clone(),
+            self.config.audit_retention,
+            shutdown.clone(),
+        );
 
         // `/metrics` is merged into the facade's router rather than the other
         // way round: `facade::router` owns the fallback that keeps an unrouted
@@ -268,8 +275,12 @@ impl Listener {
         // first to end up outermost. It has to be outermost, or a call refused
         // for want of a credential would never reach it — and a refusal missing
         // from the metrics is the one an operator most needs to see.
+        // The audit layer sits between the two: outside auth so a scope
+        // refusal is still answered through it and recorded.
+        let (audit_sink, audit_writer) = AuditSink::start(storage.clone(), shutdown.clone());
         let mut server = builder
             .layer(metrics::MetricsLayer::new(rpc_metrics))
+            .layer(AuditLayer::new(audit_sink))
             .layer(AuthLayer::new(Arc::new(auth::TokenStore::new(
                 storage.clone(),
                 self.config.namespace.as_str(),
@@ -318,6 +329,9 @@ impl Listener {
                 served
             }
         };
+        // Before returning, not after: the runtime drops a detached task, and
+        // the records still buffered with it.
+        audit_writer.finish().await;
         result.with_context(|| format!("the gRPC listener on {listen} stopped"))?;
         Ok(())
     }

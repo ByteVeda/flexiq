@@ -2,11 +2,11 @@ use crate::error::{QueueError, Result};
 use crate::job::{Job, NewJob};
 use crate::step::StepLimits;
 use crate::storage::records::{
-    AttemptFence, CircuitBreakerState, DebounceOptions, Dequeued, JobError, JobStep, LockInfo,
-    NewJobStep, NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry,
-    SettleClaimant, SettleGrant, SleepOutcome, StaleJob, StepCommit, Subscription,
-    SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo,
-    WorkerRegistration, WorkerStatus,
+    AttemptFence, AuditFilter, AuditRecord, CircuitBreakerState, DebounceOptions, Dequeued,
+    JobError, JobStep, LockInfo, NewJobStep, NewPeriodicTask, NewSubscription, PeriodicTask,
+    RateLimitState, ReplayEntry, SettleClaimant, SettleGrant, SleepOutcome, StaleJob, StepCommit,
+    Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage,
+    WorkerInfo, WorkerRegistration, WorkerStatus,
 };
 use crate::storage::{
     DeadJob, DispatchOrder, QueueStats, RetentionCounts, RetentionCutoffs, SubscriptionBacklogStats,
@@ -748,6 +748,26 @@ pub trait Storage: Send + Sync + Clone {
     ) -> Result<Vec<TaskLogEntry>>;
     /// Purge log lines older than the cutoff. Returns the count removed.
     fn purge_task_logs(&self, older_than_ms: i64) -> Result<u64>;
+
+    // ── Audit trail (#840) ──────────────────────────────────────────
+
+    /// Append audit records. Append-only: a record whose id is already stored
+    /// is skipped, never overwritten, and the rest of the batch is stored. An
+    /// empty slice is a no-op.
+    fn append_audit(&self, records: &[AuditRecord]) -> Result<()>;
+    /// One namespace's audit records matching `filter`, ordered by
+    /// `(at_ms, id)` descending with a `(at_ms, id) < after` bound. See
+    /// [`Storage::list_jobs_after`] for the cursor contract.
+    fn list_audit_after(
+        &self,
+        namespace: &str,
+        filter: &AuditFilter,
+        limit: i64,
+        after: Option<(i64, &str)>,
+    ) -> Result<Vec<AuditRecord>>;
+    /// Delete one namespace's audit records older than the cutoff. Returns the
+    /// count removed. Idempotent, so concurrent callers need no election.
+    fn purge_audit(&self, namespace: &str, older_than_ms: i64) -> Result<u64>;
 
     // ── Circuit breaker operations ──────────────────────────────────
 

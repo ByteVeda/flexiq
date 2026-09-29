@@ -135,6 +135,9 @@ grpc:
   # than throughput. Per connection, so one noisy client cannot crowd out
   # another's. 0 is unlimited.
   maxConcurrentRequests: 256
+  # Days an audit record of a token-authorised write is kept before the
+  # listener prunes it. At least 1: the trail is not optional.
+  auditRetentionDays: 90
   # There is no credential to set here. Callers present a scoped API token
   # stored in the database, which is why this chart no longer carries a gRPC
   # secret: a token is minted per client, expires, and is revoked on its own

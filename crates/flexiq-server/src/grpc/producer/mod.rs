@@ -43,6 +43,7 @@ use flexiq_workflows::WorkflowStorageBackend;
 use tonic::{Request, Response, Status};
 
 use crate::events::Events;
+use crate::grpc::audit::{self, AuditContext, TargetKind};
 use crate::grpc::auth::{Principal, Scope};
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
 use crate::grpc::pb;
@@ -124,6 +125,7 @@ impl Producer {
             events: self.events.clone(),
             namespace: Arc::clone(principal.namespace()),
             principal,
+            audit: AuditContext::of(request.extensions()),
         };
         Ok((scoped, request.into_inner()))
     }
@@ -162,9 +164,16 @@ pub(crate) struct Scoped<'a> {
     namespace: Arc<str>,
     /// The caller, for what its grants reach behind this door.
     principal: Principal,
+    /// The audit slot, on a call the audit layer records.
+    audit: Option<AuditContext>,
 }
 
 impl Scoped<'_> {
+    /// Name one thing this call acted on, for the audit trail.
+    pub(crate) fn audit(&self, kind: TargetKind, id: impl Into<String>) {
+        audit::target(self.audit.as_ref(), kind, id);
+    }
+
     /// Whether the caller may touch `queue` and `task`; `None` asks about
     /// every queue (or task) at once.
     pub(crate) fn reaches(&self, queue: Option<&str>, task: Option<&str>) -> bool {

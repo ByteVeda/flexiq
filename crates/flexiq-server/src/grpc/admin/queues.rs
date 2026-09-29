@@ -9,6 +9,7 @@ use tonic::{Response, Status};
 
 use super::{convert, require, Scoped};
 use crate::dashboard::stores::overrides::{self, Scope};
+use crate::grpc::audit::TargetKind;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::pb::admin as pb;
 use crate::grpc::producer::convert::{duration, millis_from_duration, timestamp};
@@ -75,6 +76,7 @@ pub(crate) async fn resume(
 /// the answer is the state this call left.
 async fn set_paused(scoped: &Scoped, queue: String, paused: bool) -> Result<pb::Queue, Status> {
     let queue = require("queue", queue)?;
+    scoped.audit(TargetKind::Queue, queue.clone());
     let namespace = scoped.namespace_owned();
     on_storage(scoped.storage(), move |storage| {
         if paused {

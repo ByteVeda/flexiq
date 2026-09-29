@@ -364,6 +364,62 @@ pub struct ReplayEntry {
     pub replay_error: Option<String>,
 }
 
+/// One authorised call a network door served (#840). Names the credential by
+/// its public id only — never the token, never its digest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditRecord {
+    /// Unique id of the record (UUIDv7, the tie-breaker of the listing order).
+    pub id: String,
+    /// Namespace the door serving the call is bound to.
+    pub namespace: String,
+    /// Unix-millisecond time the call was answered.
+    pub at_ms: i64,
+    /// Public id of the token that authorised the call.
+    pub token_id: String,
+    /// The token's name when the call was made.
+    pub principal: String,
+    /// Canonical RPC name, e.g. `flexiq.producer.v1.Producer/Enqueue`.
+    pub operation: String,
+    /// What kind of thing the call acted on (`job`, `queue`, `worker`, …).
+    /// `None` when the call was refused before its target was known.
+    pub target_kind: Option<String>,
+    /// Identifier of the target, in the namespace of `target_kind`.
+    pub target: Option<String>,
+    /// gRPC status code name the call ended with (`OK`, `PERMISSION_DENIED`, …).
+    pub outcome: String,
+}
+
+/// Which audit records a listing returns. Every set field must match; an empty
+/// filter returns the namespace's whole trail.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditFilter {
+    /// Only records authorised by this token id.
+    pub token_id: Option<String>,
+    /// Only records whose target is of this kind.
+    pub target_kind: Option<String>,
+    /// Only records naming this target.
+    pub target: Option<String>,
+    /// Only records at or after this Unix-millisecond time.
+    pub since_ms: Option<i64>,
+    /// Only records strictly before this Unix-millisecond time.
+    pub until_ms: Option<i64>,
+}
+
+impl AuditFilter {
+    /// Whether `record` passes every set field. The storage backends that
+    /// cannot express a filter in their query language apply it with this.
+    pub fn matches(&self, record: &AuditRecord) -> bool {
+        fn field(want: &Option<String>, have: Option<&str>) -> bool {
+            want.as_deref().is_none_or(|w| have == Some(w))
+        }
+        field(&self.token_id, Some(&record.token_id))
+            && field(&self.target_kind, record.target_kind.as_deref())
+            && field(&self.target, record.target.as_deref())
+            && self.since_ms.is_none_or(|since| record.at_ms >= since)
+            && self.until_ms.is_none_or(|until| record.at_ms < until)
+    }
+}
+
 /// One structured log line emitted during task execution.
 #[derive(Debug, Clone)]
 pub struct TaskLogEntry {

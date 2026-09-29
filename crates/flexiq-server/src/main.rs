@@ -87,6 +87,9 @@ Configuration (environment only):
                                  attach stream (default: 30; 0 is unbounded)
   FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS  calls one connection may have in flight
                                  (default: 256; 0 is unlimited)
+  FLEXIQ_GRPC_AUDIT_RETENTION_DAYS  days an audit record of a token-authorised
+                                 write is kept before the listener prunes it
+                                 (default: 90; at least 1)
   FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN  WatchJobs streams one API token may hold at
                                  once (default: 16; 0 is unlimited)
   FLEXIQ_GRPC_WATCH_RECONCILE   seconds between re-reads of every watched job

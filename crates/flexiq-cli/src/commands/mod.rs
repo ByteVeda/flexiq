@@ -4,6 +4,7 @@
 //! parsed flags, so the mapping from what an operator typed to what goes on the
 //! wire is testable without a server. Only the thin `run` around it needs one.
 
+pub mod audit;
 pub mod dlq;
 pub mod enqueue;
 pub mod jobs;

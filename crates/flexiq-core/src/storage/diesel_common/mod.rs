@@ -4,6 +4,7 @@
 //! Diesel-backed storage backends share, avoiding code duplication.
 
 mod archival;
+mod audit;
 mod dashboard_settings;
 mod dead_letter;
 mod job_row;
@@ -20,6 +21,7 @@ mod steps;
 mod workers;
 
 pub(crate) use archival::impl_diesel_archival_ops;
+pub(crate) use audit::impl_diesel_audit_ops;
 pub(crate) use dashboard_settings::impl_diesel_setting_ops;
 pub(crate) use dead_letter::impl_diesel_dead_letter_ops;
 pub(crate) use job_row::{dependency_not_found, new_job_row, JobAttribution};

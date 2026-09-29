@@ -1,4 +1,5 @@
 mod archival;
+mod audit;
 mod circuit_breakers;
 mod dashboard_settings;
 mod dead_letter;

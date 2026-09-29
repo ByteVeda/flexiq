@@ -205,6 +205,8 @@ spec:
               value: "{{ .Values.grpc.requestTimeout }}"
             - name: FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS
               value: "{{ .Values.grpc.maxConcurrentRequests }}"
+            - name: FLEXIQ_GRPC_AUDIT_RETENTION_DAYS
+              value: "{{ .Values.grpc.auditRetentionDays }}"
             {{- include "flexiq-server.tlsEnv" (dict "prefix" "FLEXIQ_GRPC" "dir" "grpc" "tls" .Values.grpc.tls) | nindent 12 }}
             {{- end }}
             {{- if .Values.webhook.enabled }}

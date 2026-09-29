@@ -309,5 +309,19 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    audit_log (id) {
+        id -> Text,
+        namespace -> Text,
+        at_ms -> BigInt,
+        token_id -> Text,
+        principal -> Text,
+        operation -> Text,
+        target_kind -> Nullable<Text>,
+        target -> Nullable<Text>,
+        outcome -> Text,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(jobs, job_dependencies);
 diesel::allow_tables_to_appear_in_same_query!(topic_messages, topic_deliveries);

@@ -16,6 +16,7 @@ use tonic::{Response, Status};
 use super::{require, Scoped};
 use crate::dashboard::error::ApiError;
 use crate::dashboard::stores::overrides::{self, Scope};
+use crate::grpc::audit::TargetKind;
 use crate::grpc::blocking::{on_storage, run};
 use crate::grpc::pb::admin as pb;
 use crate::grpc::producer::convert::timestamp;
@@ -56,6 +57,7 @@ pub(crate) async fn set_task(
     request: pb::SetTaskOverrideRequest,
 ) -> Result<Response<pb::SetTaskOverrideResponse>, Status> {
     let name = require("task_name", request.task_name)?;
+    scoped.audit(TargetKind::Task, name.clone());
     let fields = task_to_stored(request.task_override.unwrap_or_default())?;
     let stored = replace(scoped, Scope::Task, name, fields, &[]).await?;
     Ok(Response::new(pb::SetTaskOverrideResponse {
@@ -70,6 +72,7 @@ pub(crate) async fn clear_task(
     request: pb::ClearTaskOverrideRequest,
 ) -> Result<Response<pb::ClearTaskOverrideResponse>, Status> {
     let name = require("task_name", request.task_name)?;
+    scoped.audit(TargetKind::Task, name.clone());
     clear(scoped, Scope::Task, name).await?;
     Ok(Response::new(pb::ClearTaskOverrideResponse {}))
 }
@@ -80,6 +83,7 @@ pub(crate) async fn set_queue(
     request: pb::SetQueueOverrideRequest,
 ) -> Result<Response<pb::SetQueueOverrideResponse>, Status> {
     let name = require("queue", request.queue)?;
+    scoped.audit(TargetKind::Queue, name.clone());
     let fields = queue_to_stored(request.queue_override.unwrap_or_default())?;
     let stored = replace(scoped, Scope::Queue, name, fields, &QUEUE_KEEPS).await?;
     Ok(Response::new(pb::SetQueueOverrideResponse {
@@ -93,6 +97,7 @@ pub(crate) async fn clear_queue(
     request: pb::ClearQueueOverrideRequest,
 ) -> Result<Response<pb::ClearQueueOverrideResponse>, Status> {
     let name = require("queue", request.queue)?;
+    scoped.audit(TargetKind::Queue, name.clone());
     clear(scoped, Scope::Queue, name).await?;
     Ok(Response::new(pb::ClearQueueOverrideResponse {}))
 }

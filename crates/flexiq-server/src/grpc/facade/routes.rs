@@ -56,6 +56,7 @@ use super::admin as operator;
 use super::error;
 use super::json::{request as read, response as write};
 use crate::grpc::admin::Admin;
+use crate::grpc::audit::AuditContext;
 use crate::grpc::auth::Principal;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
 use crate::grpc::pb;
@@ -159,11 +160,13 @@ pub enum Rpc {
     SetQueueOverride,
     /// `AdminService.ClearQueueOverride`.
     ClearQueueOverride,
+    /// `AdminService.ListAuditRecords`.
+    ListAuditRecords,
 }
 
 impl Rpc {
     /// Every RPC, so a caller that needs the closed set does not restate it.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 32] = [
         Self::Enqueue,
         Self::EnqueueBatch,
         Self::GetJob,
@@ -195,6 +198,7 @@ impl Rpc {
         Self::ClearTaskOverride,
         Self::SetQueueOverride,
         Self::ClearQueueOverride,
+        Self::ListAuditRecords,
     ];
 
     /// The service that declares it.
@@ -230,7 +234,8 @@ impl Rpc {
             | Self::SetTaskOverride
             | Self::ClearTaskOverride
             | Self::SetQueueOverride
-            | Self::ClearQueueOverride => Service::Admin,
+            | Self::ClearQueueOverride
+            | Self::ListAuditRecords => Service::Admin,
         }
     }
 
@@ -268,6 +273,7 @@ impl Rpc {
             Self::ClearTaskOverride => "ClearTaskOverride",
             Self::SetQueueOverride => "SetQueueOverride",
             Self::ClearQueueOverride => "ClearQueueOverride",
+            Self::ListAuditRecords => "ListAuditRecords",
         }
     }
 
@@ -360,6 +366,8 @@ pub enum Binding {
     SetQueueOverride,
     /// `POST /v1/admin/queues/{queue}/override:clear`.
     ClearQueueOverride,
+    /// `GET /v1/admin/auditRecords`.
+    ListAuditRecords,
 }
 
 impl Binding {
@@ -397,6 +405,7 @@ impl Binding {
             Self::ClearTaskOverride => Rpc::ClearTaskOverride,
             Self::SetQueueOverride => Rpc::SetQueueOverride,
             Self::ClearQueueOverride => Rpc::ClearQueueOverride,
+            Self::ListAuditRecords => Rpc::ListAuditRecords,
         }
     }
 
@@ -415,7 +424,8 @@ impl Binding {
             | Self::ListWorkers
             | Self::ListPeriodicTasks
             | Self::GetPeriodicTask
-            | Self::ListOverrides => Verb::Get,
+            | Self::ListOverrides
+            | Self::ListAuditRecords => Verb::Get,
             Self::Enqueue
             | Self::EnqueueBatch
             | Self::CancelJob
@@ -473,6 +483,7 @@ impl Binding {
             Self::ClearTaskOverride => "/v1/admin/tasks/{task_name}/override:clear",
             Self::SetQueueOverride => "/v1/admin/queues/{queue}/override",
             Self::ClearQueueOverride => "/v1/admin/queues/{queue}/override:clear",
+            Self::ListAuditRecords => "/v1/admin/auditRecords",
         }
     }
 
@@ -521,6 +532,7 @@ impl Binding {
             Self::ClearTaskOverride => post(operator::clear_task_override),
             Self::SetQueueOverride => post(operator::set_queue_override),
             Self::ClearQueueOverride => post(operator::clear_queue_override),
+            Self::ListAuditRecords => get(operator::list_audit_records),
             Self::CancelJob
             | Self::PauseQueue
             | Self::ResumeQueue
@@ -569,6 +581,7 @@ pub const ROUTES: &[Binding] = &[
     Binding::ClearTaskOverride,
     Binding::SetQueueOverride,
     Binding::ClearQueueOverride,
+    Binding::ListAuditRecords,
 ];
 
 /// Which binding a concrete request path and method reach, if any.
@@ -725,7 +738,8 @@ async fn custom_method(
         | Binding::SetTaskOverride
         | Binding::ClearTaskOverride
         | Binding::SetQueueOverride
-        | Binding::ClearQueueOverride => error::refuse(unrouted(&parts)),
+        | Binding::ClearQueueOverride
+        | Binding::ListAuditRecords => error::refuse(unrouted(&parts)),
     }
 }
 
@@ -987,6 +1001,11 @@ pub(super) fn scoped<T>(parts: &Parts, message: T) -> Result<tonic::Request<T>, 
     };
     let mut request = tonic::Request::new(message);
     request.extensions_mut().insert(principal.clone());
+    // The audit slot rides along too, so a handler names its targets on the
+    // record this facade call leaves, exactly as over gRPC.
+    if let Some(audit) = AuditContext::of(&parts.extensions) {
+        request.extensions_mut().insert(audit);
+    }
     Ok(request)
 }
 

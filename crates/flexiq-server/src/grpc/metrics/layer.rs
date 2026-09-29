@@ -106,8 +106,9 @@ where
 /// The gap this leaves is a *stream* that fails after its head — its status
 /// rides trailers this layer never sees, and it is counted `OK`. That is stated
 /// where the metric is rendered rather than papered over by wrapping every
-/// response body to watch for trailers.
-fn answered_code<B>(response: &http::Response<B>) -> Code {
+/// response body to watch for trailers. The audit layer reads its outcome the
+/// same way; every call it records is unary, so the gap does not reach it.
+pub(crate) fn answered_code<B>(response: &http::Response<B>) -> Code {
     if let Some(AnsweredCode(code)) = response.extensions().get::<AnsweredCode>() {
         return *code;
     }

@@ -369,6 +369,7 @@ process is the one executors attach to — plus what only this door knows:
 |---|---|---|
 | `flexiq_grpc_requests_total` | `method`, `door`, `code` | Calls answered, by RPC and `google.rpc.Code` |
 | `flexiq_grpc_request_duration_seconds_{sum,count}` | `method`, `door` | Time to the response head |
+| `flexiq_audit_records_total` | `outcome` | [Audit records](/server/operate/audit#when-a-record-cannot-be-stored) written to the table, or sent to the log |
 
 `door` is `grpc` or `http`, because the JSON facade is the same service by
 another spelling and both are counted under the RPC they reached. A refused call

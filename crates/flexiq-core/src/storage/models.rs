@@ -2,12 +2,12 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::records::{
-    CircuitBreakerState, JobError, LockInfo, PeriodicTask, RateLimitState, ReplayEntry,
-    Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicMessage, WorkerInfo,
-    WorkerRegistration,
+    AuditRecord, CircuitBreakerState, JobError, LockInfo, PeriodicTask, RateLimitState,
+    ReplayEntry, Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicMessage,
+    WorkerInfo, WorkerRegistration,
 };
 use super::schema::{
-    archived_jobs, circuit_breakers, dashboard_settings, dead_letter, distributed_locks,
+    archived_jobs, audit_log, circuit_breakers, dashboard_settings, dead_letter, distributed_locks,
     execution_claims, job_dependencies, job_errors, job_steps, jobs, periodic_tasks, queue_state,
     rate_limits, replay_history, task_logs, task_metrics, topic_deliveries, topic_messages,
     topic_subscriptions, topics, workers,
@@ -425,6 +425,22 @@ pub struct NewTaskLogRow<'a> {
     pub extra: Option<&'a str>,
     pub logged_at: i64,
     pub namespace: Option<&'a str>,
+}
+
+// ── Audit Log ────────────────────────────────────────────────────
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(table_name = audit_log)]
+pub struct AuditRow {
+    pub id: String,
+    pub namespace: String,
+    pub at_ms: i64,
+    pub token_id: String,
+    pub principal: String,
+    pub operation: String,
+    pub target_kind: Option<String>,
+    pub target: Option<String>,
+    pub outcome: String,
 }
 
 // ── Circuit Breaker ──────────────────────────────────────────────
@@ -1032,6 +1048,38 @@ impl From<LockInfoRow> for LockInfo {
             owner_id: r.owner_id,
             acquired_at: r.acquired_at,
             expires_at: r.expires_at,
+        }
+    }
+}
+
+impl From<AuditRow> for AuditRecord {
+    fn from(r: AuditRow) -> Self {
+        AuditRecord {
+            id: r.id,
+            namespace: r.namespace,
+            at_ms: r.at_ms,
+            token_id: r.token_id,
+            principal: r.principal,
+            operation: r.operation,
+            target_kind: r.target_kind,
+            target: r.target,
+            outcome: r.outcome,
+        }
+    }
+}
+
+impl From<&AuditRecord> for AuditRow {
+    fn from(r: &AuditRecord) -> Self {
+        AuditRow {
+            id: r.id.clone(),
+            namespace: r.namespace.clone(),
+            at_ms: r.at_ms,
+            token_id: r.token_id.clone(),
+            principal: r.principal.clone(),
+            operation: r.operation.clone(),
+            target_kind: r.target_kind.clone(),
+            target: r.target.clone(),
+            outcome: r.outcome.clone(),
         }
     }
 }

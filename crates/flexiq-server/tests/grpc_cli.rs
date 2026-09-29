@@ -17,10 +17,11 @@
 mod support;
 
 use flexiq_cli::cli::{
-    DeadLetterIdArgs, DlqCommand, DlqListArgs, DlqPurgeArgs, DlqShowArgs, EnqueueArgs,
-    JobsCancelArgs, JobsCommand, JobsGetArgs, JobsListArgs, OverridesCommand, PeriodicCommand,
-    PeriodicNameArgs, PeriodicPutArgs, PeriodicShowArgs, QueueNameArgs, QueuesArgs,
-    SetQueueOverrideArgs, SetTaskOverrideArgs, TaskNameArgs, ThroughputArgs, WorkerIdArgs,
+    AuditListArgs, DeadLetterIdArgs, DlqCommand, DlqListArgs, DlqPurgeArgs, DlqShowArgs,
+    EnqueueArgs, JobsCancelArgs, JobsCommand, JobsGetArgs, JobsListArgs, OverridesCommand,
+    PeriodicCommand, PeriodicNameArgs, PeriodicPutArgs, PeriodicShowArgs, QueueNameArgs,
+    QueuesArgs, SetQueueOverrideArgs, SetTaskOverrideArgs, TaskNameArgs, ThroughputArgs,
+    WorkerIdArgs,
 };
 use flexiq_cli::commands;
 use flexiq_cli::connect::ClientTls;
@@ -595,6 +596,61 @@ async fn pause_and_resume_through_the_cli() {
         .queue
         .expect("the queue");
     assert!(!resumed.paused);
+    harness.stop().await;
+}
+
+/// `fq audit list --target queue:emails` finds the pause this suite's token
+/// made, and its `--json` reads exactly as the facade's.
+#[tokio::test]
+async fn the_audit_trail_reads_back_through_the_cli() {
+    let mut harness = Harness::start("admin-audit").await;
+    harness
+        .admin
+        .pause_queue(commands::queues::pause_request(&queue_name("emails")))
+        .await
+        .expect("pause");
+
+    let request = commands::audit::list_request(&AuditListArgs {
+        token_id: None,
+        job: None,
+        target: Some("queue:emails".into()),
+        kind: None,
+        since: None,
+        until: None,
+        page_size: None,
+        page_token: None,
+        all: false,
+    })
+    .expect("builds");
+    // The door appends off the request path, so the record lands shortly after
+    // the answer, not with it.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let listed = loop {
+        let listed = harness
+            .admin
+            .list_audit_records(request.clone())
+            .await
+            .expect("an ALL token reaches inspect")
+            .into_inner();
+        if !listed.records.is_empty() || tokio::time::Instant::now() > deadline {
+            break listed;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(listed.records.len(), 1, "{listed:?}");
+    let record = &listed.records[0];
+    assert_eq!(record.operation, "flexiq.admin.v1.AdminService/PauseQueue");
+    assert_eq!(record.outcome, "OK");
+    assert_eq!(
+        cli_render::audit_row(record)[4],
+        "queue:emails",
+        "the target cell is what --target takes back"
+    );
+    assert_same_render(
+        &listed,
+        cli_render::list_audit_records_json,
+        server_render::list_audit_records,
+    );
     harness.stop().await;
 }
 
