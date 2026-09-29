@@ -86,8 +86,8 @@ pub struct NewPeriodicTask {
     /// Serialized call payload — positional and keyword arguments both —
     /// that every firing enqueues as the job's payload.
     pub args: Option<Vec<u8>>,
-    /// Reserved (#922): must be `None`. `StorageBackend` refuses a value,
-    /// since nothing would ever read it.
+    /// Reserved (#922): must be `None`. Every backend refuses a value, since
+    /// nothing would ever read it.
     pub kwargs: Option<Vec<u8>>,
     /// Queue to enqueue into.
     pub queue: String,

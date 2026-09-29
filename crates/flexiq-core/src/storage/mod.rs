@@ -2152,14 +2152,10 @@ impl Storage for StorageBackend {
             refill_rate
         )
     }
-    // Both periodic writes refuse the reserved `kwargs` here, the layer every
-    // shell and door shares (#922).
     fn register_periodic(&self, task: &records::NewPeriodicTask) -> Result<()> {
-        crate::periodic::ensure_kwargs_unset(task)?;
         delegate!(self, register_periodic, task)
     }
     fn declare_periodic(&self, task: &records::NewPeriodicTask) -> Result<()> {
-        crate::periodic::ensure_kwargs_unset(task)?;
         delegate!(self, declare_periodic, task)
     }
     fn get_due_periodic(

@@ -142,6 +142,7 @@ impl RedisStorage {
 
     /// Register or update the schedule named by `(namespace, name)`.
     pub fn register_periodic(&self, task: &NewPeriodicTask) -> Result<()> {
+        crate::periodic::ensure_kwargs_unset(task)?;
         let namespace = task.namespace.as_deref();
         let pkey = self.periodic_key(namespace, &task.name);
 
@@ -178,6 +179,7 @@ impl RedisStorage {
     /// `list_periodic` and writing through `register_periodic` leaves the two
     /// halves unguarded (#919).
     pub fn declare_periodic(&self, task: &NewPeriodicTask) -> Result<()> {
+        crate::periodic::ensure_kwargs_unset(task)?;
         let namespace = task.namespace.as_deref();
         let pkey = self.periodic_key(namespace, &task.name);
 

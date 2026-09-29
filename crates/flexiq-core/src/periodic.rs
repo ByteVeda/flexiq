@@ -155,29 +155,14 @@ mod tests {
         }
     }
 
+    // Each backend's refusal is pinned by the cross-backend storage suite.
     #[test]
-    fn both_periodic_writes_refuse_reserved_kwargs() {
-        use crate::storage::sqlite::SqliteStorage;
-        use crate::storage::{Storage, StorageBackend};
-
-        let storage = StorageBackend::Sqlite(SqliteStorage::in_memory().unwrap());
-        let task = declaration(Some(vec![1]));
-        for (path, outcome) in [
-            ("register", storage.register_periodic(&task)),
-            ("declare", storage.declare_periodic(&task)),
-        ] {
-            match outcome {
-                Err(QueueError::Config(msg)) => assert!(msg.contains("reserved"), "{path}: {msg}"),
-                other => panic!("{path}: expected a Config refusal, got {other:?}"),
-            }
+    fn reserved_kwargs_is_refused_only_when_set() {
+        match ensure_kwargs_unset(&declaration(Some(vec![1]))) {
+            Err(QueueError::Config(msg)) => assert!(msg.contains("'nightly'"), "{msg}"),
+            other => panic!("expected a Config refusal, got {other:?}"),
         }
-        assert!(
-            storage.list_periodic(None).unwrap().is_empty(),
-            "nothing stored"
-        );
-
-        storage.declare_periodic(&declaration(None)).unwrap();
-        assert_eq!(storage.list_periodic(None).unwrap().len(), 1);
+        assert!(ensure_kwargs_unset(&declaration(None)).is_ok());
     }
 
     #[test]
