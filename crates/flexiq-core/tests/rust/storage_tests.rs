@@ -3224,16 +3224,46 @@ fn test_audit_append_never_overwrites(s: &impl Storage) {
     let ns = "audit-dup";
     s.append_audit(&[audit(ns, "d1", 1_000, "tok-a", None)])
         .unwrap();
-    let mut forged = audit(ns, "d1", 1_000, "tok-a", None);
+    let mut forged = audit(ns, "d1", 2_000, "tok-b", Some(("job", "j9")));
     forged.outcome = "PERMISSION_DENIED".to_string();
-    // Refusing the batch and skipping the duplicate both satisfy the contract;
-    // only overwriting would not.
-    let _ = s.append_audit(&[forged]);
+    // The duplicate is skipped; the record beside it in the batch still lands.
+    s.append_audit(&[forged, audit(ns, "d2", 3_000, "tok-a", None)])
+        .unwrap();
 
     let rows = s
         .list_audit_after(ns, &AuditFilter::default(), 100, None)
         .unwrap();
-    assert_eq!(rows, [audit(ns, "d1", 1_000, "tok-a", None)]);
+    assert_eq!(
+        rows,
+        [
+            audit(ns, "d2", 3_000, "tok-a", None),
+            audit(ns, "d1", 1_000, "tok-a", None)
+        ]
+    );
+}
+
+/// A duplicate id is not indexed under the fields it tried to claim: those
+/// entries would name a token and target the stored record does not have, so
+/// the purge — which reads the stored record — could never remove them.
+#[cfg(feature = "redis")]
+fn redis_duplicate_audit_id_leaves_no_index_entry(s: &flexiq_core::RedisStorage) {
+    use redis::Commands;
+    let ns = "audit-redis-dup";
+    s.append_audit(&[audit(ns, "d1", 1_000, "tok-a", None)])
+        .unwrap();
+    s.append_audit(&[audit(ns, "d1", 2_000, "tok-b", Some(("job", "j9")))])
+        .unwrap();
+
+    let mut conn = s.conn().unwrap();
+    for index in [
+        rkey(s, &["audit", "token", ns, "tok-b"]),
+        rkey(s, &["audit", "target", ns, "job", "j9"]),
+    ] {
+        let entries: usize = conn.zcard(&index).unwrap();
+        assert_eq!(entries, 0, "{index} indexed a duplicate");
+    }
+    let all: usize = conn.zcard(rkey(s, &["audit", "all", ns])).unwrap();
+    assert_eq!(all, 1, "the original is indexed once");
 }
 
 fn test_audit_purge_is_namespace_scoped(s: &impl Storage) {
@@ -4694,6 +4724,7 @@ fn redis_storage_tests() {
     redis_move_to_dlq_leaves_consistent_state(&storage);
     redis_move_to_dlq_skips_already_archived(&storage);
     redis_purge_dead_drains_across_batches(&storage);
+    redis_duplicate_audit_id_leaves_no_index_entry(&storage);
     redis_keyset_pages_a_large_tie_bucket(&storage);
     redis_backfills_expiry_for_preupgrade_rows(&storage);
     redis_debounce_index_never_outlives_its_job(&storage);

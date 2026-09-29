@@ -2,8 +2,9 @@
 macro_rules! impl_diesel_audit_ops {
     ($storage_type:ty) => {
         impl $storage_type {
-            /// Append audit records in one transaction. A duplicate id fails
-            /// the primary key, so a record is never silently overwritten.
+            /// Append audit records in one transaction. A duplicate id is
+            /// skipped, as on Redis: the stored record stands, and one repeat
+            /// does not cost the rest of the batch.
             pub fn append_audit(
                 &self,
                 records: &[$crate::storage::records::AuditRecord],
@@ -12,10 +13,15 @@ macro_rules! impl_diesel_audit_ops {
                     return Ok(());
                 }
                 let rows: Vec<AuditRow> = records.iter().map(AuditRow::from).collect();
+                // Row by row inside the one transaction: Diesel's SQLite batch
+                // insert cannot carry `ON CONFLICT`, and a sink batch is small.
                 self.write_transaction(|conn| {
-                    diesel::insert_into(audit_log::table)
-                        .values(&rows)
-                        .execute(conn)?;
+                    for row in &rows {
+                        diesel::insert_into(audit_log::table)
+                            .values(row)
+                            .on_conflict_do_nothing()
+                            .execute(conn)?;
+                    }
                     Ok(())
                 })
             }

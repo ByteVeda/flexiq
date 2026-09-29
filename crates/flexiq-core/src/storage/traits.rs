@@ -752,7 +752,8 @@ pub trait Storage: Send + Sync + Clone {
     // ── Audit trail (#840) ──────────────────────────────────────────
 
     /// Append audit records. Append-only: a record whose id is already stored
-    /// is never overwritten. An empty slice is a no-op.
+    /// is skipped, never overwritten, and the rest of the batch is stored. An
+    /// empty slice is a no-op.
     fn append_audit(&self, records: &[AuditRecord]) -> Result<()>;
     /// One namespace's audit records matching `filter`, ordered by
     /// `(at_ms, id)` descending with a `(at_ms, id) < after` bound. See

@@ -13,6 +13,21 @@ use super::{map_err, zset_keyset_page, RedisStorage, SCAN_BATCH};
 use crate::error::Result;
 use crate::storage::records::{AuditFilter, AuditRecord};
 
+/// Store one record and index it — but only if its id was free. Indexing a
+/// duplicate would leave entries naming fields the stored record does not
+/// have, which the purge (reading the stored record) could never remove.
+///
+/// `KEYS[1]` the record, `KEYS[2..]` its indexes; `ARGV` = json, score, id.
+const APPEND_SCRIPT: &str = r"
+if not redis.call('SET', KEYS[1], ARGV[1], 'NX') then
+  return 0
+end
+for i = 2, #KEYS do
+  redis.call('ZADD', KEYS[i], ARGV[2], ARGV[3])
+end
+return 1
+";
+
 impl RedisStorage {
     fn audit_record_key(&self, id: &str) -> String {
         self.key(&["audit", "rec", id])
@@ -39,35 +54,31 @@ impl RedisStorage {
         }
     }
 
-    /// Append audit records. `SET NX` keeps an existing id's record untouched.
+    /// Append audit records, one [`APPEND_SCRIPT`] per record in one pipeline.
     pub fn append_audit(&self, records: &[AuditRecord]) -> Result<()> {
         if records.is_empty() {
             return Ok(());
         }
         let mut conn = self.conn()?;
         let pipe = &mut redis::pipe();
-        pipe.atomic();
         for record in records {
             let json = serde_json::to_string(record)?;
-            let score = record.at_ms as f64;
-            pipe.set_nx(self.audit_record_key(&record.id), json)
-                .ignore();
-            pipe.zadd(self.audit_all_key(&record.namespace), &record.id, score)
-                .ignore();
-            pipe.zadd(
+            let mut keys = vec![
+                self.audit_record_key(&record.id),
+                self.audit_all_key(&record.namespace),
                 self.audit_token_key(&record.namespace, &record.token_id),
-                &record.id,
-                score,
-            )
-            .ignore();
+            ];
             if let (Some(kind), Some(target)) = (&record.target_kind, &record.target) {
-                pipe.zadd(
-                    self.audit_target_key(&record.namespace, kind, target),
-                    &record.id,
-                    score,
-                )
-                .ignore();
+                keys.push(self.audit_target_key(&record.namespace, kind, target));
             }
+            pipe.cmd("EVAL")
+                .arg(APPEND_SCRIPT)
+                .arg(keys.len())
+                .arg(&keys)
+                .arg(json)
+                .arg(record.at_ms)
+                .arg(&record.id)
+                .ignore();
         }
         pipe.query::<()>(&mut conn).map_err(map_err)?;
         Ok(())
