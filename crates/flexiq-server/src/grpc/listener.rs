@@ -277,12 +277,10 @@ impl Listener {
         // from the metrics is the one an operator most needs to see.
         // The audit layer sits between the two: outside auth so a scope
         // refusal is still answered through it and recorded.
+        let (audit_sink, audit_writer) = AuditSink::start(storage.clone(), shutdown.clone());
         let mut server = builder
             .layer(metrics::MetricsLayer::new(rpc_metrics))
-            .layer(AuditLayer::new(AuditSink::start(
-                storage.clone(),
-                shutdown.clone(),
-            )))
+            .layer(AuditLayer::new(audit_sink))
             .layer(AuthLayer::new(Arc::new(auth::TokenStore::new(
                 storage.clone(),
                 self.config.namespace.as_str(),
@@ -331,6 +329,9 @@ impl Listener {
                 served
             }
         };
+        // Before returning, not after: the runtime drops a detached task, and
+        // the records still buffered with it.
+        audit_writer.finish().await;
         result.with_context(|| format!("the gRPC listener on {listen} stopped"))?;
         Ok(())
     }

@@ -11,8 +11,11 @@
 //! [`LOG_TARGET`] as one JSON line and counted in `flexiq_audit_records_total`.
 //! It degrades to the log stream; it is never dropped silently.
 
+use std::time::Duration;
+
 use flexiq_core::{AuditRecord, Storage, StorageBackend};
 use tokio::sync::mpsc::{self, error::TrySendError};
+use tokio::task::JoinHandle;
 
 use super::metrics;
 use crate::runtime::shutdown::Shutdown;
@@ -35,17 +38,45 @@ pub struct AuditSink {
     records: mpsc::Sender<AuditRecord>,
 }
 
+/// How long a stopping listener waits for the writer to append what is
+/// buffered. Bounded, so a storage outage cannot hold the process open.
+pub const WRITER_GRACE: Duration = Duration::from_secs(10);
+
+/// The writer task, for the listener to await on the way out — a detached
+/// task would be dropped with the runtime, buffered records and all.
+#[derive(Debug)]
+pub struct AuditWriter(JoinHandle<()>);
+
+impl AuditWriter {
+    /// Wait for the writer to finish, at most [`WRITER_GRACE`]. It finishes
+    /// once shutdown fires or every sink is dropped, and the buffer is empty.
+    pub async fn finish(self) {
+        match tokio::time::timeout(WRITER_GRACE, self.0).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => log::error!("audit: the writer task failed: {error}"),
+            Err(_) => log::warn!(
+                "audit: the writer was still appending {WRITER_GRACE:?} after shutdown; \
+                 records it had not stored are lost"
+            ),
+        }
+    }
+}
+
 impl AuditSink {
     /// Start the writer on `storage`. It drains what is buffered and stops
-    /// when `shutdown` fires.
-    pub fn start(storage: StorageBackend, shutdown: Shutdown) -> Self {
+    /// when `shutdown` fires; await the [`AuditWriter`] to let it.
+    pub fn start(storage: StorageBackend, shutdown: Shutdown) -> (Self, AuditWriter) {
         Self::with_capacity(storage, BUFFER, shutdown)
     }
 
-    fn with_capacity(storage: StorageBackend, capacity: usize, shutdown: Shutdown) -> Self {
+    fn with_capacity(
+        storage: StorageBackend,
+        capacity: usize,
+        shutdown: Shutdown,
+    ) -> (Self, AuditWriter) {
         let (records, inbox) = mpsc::channel(capacity);
-        tokio::spawn(write(storage, inbox, shutdown));
-        Self { records }
+        let writer = tokio::spawn(write(storage, inbox, shutdown));
+        (Self { records }, AuditWriter(writer))
     }
 
     /// Queue `record` for the table, or log it now if that cannot happen.
@@ -163,7 +194,7 @@ mod tests {
     #[tokio::test]
     async fn a_queued_record_reaches_the_table() {
         let storage = backend();
-        let sink = AuditSink::start(storage.clone(), Shutdown::default());
+        let (sink, _writer) = AuditSink::start(storage.clone(), Shutdown::default());
         sink.record(record("r1"));
         for _ in 0..100 {
             if stored(&storage) == 1 {
@@ -178,25 +209,39 @@ mod tests {
     async fn shutdown_appends_what_was_already_buffered() {
         let storage = backend();
         let shutdown = Shutdown::default();
-        let sink = AuditSink::start(storage.clone(), shutdown.clone());
+        let (sink, writer) = AuditSink::start(storage.clone(), shutdown.clone());
         for i in 0..10 {
             sink.record(record(&format!("r{i}")));
         }
         shutdown.trigger();
-        for _ in 0..100 {
-            if stored(&storage) == 10 {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        panic!("buffered records were lost on shutdown");
+        // Finished means stored: no polling, which is the listener's guarantee.
+        writer.finish().await;
+        assert_eq!(
+            stored(&storage),
+            10,
+            "buffered records were lost on shutdown"
+        );
+    }
+
+    /// A listener whose serve loop ended without a shutdown drops its sinks;
+    /// the writer must end then too, or `finish` would sit out its grace.
+    #[tokio::test]
+    async fn dropping_every_sink_ends_the_writer() {
+        let storage = backend();
+        let (sink, writer) = AuditSink::start(storage.clone(), Shutdown::default());
+        sink.record(record("r1"));
+        drop(sink);
+        tokio::time::timeout(Duration::from_secs(2), writer.finish())
+            .await
+            .expect("the writer ends once no sink is left");
+        assert_eq!(stored(&storage), 1);
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn a_full_buffer_overflows_to_the_log_without_blocking() {
         // On a current-thread runtime the writer cannot run until this test
         // yields, so a capacity of one is full after the first record.
-        let sink = AuditSink::with_capacity(backend(), 1, Shutdown::default());
+        let (sink, _writer) = AuditSink::with_capacity(backend(), 1, Shutdown::default());
         sink.record(record("kept"));
         let before = metrics::overflowed_total();
         sink.record(record("overflowed"));
