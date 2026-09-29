@@ -24,11 +24,15 @@ pub(crate) async fn one(
     request: pb::EnqueueRequest,
 ) -> Result<Response<pb::EnqueueResponse>, Status> {
     let prepared = prepare(request, scoped.namespace())?;
+    admit(scoped, &prepared)?;
     let events = scoped.events();
     let (job, deduplicated) = on_storage(scoped.storage(), move |storage| {
         prepared.submit(storage, events.as_deref())
     })
     .await?;
+    if deduplicated {
+        conceal(scoped, &job)?;
+    }
 
     Ok(Response::new(pb::EnqueueResponse {
         // A producer that just submitted a job already has the payload it sent,
@@ -66,6 +70,7 @@ pub(crate) async fn batch(
     let mut prepared = Vec::with_capacity(request.items.len());
     for (index, item) in request.items.into_iter().enumerate() {
         let item = prepare(item, scoped.namespace()).map_err(|error| error.at_index(index))?;
+        admit(scoped, &item).map_err(|error| error.at_index(index))?;
         // Storage has no batched debounce, so honouring one here would mean
         // leaving the batch to submit the rest — which silently costs the
         // transactional backends the atomicity that is the reason to send a
@@ -93,12 +98,60 @@ pub(crate) async fn batch(
     .await?;
 
     match results {
-        Ok(results) => Ok(Response::new(pb::EnqueueBatchResponse { results })),
+        Ok(mut results) => {
+            for (index, result) in results.iter_mut().enumerate() {
+                conceal_item(scoped, result, index);
+            }
+            Ok(Response::new(pb::EnqueueBatchResponse { results }))
+        }
         // The whole batch rolled back. The error keeps the reason storage
         // raised; it carries no `index`, because nothing storage returns
         // attributes an all-or-nothing failure to one item, and inventing a
         // position would be worse than admitting there is none.
         Err(error) => Err(error.into()),
+    }
+}
+
+/// Refuse a job the caller's grants do not reach, before anything is written.
+///
+/// Checked on the job `prepare` built, not on the request, so the queue is the
+/// one it will actually land in — an empty `options.queue` is `default` by
+/// then, and a grant for `emails` must not admit it.
+fn admit(scoped: &Scoped<'_>, prepared: &Prepared) -> Result<(), WireError> {
+    let job = &prepared.job;
+    scoped.require(Some(&job.queue), Some(&job.task_name))?;
+    // A debounce key is matched across the whole namespace, and a coalescing
+    // call slides — or, with `replace_payload`, rewrites — a job that is
+    // already there, in whatever queue it sits. Only a caller that reaches
+    // every queue and task may do that blind.
+    if matches!(prepared.dispatch, Dispatch::Debounced(_)) {
+        scoped.require(None, None)?;
+    }
+    Ok(())
+}
+
+/// Refuse to hand back an existing job the caller's grants do not reach.
+///
+/// A `unique_key` is scoped to the namespace, not the queue, so a deduplicated
+/// enqueue can answer with a job in a queue this caller was never granted.
+/// Nothing was written for it, so refusing is honest; returning the row would
+/// make a narrowed grant a way to read another queue's jobs by guessing keys.
+fn conceal(scoped: &Scoped<'_>, job: &Job) -> Result<(), WireError> {
+    scoped.require(Some(&job.queue), Some(&job.task_name))
+}
+
+/// [`conceal`] for one batch result, which becomes that item's error.
+fn conceal_item(scoped: &Scoped<'_>, result: &mut pb::EnqueueBatchItemResult, index: usize) {
+    let Some(pb::enqueue_batch_item_result::Outcome::Enqueued(enqueued)) = &result.outcome else {
+        return;
+    };
+    let Some(job) = enqueued.job.as_ref().filter(|_| enqueued.deduplicated) else {
+        return;
+    };
+    if let Err(error) = scoped.require(Some(&job.queue), Some(&job.task_name)) {
+        result.outcome = Some(pb::enqueue_batch_item_result::Outcome::Error(
+            error.at_index(index).into(),
+        ));
     }
 }
 

@@ -126,11 +126,12 @@ impl tonic::service::Interceptor for Bearer {
 /// presents.
 ///
 /// Tests that only need *a* credential take the default: every scope, the
-/// namespace the door serves. The ones that are about scoping pass their own.
+/// namespace the door serves. The ones that are about scoping pass their own —
+/// a `ScopeSet` of whole scopes, or `Grants` narrowed to queues and tasks.
 pub fn mint_token(
     storage: &StorageBackend,
     namespace: &str,
-    scopes: flexiq_server::tokens::ScopeSet,
+    scopes: impl Into<flexiq_server::tokens::Grants>,
 ) -> String {
     let request =
         flexiq_server::tokens::NewToken::new("integration-test", scopes, namespace, None, None)

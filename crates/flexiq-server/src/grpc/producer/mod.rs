@@ -43,7 +43,7 @@ use flexiq_workflows::WorkflowStorageBackend;
 use tonic::{Request, Response, Status};
 
 use crate::events::Events;
-use crate::grpc::auth::Principal;
+use crate::grpc::auth::{Principal, Scope};
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
 use crate::grpc::pb;
 use crate::grpc::pb::producer_service_server::{ProducerService, ProducerServiceServer};
@@ -95,19 +95,35 @@ impl Producer {
             .max_encoding_message_size(PRODUCER_MAX_MESSAGE_BYTES)
     }
 
-    /// Split a request into the caller's scope and its message.
+    /// Split a request into the caller's scope and its message, for a method
+    /// that checks no queue and no task: the caller must reach every one.
+    ///
+    /// This is the default on purpose (#839). A credential narrowed to some
+    /// queues is refused by every method that has not been taught to check
+    /// them, so a new RPC is closed to it until someone opens it deliberately
+    /// through [`Self::scope_narrowed`].
+    fn scope<T>(&self, request: Request<T>) -> Result<(Scoped<'_>, T), Status> {
+        let (scoped, message) = self.scope_narrowed(request)?;
+        if !scoped.principal.reaches_everything() {
+            return Err(scoped.beyond(None, None).into());
+        }
+        Ok((scoped, message))
+    }
+
+    /// Split a request into the caller's scope and its message, for a method
+    /// that checks each queue and task it touches through [`Scoped::require`].
     ///
     /// Both at once, because the principal lives in the request's extensions
     /// and the message is behind `into_inner`: taking them in two steps would
-    /// mean either cloning the principal or borrowing a request that has been
-    /// consumed.
-    fn scope<T>(&self, request: Request<T>) -> Result<(Scoped<'_>, T), Status> {
-        let principal = principal(&request)?;
+    /// mean borrowing a request that has been consumed.
+    fn scope_narrowed<T>(&self, request: Request<T>) -> Result<(Scoped<'_>, T), Status> {
+        let principal = principal(&request)?.clone();
         let scoped = Scoped {
             storage: &self.storage,
             workflows: &self.workflows,
             events: self.events.clone(),
             namespace: Arc::clone(principal.namespace()),
+            principal,
         };
         Ok((scoped, request.into_inner()))
     }
@@ -144,9 +160,35 @@ pub(crate) struct Scoped<'a> {
     /// pool and emit right after the write it announces.
     events: Events,
     namespace: Arc<str>,
+    /// The caller, for what its grants reach behind this door.
+    principal: Principal,
 }
 
 impl Scoped<'_> {
+    /// Whether the caller may touch `queue` and `task`; `None` asks about
+    /// every queue (or task) at once.
+    pub(crate) fn reaches(&self, queue: Option<&str>, task: Option<&str>) -> bool {
+        self.principal.reaches(queue, task)
+    }
+
+    /// Refuse a call on a queue or task the caller's grants do not reach.
+    pub(crate) fn require(&self, queue: Option<&str>, task: Option<&str>) -> Result<(), WireError> {
+        if self.reaches(queue, task) {
+            Ok(())
+        } else {
+            Err(self.beyond(queue, task))
+        }
+    }
+
+    /// The refusal for a call beyond the caller's grants.
+    fn beyond(&self, queue: Option<&str>, task: Option<&str>) -> WireError {
+        // The layer fixes the door before any handler runs; without one the
+        // caller reaches nothing, and `produce` is the scope this package
+        // would have asked for.
+        let scope = self.principal.door().unwrap_or(Scope::Produce);
+        WireError::beyond_grant(scope.as_str(), queue, task)
+    }
+
     /// The namespace every storage call is scoped to. Never `None`, never
     /// empty: the role refuses to start without one.
     pub(crate) fn namespace(&self) -> &str {
@@ -176,7 +218,7 @@ impl ProducerService for Producer {
         &self,
         request: Request<pb::EnqueueRequest>,
     ) -> Result<Response<pb::EnqueueResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         enqueue::one(&scoped, message).await
     }
 
@@ -184,7 +226,7 @@ impl ProducerService for Producer {
         &self,
         request: Request<pb::EnqueueBatchRequest>,
     ) -> Result<Response<pb::EnqueueBatchResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         enqueue::batch(&scoped, message).await
     }
 
@@ -192,7 +234,7 @@ impl ProducerService for Producer {
         &self,
         request: Request<pb::GetJobRequest>,
     ) -> Result<Response<pb::GetJobResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         reads::get_job(&scoped, message).await
     }
 
@@ -200,7 +242,7 @@ impl ProducerService for Producer {
         &self,
         request: Request<pb::ListJobsRequest>,
     ) -> Result<Response<pb::ListJobsResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         reads::list_jobs(&scoped, message).await
     }
 
@@ -208,7 +250,7 @@ impl ProducerService for Producer {
         &self,
         request: Request<pb::CancelJobRequest>,
     ) -> Result<Response<pb::CancelJobResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         cancel::cancel_job(&scoped, message).await
     }
 
@@ -216,7 +258,7 @@ impl ProducerService for Producer {
         &self,
         request: Request<pb::QueueStatsRequest>,
     ) -> Result<Response<pb::QueueStatsResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         reads::queue_stats(&scoped, message).await
     }
 
@@ -243,7 +285,7 @@ impl ProducerService for Producer {
         request: Request<pb::WatchJobsRequest>,
     ) -> Result<Response<Self::WatchJobsStream>, Status> {
         // The credential as well as the namespace: the stream cap counts per
-        // credential.
+        // credential, and a narrowed one's grants are checked per target.
         let principal = principal(&request)?.clone();
         self.watches.watch(&principal, request.into_inner())
     }

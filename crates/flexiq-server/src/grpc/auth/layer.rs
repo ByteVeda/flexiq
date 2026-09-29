@@ -50,6 +50,7 @@ use super::gate::{self, Requirement};
 use super::principal::Principal;
 use crate::grpc::facade;
 use crate::grpc::status::WireError;
+use crate::tokens::grant::NARROWABLE;
 
 /// Wraps a service so that every request is authenticated before it is routed.
 #[derive(Clone)]
@@ -163,10 +164,20 @@ async fn authorize(
     }
 
     let principal = authenticator.authenticate(metadata).await?;
-    if let Requirement::Scoped(scope) = requirement {
-        if !principal.grants(scope) {
-            return Err(WireError::scope_denied(scope.as_str()).into());
-        }
+    let Requirement::Scoped(scope) = requirement else {
+        return Ok(Some(principal));
+    };
+    if !principal.grants(scope) {
+        return Err(WireError::scope_denied(scope.as_str()).into());
+    }
+    // What the caller reaches behind this door is fixed here, once, so a
+    // handler reads it rather than recomputing it (#839).
+    let principal = principal.behind(scope);
+    // A door none of whose methods checks a queue or a task admits whole
+    // grants only. The grammar already refuses to narrow these scopes; this is
+    // the line that holds if a row ever says otherwise.
+    if !NARROWABLE.contains(&scope) && !principal.reaches_everything() {
+        return Err(WireError::scope_denied(scope.as_str()).into());
     }
     Ok(Some(principal))
 }

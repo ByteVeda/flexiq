@@ -21,6 +21,7 @@ use super::feed::{Seq, WatchFeed};
 use super::quota::Slot;
 use super::reconcile::{Reading, Reconciler, Round};
 use super::transition::{self, Observed, Rank};
+use crate::grpc::auth::Principal;
 use crate::grpc::blocking;
 use crate::grpc::pb::{self, watch_jobs_response::Item};
 use crate::grpc::status::WireError;
@@ -180,17 +181,18 @@ async fn wake(
 }
 
 /// Watch `ids`: snapshot each, then follow them until every one is finished.
-pub async fn watch_ids(ctx: Shared, session: Session, namespace: Arc<str>, ids: Vec<String>) {
-    let stop = follow_ids(&ctx, &session, &namespace, ids).await;
+pub async fn watch_ids(ctx: Shared, session: Session, principal: Principal, ids: Vec<String>) {
+    let stop = follow_ids(&ctx, &session, &principal, ids).await;
     session.finish(stop);
 }
 
 async fn follow_ids(
     ctx: &Shared,
     session: &Session,
-    namespace: &Arc<str>,
+    principal: &Principal,
     ids: Vec<String>,
 ) -> Stop {
+    let namespace = principal.namespace();
     let registration = ctx.reconciler.register(Arc::clone(namespace), ids.clone());
     let mut rounds = ctx.reconciler.subscribe();
     rounds.borrow_and_update();
@@ -214,7 +216,14 @@ async fn follow_ids(
     };
     let boundary = ctx.feed.head();
 
-    let mut rows: HashMap<String, _> = rows.into_iter().map(|job| (job.id.clone(), job)).collect();
+    // A job outside a narrowed caller's grants reads as not found, as it does
+    // to `GetJob` (#839), and is never followed: the loop below forwards only
+    // what `watching` holds.
+    let mut rows: HashMap<String, _> = rows
+        .into_iter()
+        .filter(|job| principal.reaches(Some(&job.queue), Some(&job.task_name)))
+        .map(|job| (job.id.clone(), job))
+        .collect();
     let mut watching: HashMap<String, Rank> = HashMap::with_capacity(ids.len());
     for id in ids {
         let Some(job) = rows.remove(&id) else {

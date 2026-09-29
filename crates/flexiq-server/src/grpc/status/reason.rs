@@ -124,8 +124,11 @@ pub const UNKNOWN: &str = "UNKNOWN";
 // rather than failing the whole response: the code and the reason already
 // carry the decision.
 
-/// The queue's name, verbatim. `QUEUE_FULL`.
+/// The queue's name, verbatim. `QUEUE_FULL`; for `SCOPE_DENIED`, the queue a
+/// narrowed grant does not reach.
 pub const KEY_QUEUE: &str = "queue";
+/// The task a narrowed grant does not reach, verbatim. `SCOPE_DENIED`.
+pub const KEY_TASK: &str = "task";
 /// Jobs currently pending, `int64`. `QUEUE_FULL`.
 pub const KEY_PENDING: &str = "pending";
 /// The admission cap, `int64`. `QUEUE_FULL`; for `WATCH_LIMIT`, the watches
@@ -142,8 +145,8 @@ pub const KEY_LIMIT: &str = "limit";
 pub const KEY_ACTUAL: &str = "actual";
 /// The permitted value, `uint64`, in `limit`'s unit. `STEP_LIMIT_EXCEEDED`.
 pub const KEY_ALLOWED: &str = "allowed";
-/// The scope the credential lacks — one of `produce`, `execute`, `inspect`,
-/// `admin`. `SCOPE_DENIED`.
+/// The scope the credential lacks — one of `produce`, `read`, `execute`,
+/// `inspect`, `admin`. `SCOPE_DENIED`.
 pub const KEY_SCOPE: &str = "scope";
 /// 0-based position in an `EnqueueBatch` request, `int32`.
 ///

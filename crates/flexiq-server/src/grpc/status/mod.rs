@@ -220,6 +220,46 @@ impl WireError {
         }
     }
 
+    /// A credential whose `scope` grants are narrowed (#839) and do not reach
+    /// the queue or task a call names — or, with neither named, a call that
+    /// reaches every queue at once.
+    ///
+    /// The same reason as [`Self::scope_denied`]: to a client both say "this
+    /// credential will never be allowed this", and a new reason would be one
+    /// every SDK has to learn before it can act on the refusal. The queue and
+    /// task ride as metadata so it can still say which.
+    pub fn beyond_grant(scope: &'static str, queue: Option<&str>, task: Option<&str>) -> Self {
+        let mut metadata = HashMap::from([(reason::KEY_SCOPE.to_string(), scope.to_string())]);
+        let mut reached = Vec::new();
+        if let Some(queue) = queue {
+            metadata.insert(reason::KEY_QUEUE.to_string(), queue.to_string());
+            reached.push(format!("queue `{queue}`"));
+        }
+        if let Some(task) = task {
+            metadata.insert(reason::KEY_TASK.to_string(), task.to_string());
+            reached.push(format!("task `{task}`"));
+        }
+        let message = if reached.is_empty() {
+            format!(
+                "this credential's `{scope}` grants are narrowed to some queues or \
+                 tasks, and this call reaches beyond them — name a queue (and task) \
+                 the credential may reach"
+            )
+        } else {
+            format!(
+                "this credential's `{scope}` grants do not reach {}",
+                reached.join(", ")
+            )
+        };
+        Self {
+            code: Code::PermissionDenied,
+            reason: reason::SCOPE_DENIED,
+            message,
+            metadata,
+            retry_after: None,
+        }
+    }
+
     /// A fault of the server's own, with nothing useful to say to the caller.
     ///
     /// The cause is logged by whoever raises this; the response carries only

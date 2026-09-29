@@ -24,6 +24,9 @@ pub struct Principal {
     /// Behind an `Arc` because a principal is cloned into every request's
     /// extensions and narrowed grants are a `Vec`.
     scopes: Arc<Grants>,
+    /// The scope the path needed and what these grants reach behind it, set
+    /// by [`Self::behind`]. `None` until then, which reaches nothing.
+    door: Option<(Scope, Access)>,
 }
 
 impl Principal {
@@ -38,6 +41,7 @@ impl Principal {
             credential: credential.into(),
             namespace: namespace.into(),
             scopes: Arc::new(scopes.into()),
+            door: None,
         }
     }
 
@@ -59,6 +63,35 @@ impl Principal {
     pub fn grants(&self, scope: Scope) -> bool {
         self.scopes.opens(scope)
     }
+
+    /// This principal, as seen from behind `scope`'s door: what it may reach
+    /// there is fixed now, by the layer, so every handler reads one answer.
+    pub fn behind(mut self, scope: Scope) -> Self {
+        self.door = Some((scope, self.scopes.access(scope)));
+        self
+    }
+
+    /// The door the layer let this caller through, if the path had one.
+    pub fn door(&self) -> Option<Scope> {
+        self.door.as_ref().map(|(scope, _)| *scope)
+    }
+
+    /// Whether this caller may touch the queue and task a call names, `None`
+    /// meaning every queue (or task). A principal no door was fixed for reaches
+    /// nothing: a handler asking has no business being reachable without one.
+    pub fn reaches(&self, queue: Option<&str>, task: Option<&str>) -> bool {
+        self.door
+            .as_ref()
+            .is_some_and(|(_, access)| access.reaches(queue, task))
+    }
+
+    /// Whether this caller reaches every queue and every task behind its door —
+    /// what a method that checks neither needs.
+    pub fn reaches_everything(&self) -> bool {
+        self.door
+            .as_ref()
+            .is_some_and(|(_, access)| access.is_whole())
+    }
 }
 
 #[cfg(test)]
@@ -79,6 +112,26 @@ mod tests {
         let principal = Principal::new("tok", "prod", ScopeSet::of(&[Scope::Produce]));
         assert!(principal.grants(Scope::Produce));
         assert!(!principal.grants(Scope::Execute));
+    }
+
+    #[test]
+    fn a_principal_reaches_nothing_until_a_door_is_fixed() {
+        let principal = Principal::new("tok", "prod", ScopeSet::ALL);
+        assert!(!principal.reaches(Some("emails"), Some("send")));
+        assert!(!principal.reaches_everything());
+        let behind = principal.behind(Scope::Produce);
+        assert_eq!(behind.door(), Some(Scope::Produce));
+        assert!(behind.reaches_everything());
+    }
+
+    #[test]
+    fn a_narrowed_principal_reaches_only_its_queues() {
+        let grants = Grants::parse_all(["produce:queue=emails"]).expect("valid");
+        let principal = Principal::new("tok", "prod", grants).behind(Scope::Produce);
+        assert!(principal.reaches(Some("emails"), Some("send")));
+        assert!(!principal.reaches(Some("billing"), Some("send")));
+        assert!(!principal.reaches(None, None));
+        assert!(!principal.reaches_everything());
     }
 
     #[test]
