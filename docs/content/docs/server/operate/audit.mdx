@@ -1,0 +1,124 @@
+---
+title: Audit trail
+description: "Which token enqueued a job, who cancelled it, and what a revoked token did while it was valid — one record per token-authorised write, kept in the database."
+---
+
+A token says who may call the gRPC door. The audit trail says who **did**: every
+write a token makes — an enqueue, a cancel, a queue pause, a dead-letter replay
+— leaves one record in the database naming the token, what it did, to what,
+when, and how the call ended. It answers the questions a credential alone
+cannot:
+
+- which token enqueued this job;
+- who cancelled it;
+- what did the token we just revoked do while it was valid.
+
+A record never carries the token or its digest. It names the token by its
+public id — the `ID` column of `flexiq-server token list` — and by the name it
+was minted under.
+
+## What is recorded
+
+One record per call that needs a **write scope**: `produce` on the producer
+door, `admin` on [the admin door](/server/operate/admin). The same calls over the
+[JSON facade](/server/operate/grpc#the-same-door-without-grpc) are recorded the
+same way, under the same operation name.
+
+| Field | Is |
+| --- | --- |
+| `time` | When the call was answered |
+| `tokenId` | The token's public id |
+| `principal` | The token's name when the call was made — a label, since two tokens may share one |
+| `operation` | The RPC, e.g. `flexiq.v1.ProducerService/Enqueue` |
+| `targetKind`, `target` | What it acted on: `job`, `workflow_run`, `queue`, `dead_letter`, `worker`, `periodic` or `task`, and its id or name |
+| `outcome` | The `google.rpc.Code` the call ended with: `OK`, `PERMISSION_DENIED`, `NOT_FOUND`, … |
+
+A call acting on several things writes one record per target: `EnqueueBatch`
+writes one per job, and a dead-letter replay writes one for the entry and one
+for the job it became, so "who enqueued this job" has an answer for a replayed
+job too.
+
+**Refusals are recorded.** A token that is valid but lacks the scope, or whose
+[grants](/server/operate/tokens#narrowing-a-token-to-queues-and-tasks) do not
+reach the queue, leaves a record with outcome `PERMISSION_DENIED` — and no target
+when the call was refused before naming one. That is usually the record an
+investigation is looking for.
+
+What is **not** recorded, and why:
+
+- **Reads.** `GetJob`, `ListJobs`, `WatchJobs` and every `inspect` method are
+  dominated by polling, and a record per poll would bury every write under
+  noise. The trail answers "what did it change", not "what did it see".
+- **The executor door.** Claims and results are workers' own traffic, and their
+  effect is already in each job's history.
+- **Calls with no believable credential.** A missing, unknown or wrong token has
+  no trustworthy id to record. The server logs those refusals instead.
+- **The dashboard.** Its users sign in with a session, not a token.
+
+## Reading it back
+
+With `fq`, on a token that carries `inspect`:
+
+```bash
+fq audit list                              # newest first; --all follows every page
+fq audit list --job <JOB_ID>               # who enqueued it, who cancelled it
+fq audit list --token-id <TOKEN_ID>        # everything one token did
+fq audit list --target queue:emails        # or --kind queue for every queue
+fq audit list --since 2026-09-01T00:00:00Z --until 2026-09-02T00:00:00Z
+```
+
+```text
+time                      token             principal    operation                                target                                    outcome
+------------------------  ----------------  -----------  ---------------------------------------  ----------------------------------------  -----------------
+2026-09-29T09:51:33.524Z  10d08aa8296d8f38  ops          flexiq.admin.v1.AdminService/PauseQueue  queue:emails                              OK
+2026-09-29T09:51:33.515Z  665dbdce673017bc  dashboard    flexiq.v1.ProducerService/Enqueue        -                                         PERMISSION_DENIED
+2026-09-29T09:51:33.474Z  8a7fbf03e21cfa60  billing-api  flexiq.v1.ProducerService/Enqueue        job:01a0ec93-a261-75b4-806b-d6fb5c06c449  OK
+```
+
+The filters combine: every one set must match. `--token-id` takes the public
+id, not a credential — `fq` still reads its own token from `FLEXIQ_TOKEN`.
+
+The same read is `AdminService.ListAuditRecords` over gRPC, and
+`GET /v1/admin/auditRecords` over JSON, with `tokenId`, `targetKind`, `target`,
+`since`, `until`, `pageSize` and `pageToken` as query parameters:
+
+```bash
+curl -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  "http://localhost:50051/v1/admin/auditRecords?tokenId=8a7fbf03e21cfa60"
+```
+
+It needs `inspect`. A `produce` token is refused `SCOPE_DENIED`: the trail names
+every token in the namespace, and a producer has no business listing them.
+
+## Retention
+
+Records are kept for **90 days**, then deleted. Set
+`FLEXIQ_GRPC_AUDIT_RETENTION_DAYS` (Helm: `grpc.auditRetentionDays`) to keep them
+longer or shorter; it must be at least `1`. There is no "forever": a table
+nobody prunes grows without bound.
+
+Each gRPC listener prunes its own namespace once an hour. The delete is
+idempotent, so replicas sharing a database prune without electing a leader —
+the second one finds nothing left. The window is the server's alone; it is not
+part of the per-queue retention an SDK configures, because no SDK writes this
+table.
+
+## When a record cannot be stored
+
+The door never waits on the audit write, and never fails a call because of it.
+Records go into an in-memory buffer and one writer appends them in batches; an
+enqueue does not get slower because the audit table is, and it is not refused
+because the audit table is down.
+
+A record the buffer cannot take, or whose write fails, is written to the log
+instead — one JSON line under the log target `flexiq::audit` — and counted on
+[`/metrics`](/server/operate/grpc#scraping-it):
+
+| Series | Labels | Is |
+| --- | --- | --- |
+| `flexiq_audit_records_total` | `outcome` | Records `written` to the table, or sent to the log on `overflow` / `write_failed` |
+
+Alert on anything but `written` rising. A record is degraded to the log stream,
+never dropped silently — but the log stream is only an audit trail if something
+keeps it. On a clean shutdown the writer appends what is already buffered
+before the process exits.

@@ -12,6 +12,18 @@ their entries below keep that name.
 
 ### Added
 
+- **An audit trail of token-authorised writes** (#840). Every call on the gRPC door or its JSON
+  facade that needs `produce` or `admin` leaves one record in a new `audit_log` table (migration
+  `0022_audit_log`, on all three backends): the token's public id and name, the namespace, the
+  RPC, what it acted on (a job, queue, worker, dead letter, periodic task, task or workflow run),
+  the time and the `google.rpc.Code` it ended with. Refusals of a valid token are recorded;
+  reads, the executor door and unauthenticated calls are not, and no record ever carries the
+  token or its digest. Read it back with `AdminService.ListAuditRecords` (`inspect`),
+  `GET /v1/admin/auditRecords`, or `fq audit list --job … | --token-id … | --target kind:id`.
+  Records are written off the request path — a record the buffer or the table cannot take is
+  logged as JSON under `flexiq::audit` and counted in `flexiq_audit_records_total` — and pruned
+  after `FLEXIQ_GRPC_AUDIT_RETENTION_DAYS` (default 90; Helm `grpc.auditRetentionDays`).
+
 - **In-process TLS and mTLS on the server's credentialled listeners** (#838). The gRPC door
   (`FLEXIQ_GRPC_TLS_CERT`, `…_KEY`, `…_CLIENT_CA`) and the attach listener
   (`FLEXIQ_LISTEN_TLS_CERT`, `…_KEY`, `…_CLIENT_CA`) terminate TLS themselves when configured, and

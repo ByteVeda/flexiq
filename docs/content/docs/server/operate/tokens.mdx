@@ -263,6 +263,13 @@ the dashboard, from another pod, or from a shell takes effect immediately
 everywhere, because there is no cache to invalidate — a cached allow would be a
 revocation that never takes effect.
 
+What the token did while it was valid is in the
+[audit trail](/server/operate/audit), under the same id:
+
+```bash
+fq audit list --token-id 9f2c1ab74e05d366 --all
+```
+
 ## What a refusal tells a caller
 
 Nothing it does not already know. A missing token, a wrong one, a well-formed
