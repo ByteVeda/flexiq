@@ -4,8 +4,6 @@
 //! meets — shells, the gRPC producer, triggers, replays, periodic fires — so
 //! depth and rate quotas are admitted here and nowhere else.
 
-use std::collections::BTreeMap;
-
 use super::{Storage, StorageBackend};
 use crate::error::{QueueError, Result};
 use crate::job::{now_millis, Job, JobStatus, NewJob};
@@ -57,11 +55,12 @@ impl StorageBackend {
     /// `shed`. Results keep call order. A `reject` quota fails the whole call
     /// before anything is written.
     ///
-    /// Only a call that mixes admitted and shed jobs — one batch spanning
-    /// namespaces — writes twice, and no backend offers one transaction over
-    /// both. The admitted enqueue goes first and decides the call's outcome:
-    /// once any write has committed, a shed record that fails is logged, not
-    /// returned. The shed jobs are discarded either way; answering with an
+    /// Every shed job of the call, whatever its reason, is recorded in one
+    /// atomic `shed_new_jobs` write. Only a call that mixes admitted and shed
+    /// jobs — one batch spanning namespaces — writes twice, and no backend
+    /// offers one transaction over both. The admitted enqueue goes first and
+    /// decides the call's outcome: if the shed record then fails it is logged,
+    /// not returned. The shed jobs are discarded either way; answering with an
     /// error would tell the caller its committed jobs failed, and a retry
     /// would enqueue them twice.
     pub(super) fn with_quota<T>(
@@ -77,41 +76,38 @@ impl StorageBackend {
 
         let mut results: Vec<Option<T>> = Vec::with_capacity(new_jobs.len());
         let mut admitted = Vec::new();
-        let mut by_reason: BTreeMap<String, Vec<(usize, Job)>> = BTreeMap::new();
+        let mut shed_at = Vec::new();
+        let mut dead = Vec::new();
         for (i, (new_job, verdict)) in new_jobs.into_iter().zip(verdicts).enumerate() {
             results.push(None);
             match verdict {
                 None => admitted.push((i, new_job)),
                 Some(reason) => {
-                    let job = shed_copy(new_job, &reason);
-                    by_reason.entry(reason).or_default().push((i, job));
+                    shed_at.push(i);
+                    dead.push(shed_copy(new_job, &reason));
                 }
             }
         }
 
-        let mut committed = false;
-        if !admitted.is_empty() {
+        let committed = !admitted.is_empty();
+        if committed {
             let (positions, jobs): (Vec<usize>, Vec<NewJob>) = admitted.into_iter().unzip();
             for (i, result) in positions.into_iter().zip(enqueue(jobs)?) {
                 results[i] = Some(result);
             }
-            committed = true;
         }
 
-        for (reason, jobs) in by_reason {
-            let dead: Vec<Job> = jobs.iter().map(|(_, job)| job.clone()).collect();
-            match self.shed_new_jobs(&dead, &reason, Some(QUOTA_SHED_METADATA)) {
-                Ok(()) => committed = true,
-                Err(error) if committed => log::error!(
-                    "recording {} quota-shed job(s) failed after the rest of the call \
-                     committed; they are dropped without a dead-letter entry: {error}",
-                    dead.len()
-                ),
-                Err(error) => return Err(error),
-            }
-            for (i, job) in jobs {
-                results[i] = Some(shed(job));
-            }
+        match self.shed_new_jobs(&dead, Some(QUOTA_SHED_METADATA)) {
+            Ok(()) => {}
+            Err(error) if committed => log::error!(
+                "recording {} quota-shed job(s) failed after the rest of the call \
+                 committed; they are dropped without a dead-letter entry: {error}",
+                dead.len()
+            ),
+            Err(error) => return Err(error),
+        }
+        for (i, job) in shed_at.into_iter().zip(dead) {
+            results[i] = Some(shed(job));
         }
         // Every slot was filled by exactly one of the two branches above.
         Ok(results.into_iter().flatten().collect())

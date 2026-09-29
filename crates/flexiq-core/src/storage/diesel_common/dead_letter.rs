@@ -80,15 +80,12 @@ macro_rules! impl_diesel_dead_letter_ops {
             /// scheduler ever sees it live. Unique and debounce keys are not
             /// recorded: a job that never went live never held its key, and
             /// the insert must not collide with the live job that does.
-            pub fn shed_new_jobs(
-                &self,
-                jobs: &[Job],
-                error: &str,
-                metadata: Option<&str>,
-            ) -> Result<()> {
+            pub fn shed_new_jobs(&self, jobs: &[Job], metadata: Option<&str>) -> Result<()> {
+                let reasons = $crate::storage::shed_reasons(jobs)?;
                 let now = now_millis();
                 self.write_transaction(|conn| {
-                    for job in jobs {
+                    for (job, error) in jobs.iter().zip(&reasons) {
+                        let error = error.as_str();
                         let mut job = job.clone();
                         job.unique_key = None;
                         job.debounce_key = None;

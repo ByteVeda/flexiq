@@ -166,15 +166,17 @@ impl RedisStorage {
     /// scheduler ever sees them. Unique and debounce keys are dropped — a job
     /// that never went live never held its key, and archiving one that names a
     /// key would touch the index entries of the live job that does.
-    pub fn shed_new_jobs(&self, jobs: &[Job], error: &str, metadata: Option<&str>) -> Result<()> {
+    pub fn shed_new_jobs(&self, jobs: &[Job], metadata: Option<&str>) -> Result<()> {
         if jobs.is_empty() {
             return Ok(());
         }
+        let reasons = crate::storage::shed_reasons(jobs)?;
         let now = now_millis();
         let dlq_all = self.key(&["dlq", "all"]);
         let pipe = &mut redis::pipe();
         pipe.atomic();
-        for job in jobs {
+        for (job, error) in jobs.iter().zip(&reasons) {
+            let error = error.as_str();
             let mut job = job.clone();
             job.unique_key = None;
             job.debounce_key = None;

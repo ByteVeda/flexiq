@@ -432,7 +432,11 @@ pub trait Storage: Send + Sync + Clone {
     /// over-quota enqueue (#841). Each lands in the DLQ (`shed`) and the
     /// archive (`Dead`) in one write and is never live, so no scheduler can
     /// claim it first. Unique and debounce keys are not recorded.
-    fn shed_new_jobs(&self, jobs: &[Job], error: &str, metadata: Option<&str>) -> Result<()>;
+    ///
+    /// Each job's own `error` is its dead-letter reason, so one call records
+    /// jobs shed for different reasons in a single atomic write. A job with no
+    /// `error` refuses the whole call before anything is written.
+    fn shed_new_jobs(&self, jobs: &[Job], metadata: Option<&str>) -> Result<()>;
     /// Dead-letter entries, newest first, paginated.
     /// `namespace` of `None` returns every namespace, matching `list_jobs`.
     fn list_dead(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<DeadJob>>;

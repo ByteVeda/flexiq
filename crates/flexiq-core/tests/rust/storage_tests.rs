@@ -3354,9 +3354,30 @@ fn test_shed_new_jobs_never_go_live(s: &impl Storage) {
     let mut shed = make_job(q, "shed_task");
     shed.namespace = ns.map(str::to_string);
     shed.unique_key = Some("shed-uk".to_string());
-    let shed = shed.into_job();
-    s.shed_new_jobs(std::slice::from_ref(&shed), "quota:max_pending", None)
+    let mut shed = shed.into_job();
+    shed.error = Some("quota:max_pending".to_string());
+    // One call, two reasons: every job carries its own.
+    let mut other = make_job(q, "shed_task");
+    other.namespace = ns.map(str::to_string);
+    let mut other = other.into_job();
+    other.error = Some("quota:enqueue_rate".to_string());
+    s.shed_new_jobs(&[shed.clone(), other.clone()], None)
         .unwrap();
+
+    // A job with no reason refuses the whole call before anything is written.
+    let mut bare = make_job(q, "shed_task");
+    bare.namespace = ns.map(str::to_string);
+    let with_reason = {
+        let mut job = make_job(q, "shed_task");
+        job.namespace = ns.map(str::to_string);
+        let mut job = job.into_job();
+        job.error = Some("quota:max_pending".to_string());
+        job
+    };
+    assert!(s
+        .shed_new_jobs(&[with_reason.clone(), bare.into_job()], None)
+        .is_err());
+    assert!(s.get_job(&with_reason.id, ns).unwrap().is_none());
 
     assert_eq!(s.count_by_namespace(ns, JobStatus::Pending).unwrap(), 1);
     let archived = s.get_job(&shed.id, ns).unwrap().expect("archived");
@@ -3367,6 +3388,11 @@ fn test_shed_new_jobs_never_go_live(s: &impl Storage) {
         .find(|d| d.original_job_id == shed.id)
         .expect("dead-letter entry");
     assert_eq!(entry.error.as_deref(), Some("quota:max_pending"));
+    let other_entry = dead
+        .iter()
+        .find(|d| d.original_job_id == other.id)
+        .expect("the second reason's entry");
+    assert_eq!(other_entry.error.as_deref(), Some("quota:enqueue_rate"));
 
     // The live job still owns the key: a same-key enqueue dedupes onto it.
     let mut again = make_job(q, "shed_task");

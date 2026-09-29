@@ -151,6 +151,27 @@ fn a_mixed_batch_sheds_only_the_namespace_over_its_quota() {
     assert_eq!(pending(&s, TENANT), 0);
 }
 
+/// A batch every job of which is shed, for different reasons in different
+/// namespaces, is recorded in full: one write, not one per reason.
+#[test]
+fn an_all_shed_batch_records_every_reason() {
+    let s = storage();
+    s.set_namespace_quota(TENANT, &depth(0, QuotaOverflow::Drop))
+        .unwrap();
+    s.set_namespace_quota(Some("other"), &depth(0, QuotaOverflow::Drop))
+        .unwrap();
+    let jobs = s
+        .enqueue_batch(vec![job_in(TENANT), job_in(Some("other"))])
+        .unwrap();
+    assert!(jobs.iter().all(|job| job.status == JobStatus::Dead));
+    for (job, namespace) in jobs.iter().zip([TENANT, Some("other")]) {
+        let dead = s.list_dead(10, 0, namespace).unwrap();
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].original_job_id, job.id);
+        assert_eq!(dead[0].error, job.error, "each keeps its own reason");
+    }
+}
+
 /// A mixed call whose admitted enqueue fails writes nothing at all: the shed
 /// half is recorded only after the admitted half committed.
 #[test]

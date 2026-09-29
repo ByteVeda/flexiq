@@ -801,10 +801,9 @@ macro_rules! impl_storage {
             fn shed_new_jobs(
                 &self,
                 jobs: &[$crate::job::Job],
-                error: &str,
                 metadata: Option<&str>,
             ) -> $crate::error::Result<()> {
-                self.shed_new_jobs(jobs, error, metadata)
+                self.shed_new_jobs(jobs, metadata)
             }
             fn list_dead(
                 &self,
@@ -1591,6 +1590,21 @@ macro_rules! impl_storage {
 
 pub(crate) use impl_storage;
 
+/// Each shed job's dead-letter reason — its own `error` — checked for every
+/// job before a backend writes any of them.
+pub(crate) fn shed_reasons(jobs: &[Job]) -> Result<Vec<String>> {
+    jobs.iter()
+        .map(|job| {
+            job.error.clone().ok_or_else(|| {
+                crate::error::QueueError::Other(format!(
+                    "shed job {} carries no dead-letter reason",
+                    job.id
+                ))
+            })
+        })
+        .collect()
+}
+
 // ── Backend-agnostic storage wrapper ──────────────────────────────────
 
 /// Storage backend enum that dispatches to either SQLite or PostgreSQL.
@@ -2048,8 +2062,8 @@ impl Storage for StorageBackend {
     ) -> Result<Vec<Job>> {
         delegate!(self, shed_to_dlq_reporting, job, error, metadata)
     }
-    fn shed_new_jobs(&self, jobs: &[Job], error: &str, metadata: Option<&str>) -> Result<()> {
-        delegate!(self, shed_new_jobs, jobs, error, metadata)
+    fn shed_new_jobs(&self, jobs: &[Job], metadata: Option<&str>) -> Result<()> {
+        delegate!(self, shed_new_jobs, jobs, metadata)
     }
     fn list_dead(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<DeadJob>> {
         delegate!(self, list_dead, limit, offset, namespace)
