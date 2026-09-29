@@ -17,6 +17,7 @@ import {
 import { ApiError } from "@/lib/api-client";
 import { useCreateGrpcToken, useGrpcScopes } from "../hooks";
 import type { CreatedGrpcToken } from "../types";
+import { spellGrants } from "../utils";
 
 /** Matches the server's default; the server is still the one that enforces it. */
 const DEFAULT_DAYS = 90;
@@ -26,6 +27,7 @@ const MAX_DAYS = 365;
 /** What each scope opens, in the operator's words rather than the package's. */
 const SCOPE_HELP: Record<string, string> = {
   produce: "Submit, read and cancel work.",
+  read: "See jobs, queue stats and workflow runs. Never submit or cancel.",
   execute: "Claim work and report on it.",
   inspect: "Look at queues, dead letters, workers, schedules and overrides.",
   admin: "Pause queues, replay dead letters, manage schedules and overrides.",
@@ -36,14 +38,21 @@ export function CreateGrpcTokenDialog() {
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["produce"]);
   const [days, setDays] = useState(DEFAULT_DAYS);
+  const [queue, setQueue] = useState("");
+  const [task, setTask] = useState("");
   const [created, setCreated] = useState<CreatedGrpcToken | null>(null);
   const create = useCreateGrpcToken();
   const { data: available } = useGrpcScopes();
+  const narrowable = (available ?? [])
+    .filter((scope) => scope.narrowable)
+    .map((scope) => scope.name);
 
   function reset() {
     setName("");
     setScopes(["produce"]);
     setDays(DEFAULT_DAYS);
+    setQueue("");
+    setTask("");
     setCreated(null);
     create.reset();
   }
@@ -70,7 +79,11 @@ export function CreateGrpcTokenDialog() {
   function onSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     create.mutate(
-      { name, scopes, expires_in_days: days },
+      {
+        name,
+        scopes: spellGrants(scopes, available ?? [], { queue, task }),
+        expires_in_days: days,
+      },
       { onSuccess: (token) => setCreated(token) },
     );
   }
@@ -139,6 +152,35 @@ export function CreateGrpcTokenDialog() {
                 claim it.
               </span>
             </div>
+            {narrowable.length > 0 ? (
+              <div className="flex flex-col gap-2 text-sm">
+                <span className="font-medium">Narrow to</span>
+                <div className="grid grid-cols-2 gap-2">
+                  <label htmlFor="token-queue" className="flex flex-col gap-1.5">
+                    <span className="text-xs">Queue</span>
+                    <Input
+                      id="token-queue"
+                      value={queue}
+                      onChange={(e) => setQueue(e.target.value)}
+                      placeholder="every queue"
+                    />
+                  </label>
+                  <label htmlFor="token-task" className="flex flex-col gap-1.5">
+                    <span className="text-xs">Task</span>
+                    <Input
+                      id="token-task"
+                      value={task}
+                      onChange={(e) => setTask(e.target.value)}
+                      placeholder="every task"
+                    />
+                  </label>
+                </div>
+                <span className="text-xs text-[var(--fg-subtle)]">
+                  Applies to {narrowable.join(" and ")}. A name, or a prefix ending in{" "}
+                  <code className="font-mono">*</code>. Blank reaches every one.
+                </span>
+              </div>
+            ) : null}
             <div className="flex flex-col gap-1.5 text-sm">
               <span className="font-medium">Expires in</span>
               <Stepper

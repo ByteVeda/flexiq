@@ -4,6 +4,8 @@ export type GrpcTokenStatus = "active" | "expired" | "revoked";
 /** A scope a token may be granted, as this build's server spells it. */
 export interface GrpcScope {
   name: string;
+  /** Whether a grant of it may be narrowed to queue and task patterns. */
+  narrowable: boolean;
 }
 
 /**
@@ -16,6 +18,7 @@ export interface GrpcScope {
 export interface GrpcToken {
   id: string;
   name: string;
+  /** Grants as the server spells them: `produce`, or `produce:queue=emails`. */
   scopes: string[];
   namespace: string;
   created_at: number;
