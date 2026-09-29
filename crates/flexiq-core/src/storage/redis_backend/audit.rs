@@ -54,7 +54,7 @@ impl RedisStorage {
         }
     }
 
-    /// Append audit records, one [`APPEND_SCRIPT`] per record in one pipeline.
+    /// Append audit records, one `APPEND_SCRIPT` per record in one pipeline.
     pub fn append_audit(&self, records: &[AuditRecord]) -> Result<()> {
         if records.is_empty() {
             return Ok(());
