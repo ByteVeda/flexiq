@@ -10,19 +10,20 @@ mod support;
 
 use flexiq_core::job::{now_millis, NewJob};
 use flexiq_core::storage::records::WorkerRegistration;
-use flexiq_core::{override_key, OverrideScope, Storage};
+use flexiq_core::{override_key, quota_key, OverrideScope, Storage};
 use flexiq_server::config::grpc::GrpcConfig;
 use flexiq_server::config::listen::ListenAddress;
 use flexiq_server::grpc::pb::admin::admin_service_client::AdminServiceClient;
 use flexiq_server::grpc::pb::admin::{
-    purge_dead_letters_request, put_periodic_task_request, ClearTaskOverrideRequest,
-    DeleteDeadLetterRequest, DeletePeriodicTaskRequest, DrainWorkerRequest, GetDeadLetterRequest,
-    GetPeriodicTaskRequest, GetThroughputRequest, ListDeadLettersRequest, ListOverridesRequest,
-    ListPeriodicTasksRequest, ListQueuesRequest, ListWorkersRequest, PausePeriodicTaskRequest,
+    purge_dead_letters_request, put_periodic_task_request, ClearNamespaceQuotaRequest,
+    ClearTaskOverrideRequest, DeleteDeadLetterRequest, DeletePeriodicTaskRequest,
+    DrainWorkerRequest, GetDeadLetterRequest, GetNamespaceQuotaRequest, GetPeriodicTaskRequest,
+    GetThroughputRequest, ListDeadLettersRequest, ListOverridesRequest, ListPeriodicTasksRequest,
+    ListQueuesRequest, ListWorkersRequest, NamespaceQuota, PausePeriodicTaskRequest,
     PauseQueueRequest, PurgeDeadLettersRequest, PutPeriodicTaskRequest, QueueOverride,
-    ReplayDeadLetterRequest, ResumePeriodicTaskRequest, ResumeQueueRequest,
-    SetQueueOverrideRequest, SetTaskOverrideRequest, TaskOverride, TriggerPeriodicTaskRequest,
-    WorkerStatus,
+    QuotaOverflow, ReplayDeadLetterRequest, ResumePeriodicTaskRequest, ResumeQueueRequest,
+    SetNamespaceQuotaRequest, SetQueueOverrideRequest, SetTaskOverrideRequest, TaskOverride,
+    TriggerPeriodicTaskRequest, WorkerStatus,
 };
 use flexiq_server::grpc::pb::{JobStatus, StructuredArgs};
 use flexiq_server::grpc::status::reason;
@@ -874,4 +875,99 @@ async fn each_scope_reaches_its_half_of_the_service_and_no_more() {
         "inspect",
     );
     admin.stop().await;
+}
+
+/// #841: the quota is the credential's namespace's, read by `inspect` and
+/// written by `admin`, and a write binds the core at once — the next enqueue in
+/// that namespace is refused while another tenant's is not.
+#[tokio::test]
+async fn the_namespace_quota_is_set_read_enforced_and_cleared() {
+    let mut harness = Harness::start("admin-quota").await;
+    let unlimited = harness
+        .client
+        .get_namespace_quota(GetNamespaceQuotaRequest {})
+        .await
+        .expect("get")
+        .into_inner()
+        .quota
+        .expect("always answered");
+    // Every limit unset; the overflow answers with the default it would apply.
+    assert_eq!(
+        unlimited,
+        NamespaceQuota {
+            on_excess: QuotaOverflow::Reject as i32,
+            ..Default::default()
+        }
+    );
+
+    let stored = harness
+        .client
+        .set_namespace_quota(SetNamespaceQuotaRequest {
+            quota: Some(NamespaceQuota {
+                max_pending: Some(0),
+                enqueue_rate: Some("10/s".into()),
+                ..Default::default()
+            }),
+        })
+        .await
+        .expect("set")
+        .into_inner()
+        .quota
+        .expect("as stored");
+    assert_eq!(stored.max_pending, Some(0));
+    assert_eq!(stored.on_excess, QuotaOverflow::Reject as i32);
+
+    assert!(harness
+        .storage
+        .get_setting(&quota_key(Some(NAMESPACE)))
+        .unwrap()
+        .is_some());
+    let refused = harness
+        .storage
+        .enqueue(job_in(Some(NAMESPACE), "emails", "send"))
+        .expect_err("the namespace is frozen");
+    assert!(refused.to_string().contains("max_pending 0"), "{refused}");
+    harness
+        .storage
+        .enqueue(job_in(Some(OTHER), "emails", "send"))
+        .expect("another tenant is untouched");
+
+    let invalid = harness
+        .client
+        .set_namespace_quota(SetNamespaceQuotaRequest {
+            quota: Some(NamespaceQuota {
+                max_running: Some(-1),
+                ..Default::default()
+            }),
+        })
+        .await
+        .expect_err("a negative cap");
+    assert_reason(&invalid, Code::InvalidArgument, reason::INVALID_REQUEST);
+
+    harness
+        .client
+        .clear_namespace_quota(ClearNamespaceQuotaRequest {})
+        .await
+        .expect("clear");
+    harness
+        .storage
+        .enqueue(job_in(Some(NAMESPACE), "emails", "send"))
+        .expect("unlimited again");
+    harness.stop().await;
+
+    // `inspect` reads the quota and cannot write it.
+    let mut inspect =
+        Harness::with_scopes("admin-quota-inspect", ScopeSet::of(&[Scope::Inspect])).await;
+    inspect
+        .client
+        .get_namespace_quota(GetNamespaceQuotaRequest {})
+        .await
+        .expect("inspect reads");
+    let refused = inspect
+        .client
+        .set_namespace_quota(SetNamespaceQuotaRequest { quota: None })
+        .await
+        .expect_err("a write");
+    assert_reason(&refused, Code::PermissionDenied, reason::SCOPE_DENIED);
+    inspect.stop().await;
 }

@@ -162,11 +162,17 @@ pub enum Rpc {
     ClearQueueOverride,
     /// `AdminService.ListAuditRecords`.
     ListAuditRecords,
+    /// `AdminService.GetNamespaceQuota`.
+    GetNamespaceQuota,
+    /// `AdminService.SetNamespaceQuota`.
+    SetNamespaceQuota,
+    /// `AdminService.ClearNamespaceQuota`.
+    ClearNamespaceQuota,
 }
 
 impl Rpc {
     /// Every RPC, so a caller that needs the closed set does not restate it.
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 35] = [
         Self::Enqueue,
         Self::EnqueueBatch,
         Self::GetJob,
@@ -199,6 +205,9 @@ impl Rpc {
         Self::SetQueueOverride,
         Self::ClearQueueOverride,
         Self::ListAuditRecords,
+        Self::GetNamespaceQuota,
+        Self::SetNamespaceQuota,
+        Self::ClearNamespaceQuota,
     ];
 
     /// The service that declares it.
@@ -235,7 +244,10 @@ impl Rpc {
             | Self::ClearTaskOverride
             | Self::SetQueueOverride
             | Self::ClearQueueOverride
-            | Self::ListAuditRecords => Service::Admin,
+            | Self::ListAuditRecords
+            | Self::GetNamespaceQuota
+            | Self::SetNamespaceQuota
+            | Self::ClearNamespaceQuota => Service::Admin,
         }
     }
 
@@ -274,6 +286,9 @@ impl Rpc {
             Self::SetQueueOverride => "SetQueueOverride",
             Self::ClearQueueOverride => "ClearQueueOverride",
             Self::ListAuditRecords => "ListAuditRecords",
+            Self::GetNamespaceQuota => "GetNamespaceQuota",
+            Self::SetNamespaceQuota => "SetNamespaceQuota",
+            Self::ClearNamespaceQuota => "ClearNamespaceQuota",
         }
     }
 
@@ -368,6 +383,12 @@ pub enum Binding {
     ClearQueueOverride,
     /// `GET /v1/admin/auditRecords`.
     ListAuditRecords,
+    /// `GET /v1/admin/quota`.
+    GetNamespaceQuota,
+    /// `POST /v1/admin/quota`.
+    SetNamespaceQuota,
+    /// `POST /v1/admin/quota:clear`.
+    ClearNamespaceQuota,
 }
 
 impl Binding {
@@ -406,6 +427,9 @@ impl Binding {
             Self::SetQueueOverride => Rpc::SetQueueOverride,
             Self::ClearQueueOverride => Rpc::ClearQueueOverride,
             Self::ListAuditRecords => Rpc::ListAuditRecords,
+            Self::GetNamespaceQuota => Rpc::GetNamespaceQuota,
+            Self::SetNamespaceQuota => Rpc::SetNamespaceQuota,
+            Self::ClearNamespaceQuota => Rpc::ClearNamespaceQuota,
         }
     }
 
@@ -425,7 +449,8 @@ impl Binding {
             | Self::ListPeriodicTasks
             | Self::GetPeriodicTask
             | Self::ListOverrides
-            | Self::ListAuditRecords => Verb::Get,
+            | Self::ListAuditRecords
+            | Self::GetNamespaceQuota => Verb::Get,
             Self::Enqueue
             | Self::EnqueueBatch
             | Self::CancelJob
@@ -444,7 +469,9 @@ impl Binding {
             | Self::SetTaskOverride
             | Self::ClearTaskOverride
             | Self::SetQueueOverride
-            | Self::ClearQueueOverride => Verb::Post,
+            | Self::ClearQueueOverride
+            | Self::SetNamespaceQuota
+            | Self::ClearNamespaceQuota => Verb::Post,
         }
     }
 
@@ -484,6 +511,8 @@ impl Binding {
             Self::SetQueueOverride => "/v1/admin/queues/{queue}/override",
             Self::ClearQueueOverride => "/v1/admin/queues/{queue}/override:clear",
             Self::ListAuditRecords => "/v1/admin/auditRecords",
+            Self::GetNamespaceQuota | Self::SetNamespaceQuota => "/v1/admin/quota",
+            Self::ClearNamespaceQuota => "/v1/admin/quota:clear",
         }
     }
 
@@ -533,6 +562,9 @@ impl Binding {
             Self::SetQueueOverride => post(operator::set_queue_override),
             Self::ClearQueueOverride => post(operator::clear_queue_override),
             Self::ListAuditRecords => get(operator::list_audit_records),
+            Self::GetNamespaceQuota => get(operator::get_namespace_quota),
+            Self::SetNamespaceQuota => post(operator::set_namespace_quota),
+            Self::ClearNamespaceQuota => post(operator::clear_namespace_quota),
             Self::CancelJob
             | Self::PauseQueue
             | Self::ResumeQueue
@@ -582,6 +614,9 @@ pub const ROUTES: &[Binding] = &[
     Binding::SetQueueOverride,
     Binding::ClearQueueOverride,
     Binding::ListAuditRecords,
+    Binding::GetNamespaceQuota,
+    Binding::SetNamespaceQuota,
+    Binding::ClearNamespaceQuota,
 ];
 
 /// Which binding a concrete request path and method reach, if any.
@@ -739,7 +774,10 @@ async fn custom_method(
         | Binding::ClearTaskOverride
         | Binding::SetQueueOverride
         | Binding::ClearQueueOverride
-        | Binding::ListAuditRecords => error::refuse(unrouted(&parts)),
+        | Binding::ListAuditRecords
+        | Binding::GetNamespaceQuota
+        | Binding::SetNamespaceQuota
+        | Binding::ClearNamespaceQuota => error::refuse(unrouted(&parts)),
     }
 }
 

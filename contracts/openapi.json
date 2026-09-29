@@ -63,7 +63,7 @@
             "type": "string"
           },
           "targetKind": {
-            "description": "What the call acted on: `job`, `workflow_run`, `queue`, `dead_letter`,\n`worker`, `periodic` or `task`. Empty when it was refused before naming\none. A call acting on several writes one record per target.",
+            "description": "What the call acted on: `job`, `workflow_run`, `queue`, `dead_letter`,\n`worker`, `periodic`, `task` or `namespace`. Empty when it was refused before naming\none. A call acting on several writes one record per target.",
             "type": "string"
           },
           "time": {
@@ -76,6 +76,10 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "flexiq.admin.v1.ClearNamespaceQuotaResponse": {
+        "properties": {},
         "type": "object"
       },
       "flexiq.admin.v1.ClearQueueOverrideResponse": {
@@ -163,6 +167,14 @@
         "properties": {
           "deadLetter": {
             "$ref": "#/components/schemas/flexiq.admin.v1.DeadLetter"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.GetNamespaceQuotaResponse": {
+        "properties": {
+          "quota": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.NamespaceQuota"
           }
         },
         "type": "object"
@@ -280,6 +292,49 @@
               "$ref": "#/components/schemas/flexiq.admin.v1.Worker"
             },
             "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.NamespaceQuota": {
+        "description": "The limits one namespace is held to, enforced by every process serving it.\nAn unset limit is unlimited; zero is a real limit.",
+        "properties": {
+          "enqueueRate": {
+            "description": "Enqueues per interval, `<count>/<unit>` as TaskOverride.rate_limit.",
+            "type": "string"
+          },
+          "maxArchivedRows": {
+            "description": "Row ceiling on the archive. The retention sweep deletes the oldest rows\nover it.",
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "maxDeadRows": {
+            "description": "Row ceiling on the dead-letter queue, trimmed the same way.",
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "maxPending": {
+            "description": "Most pending jobs, delayed ones included. A call that would pass it is\nover as a whole: a batch never half-lands.",
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "maxRunning": {
+            "description": "Most jobs running at once, gated at dispatch.",
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "onExcess": {
+            "description": "What an enqueue over max_pending or enqueue_rate does.",
+            "enum": [
+              "QUOTA_OVERFLOW_UNSPECIFIED",
+              "QUOTA_OVERFLOW_REJECT",
+              "QUOTA_OVERFLOW_DROP"
+            ],
+            "type": "string"
           }
         },
         "type": "object"
@@ -587,6 +642,15 @@
           "queue": {
             "$ref": "#/components/schemas/flexiq.admin.v1.Queue",
             "description": "The queue after the call."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.SetNamespaceQuotaResponse": {
+        "properties": {
+          "quota": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.NamespaceQuota",
+            "description": "As stored."
           }
         },
         "type": "object"
@@ -2389,6 +2453,109 @@
           }
         },
         "summary": "Resume dispatching from a paused queue.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/quota": {
+      "get": {
+        "description": "The namespace's quota. A namespace with none answers with every limit\nunset: unlimited.",
+        "operationId": "AdminService_GetNamespaceQuota",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.GetNamespaceQuotaResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "The namespace's quota. A namespace with none answers with every limit",
+        "tags": [
+          "AdminService"
+        ]
+      },
+      "post": {
+        "description": "Replace the namespace's quota. Not a merge: a limit left unset is lifted.\nEvery running process enforces the new limits within a couple of seconds.",
+        "operationId": "AdminService_SetNamespaceQuota",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/flexiq.admin.v1.NamespaceQuota"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.SetNamespaceQuotaResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Replace the namespace's quota. Not a merge: a limit left unset is lifted.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/quota:clear": {
+      "post": {
+        "operationId": "AdminService_ClearNamespaceQuota",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.ClearNamespaceQuotaResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Remove the namespace's quota, lifting every limit.",
         "tags": [
           "AdminService"
         ]

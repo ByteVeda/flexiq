@@ -213,6 +213,29 @@ service AdminService {
     option (google.api.http) = {post: "/v1/admin/queues/{queue}/override:clear"};
   }
 
+  // The namespace's quota. A namespace with none answers with every limit
+  // unset: unlimited.
+  rpc GetNamespaceQuota(GetNamespaceQuotaRequest) returns (GetNamespaceQuotaResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/admin/quota"};
+  }
+
+  // Replace the namespace's quota. Not a merge: a limit left unset is lifted.
+  // Every running process enforces the new limits within a couple of seconds.
+  rpc SetNamespaceQuota(SetNamespaceQuotaRequest) returns (SetNamespaceQuotaResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {
+      post: "/v1/admin/quota"
+      body: "quota"
+    };
+  }
+
+  // Remove the namespace's quota, lifting every limit.
+  rpc ClearNamespaceQuota(ClearNamespaceQuotaRequest) returns (ClearNamespaceQuotaResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {post: "/v1/admin/quota:clear"};
+  }
+
   // Page through the audit trail, newest first: one record per
   // token-authorised write this namespace's doors answered, refusals included.
   // Reads are not recorded.
@@ -599,6 +622,59 @@ message ClearQueueOverrideRequest {
 
 message ClearQueueOverrideResponse {}
 
+// ── Quota ──────────────────────────────────────────────────────────────
+
+// What an enqueue over max_pending or enqueue_rate does.
+enum QuotaOverflow {
+  // Read as QUOTA_OVERFLOW_REJECT.
+  QUOTA_OVERFLOW_UNSPECIFIED = 0;
+  // Refuse the enqueue: RESOURCE_EXHAUSTED, reason QUEUE_FULL for depth and
+  // RATE_LIMITED for rate. Nothing of the call is written.
+  QUOTA_OVERFLOW_REJECT = 1;
+  // Accept the call but dead-letter its jobs as shed. They never run, and the
+  // dead-letter sweep never retries them.
+  QUOTA_OVERFLOW_DROP = 2;
+}
+
+// The limits one namespace is held to, enforced by every process serving it.
+// An unset limit is unlimited; zero is a real limit.
+message NamespaceQuota {
+  // Most pending jobs, delayed ones included. A call that would pass it is
+  // over as a whole: a batch never half-lands.
+  optional int64 max_pending = 1;
+  // What an enqueue over max_pending or enqueue_rate does.
+  QuotaOverflow on_excess = 2;
+  // Enqueues per interval, `<count>/<unit>` as TaskOverride.rate_limit.
+  optional string enqueue_rate = 3;
+  // Most jobs running at once, gated at dispatch.
+  optional int64 max_running = 4;
+  // Row ceiling on the archive. The retention sweep deletes the oldest rows
+  // over it.
+  optional int64 max_archived_rows = 5;
+  // Row ceiling on the dead-letter queue, trimmed the same way.
+  optional int64 max_dead_rows = 6;
+}
+
+message GetNamespaceQuotaRequest {}
+
+message GetNamespaceQuotaResponse {
+  NamespaceQuota quota = 1;
+}
+
+message SetNamespaceQuotaRequest {
+  // Setting every limit unset is the same as ClearNamespaceQuota.
+  NamespaceQuota quota = 1;
+}
+
+message SetNamespaceQuotaResponse {
+  // As stored.
+  NamespaceQuota quota = 1;
+}
+
+message ClearNamespaceQuotaRequest {}
+
+message ClearNamespaceQuotaResponse {}
+
 // ── Audit trail ────────────────────────────────────────────────────────
 
 // One token-authorised write. Names the token by its public id only — never
@@ -615,7 +691,7 @@ message AuditRecord {
   // The RPC, as `package.Service/Method`, however it was reached.
   string operation = 5;
   // What the call acted on: `job`, `workflow_run`, `queue`, `dead_letter`,
-  // `worker`, `periodic` or `task`. Empty when it was refused before naming
+  // `worker`, `periodic`, `task` or `namespace`. Empty when it was refused before naming
   // one. A call acting on several writes one record per target.
   string target_kind = 6;
   // The target's id or name, in `target_kind`'s terms.

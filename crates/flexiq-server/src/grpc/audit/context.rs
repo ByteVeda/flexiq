@@ -28,6 +28,8 @@ pub enum TargetKind {
     Periodic,
     /// A task name.
     Task,
+    /// A namespace, for what acts on the tenant as a whole — its quota.
+    Namespace,
 }
 
 impl TargetKind {
@@ -41,6 +43,7 @@ impl TargetKind {
             Self::Worker => "worker",
             Self::Periodic => "periodic",
             Self::Task => "task",
+            Self::Namespace => "namespace",
         }
     }
 }

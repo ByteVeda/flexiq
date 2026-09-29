@@ -672,3 +672,56 @@ async fn a_structured_integer_past_the_exact_range_is_refused() {
 
     harness.stop().await;
 }
+
+/// #841: the producer door enforces the namespace quota because the core does
+/// — a single enqueue and a batch both answer RESOURCE_EXHAUSTED / QUEUE_FULL
+/// once the namespace is at `max_pending`, and nothing of the batch lands.
+#[tokio::test]
+async fn a_namespace_at_its_depth_quota_refuses_enqueues() {
+    let mut harness = Harness::start("grpc-producer-quota").await;
+    let quota = flexiq_core::NamespaceQuota {
+        max_pending: Some(1),
+        ..Default::default()
+    };
+    harness
+        .storage
+        .set_namespace_quota(Some(NAMESPACE), &quota)
+        .expect("set quota");
+
+    harness
+        .client
+        .enqueue(request("send", CALL_ENVELOPE.to_vec(), in_queue("emails")))
+        .await
+        .expect("under the quota");
+    let error = harness
+        .client
+        .enqueue(request("send", CALL_ENVELOPE.to_vec(), in_queue("emails")))
+        .await
+        .expect_err("at the quota");
+    assert_eq!(error.code(), Code::ResourceExhausted);
+    assert_eq!(
+        error.get_details_error_info().expect("an ErrorInfo").reason,
+        reason::QUEUE_FULL
+    );
+
+    let batch = harness
+        .client
+        .enqueue_batch(EnqueueBatchRequest {
+            items: vec![
+                request("send", CALL_ENVELOPE.to_vec(), in_queue("emails")),
+                request("send", CALL_ENVELOPE.to_vec(), in_queue("emails")),
+            ],
+        })
+        .await;
+    let stats = harness
+        .client
+        .queue_stats(QueueStatsRequest {
+            queue: Some("emails".to_string()),
+        })
+        .await
+        .expect("queue_stats")
+        .into_inner();
+    assert_eq!(stats.pending, 1, "nothing past the quota landed: {batch:?}");
+
+    harness.stop().await;
+}
