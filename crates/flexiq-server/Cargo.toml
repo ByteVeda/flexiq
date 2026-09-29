@@ -87,7 +87,7 @@ sha1 = { version = "0.10", features = ["oid"] }
 # `x509-cert` shares its `der`/`spki` generation, so the certificate's key
 # needs no second ASN.1 stack. PEM is unwrapped by hand, so no `pem` feature.
 rsa = { version = "0.9", default-features = false, features = ["std"] }
-x509-cert = { version = "0.2", default-features = false, features = ["std"] }
+x509-cert = { version = "0.3", default-features = false, features = ["std"] }
 # Hex-encoded signatures (GitHub, Stripe, a generic HMAC header).
 hex = "0.4"
 thiserror = { workspace = true }
