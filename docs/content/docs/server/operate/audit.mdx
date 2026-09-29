@@ -1,13 +1,12 @@
 ---
 title: Audit trail
-description: "Which token enqueued a job, who cancelled it, and what a revoked token did while it was valid — one record per token-authorised write, kept in the database."
+description: "Which token enqueued a job, who cancelled it, and what a revoked token did while it was valid — a record for every thing a token-authorised write touched, kept in the database."
 ---
 
 A token says who may call the gRPC door. The audit trail says who **did**: every
 write a token makes — an enqueue, a cancel, a queue pause, a dead-letter replay
-— leaves one record in the database naming the token, what it did, to what,
-when, and how the call ended. It answers the questions a credential alone
-cannot:
+— leaves records in the database naming the token, what it did, to what, when,
+and how the call ended. It answers the questions a credential alone cannot:
 
 - which token enqueued this job;
 - who cancelled it;
@@ -19,10 +18,14 @@ was minted under.
 
 ## What is recorded
 
-One record per call that needs a **write scope**: `produce` on the producer
+Every call that needs a **write scope** is recorded: `produce` on the producer
 door, `admin` on [the admin door](/server/operate/admin). The same calls over the
 [JSON facade](/server/operate/grpc#the-same-door-without-grpc) are recorded the
 same way, under the same operation name.
+
+A record is per **target**, not per call — count records as calls and a batch
+will mislead you. A call leaves one record for each thing it acted on, or a
+single untargeted record when it was refused before naming any.
 
 | Field | Is |
 | --- | --- |
@@ -31,9 +34,9 @@ same way, under the same operation name.
 | `principal` | The token's name when the call was made — a label, since two tokens may share one |
 | `operation` | The RPC, e.g. `flexiq.v1.ProducerService/Enqueue` |
 | `targetKind`, `target` | What it acted on: `job`, `workflow_run`, `queue`, `dead_letter`, `worker`, `periodic` or `task`, and its id or name |
-| `outcome` | The `google.rpc.Code` the call ended with: `OK`, `PERMISSION_DENIED`, `NOT_FOUND`, … |
+| `outcome` | The `google.rpc.Code` the call ended with: `OK`, `PERMISSION_DENIED`, `NOT_FOUND`, … `CANCELLED` means the call never answered — a deadline or a client that hung up — so its write may or may not have landed |
 
-A call acting on several things writes one record per target: `EnqueueBatch`
+`EnqueueBatch`
 writes one per job, and a dead-letter replay writes one for the entry and one
 for the job it became, so "who enqueued this job" has an answer for a replayed
 job too.
@@ -120,5 +123,6 @@ instead — one JSON line under the log target `flexiq::audit` — and counted o
 
 Alert on anything but `written` rising. A record is degraded to the log stream,
 never dropped silently — but the log stream is only an audit trail if something
-keeps it. On a clean shutdown the writer appends what is already buffered
-before the process exits.
+keeps it. On a clean shutdown the listener waits up to ten seconds for the
+writer to append what is already buffered before the process exits; what is
+still unwritten after that is logged as lost.
