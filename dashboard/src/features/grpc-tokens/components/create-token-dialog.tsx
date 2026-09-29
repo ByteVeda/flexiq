@@ -46,6 +46,9 @@ export function CreateGrpcTokenDialog() {
   const narrowable = (available ?? [])
     .filter((scope) => scope.narrowable)
     .map((scope) => scope.name);
+  // The narrowing fields show only while they would narrow something: typed
+  // against `execute` alone, a pattern would be dropped and the grant sent whole.
+  const narrowing = scopes.some((scope) => narrowable.includes(scope));
 
   function reset() {
     setName("");
@@ -71,9 +74,14 @@ export function CreateGrpcTokenDialog() {
   }
 
   function toggleScope(scope: string, on: boolean) {
-    setScopes((current) =>
-      on ? [...new Set([...current, scope])] : current.filter((name) => name !== scope),
-    );
+    const next = on ? [...new Set([...scopes, scope])] : scopes.filter((name) => name !== scope);
+    setScopes(next);
+    // Hidden fields must not keep a pattern that reappears, silently, when a
+    // narrowable scope is switched back on.
+    if (!next.some((name) => narrowable.includes(name))) {
+      setQueue("");
+      setTask("");
+    }
   }
 
   function onSubmit(event: FormEvent<HTMLFormElement>): void {
@@ -152,7 +160,7 @@ export function CreateGrpcTokenDialog() {
                 claim it.
               </span>
             </div>
-            {narrowable.length > 0 ? (
+            {narrowing ? (
               <div className="flex flex-col gap-2 text-sm">
                 <span className="font-medium">Narrow to</span>
                 <div className="grid grid-cols-2 gap-2">
