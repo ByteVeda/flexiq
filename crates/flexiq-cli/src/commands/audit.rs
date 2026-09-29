@@ -12,7 +12,7 @@ use crate::output;
 use crate::output::admin::{audit_row, list_audit_records_json, AUDIT_COLUMNS};
 use crate::pb::admin as pb;
 use crate::safe::escape;
-use crate::time::instant_at;
+use crate::time::instant_bound;
 
 /// The kind `--job` stands for.
 const JOB: &str = "job";
@@ -46,8 +46,8 @@ pub fn list_request(args: &AuditListArgs) -> Result<pb::ListAuditRecordsRequest>
         token_id: args.token_id.clone().unwrap_or_default(),
         target_kind,
         target,
-        since: instant_at(args.since.as_deref(), "--since")?,
-        until: instant_at(args.until.as_deref(), "--until")?,
+        since: instant_bound(args.since.as_deref(), "--since")?,
+        until: instant_bound(args.until.as_deref(), "--until")?,
     })
 }
 
@@ -182,5 +182,14 @@ mod tests {
         args.until = None;
         let request = list_request(&args).expect("builds");
         assert_eq!(request.since.map(|at| at.seconds), Some(1_757_500_000));
+    }
+
+    /// The door rounds a bound; truncating here first would decide for it.
+    #[test]
+    fn a_bound_keeps_its_submillisecond_digits() {
+        let mut args = args();
+        args.since = Some("2025-09-10T10:26:40.000500Z".into());
+        let since = list_request(&args).expect("builds").since.expect("set");
+        assert_eq!((since.seconds, since.nanos), (1_757_500_000, 500_000));
     }
 }

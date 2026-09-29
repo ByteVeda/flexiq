@@ -72,16 +72,34 @@ pub fn instant_before(now_ms: i64, age_ms: Option<i64>, flag: &str) -> Result<Op
 /// dropped: the door stores milliseconds.
 pub fn instant_at(text: Option<&str>, flag: &str) -> Result<Option<Timestamp>> {
     text.map(|text| {
-        let parsed = DateTime::parse_from_rfc3339(text).map_err(|error| {
-            anyhow!(
-                "`{flag} {text}` is not an RFC 3339 instant ({error}), e.g. 2026-09-01T00:00:00Z"
-            )
-        })?;
+        let parsed = rfc3339(text, flag)?;
         in_timestamp_range(parsed.timestamp_millis())
             .map(timestamp)
             .ok_or_else(|| out_of_range(flag, text))
     })
     .transpose()
+}
+
+/// An RFC 3339 instant with every digit kept, for a filter bound: truncating
+/// `.0005` to the millisecond would move the bound past the records it is
+/// meant to separate. The door decides how to round it.
+pub fn instant_bound(text: Option<&str>, flag: &str) -> Result<Option<Timestamp>> {
+    text.map(|text| {
+        let parsed = rfc3339(text, flag)?;
+        in_timestamp_range(parsed.timestamp_millis())
+            .map(|_| Timestamp {
+                seconds: parsed.timestamp(),
+                nanos: parsed.timestamp_subsec_nanos() as i32,
+            })
+            .ok_or_else(|| out_of_range(flag, text))
+    })
+    .transpose()
+}
+
+fn rfc3339(text: &str, flag: &str) -> Result<DateTime<chrono::FixedOffset>> {
+    DateTime::parse_from_rfc3339(text).map_err(|error| {
+        anyhow!("`{flag} {text}` is not an RFC 3339 instant ({error}), e.g. 2026-09-01T00:00:00Z")
+    })
 }
 
 /// A span in milliseconds as a `Duration`, refusing one the type cannot carry.

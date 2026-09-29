@@ -5,6 +5,7 @@
 //! dead letters may see who touched them.
 
 use flexiq_core::{AuditFilter, AuditRecord, Storage};
+use prost_types::Timestamp;
 use tonic::{Response, Status};
 
 use super::Scoped;
@@ -69,10 +70,26 @@ fn filter(request: &pb::ListAuditRecordsRequest) -> AuditFilter {
         token_id: set(&request.token_id),
         target_kind: set(&request.target_kind),
         target: set(&request.target),
-        since_ms: request.since.as_ref().map(millis_from_timestamp),
-        until_ms: request.until.as_ref().map(millis_from_timestamp),
+        since_ms: request.since.as_ref().map(bound_millis),
+        until_ms: request.until.as_ref().map(bound_millis),
     }
 }
+
+/// A bound in the millisecond units records are stamped in, rounded **up**.
+/// A record stamped `m` was made at or after `m` and before `m + 1`, so both
+/// `since` (inclusive) and `until` (exclusive) at `m + 0.5` must read as
+/// `m + 1`: rounding down would admit a record made before `since`, and drop
+/// one made before `until`.
+fn bound_millis(value: &Timestamp) -> i64 {
+    let floor = millis_from_timestamp(value);
+    if value.nanos % NANOS_PER_MILLI == 0 {
+        floor
+    } else {
+        floor.saturating_add(1)
+    }
+}
+
+const NANOS_PER_MILLI: i32 = 1_000_000;
 
 fn to_wire(record: AuditRecord) -> pb::AuditRecord {
     pb::AuditRecord {
@@ -106,6 +123,15 @@ mod tests {
                 ..Default::default()
             }
         );
+    }
+
+    #[test]
+    fn a_submillisecond_bound_rounds_up_to_the_next_record_stamp() {
+        let at = |nanos| Timestamp { seconds: 1, nanos };
+        assert_eq!(bound_millis(&at(0)), 1_000);
+        assert_eq!(bound_millis(&at(2_000_000)), 1_002);
+        assert_eq!(bound_millis(&at(2_000_001)), 1_003);
+        assert_eq!(bound_millis(&at(999_999_999)), 2_000);
     }
 
     #[test]
