@@ -46,6 +46,13 @@ public final class InMemorySettings implements SettingsAccess {
     @Override
     public List<String> reservedPrefixes() {
         return List.of(
-                "auth:", "contract:", "middleware:disabled:", "retention:", "flexiq.webhooks", "webhook:", "webhooks:");
+                "auth:",
+                "contract:",
+                "middleware:disabled:",
+                "quota:",
+                "retention:",
+                "flexiq.webhooks",
+                "webhook:",
+                "webhooks:");
     }
 }
