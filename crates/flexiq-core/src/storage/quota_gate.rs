@@ -56,6 +56,14 @@ impl StorageBackend {
     /// dead-lettered without ever going live and come back as `Dead` through
     /// `shed`. Results keep call order. A `reject` quota fails the whole call
     /// before anything is written.
+    ///
+    /// Only a call that mixes admitted and shed jobs — one batch spanning
+    /// namespaces — writes twice, and no backend offers one transaction over
+    /// both. The admitted enqueue goes first and decides the call's outcome:
+    /// once any write has committed, a shed record that fails is logged, not
+    /// returned. The shed jobs are discarded either way; answering with an
+    /// error would tell the caller its committed jobs failed, and a retry
+    /// would enqueue them twice.
     pub(super) fn with_quota<T>(
         &self,
         new_jobs: Vec<NewJob>,
@@ -81,18 +89,28 @@ impl StorageBackend {
             }
         }
 
-        for (reason, jobs) in by_reason {
-            let dead: Vec<Job> = jobs.iter().map(|(_, job)| job.clone()).collect();
-            self.shed_new_jobs(&dead, &reason, Some(QUOTA_SHED_METADATA))?;
-            for (i, job) in jobs {
-                results[i] = Some(shed(job));
-            }
-        }
-
+        let mut committed = false;
         if !admitted.is_empty() {
             let (positions, jobs): (Vec<usize>, Vec<NewJob>) = admitted.into_iter().unzip();
             for (i, result) in positions.into_iter().zip(enqueue(jobs)?) {
                 results[i] = Some(result);
+            }
+            committed = true;
+        }
+
+        for (reason, jobs) in by_reason {
+            let dead: Vec<Job> = jobs.iter().map(|(_, job)| job.clone()).collect();
+            match self.shed_new_jobs(&dead, &reason, Some(QUOTA_SHED_METADATA)) {
+                Ok(()) => committed = true,
+                Err(error) if committed => log::error!(
+                    "recording {} quota-shed job(s) failed after the rest of the call \
+                     committed; they are dropped without a dead-letter entry: {error}",
+                    dead.len()
+                ),
+                Err(error) => return Err(error),
+            }
+            for (i, job) in jobs {
+                results[i] = Some(shed(job));
             }
         }
         // Every slot was filled by exactly one of the two branches above.

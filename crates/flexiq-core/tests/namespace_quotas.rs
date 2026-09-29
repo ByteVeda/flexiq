@@ -151,6 +151,23 @@ fn a_mixed_batch_sheds_only_the_namespace_over_its_quota() {
     assert_eq!(pending(&s, TENANT), 0);
 }
 
+/// A mixed call whose admitted enqueue fails writes nothing at all: the shed
+/// half is recorded only after the admitted half committed.
+#[test]
+fn a_failed_admitted_enqueue_leaves_no_shed_record() {
+    let s = storage();
+    s.set_namespace_quota(TENANT, &depth(0, QuotaOverflow::Drop))
+        .unwrap();
+    let mut broken = job_in(None);
+    broken.depends_on = vec!["no-such-job".to_string()];
+    let error = s.enqueue_batch(vec![broken, job_in(TENANT)]).unwrap_err();
+    assert!(
+        matches!(error, QueueError::DependencyNotFound(_)),
+        "{error:?}"
+    );
+    assert!(s.list_dead(10, 0, TENANT).unwrap().is_empty());
+}
+
 #[test]
 fn a_shed_unique_enqueue_reports_no_dedup_and_holds_no_key() {
     let s = storage();
