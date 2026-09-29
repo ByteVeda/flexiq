@@ -76,7 +76,7 @@ static DEBOUNCE_RESOLVE: LazyLock<redis::Script> =
 /// no window is open, so nothing is refused for a burst that inserts nothing.
 ///
 /// KEYS (after the index): job, status set, queue zset, by_queue, by_task, all,
-/// and — only for a pub/sub delivery — its subscription's pending backlog.
+/// by_ns, and — only for a pub/sub delivery — its subscription's pending backlog.
 /// ARGV (after the scan's four): job id, job JSON, queue score, `created_at`,
 /// dependency count, the admission cap (negative = uncapped), then one
 /// `(depends_on_key, dep_id, dependents_key)` triple per dependency, then —
@@ -109,10 +109,11 @@ const DEBOUNCE_INSERT_BODY: &str = r#"
     redis.call('SADD', KEYS[5], job_id)
     redis.call('SADD', KEYS[6], job_id)
     redis.call('ZADD', KEYS[7], -created_at, job_id)
+    redis.call('SADD', KEYS[8], job_id)
     redis.call('ZADD', debounce_index, created_at, job_id)
 
-    if KEYS[8] then
-        redis.call('ZADD', KEYS[8], created_at, job_id)
+    if KEYS[9] then
+        redis.call('ZADD', KEYS[9], created_at, job_id)
     end
 
     for i = 1, num_deps do
@@ -297,6 +298,7 @@ impl RedisStorage {
         pipe.zadd(&queue_key, &job.id, score);
         pipe.sadd(&by_queue_key, &job.id);
         pipe.sadd(&by_task_key, &job.id);
+        pipe.sadd(self.by_namespace_key(job.namespace.as_deref()), &job.id);
         pipe.zadd(&all_key, &job.id, -(job.created_at as f64));
 
         // A pending job carrying a debounce key is a valid slide target however
@@ -367,6 +369,7 @@ impl RedisStorage {
             pipe.zadd(&queue_key, &job.id, score);
             pipe.sadd(&by_queue_key, &job.id);
             pipe.sadd(&by_task_key, &job.id);
+            pipe.sadd(self.by_namespace_key(job.namespace.as_deref()), &job.id);
             pipe.zadd(&all_key, &job.id, -(job.created_at as f64));
 
             // Debounce index, as in the single-job `enqueue`.
@@ -518,7 +521,8 @@ impl RedisStorage {
             .key(self.key(&["queue", &job.queue, "pending"]))
             .key(self.key(&["jobs", "by_queue", &job.queue]))
             .key(self.key(&["jobs", "by_task", &job.task_name]))
-            .key(self.key(&["jobs", "all"]));
+            .key(self.key(&["jobs", "all"]))
+            .key(self.by_namespace_key(job.namespace.as_deref()));
         // A pub/sub delivery also enters its subscription's pending backlog
         // index, in the same script so the two cannot desync on a crash.
         if let Some((topic, name)) = crate::pubsub::extract_topic_subscription(job.notes.as_deref())
@@ -719,6 +723,7 @@ impl RedisStorage {
                 local by_queue_key = KEYS[5]
                 local by_task_key = KEYS[6]
                 local all_key = KEYS[7]
+                local by_ns_key = KEYS[8]
 
                 local job_id = ARGV[1]
                 local job_json = ARGV[2]
@@ -751,14 +756,15 @@ impl RedisStorage {
                 redis.call('SADD', by_queue_key, job_id)
                 redis.call('SADD', by_task_key, job_id)
                 redis.call('ZADD', all_key, -created_at, job_id)
+                redis.call('SADD', by_ns_key, job_id)
                 redis.call('SET', unique_key, job_id)
 
                 -- Pub/sub delivery: mirror into its subscription's pending
-                -- backlog index (KEYS[8], present only for pub/sub deliveries),
+                -- backlog index (KEYS[9], present only for pub/sub deliveries),
                 -- scored by created_at. Folded into this atomic store so the
                 -- backlog index cannot desync from the job on a crash.
-                if KEYS[8] then
-                    redis.call('ZADD', KEYS[8], created_at, job_id)
+                if KEYS[9] then
+                    redis.call('ZADD', KEYS[9], created_at, job_id)
                 end
 
                 -- A debounce key makes the job a slide target while it stays
@@ -804,9 +810,9 @@ impl RedisStorage {
             let job_key_prefix = self.key(&["job", ""]);
 
             // Build keys and args vectors to avoid temporary lifetime issues.
-            // KEYS[8] (the subscription's pending backlog index) is appended
-            // only for pub/sub deliveries, so ordinary jobs pass 7 keys and the
-            // Lua's `if KEYS[8]` guard is false.
+            // KEYS[9] (the subscription's pending backlog index) is appended
+            // only for pub/sub deliveries, so ordinary jobs pass 8 keys and the
+            // Lua's `if KEYS[9]` guard is false.
             let mut keys = vec![
                 unique_key.clone(),
                 job_key,
@@ -815,6 +821,7 @@ impl RedisStorage {
                 by_queue_key,
                 by_task_key,
                 all_key,
+                self.by_namespace_key(job.namespace.as_deref()),
             ];
             if let Some((topic, name)) =
                 crate::pubsub::extract_topic_subscription(job.notes.as_deref())

@@ -2735,6 +2735,27 @@ macro_rules! impl_diesel_job_ops {
                 Ok(count)
             }
 
+            /// Live jobs in one namespace and status (namespace quotas). `None`
+            /// is the default namespace (`IS NULL`), not every namespace.
+            pub fn count_by_namespace(
+                &self,
+                namespace: Option<&str>,
+                status: JobStatus,
+            ) -> Result<i64> {
+                let mut conn = self.conn()?;
+
+                let query = jobs::table
+                    .filter(jobs::status.eq(status as i32))
+                    .into_boxed();
+                let query = match namespace {
+                    Some(ns) => query.filter(jobs::namespace.eq(ns)),
+                    None => query.filter(jobs::namespace.is_null()),
+                };
+                let count: i64 = query.count().get_result(&mut conn)?;
+
+                Ok(count)
+            }
+
             /// Count pending jobs on a queue (for the `max_pending` admission cap).
             pub fn count_pending_by_queue(&self, queue_name: &str) -> Result<i64> {
                 let mut conn = self.conn()?;

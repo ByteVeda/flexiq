@@ -3303,7 +3303,46 @@ fn test_audit_purge_is_namespace_scoped(s: &impl Storage) {
     assert_eq!(s.purge_audit(ns, 3_000).unwrap(), 0, "purge is idempotent");
 }
 
+/// #841: `count_by_namespace` counts one tenant's live jobs in one status —
+/// never another tenant's, and `None` is the default namespace, not a wildcard.
+fn test_count_by_namespace(s: &impl Storage) {
+    let q = "q-count-by-namespace";
+    let (a, b) = (Some("count-ns-a"), Some("count-ns-b"));
+    let enqueue = |ns: Option<&str>| {
+        let mut job = make_job(q, "count_task");
+        job.namespace = ns.map(str::to_string);
+        s.enqueue(job).unwrap()
+    };
+    let count = |ns: Option<&str>, status| s.count_by_namespace(ns, status).unwrap();
+
+    // Other tests share the default namespace, so it is asserted as a delta.
+    let default_before = count(None, JobStatus::Pending);
+    for _ in 0..3 {
+        enqueue(a);
+    }
+    enqueue(b);
+    enqueue(None);
+    enqueue(None);
+
+    assert_eq!(count(a, JobStatus::Pending), 3);
+    assert_eq!(count(b, JobStatus::Pending), 1);
+    assert_eq!(count(None, JobStatus::Pending), default_before + 2);
+    assert_eq!(count(Some("count-ns-none"), JobStatus::Pending), 0);
+
+    // A claim moves one job from Pending to Running, in its own namespace only.
+    let claimed = s.dequeue(q, now_millis() + 1, a).unwrap().expect("a job");
+    assert_eq!(count(a, JobStatus::Pending), 2);
+    assert_eq!(count(a, JobStatus::Running), 1);
+    assert_eq!(count(b, JobStatus::Running), 0);
+
+    // A terminal job leaves the live count.
+    s.complete(&claimed.id, None, a).unwrap();
+    assert_eq!(count(a, JobStatus::Running), 0);
+    assert_eq!(count(a, JobStatus::Pending), 2);
+}
+
 fn run_storage_tests(s: &impl Storage) {
+    test_count_by_namespace(s);
     test_enqueue_and_get(s);
     test_dequeue(s);
     test_dequeue_batch(s);

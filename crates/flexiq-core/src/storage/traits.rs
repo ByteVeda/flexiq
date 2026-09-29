@@ -1,5 +1,5 @@
 use crate::error::{QueueError, Result};
-use crate::job::{Job, NewJob};
+use crate::job::{Job, JobStatus, NewJob};
 use crate::step::StepLimits;
 use crate::storage::records::{
     AttemptFence, AuditFilter, AuditRecord, CircuitBreakerState, DebounceOptions, Dequeued,
@@ -1140,6 +1140,11 @@ pub trait Storage: Send + Sync + Clone {
     /// Running-job count for a task — the per-task concurrency-cap primitive.
     /// Scoped, so a job elsewhere never consumes this scheduler's budget.
     fn count_running_by_task(&self, task_name: &str, namespace: Option<&str>) -> Result<i64>;
+
+    /// Live jobs in one namespace and status — the namespace-quota primitive.
+    /// `None` is the default namespace, never a wildcard: a quota bounds one
+    /// tenant, and the default namespace is a tenant like any other.
+    fn count_by_namespace(&self, namespace: Option<&str>, status: JobStatus) -> Result<i64>;
 
     // ── Per-queue stats ──────────────────────────────────────────
 

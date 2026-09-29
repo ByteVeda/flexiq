@@ -1444,6 +1444,13 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<i64> {
                 self.count_running_by_task(task_name, namespace)
             }
+            fn count_by_namespace(
+                &self,
+                namespace: Option<&str>,
+                status: $crate::job::JobStatus,
+            ) -> $crate::error::Result<i64> {
+                self.count_by_namespace(namespace, status)
+            }
             fn count_pending_by_queue(
                 &self,
                 queue_name: &str,
@@ -2521,6 +2528,9 @@ impl Storage for StorageBackend {
     }
     fn count_running_by_task(&self, task_name: &str, namespace: Option<&str>) -> Result<i64> {
         delegate!(self, count_running_by_task, task_name, namespace)
+    }
+    fn count_by_namespace(&self, namespace: Option<&str>, status: JobStatus) -> Result<i64> {
+        delegate!(self, count_by_namespace, namespace, status)
     }
     fn count_pending_by_queue(&self, queue_name: &str) -> Result<i64> {
         delegate!(self, count_pending_by_queue, queue_name)

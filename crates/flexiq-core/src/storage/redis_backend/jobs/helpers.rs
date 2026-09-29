@@ -31,6 +31,16 @@ impl RedisStorage {
         }
     }
 
+    /// The set of live job ids in `namespace` — the membership half of a
+    /// per-namespace count, intersected server-side with a status set the way
+    /// `jobs:by_task` is. Entered at every insert, left in `push_archive_ops`.
+    pub(in crate::storage::redis_backend) fn by_namespace_key(
+        &self,
+        namespace: Option<&str>,
+    ) -> String {
+        self.key(&["jobs", "by_ns", &Self::namespace_segment(namespace)])
+    }
+
     /// The debounce index of a `(namespace, debounce_key)` pair: a sorted set of
     /// the pending job ids carrying that key, scored by `created_at` so a scan
     /// reads them oldest-first. Redis drops a sorted set once its last member
@@ -244,6 +254,7 @@ impl RedisStorage {
         let status_key = self.key(&["jobs", "status", &(old_status as i32).to_string()]);
         let by_queue_key = self.key(&["jobs", "by_queue", &job.queue]);
         let by_task_key = self.key(&["jobs", "by_task", &job.task_name]);
+        let by_ns_key = self.by_namespace_key(job.namespace.as_deref());
         let all_key = self.key(&["jobs", "all"]);
         let pending_key = self.key(&["queue", &job.queue, "pending"]);
         let archived_key = self.key(&["archived", &job.id]);
@@ -259,6 +270,7 @@ impl RedisStorage {
         pipe.srem(&status_key, &job.id).ignore();
         pipe.srem(&by_queue_key, &job.id).ignore();
         pipe.srem(&by_task_key, &job.id).ignore();
+        pipe.srem(&by_ns_key, &job.id).ignore();
         pipe.zrem(&all_key, &job.id).ignore();
         // Pending jobs still sit in the per-queue pending zset; running jobs
         // were removed at dequeue, so only remove on a Pending→terminal move.

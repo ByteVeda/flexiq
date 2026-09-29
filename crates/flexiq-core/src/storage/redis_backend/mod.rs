@@ -56,11 +56,15 @@ impl RedisStorage {
             .query::<String>(&mut conn)
             .map_err(|e| QueueError::Config(format!("Redis ping failed: {e}")))?;
 
-        Ok(Self {
+        let storage = Self {
             pool: pool::ConnectionPool::new(client, conn),
             prefix: prefix.to_string(),
             wake_refusal_warned: Arc::new(AtomicBool::new(false)),
-        })
+        };
+        // No shell migrates a Redis store on open, so the one-time index
+        // backfill runs here; after the first pass it is a single `GET`.
+        storage.backfill_namespace_index()?;
+        Ok(storage)
     }
 
     /// Report that there is nothing to migrate.

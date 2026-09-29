@@ -168,6 +168,48 @@ impl RedisStorage {
         Ok(count)
     }
 
+    /// Enter every live job written before `jobs:by_ns` existed into it, once:
+    /// one `ZSCAN` pass over `jobs:all`, then a done marker. Runs when the
+    /// store opens, so a shell pays it at startup rather than on a hot path.
+    ///
+    /// A job a pre-#841 process enqueues after this pass is never indexed and
+    /// goes uncounted until it finishes — the price of a rolling upgrade.
+    pub(in crate::storage::redis_backend) fn backfill_namespace_index(&self) -> Result<()> {
+        let mut conn = self.conn()?;
+        let done_key = self.key(&["jobs", "by_ns", "backfilled"]);
+        let done: Option<String> = conn.get(&done_key).map_err(map_err)?;
+        if done.is_some() {
+            return Ok(());
+        }
+
+        let all_key = self.key(&["jobs", "all"]);
+        let mut cursor: u64 = 0;
+        loop {
+            let (next, flat): (u64, Vec<String>) = redis::cmd("ZSCAN")
+                .arg(&all_key)
+                .arg(cursor)
+                .arg("COUNT")
+                .arg(SCAN_BATCH)
+                .query(&mut conn)
+                .map_err(map_err)?;
+            // ZSCAN returns a flat [member, score, member, score, ...] list.
+            let pipe = &mut redis::pipe();
+            for id in flat.iter().step_by(2) {
+                if let Some(job) = self.load_job(&mut conn, id)? {
+                    pipe.sadd(self.by_namespace_key(job.namespace.as_deref()), &job.id)
+                        .ignore();
+                }
+            }
+            pipe.query::<()>(&mut conn).map_err(map_err)?;
+            if next == 0 {
+                break;
+            }
+            cursor = next;
+        }
+
+        conn.set::<_, _, ()>(&done_key, "1").map_err(map_err)
+    }
+
     /// Index one batch of pre-existing archived rows that carry a per-entry TTL
     /// but predate the `archived:expiry` index. Resumable via a stored cursor
     /// and bounded to one `ZSCAN` batch per call, so the one-time migration
