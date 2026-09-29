@@ -265,6 +265,11 @@ where
 /// per round trip so a sweep over millions of rows never loads the whole set.
 const SCAN_BATCH: isize = 500;
 
+/// Max `SCAN_BATCH`-sized batches one row-ceiling trim (#841) deletes, so a
+/// namespace far over its ceiling is cut down across ticks rather than in one
+/// sweep — the Diesel purges' batch cap, applied here.
+const MAX_TRIM_BATCHES: u32 = 200;
+
 /// Drop the `payload`/`result` blobs from a job before it enters a listing.
 /// Redis loads the whole job JSON in one read, so this saves no I/O; it exists
 /// only to match the Diesel backends' narrow-projection contract — list results

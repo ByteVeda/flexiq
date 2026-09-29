@@ -469,6 +469,35 @@ macro_rules! impl_diesel_dead_letter_ops {
                 })
             }
 
+            /// Delete `namespace`'s oldest dead-letter entries until at most
+            /// `keep` remain — the `max_dead_rows` quota (#841). `None` is the
+            /// default namespace. Oldest by `failed_at`, then id.
+            pub fn trim_dead_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64> {
+                let in_namespace = |query: dead_letter::BoxedQuery<'static, _>| match namespace {
+                    Some(ns) => query.filter(dead_letter::namespace.eq(ns.to_string())),
+                    None => query.filter(dead_letter::namespace.is_null()),
+                };
+                let total: i64 = {
+                    let mut conn = self.conn()?;
+                    in_namespace(dead_letter::table.into_boxed())
+                        .count()
+                        .get_result(&mut conn)?
+                };
+                $crate::storage::diesel_common::purge::trim_oldest(total - keep.max(0), |limit| {
+                    self.write_transaction(|conn| {
+                        let ids: Vec<String> = in_namespace(dead_letter::table.into_boxed())
+                            .order((dead_letter::failed_at.asc(), dead_letter::id.asc()))
+                            .select(dead_letter::id)
+                            .limit(limit)
+                            .load(conn)?;
+                        let affected =
+                            diesel::delete(dead_letter::table.filter(dead_letter::id.eq_any(&ids)))
+                                .execute(conn)?;
+                        Ok(affected as u64)
+                    })
+                })
+            }
+
             /// Delete a single dead letter entry. Returns true if it existed.
             ///
             /// An entry in another namespace reports `false`, the same answer an

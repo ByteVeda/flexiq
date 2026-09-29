@@ -472,6 +472,14 @@ pub trait Storage: Send + Sync + Clone {
     /// Purge dead-letter entries by the global/per-entry TTL. Returns the
     /// count removed.
     fn purge_dead_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64>;
+    /// Delete `namespace`'s oldest dead-letter entries until at most `keep`
+    /// remain — the `max_dead_rows` quota (#841). `None` is the default
+    /// namespace. Bounded per call like the TTL purges; returns rows removed.
+    fn trim_dead_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64>;
+    /// Delete `namespace`'s oldest archived jobs until at most `keep` remain —
+    /// the `max_archived_rows` quota (#841). `None` is the default namespace.
+    /// Bounded per call like the TTL purges; returns rows removed.
+    fn trim_archived_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64>;
     /// Dead-letter entries eligible for automatic retry, bounded by `limit`.
     ///
     /// Entries written by [`shed_to_dlq`](Self::shed_to_dlq) are excluded: the

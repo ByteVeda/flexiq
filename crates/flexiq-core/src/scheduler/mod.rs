@@ -3907,6 +3907,66 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_cleanup_trims_to_namespace_row_quotas() {
+        // #841: the retention leader cuts each namespace with a row ceiling
+        // down to it, oldest first; one without a ceiling keeps everything.
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let quota = crate::quota::NamespaceQuota {
+            max_archived_rows: Some(1),
+            max_dead_rows: Some(0),
+            ..Default::default()
+        };
+        storage.set_namespace_quota(Some("a"), &quota).unwrap();
+        for namespace in [Some("a"), Some("b")] {
+            for _ in 0..3 {
+                storage.enqueue(job_in(namespace)).unwrap();
+                let job = storage
+                    .dequeue("default", now_millis() + 1, namespace)
+                    .unwrap()
+                    .unwrap();
+                storage.complete(&job.id, None, namespace).unwrap();
+            }
+            storage.enqueue(job_in(namespace)).unwrap();
+            let job = storage
+                .dequeue("default", now_millis() + 1, namespace)
+                .unwrap()
+                .unwrap();
+            storage.move_to_dlq(&job, "boom", None).unwrap();
+        }
+
+        namespace_scheduler(&storage, None).auto_cleanup().unwrap();
+
+        assert_eq!(storage.list_archived(100, 0, Some("a")).unwrap().len(), 1);
+        assert!(storage.list_dead(100, 0, Some("a")).unwrap().is_empty());
+        // 3 complete + the dead job's archived row.
+        assert_eq!(storage.list_archived(100, 0, Some("b")).unwrap().len(), 4);
+        assert_eq!(storage.list_dead(100, 0, Some("b")).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_auto_cleanup_skips_an_unreadable_row_quota() {
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        storage.enqueue(job_in(Some("a"))).unwrap();
+        let job = storage
+            .dequeue("default", now_millis() + 1, Some("a"))
+            .unwrap()
+            .unwrap();
+        storage.complete(&job.id, None, Some("a")).unwrap();
+        // Written raw, after the enqueue: an unreadable quota fails that closed.
+        storage
+            .set_setting(
+                &crate::quota::quota_key(Some("a")),
+                r#"{"max_archived_rows":-1}"#,
+            )
+            .unwrap();
+
+        namespace_scheduler(&storage, None).auto_cleanup().unwrap();
+        assert_eq!(storage.list_archived(100, 0, Some("a")).unwrap().len(), 1);
+    }
+
+    #[test]
     fn test_auto_cleanup_skips_when_another_holds_the_lock() {
         // A peer holds the retention lock, so this scheduler is not the elected
         // cleaner and must purge nothing even though its own TTL has expired.

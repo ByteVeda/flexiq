@@ -3382,8 +3382,80 @@ fn test_shed_new_jobs_never_go_live(s: &impl Storage) {
     );
 }
 
+/// Enqueue, claim and finish `n` jobs in `namespace` one after another, so
+/// each lands in the archive later than the one before; their ids, oldest first.
+fn archive_in(
+    s: &impl Storage,
+    q: &str,
+    namespace: Option<&str>,
+    n: usize,
+    dead: bool,
+) -> Vec<String> {
+    (0..n)
+        .map(|_| {
+            let mut job = make_job(q, "trim_task");
+            job.namespace = namespace.map(str::to_string);
+            s.enqueue(job).unwrap();
+            let job = s
+                .dequeue(q, now_millis() + 1, namespace)
+                .unwrap()
+                .expect("claimed");
+            if dead {
+                s.move_to_dlq(&job, "boom", None).unwrap();
+            } else {
+                s.complete(&job.id, None, namespace).unwrap();
+            }
+            // Distinct completion instants, so oldest-first is unambiguous.
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            job.id
+        })
+        .collect()
+}
+
+/// #841: `max_archived_rows` trims one namespace's archive oldest-first down
+/// to the ceiling, and never touches another namespace's rows.
+fn test_trim_archived_over(s: &impl Storage) {
+    let q = "q-trim-archived";
+    let (a, b) = (Some("trim-archived-a"), Some("trim-archived-b"));
+    let ids = archive_in(s, q, a, 5, false);
+    archive_in(s, q, b, 2, false);
+
+    assert_eq!(s.trim_archived_over(a, 10).unwrap(), 0, "under the ceiling");
+    assert_eq!(s.trim_archived_over(a, 2).unwrap(), 3);
+    let mut kept: Vec<String> = s
+        .list_archived(100, 0, a)
+        .unwrap()
+        .into_iter()
+        .map(|job| job.id)
+        .collect();
+    kept.sort();
+    let mut newest = ids[3..].to_vec();
+    newest.sort();
+    assert_eq!(kept, newest, "the two newest survive");
+    assert_eq!(s.list_archived(100, 0, b).unwrap().len(), 2);
+    assert_eq!(s.trim_archived_over(a, 2).unwrap(), 0, "idempotent");
+}
+
+/// #841: `max_dead_rows` trims one namespace's dead letters oldest-first.
+fn test_trim_dead_over(s: &impl Storage) {
+    let q = "q-trim-dead";
+    let (a, b) = (Some("trim-dead-a"), Some("trim-dead-b"));
+    let ids = archive_in(s, q, a, 4, true);
+    archive_in(s, q, b, 1, true);
+
+    assert_eq!(s.trim_dead_over(a, 1).unwrap(), 3);
+    let kept = s.list_dead(100, 0, a).unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].original_job_id, ids[3], "the newest survives");
+    assert_eq!(s.list_dead(100, 0, b).unwrap().len(), 1);
+    assert_eq!(s.trim_dead_over(a, 0).unwrap(), 1, "zero keeps nothing");
+    assert!(s.list_dead(100, 0, a).unwrap().is_empty());
+}
+
 fn run_storage_tests(s: &impl Storage) {
     test_count_by_namespace(s);
+    test_trim_archived_over(s);
+    test_trim_dead_over(s);
     test_shed_new_jobs_never_go_live(s);
     test_enqueue_and_get(s);
     test_dequeue(s);

@@ -1,7 +1,9 @@
 use redis::Commands;
 use serde::{Deserialize, Serialize};
 
-use super::{map_err, strip_dead_blob, watched_transaction, RedisStorage, SCAN_BATCH};
+use super::{
+    map_err, strip_dead_blob, watched_transaction, RedisStorage, MAX_TRIM_BATCHES, SCAN_BATCH,
+};
 use crate::error::{QueueError, Result};
 use crate::events::reason;
 use crate::job::{now_millis, Job, JobStatus, NewJob};
@@ -183,12 +185,98 @@ impl RedisStorage {
             )
             .ignore();
             pipe.zadd(&dlq_all, &entry.id, now as f64).ignore();
+            pipe.zadd(
+                self.dlq_by_namespace_key(job.namespace.as_deref()),
+                &entry.id,
+                now as f64,
+            )
+            .ignore();
             let dead_job = dead_copy(&job, error, now);
             let dead_json = serde_json::to_string(&dead_job)?;
             self.push_archive_ops(pipe, &dead_job, JobStatus::Pending, &dead_json);
         }
         let mut conn = self.conn()?;
         pipe.query::<()>(&mut conn).map_err(map_err)
+    }
+
+    /// Delete `namespace`'s oldest dead-letter entries until at most `keep`
+    /// remain — the `max_dead_rows` quota (#841) — walking `dlq:by_ns:<seg>`
+    /// oldest-first. Like the archive trim, each call first indexes one more
+    /// batch of entries that predate the index, erring toward keeping rows.
+    pub fn trim_dead_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64> {
+        let mut conn = self.conn()?;
+        self.backfill_batch(
+            &mut conn,
+            &self.key(&["dlq", "all"]),
+            &self.key(&["dlq", "by_ns"]),
+            |conn, ids| {
+                let pipe = &mut redis::pipe();
+                for id in ids {
+                    let data: Option<String> = conn.get(self.key(&["dlq", id])).map_err(map_err)?;
+                    let entry = data.and_then(|d| serde_json::from_str::<DeadJobEntry>(&d).ok());
+                    if let Some(entry) = entry {
+                        pipe.zadd(
+                            self.dlq_by_namespace_key(entry.namespace.as_deref()),
+                            id,
+                            entry.failed_at as f64,
+                        )
+                        .ignore();
+                    }
+                }
+                pipe.query::<()>(conn).map_err(map_err)
+            },
+        )?;
+
+        let index = self.dlq_by_namespace_key(namespace);
+        let total: i64 = conn.zcard(&index).map_err(map_err)?;
+        let mut remaining = total - keep.max(0);
+        let mut removed = 0u64;
+        for _ in 0..MAX_TRIM_BATCHES {
+            if remaining <= 0 {
+                break;
+            }
+            let take = remaining.min(SCAN_BATCH as i64) as isize;
+            let ids: Vec<String> = conn.zrange(&index, 0, take - 1).map_err(map_err)?;
+            if ids.is_empty() {
+                break;
+            }
+            let pipe = &mut redis::pipe();
+            for id in &ids {
+                let data: Option<String> = conn.get(self.key(&["dlq", id])).map_err(map_err)?;
+                match data.map(|d| serde_json::from_str::<DeadJobEntry>(&d)) {
+                    Some(Ok(entry)) => {
+                        self.push_dlq_remove(pipe, id, &entry);
+                        removed += 1;
+                    }
+                    // Undecodable, but indexed here, so this namespace's.
+                    Some(Err(_)) => {
+                        pipe.del(self.key(&["dlq", id])).ignore();
+                        pipe.zrem(self.key(&["dlq", "all"]), id).ignore();
+                        pipe.zrem(&index, id).ignore();
+                        removed += 1;
+                    }
+                    // Left behind by a delete that could not name the
+                    // namespace; it was counted, so pruning it is progress.
+                    None => {
+                        pipe.zrem(&index, id).ignore();
+                    }
+                }
+            }
+            pipe.query::<()>(&mut conn).map_err(map_err)?;
+            remaining -= ids.len() as i64;
+        }
+        Ok(removed)
+    }
+
+    /// Queue the removal of dead-letter entry `id` and every index it sits in:
+    /// the global set, its namespace's set, and — for a pub/sub delivery — its
+    /// subscription's `sub:dead` index.
+    fn push_dlq_remove(&self, pipe: &mut redis::Pipeline, id: &str, entry: &DeadJobEntry) {
+        pipe.del(self.key(&["dlq", id])).ignore();
+        pipe.zrem(self.key(&["dlq", "all"]), id).ignore();
+        pipe.zrem(self.dlq_by_namespace_key(entry.namespace.as_deref()), id)
+            .ignore();
+        self.push_pubsub_dead_remove(pipe, entry.notes.as_deref(), &entry.original_job_id);
     }
 
     /// Shared body of `move_to_dlq`/`shed_to_dlq`; `shed` is the only
@@ -209,6 +297,7 @@ impl RedisStorage {
 
         let dlq_key = self.key(&["dlq", &dlq_id]);
         let dlq_all = self.key(&["dlq", "all"]);
+        let dlq_by_ns = self.dlq_by_namespace_key(job.namespace.as_deref());
 
         let old_status = job.status;
         let dead_job = dead_copy(job, error, now);
@@ -227,6 +316,7 @@ impl RedisStorage {
                 }
                 pipe.set(&dlq_key, &json).ignore();
                 pipe.zadd(&dlq_all, &dlq_id, now as f64).ignore();
+                pipe.zadd(&dlq_by_ns, &dlq_id, now as f64).ignore();
                 self.push_archive_ops(pipe, &dead_job, old_status, &dead_json);
                 Ok(pipe.query::<Option<()>>(conn)?.map(|()| true))
             })
@@ -439,9 +529,7 @@ impl RedisStorage {
         // ids whose entry matches `task_name`.
         let ids: Vec<String> = conn.zrevrange(&dlq_all, 0, -1).map_err(map_err)?;
 
-        // (dlq_id, notes, original_job_id) — notes + original id let the
-        // sub:dead index shrink with the purge (no-op for non-pub/sub rows).
-        let mut to_delete: Vec<(String, Option<String>, String)> = Vec::new();
+        let mut to_delete: Vec<(String, DeadJobEntry)> = Vec::new();
         for id in ids {
             let dlq_key = self.key(&["dlq", &id]);
             let data: Option<String> = conn.get(&dlq_key).map_err(map_err)?;
@@ -452,7 +540,7 @@ impl RedisStorage {
                 let in_scope =
                     namespace.is_none_or(|scope| entry.namespace.as_deref() == Some(scope));
                 if entry.task_name == task_name && in_scope {
-                    to_delete.push((id, entry.notes, entry.original_job_id));
+                    to_delete.push((id, entry));
                 }
             }
         }
@@ -462,10 +550,8 @@ impl RedisStorage {
         }
 
         let pipe = &mut redis::pipe();
-        for (id, notes, member) in &to_delete {
-            pipe.del(self.key(&["dlq", id]));
-            pipe.zrem(&dlq_all, id.as_str());
-            self.push_pubsub_dead_remove(pipe, notes.as_deref(), member);
+        for (id, entry) in &to_delete {
+            self.push_dlq_remove(pipe, id, entry);
         }
         pipe.query::<()>(&mut conn).map_err(map_err)?;
         Ok(to_delete.len() as u64)
@@ -556,6 +642,7 @@ impl RedisStorage {
         let pipe = &mut redis::pipe();
         pipe.del(&dlq_key);
         pipe.zrem(&dlq_all, dead_id);
+        pipe.zrem(self.dlq_by_namespace_key(job.namespace.as_deref()), dead_id);
         self.push_pubsub_dead_remove(pipe, dead_notes.as_deref(), &dead_member);
         pipe.query::<()>(&mut conn).map_err(map_err)?;
 
@@ -608,14 +695,14 @@ impl RedisStorage {
                     skipped += 1;
                     continue;
                 }
-                pipe.del(self.key(&["dlq", id]));
-                pipe.zrem(&dlq_all, id.as_str());
-                if let Some(entry) = entry {
-                    self.push_pubsub_dead_remove(
-                        pipe,
-                        entry.notes.as_deref(),
-                        &entry.original_job_id,
-                    );
+                match entry {
+                    Some(entry) => self.push_dlq_remove(pipe, id, &entry),
+                    // Unreadable, so its namespace index is unknown: the
+                    // `max_dead_rows` trim prunes the entry it leaves there.
+                    None => {
+                        pipe.del(self.key(&["dlq", id]));
+                        pipe.zrem(&dlq_all, id.as_str());
+                    }
                 }
                 purged += 1;
             }
@@ -636,7 +723,6 @@ impl RedisStorage {
     pub fn delete_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<bool> {
         let mut conn = self.conn()?;
         let dlq_key = self.key(&["dlq", dead_id]);
-        let dlq_all = self.key(&["dlq", "all"]);
 
         // Load the row (rather than a bare EXISTS) so its subscription
         // attribution is known and the sub:dead index shrinks with the delete.
@@ -650,9 +736,7 @@ impl RedisStorage {
         }
 
         let pipe = &mut redis::pipe();
-        pipe.del(&dlq_key);
-        pipe.zrem(&dlq_all, dead_id);
-        self.push_pubsub_dead_remove(pipe, entry.notes.as_deref(), &entry.original_job_id);
+        self.push_dlq_remove(pipe, dead_id, &entry);
         pipe.query::<()>(&mut conn).map_err(map_err)?;
         Ok(true)
     }
@@ -680,7 +764,7 @@ impl RedisStorage {
             cursor = next;
 
             // ZSCAN returns a flat [member, score, member, score, ...] list.
-            let mut to_delete: Vec<(String, Option<String>, String)> = Vec::new();
+            let mut to_delete: Vec<(String, DeadJobEntry)> = Vec::new();
             for id in flat.iter().step_by(2) {
                 let dlq_key = self.key(&["dlq", id]);
                 let data: Option<String> = conn.get(&dlq_key).map_err(map_err)?;
@@ -696,7 +780,7 @@ impl RedisStorage {
                             None => global_cutoff_ms.is_some_and(|c| entry.failed_at < c),
                         };
                         if expired {
-                            to_delete.push((id.clone(), entry.notes, entry.original_job_id));
+                            to_delete.push((id.clone(), entry));
                         }
                     }
                 }
@@ -704,10 +788,8 @@ impl RedisStorage {
 
             if !to_delete.is_empty() {
                 let pipe = &mut redis::pipe();
-                for (id, notes, member) in &to_delete {
-                    pipe.del(self.key(&["dlq", id]));
-                    pipe.zrem(&dlq_all, id.as_str());
-                    self.push_pubsub_dead_remove(pipe, notes.as_deref(), member);
+                for (id, entry) in &to_delete {
+                    self.push_dlq_remove(pipe, id, entry);
                 }
                 pipe.query::<()>(&mut conn).map_err(map_err)?;
                 total += to_delete.len() as u64;

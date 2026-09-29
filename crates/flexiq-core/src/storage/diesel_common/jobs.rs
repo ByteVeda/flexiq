@@ -2387,6 +2387,33 @@ macro_rules! impl_diesel_job_ops {
                 Ok(global + per_entry)
             }
 
+            /// Delete `namespace`'s oldest archived jobs until at most `keep`
+            /// remain — the `max_archived_rows` quota (#841). `None` is the
+            /// default namespace. Oldest by `completed_at`, then id. Diagnostics
+            /// are left to their own retention windows, as the TTL purge does.
+            pub fn trim_archived_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64> {
+                let in_namespace = |query: archived_jobs::BoxedQuery<'static, _>| match namespace {
+                    Some(ns) => query.filter(archived_jobs::namespace.eq(ns.to_string())),
+                    None => query.filter(archived_jobs::namespace.is_null()),
+                };
+                let total: i64 = {
+                    let mut conn = self.conn()?;
+                    in_namespace(archived_jobs::table.into_boxed())
+                        .count()
+                        .get_result(&mut conn)?
+                };
+                $crate::storage::diesel_common::purge::trim_oldest(total - keep.max(0), |limit| {
+                    self.write_transaction(|conn| {
+                        let ids: Vec<String> = in_namespace(archived_jobs::table.into_boxed())
+                            .order((archived_jobs::completed_at.asc(), archived_jobs::id.asc()))
+                            .select(archived_jobs::id)
+                            .limit(limit)
+                            .load(conn)?;
+                        Ok(Self::purge_archived_id_batch(conn, &ids, false)?)
+                    })
+                })
+            }
+
             /// Find stale running jobs that exceeded their deadline.
             ///
             /// Scoped to `namespace`, so a scheduler never times out another

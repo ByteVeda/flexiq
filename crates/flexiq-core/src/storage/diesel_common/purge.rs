@@ -46,6 +46,25 @@ where
     Ok(total)
 }
 
+/// Delete the `excess` oldest rows of a table over its row ceiling (#841),
+/// through `delete_oldest(limit)`: it must delete at most `limit` rows, oldest
+/// first, in its own transaction, and return how many. Bounded like every
+/// other sweep — a backlog past the batch cap resumes on the next tick.
+pub(crate) fn trim_oldest<F>(excess: i64, mut delete_oldest: F) -> Result<u64>
+where
+    F: FnMut(i64) -> Result<u64>,
+{
+    let mut remaining = excess.max(0);
+    drain_batches(|| {
+        if remaining == 0 {
+            return Ok(0);
+        }
+        let removed = delete_oldest(remaining.min(PURGE_BATCH))?;
+        remaining = remaining.saturating_sub(removed as i64);
+        Ok(removed)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;

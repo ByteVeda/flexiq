@@ -4,6 +4,7 @@ use crate::error::Result;
 use crate::events::reason;
 use crate::job::now_millis;
 use crate::periodic::{next_run, periodic_job};
+use crate::quota::{namespace_of_quota_key, NamespaceQuota};
 use crate::scheduler::retention::{
     publish_effective_retention, EffectiveRetention, RetentionConfig, DEFAULT_NAMESPACE,
 };
@@ -96,6 +97,46 @@ fn sweep(label: &str, purge: impl FnOnce() -> Result<u64>) -> u64 {
 }
 
 impl Scheduler {
+    /// Trim every namespace with a row ceiling (#841) down to it, oldest
+    /// first; returns the rows removed. Cluster-wide like the TTL sweeps, so
+    /// only the retention leader runs it. An unreadable quota is skipped with a
+    /// warning rather than read as a ceiling: guessing here deletes history.
+    fn trim_to_quotas(&self) -> u64 {
+        let settings = match self.storage.list_settings() {
+            Ok(settings) => settings,
+            Err(e) => {
+                warn!("listing namespace quotas failed: {e}");
+                return 0;
+            }
+        };
+        let mut trimmed = 0;
+        for (key, raw) in &settings {
+            let Some(namespace) = namespace_of_quota_key(key) else {
+                continue;
+            };
+            let namespace = namespace.as_deref();
+            let label = namespace.unwrap_or(DEFAULT_NAMESPACE);
+            let quota = match NamespaceQuota::from_json(raw) {
+                Ok(quota) => quota,
+                Err(e) => {
+                    warn!("namespace {label}: skipping row quotas, {e}");
+                    continue;
+                }
+            };
+            if let Some(keep) = quota.max_archived_rows {
+                trimmed += sweep("trim_archived_over", || {
+                    self.storage.trim_archived_over(namespace, keep)
+                });
+            }
+            if let Some(keep) = quota.max_dead_rows {
+                trimmed += sweep("trim_dead_over", || {
+                    self.storage.trim_dead_over(namespace, keep)
+                });
+            }
+        }
+        trimmed
+    }
+
     pub(super) fn reap_stale(&self) -> Result<()> {
         let now = now_millis();
         // Expire pending jobs that passed their TTL. Only a hub needs the rows,
@@ -350,9 +391,13 @@ impl Scheduler {
                 .purge_topic_messages(now, TOPIC_MESSAGE_PURGE_LIMIT)
         });
 
-        if completed + dead + errors + metrics + logs + topic_msgs > 0 {
+        // Row ceilings run after the windows, so they only cut what the
+        // windows left standing.
+        let trimmed = self.trim_to_quotas();
+
+        if completed + dead + errors + metrics + logs + topic_msgs + trimmed > 0 {
             info!(
-                "auto-cleanup: purged {completed} completed, {dead} dead, {errors} errors, {metrics} metrics, {logs} logs, {topic_msgs} topic messages"
+                "auto-cleanup: purged {completed} completed, {dead} dead, {errors} errors, {metrics} metrics, {logs} logs, {topic_msgs} topic messages, {trimmed} over namespace row quotas"
             );
         }
 

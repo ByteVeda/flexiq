@@ -872,6 +872,20 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<u64> {
                 self.purge_dead_with_ttl(global_cutoff_ms)
             }
+            fn trim_dead_over(
+                &self,
+                namespace: Option<&str>,
+                keep: i64,
+            ) -> $crate::error::Result<u64> {
+                self.trim_dead_over(namespace, keep)
+            }
+            fn trim_archived_over(
+                &self,
+                namespace: Option<&str>,
+                keep: i64,
+            ) -> $crate::error::Result<u64> {
+                self.trim_archived_over(namespace, keep)
+            }
             fn list_dead_for_retry(
                 &self,
                 cutoff_ms: i64,
@@ -2074,6 +2088,12 @@ impl Storage for StorageBackend {
     }
     fn purge_dead_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64> {
         delegate!(self, purge_dead_with_ttl, global_cutoff_ms)
+    }
+    fn trim_dead_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64> {
+        delegate!(self, trim_dead_over, namespace, keep)
+    }
+    fn trim_archived_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64> {
+        delegate!(self, trim_archived_over, namespace, keep)
     }
     fn list_dead_for_retry(
         &self,
