@@ -490,6 +490,15 @@ pub trait Storage: Send + Sync + Clone {
     /// Atomically refill and consume one token. Returns `false` when the
     /// bucket is empty.
     fn try_acquire_token(&self, key: &str, max_tokens: f64, refill_rate: f64) -> Result<bool>;
+    /// Atomically refill and consume `count` tokens — all or none, so a
+    /// refused batch spends nothing. A `count` above `max_tokens` never passes.
+    fn try_acquire_tokens(
+        &self,
+        key: &str,
+        count: u32,
+        max_tokens: f64,
+        refill_rate: f64,
+    ) -> Result<bool>;
 
     // ── Periodic task operations ────────────────────────────────────
     //

@@ -3428,6 +3428,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_listing_is_blob_free(s);
     test_concurrent_dequeue_no_double_claim(s);
     test_rate_limit_token_exhaustion(s);
+    test_rate_limit_multi_token_is_all_or_nothing(s);
     test_task_logs_after_cursor(s);
     test_keyset_pagination_jobs(s);
     test_keyset_pagination_dlq_and_archive(s);
@@ -4716,6 +4717,24 @@ fn test_rate_limit_token_exhaustion(s: &impl Storage) {
     assert!(
         !s.try_acquire_token(key, max_tokens, 0.0).unwrap(),
         "bucket must be empty after max_tokens acquisitions"
+    );
+}
+
+fn test_rate_limit_multi_token_is_all_or_nothing(s: &impl Storage) {
+    // A batch takes every token it asks for or none: a refusal spends nothing,
+    // so the remainder is still there for a smaller batch.
+    let key = "q-rate-multi";
+    assert!(s.try_acquire_tokens(key, 3, 5.0, 0.0).unwrap());
+    assert!(
+        !s.try_acquire_tokens(key, 3, 5.0, 0.0).unwrap(),
+        "only 2 left"
+    );
+    assert!(s.try_acquire_tokens(key, 2, 5.0, 0.0).unwrap());
+    assert!(!s.try_acquire_token(key, 5.0, 0.0).unwrap(), "bucket empty");
+    assert!(
+        !s.try_acquire_tokens("q-rate-multi-big", 6, 5.0, 0.0)
+            .unwrap(),
+        "a batch above capacity never passes"
     );
 }
 

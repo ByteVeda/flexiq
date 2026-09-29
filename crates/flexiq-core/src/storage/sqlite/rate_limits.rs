@@ -39,7 +39,20 @@ impl SqliteStorage {
     /// `SqliteStorage::write_transaction` (BEGIN IMMEDIATE) so the read-then-
     /// write can't hit the deferred-lock-upgrade `SQLITE_BUSY` deadlock.
     pub fn try_acquire_token(&self, key: &str, max_tokens: f64, refill_rate: f64) -> Result<bool> {
+        self.try_acquire_tokens(key, 1, max_tokens, refill_rate)
+    }
+
+    /// [`try_acquire_token`](Self::try_acquire_token) for `count` tokens at
+    /// once: all of them or none, so a refused batch spends nothing.
+    pub fn try_acquire_tokens(
+        &self,
+        key: &str,
+        count: u32,
+        max_tokens: f64,
+        refill_rate: f64,
+    ) -> Result<bool> {
         let now = now_millis();
+        let count = f64::from(count);
 
         self.write_transaction(|conn| {
             let existing: Option<RateLimitRow> = rate_limits::table
@@ -66,9 +79,9 @@ impl SqliteStorage {
             row.tokens = refilled.min(max_tokens);
             row.last_refill = now;
 
-            // Try to consume one token
-            let acquired = if row.tokens >= 1.0 {
-                row.tokens -= 1.0;
+            // Try to consume `count` tokens
+            let acquired = if row.tokens >= count {
+                row.tokens -= count;
                 true
             } else {
                 false

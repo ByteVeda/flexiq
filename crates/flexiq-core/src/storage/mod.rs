@@ -893,6 +893,15 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<bool> {
                 self.try_acquire_token(key, max_tokens, refill_rate)
             }
+            fn try_acquire_tokens(
+                &self,
+                key: &str,
+                count: u32,
+                max_tokens: f64,
+                refill_rate: f64,
+            ) -> $crate::error::Result<bool> {
+                self.try_acquire_tokens(key, count, max_tokens, refill_rate)
+            }
             fn register_periodic(
                 &self,
                 task: &$crate::storage::records::NewPeriodicTask,
@@ -2044,6 +2053,22 @@ impl Storage for StorageBackend {
     }
     fn try_acquire_token(&self, key: &str, max_tokens: f64, refill_rate: f64) -> Result<bool> {
         delegate!(self, try_acquire_token, key, max_tokens, refill_rate)
+    }
+    fn try_acquire_tokens(
+        &self,
+        key: &str,
+        count: u32,
+        max_tokens: f64,
+        refill_rate: f64,
+    ) -> Result<bool> {
+        delegate!(
+            self,
+            try_acquire_tokens,
+            key,
+            count,
+            max_tokens,
+            refill_rate
+        )
     }
     fn register_periodic(&self, task: &records::NewPeriodicTask) -> Result<()> {
         delegate!(self, register_periodic, task)
