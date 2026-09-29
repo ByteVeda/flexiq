@@ -3055,6 +3055,115 @@ mod tests {
         assert_eq!(received, 5);
     }
 
+    /// A scheduler serving `namespace`, sharing `storage`, draining in batches.
+    fn namespace_scheduler(storage: &StorageBackend, namespace: Option<&str>) -> Scheduler {
+        let config = SchedulerConfig {
+            batch_size: Some(8),
+            ..SchedulerConfig::default()
+        };
+        Scheduler::new(
+            storage.clone(),
+            vec!["default".to_string()],
+            config,
+            namespace.map(str::to_string),
+        )
+    }
+
+    fn job_in(namespace: Option<&str>) -> NewJob {
+        NewJob {
+            namespace: namespace.map(str::to_string),
+            ..make_job("tenant_task")
+        }
+    }
+
+    /// Ticks `scheduler` until a tick makes no progress; the jobs it handed out.
+    fn drain(scheduler: &Scheduler) -> usize {
+        let (tx, mut rx) = make_channel(64);
+        let mut counters = TickCounters::default();
+        for _ in 0..8 {
+            scheduler.tick(&tx, &mut counters);
+        }
+        let mut dispatched = 0;
+        while rx.try_recv().is_ok() {
+            dispatched += 1;
+        }
+        dispatched
+    }
+
+    #[test]
+    fn test_namespace_max_running_allows_exactly_max() {
+        // #841: the namespace cap gates at dispatch beside the queue and task
+        // caps — two of five run, the rest return to Pending with no claim.
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let quota = crate::quota::NamespaceQuota {
+            max_running: Some(2),
+            ..Default::default()
+        };
+        storage.set_namespace_quota(Some("a"), &quota).unwrap();
+        let scheduler = namespace_scheduler(&storage, Some("a"));
+        for _ in 0..5 {
+            storage.enqueue(job_in(Some("a"))).unwrap();
+        }
+
+        assert_eq!(drain(&scheduler), 2);
+        assert_eq!(
+            storage
+                .count_by_namespace(Some("a"), JobStatus::Pending)
+                .unwrap(),
+            3
+        );
+        let claims = storage
+            .list_claims_by_worker(scheduler.claim_owner())
+            .unwrap();
+        assert_eq!(claims.len(), 2, "rolled-back jobs keep no claim");
+    }
+
+    #[test]
+    fn test_namespace_max_running_leaves_other_tenants_alone() {
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let frozen = crate::quota::NamespaceQuota {
+            max_running: Some(0),
+            ..Default::default()
+        };
+        storage.set_namespace_quota(Some("a"), &frozen).unwrap();
+        for namespace in [Some("a"), Some("b"), None] {
+            for _ in 0..3 {
+                storage.enqueue(job_in(namespace)).unwrap();
+            }
+        }
+
+        assert_eq!(drain(&namespace_scheduler(&storage, Some("a"))), 0);
+        assert_eq!(drain(&namespace_scheduler(&storage, Some("b"))), 3);
+        assert_eq!(drain(&namespace_scheduler(&storage, None)), 3);
+    }
+
+    #[test]
+    fn test_unreadable_namespace_quota_does_not_strand_the_claim() {
+        // Fail closed without failing stuck: the gate errors, and the job goes
+        // back to Pending with its claim revoked instead of sitting Running
+        // until the reaper calls it a timeout.
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let scheduler = namespace_scheduler(&storage, Some("a"));
+        let job = storage.enqueue(job_in(Some("a"))).unwrap();
+        storage
+            .set_setting(&crate::quota::quota_key(Some("a")), r#"{"max_running":-1}"#)
+            .unwrap();
+        // A raw write skips the handle's cache, which still holds the
+        // enqueue's "no quota" read.
+        storage.quota_cache().invalidate(Some("a"));
+
+        assert_eq!(drain(&scheduler), 0);
+        let stored = storage.get_job(&job.id, Some("a")).unwrap().unwrap();
+        assert_eq!(stored.status, JobStatus::Pending);
+        assert!(storage
+            .list_claims_by_worker(scheduler.claim_owner())
+            .unwrap()
+            .is_empty());
+    }
+
     #[test]
     fn test_try_dispatch_per_queue_concurrency_allows_exactly_max() {
         // Same regression for the queue-level cap.
