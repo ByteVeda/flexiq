@@ -5,7 +5,8 @@
 //! A package is the right unit because the audiences differ — a producer
 //! submits work and an executor runs it — and because a scope that named an RPC
 //! would have to grow every time the service does. The operator split is drawn
-//! by each method's idempotency level for the same reason (#836).
+//! by each method's idempotency level for the same reason (#836), and so is the
+//! producer's: `read` reaches its read-only methods, `produce` all of them.
 //!
 //! This lives outside `grpc/` because a scope is a property of a *token*, and
 //! tokens are minted, listed and revoked by builds compiled without the `grpc`
@@ -14,15 +15,14 @@
 
 use std::fmt;
 
-use serde::de::{SeqAccess, Visitor};
-use serde::ser::SerializeSeq;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
 /// A door a credential may open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Scope {
     /// `flexiq.v1` — submit, read and cancel work.
     Produce,
+    /// `flexiq.v1`, read-only methods — look at jobs, queue stats and workflow
+    /// runs, never submit or cancel. A `produce` grant covers it too.
+    Read,
     /// `flexiq.executor.v1` — claim work and report on it.
     Execute,
     /// `flexiq.admin.v1`, read-only methods — look at queues, dead letters,
@@ -35,7 +35,13 @@ pub enum Scope {
 
 impl Scope {
     /// Every scope there is, in the order a listing shows them.
-    pub const ALL: [Self; 4] = [Self::Produce, Self::Execute, Self::Inspect, Self::Admin];
+    pub const ALL: [Self; 5] = [
+        Self::Produce,
+        Self::Read,
+        Self::Execute,
+        Self::Inspect,
+        Self::Admin,
+    ];
 
     /// This scope's bit in a [`ScopeSet`].
     const fn bit(self) -> u8 {
@@ -44,13 +50,25 @@ impl Scope {
             Self::Execute => 1 << 1,
             Self::Inspect => 1 << 2,
             Self::Admin => 1 << 3,
+            Self::Read => 1 << 4,
         }
+    }
+
+    /// Whether a grant of `granted` opens what this scope guards.
+    ///
+    /// `produce` has always reached the producer's reads, so it still does:
+    /// narrowing it would take reads away from every token minted before `read`
+    /// existed. That is the only implication; `inspect` is not implied by
+    /// `admin`.
+    pub fn is_granted_by(self, granted: Self) -> bool {
+        granted == self || (self == Self::Read && granted == Self::Produce)
     }
 
     /// The scope's name, for a log line, a token definition or the wire.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Produce => "produce",
+            Self::Read => "read",
             Self::Execute => "execute",
             Self::Inspect => "inspect",
             Self::Admin => "admin",
@@ -84,16 +102,20 @@ impl fmt::Display for Scope {
 /// once per request, so the allocation would buy nothing, and `Copy` keeps a
 /// principal cheap to clone into a request's extensions.
 ///
-/// It serialises as an array of names rather than as the bits, because the
-/// stored form is read by builds that may know a different set of scopes than
-/// the one that wrote it.
+/// It holds whole scopes only. A token's stored form is its
+/// [`Grants`](super::grant::Grants), which keeps one of these beside any
+/// narrowed grants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ScopeSet(u8);
 
 impl ScopeSet {
     /// Every scope this build knows.
     pub const ALL: Self = Self(
-        Scope::Produce.bit() | Scope::Execute.bit() | Scope::Inspect.bit() | Scope::Admin.bit(),
+        Scope::Produce.bit()
+            | Scope::Read.bit()
+            | Scope::Execute.bit()
+            | Scope::Inspect.bit()
+            | Scope::Admin.bit(),
     );
 
     /// No scopes at all. A credential carrying this opens nothing.
@@ -104,9 +126,15 @@ impl ScopeSet {
         Self(scopes.iter().fold(0, |bits, scope| bits | scope.bit()))
     }
 
-    /// Whether this set grants `scope`.
+    /// Whether this set lists `scope` itself.
     pub fn contains(self, scope: Scope) -> bool {
         self.0 & scope.bit() != 0
+    }
+
+    /// Whether some scope in this set opens what `scope` guards — `contains`,
+    /// plus the one implication [`Scope::is_granted_by`] draws.
+    pub fn opens(self, scope: Scope) -> bool {
+        self.iter().any(|granted| scope.is_granted_by(granted))
     }
 
     /// Whether this set grants nothing.
@@ -135,53 +163,6 @@ impl ScopeSet {
 impl fmt::Display for ScopeSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.names().join(","))
-    }
-}
-
-impl Serialize for ScopeSet {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let names = self.names();
-        let mut seq = serializer.serialize_seq(Some(names.len()))?;
-        for name in names {
-            seq.serialize_element(name)?;
-        }
-        seq.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for ScopeSet {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_seq(NameVisitor)
-    }
-}
-
-/// Reads the stored array of names.
-struct NameVisitor;
-
-impl<'de> Visitor<'de> for NameVisitor {
-    type Value = ScopeSet;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "an array of scope names")
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<ScopeSet, A::Error> {
-        let mut set = ScopeSet::NONE;
-        while let Some(name) = seq.next_element::<String>()? {
-            // A name this build does not know is dropped, not refused. Dropping
-            // it can only *narrow* what the credential opens, and a stored row
-            // written by a newer build must not lock an older one out of the
-            // scopes they agree on. The log is how the operator learns the two
-            // disagree.
-            match Scope::parse(&name) {
-                Some(scope) => set.insert(scope),
-                None => log::warn!(
-                    "gRPC token carries scope '{name}', which this build does not \
-                     know; ignoring it"
-                ),
-            }
-        }
-        Ok(set)
     }
 }
 
@@ -215,24 +196,6 @@ mod tests {
     }
 
     #[test]
-    fn a_set_round_trips_through_json() {
-        let set = ScopeSet::of(&[Scope::Execute, Scope::Produce]);
-        let encoded = serde_json::to_string(&set).expect("encode");
-        assert_eq!(encoded, r#"["produce","execute"]"#);
-        let decoded: ScopeSet = serde_json::from_str(&encoded).expect("decode");
-        assert_eq!(decoded, set);
-    }
-
-    /// A row written by a build that knows more scopes than this one must still
-    /// grant the scopes both builds understand.
-    #[test]
-    fn an_unknown_scope_name_narrows_rather_than_failing() {
-        let decoded: ScopeSet =
-            serde_json::from_str(r#"["produce","teleport"]"#).expect("unknown names are ignored");
-        assert_eq!(decoded, ScopeSet::of(&[Scope::Produce]));
-    }
-
-    #[test]
     fn all_holds_every_scope_this_build_knows() {
         for scope in Scope::ALL {
             assert!(ScopeSet::ALL.contains(scope));
@@ -249,5 +212,23 @@ mod tests {
         assert!(!write.contains(Scope::Inspect));
         let produce = ScopeSet::of(&[Scope::Produce]);
         assert!(!produce.contains(Scope::Inspect) && !produce.contains(Scope::Admin));
+        assert!(!write.opens(Scope::Inspect), "admin does not imply inspect");
+    }
+
+    /// Every token minted before `read` existed reached the producer's reads
+    /// through `produce`; it still must. The reverse would be a write grant.
+    #[test]
+    fn produce_opens_the_reads_and_read_opens_nothing_else() {
+        let produce = ScopeSet::of(&[Scope::Produce]);
+        assert!(produce.opens(Scope::Read));
+        assert!(
+            !produce.contains(Scope::Read),
+            "the implication is not a listing"
+        );
+        let read = ScopeSet::of(&[Scope::Read]);
+        assert!(read.opens(Scope::Read));
+        for scope in [Scope::Produce, Scope::Execute, Scope::Inspect, Scope::Admin] {
+            assert!(!read.opens(scope), "read must not open {scope}");
+        }
     }
 }

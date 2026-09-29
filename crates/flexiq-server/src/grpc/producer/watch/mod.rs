@@ -28,7 +28,7 @@ use flexiq_core::{EventHub, StorageBackend};
 use tonic::{Response, Status};
 
 use crate::config::watch::WatchConfig;
-use crate::grpc::auth::Principal;
+use crate::grpc::auth::{Principal, Scope};
 use crate::grpc::pb::{self, watch_jobs_request::Target};
 use crate::grpc::producer::convert::DEFAULT_QUEUE;
 use crate::grpc::status::WireError;
@@ -107,6 +107,15 @@ impl Watches {
         request: pb::WatchJobsRequest,
     ) -> Result<Response<Outlet>, Status> {
         let target = self.target(request)?;
+        // A queue watch reports every task in the queue, so a narrowed caller
+        // needs a grant reaching the queue and all its tasks. An id watch is
+        // checked per job, once the rows are read.
+        if let Want::Queue { queue, .. } = &target {
+            if !principal.reaches(Some(queue), None) {
+                let scope = principal.door().unwrap_or(Scope::Read);
+                return Err(WireError::beyond_grant(scope.as_str(), Some(queue), None).into());
+            }
+        }
         let slot = self
             .quota
             .acquire(principal.credential())
@@ -116,7 +125,7 @@ impl Watches {
         let namespace = Arc::clone(principal.namespace());
         match target {
             Want::Ids(ids) => {
-                tokio::spawn(stream::watch_ids(shared, session, namespace, ids));
+                tokio::spawn(stream::watch_ids(shared, session, principal.clone(), ids));
             }
             Want::Queue { queue, from } => {
                 // Taken now, not in the task: a transition that lands after

@@ -25,7 +25,7 @@ use flexiq_core::StorageBackend;
 use tonic::{Request, Response, Status};
 
 use crate::events::Events;
-use crate::grpc::auth::Principal;
+use crate::grpc::auth::{Principal, Scope};
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
 use crate::grpc::pb::admin as pb;
 use crate::grpc::pb::admin::admin_service_server::{AdminService, AdminServiceServer};
@@ -77,6 +77,13 @@ impl Admin {
                 );
                 Status::from(WireError::internal())
             })?;
+        // No operator method checks a queue or a task against a grant, so a
+        // narrowed one opens none of them (#839). The layer refuses it first;
+        // this holds if the service is ever reached another way.
+        if !principal.reaches_everything() {
+            let scope = principal.door().unwrap_or(Scope::Admin);
+            return Err(WireError::scope_denied(scope.as_str()).into());
+        }
         let scoped = Scoped {
             storage: self.storage.clone(),
             events: self.events.clone(),

@@ -120,8 +120,10 @@ fn info() -> Value {
     from `contracts/proto/flexiq/v1` and `contracts/proto/flexiq/admin/v1`. Every path here reaches \
     the same service method a gRPC client reaches, on the same listener and behind the same token \
     check.\n\n\
-    A token's scopes pick what it may call: `produce` reaches the `/v1/` producer paths; under \
-    `/v1/admin/`, `inspect` reaches every `GET` and `admin` every `POST`.\n\n\
+    A token's scopes pick what it may call: on the `/v1/` producer paths, `read` reaches every \
+    `GET` and `produce` reaches every path; under `/v1/admin/`, `inspect` reaches every `GET` and \
+    `admin` every `POST`. A `produce` or `read` grant narrowed to some queues and tasks reaches \
+    only those.\n\n\
     Requests are refused when they carry a field the contract does not declare. Responses are not \
     closed: a later release may add one.\n\n\
     A listener serves exactly one namespace and it comes from the token, so no request names one. A \

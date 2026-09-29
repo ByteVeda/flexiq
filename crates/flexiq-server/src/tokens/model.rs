@@ -4,7 +4,7 @@ use flexiq_core::now_millis;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::scope::ScopeSet;
+use super::grant::Grants;
 
 /// Milliseconds in a day, the unit every lifetime here is expressed in.
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -41,8 +41,9 @@ pub struct ApiToken {
     pub name: String,
     /// `sha256(secret)`, hex. The token itself is not recoverable from it.
     pub hash: String,
-    /// The packages this token may call.
-    pub scopes: ScopeSet,
+    /// The packages this token may call, and the queues and tasks inside them.
+    /// Named `scopes` because that is the stored key rows already carry.
+    pub scopes: Grants,
     /// The one namespace every call on this credential is scoped to. Never
     /// empty: the NULL namespace is not addressable over the wire (D11).
     pub namespace: String,
@@ -139,7 +140,7 @@ pub struct NewToken {
     /// Operator-chosen label.
     pub name: String,
     /// What the token may call. Never empty.
-    pub scopes: ScopeSet,
+    pub scopes: Grants,
     /// The namespace it is bound to. Never empty.
     pub namespace: String,
     /// Days from now until it expires.
@@ -156,11 +157,12 @@ impl NewToken {
     /// not just what was refused.
     pub fn new(
         name: &str,
-        scopes: ScopeSet,
+        scopes: impl Into<Grants>,
         namespace: &str,
         lifetime_days: Option<i64>,
         created_by: Option<String>,
     ) -> Result<Self, String> {
+        let scopes = scopes.into();
         let name = name.trim();
         if name.is_empty() {
             return Err("name is required — a token nobody can identify cannot be \
@@ -254,7 +256,7 @@ pub fn mint_namespace(server: Option<&str>, requested: Option<&str>) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tokens::scope::Scope;
+    use crate::tokens::scope::{Scope, ScopeSet};
 
     fn request(lifetime: Option<i64>) -> Result<NewToken, String> {
         NewToken::new(
@@ -328,6 +330,30 @@ mod tests {
         assert!(!rendered.to_string().contains("hash"));
         assert_eq!(rendered["status"], "active");
         assert_eq!(rendered["scopes"], json!(["produce"]));
+    }
+
+    /// A row stored before grants existed keeps exactly its grants (#839).
+    #[test]
+    fn a_row_minted_before_grants_reads_back_whole() {
+        let stored = json!({
+            "id": "abc", "name": "ci", "hash": "h", "scopes": ["produce", "execute"],
+            "namespace": "prod", "created_at": 1, "expires_at": 2,
+        });
+        let token: ApiToken = serde_json::from_value(stored).expect("an old row still reads");
+        assert_eq!(
+            token.scopes,
+            Grants::from(ScopeSet::of(&[Scope::Produce, Scope::Execute]))
+        );
+    }
+
+    #[test]
+    fn a_narrowed_grant_is_stored_and_shown_as_spelled() {
+        let grants = Grants::parse_all(["read", "produce:queue=emails"]).expect("valid");
+        let token = NewToken::new("edge", grants, "prod", None, None)
+            .expect("valid")
+            .into_row("abc".to_string(), "hash".to_string());
+        let rendered = token.to_api_json(token.created_at);
+        assert_eq!(rendered["scopes"], json!(["read", "produce:queue=emails"]));
     }
 
     #[test]

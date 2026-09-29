@@ -5,6 +5,7 @@
 //! failure at all, a dropped connection included.
 
 use flexiq_core::storage::Storage;
+use flexiq_core::Job;
 use tonic::{Response, Status};
 
 use super::convert::{self, Blobs};
@@ -43,10 +44,24 @@ pub(crate) async fn get_job(
     // existed, which is deliberate: a distinguishable answer is an oracle for
     // ids outside the caller's own namespace.
     .ok_or_else(|| not_found(&request.job_id))?;
+    let job = within_grants(scoped, job, &request.job_id)?;
 
     Ok(Response::new(pb::GetJobResponse {
         job: Some(convert::job_to_wire(job, blobs)),
     }))
+}
+
+/// `job`, if the caller's grants reach its queue and task; otherwise the same
+/// answer as a job in another namespace (#839).
+///
+/// Not a refusal: "you may not see that job" confirms the id exists, which is
+/// the oracle the namespace answer already declines to be.
+pub(super) fn within_grants(scoped: &Scoped<'_>, job: Job, raw_id: &str) -> Result<Job, Status> {
+    if scoped.reaches(Some(&job.queue), Some(&job.task_name)) {
+        Ok(job)
+    } else {
+        Err(not_found(raw_id))
+    }
 }
 
 /// Page through jobs, newest first.
@@ -73,6 +88,11 @@ pub(crate) async fn list_jobs(
         .transpose()?
         .and_then(convert::status_from_wire)
         .map(|status| status as i32);
+
+    // A narrowed caller names what it lists rather than having the page
+    // filtered after the scan: filtering would make short pages that are not
+    // the end, and a page's size would tell it how many rows it cannot see.
+    scoped.require(request.queue.as_deref(), request.task_name.as_deref())?;
 
     let namespace = scoped.namespace().to_string();
     let queue = request.queue;
@@ -123,6 +143,10 @@ pub(crate) async fn queue_stats(
     scoped: &Scoped<'_>,
     request: pb::QueueStatsRequest,
 ) -> Result<Response<pb::QueueStatsResponse>, Status> {
+    // Counts span every task in the queue, so a task-narrowed caller is
+    // refused: `None` for the task asks whether it reaches all of them.
+    scoped.require(request.queue.as_deref(), None)?;
+
     let namespace = scoped.namespace().to_string();
     let queue = request.queue;
 

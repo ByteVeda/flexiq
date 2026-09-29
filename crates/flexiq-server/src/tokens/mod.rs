@@ -1,6 +1,7 @@
 //! Scoped API tokens: the credential the gRPC door accepts.
 //!
-//! A token is a named row with a set of [`Scope`]s, a namespace and an expiry,
+//! A token is a named row with a set of [`Grant`]s — [`Scope`]s, optionally
+//! narrowed to queues and tasks — a namespace and an expiry,
 //! stored hashed and shown to its operator exactly once. It replaces the shared
 //! secret #716 shipped, which was one string every client presented: it could
 //! not be revoked for one of them, carried no scope, and left no record of who
@@ -20,11 +21,13 @@
 //! process.
 
 pub mod cli;
+pub mod grant;
 pub mod model;
 pub mod scope;
 pub mod secret;
 pub mod store;
 
+pub use grant::{Access, Grant, Grants, Pattern};
 pub use model::{ApiToken, NewToken, TokenStatus};
 pub use scope::{Scope, ScopeSet};
 pub use secret::{MintedToken, PresentedToken};

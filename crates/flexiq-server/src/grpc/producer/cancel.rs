@@ -10,7 +10,7 @@ use flexiq_core::storage::Storage;
 use tonic::{Response, Status};
 
 use super::convert::{self, Blobs};
-use super::reads::{not_found, require_job_id};
+use super::reads::{not_found, require_job_id, within_grants};
 use super::Scoped;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::pb;
@@ -23,6 +23,19 @@ pub(crate) async fn cancel_job(
     let id = require_job_id(&request.job_id)?;
     let namespace = scoped.namespace().to_string();
     let events = scoped.events();
+
+    // A narrowed caller's job is read before it is touched, so one outside its
+    // grants answers as missing and is never cancelled (#839). A whole grant
+    // skips the extra read.
+    if !scoped.reaches(None, None) {
+        let (id, namespace) = (id.clone(), namespace.clone());
+        let job = on_storage(scoped.storage(), move |storage| {
+            storage.get_job(&id, Some(&namespace))
+        })
+        .await?
+        .ok_or_else(|| not_found(&request.job_id))?;
+        within_grants(scoped, job, &request.job_id)?;
+    }
 
     // All three calls share one hop onto the blocking pool: they are one
     // logical operation, and three round trips through the pool would be three

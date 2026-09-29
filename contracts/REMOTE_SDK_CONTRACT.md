@@ -503,7 +503,7 @@ The closed list, with the code each arrives under:
 | Reason | Code | Means |
 |---|---|---|
 | `UNAUTHENTICATED` | `UNAUTHENTICATED` | No usable credential. One reason for every way of failing, and a message that names none of them. |
-| `SCOPE_DENIED` | `PERMISSION_DENIED` | Genuine credential, wrong package. Carries `scope`. Never retryable. |
+| `SCOPE_DENIED` | `PERMISSION_DENIED` | Genuine credential, wrong package — or a narrowed grant that does not reach the queue or task named. Carries `scope`, and `queue` / `task` for the latter. Never retryable. |
 | `INVALID_REQUEST` | `INVALID_ARGUMENT` | The request is not a shape this service accepts. |
 | `MALFORMED_PAYLOAD` | `INVALID_ARGUMENT` | Bytes the client sent could not be decoded. |
 | `NO_SUCH_METHOD` | `UNIMPLEMENTED` | The path names no RPC. |
@@ -547,7 +547,8 @@ width and signedness are per key.
 |---|---|---|
 | `queue` | `QUEUE_FULL` | queue name, verbatim |
 | `pending`, `cap` | `QUEUE_FULL` | `int64`, jobs |
-| `scope` | `SCOPE_DENIED` | one of `produce`, `execute`, `inspect`, `admin` |
+| `scope` | `SCOPE_DENIED` | one of `produce`, `read`, `execute`, `inspect`, `admin` |
+| `queue`, `task` | `SCOPE_DENIED` | the queue / task name a narrowed grant does not reach, verbatim; either may be absent |
 | `speaks`, `required` | `CONTRACT_TOO_OLD` | `uint32`, contract level |
 | `limit` | `STEP_LIMIT_EXCEEDED` | one of `step bytes`, `total bytes`, `step count` |
 | `actual`, `allowed` | `STEP_LIMIT_EXCEEDED` | `uint64`, in `limit`'s unit |
@@ -663,11 +664,12 @@ token — there is no uncredentialled bind — but neither puts one on a wire.
 
 ### Scopes
 
-There are four, and **they are not a hierarchy**:
+There are five, and **they are not a hierarchy** — with one exception, below:
 
 | Scope | Opens |
 |---|---|
 | `produce` | `flexiq.v1` — every RPC in the package, and its JSON facade |
+| `read` | `flexiq.v1` — every `NO_SIDE_EFFECTS` RPC, and `GET` on its JSON facade |
 | `execute` | `flexiq.executor.v1` — every RPC in the package |
 | `inspect` | `flexiq.admin.v1` — every `NO_SIDE_EFFECTS` RPC, and `GET` on its JSON facade |
 | `admin` | `flexiq.admin.v1` — every other RPC, and `POST` on its JSON facade |
@@ -682,6 +684,25 @@ lacking. A credential is granted a scope only when it genuinely needs it.
 The consequence for a client author: a new RPC in a package a client already
 calls needs no new grant beyond the one its idempotency level names, and no RPC
 will ever be individually grantable.
+
+The exception: `produce` also opens everything `read` does, because it opened
+the producer's reads before `read` existed. `admin` does not open `inspect`.
+
+**A `produce` or `read` grant may be narrowed to queues and tasks**
+(`produce:queue=emails-*,task=send_receipt`). A call on a queue or task the
+narrowed grants do not reach is refused `PERMISSION_DENIED` with reason
+`SCOPE_DENIED`, carrying `scope` and whichever of `queue` and `task` it named.
+Two answers differ from that, and a client **MUST NOT** rely on telling them
+from a genuinely absent job:
+
+- a job outside the grants reads as missing — `JOB_NOT_FOUND` from `GetJob` and
+  `CancelJob`, `not_found_job_id` on a `WatchJobs` id watch;
+- a listing is never filtered: `ListJobs`, `QueueStats` and a queue watch must
+  name a queue (and, for a task-narrowed grant, a task) the grants reach, or
+  they are refused.
+
+RPCs that check no queue — `SubmitWorkflow`, `GetWorkflowRun`, and a debounced
+`Enqueue` — refuse a narrowed credential outright.
 
 ### The namespace
 

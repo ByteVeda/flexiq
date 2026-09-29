@@ -25,8 +25,21 @@ const HEALTH: [&str; 2] = [
     "/grpc.health.v1.Health/Check",
     "/grpc.health.v1.Health/Watch",
 ];
-/// The producer package.
+/// The producer package, split between two scopes by method.
 const PRODUCER: &str = "/flexiq.v1.";
+/// The producer package's service path.
+const PRODUCER_SERVICE: &str = "/flexiq.v1.ProducerService/";
+/// Its `NO_SIDE_EFFECTS` methods, which `read` reaches (#839). Every other
+/// method needs `produce`, so one added without updating this list fails
+/// closed onto the stronger scope. A test holds the list to the descriptor's
+/// idempotency levels, both ways.
+pub const READ_METHODS: [&str; 5] = [
+    "GetJob",
+    "ListJobs",
+    "QueueStats",
+    "GetWorkflowRun",
+    "WatchJobs",
+];
 /// The executor package (#720). Classified now so the RPCs that land in it
 /// arrive already gated, rather than relying on that PR to remember.
 const EXECUTOR: &str = "/flexiq.executor.v1.";
@@ -102,8 +115,20 @@ fn admin_method(path: &str) -> Scope {
     }
 }
 
-/// Classify one request by its path, and — on the JSON facade's operator
-/// paths, where the verb is what separates a read from a write — its method.
+/// The scope one producer gRPC method needs.
+fn producer_method(path: &str) -> Scope {
+    let read_only = path
+        .strip_prefix(PRODUCER_SERVICE)
+        .is_some_and(|method| READ_METHODS.contains(&method));
+    if read_only {
+        Scope::Read
+    } else {
+        Scope::Produce
+    }
+}
+
+/// Classify one request by its path, and — on the JSON facade, where the verb
+/// is what separates a read from a write — its method.
 pub fn requirement(method: &http::Method, path: &str) -> Requirement {
     if HEALTH.contains(&path) {
         // A kubelet `grpc:` probe sends no metadata and has no way to, so
@@ -121,8 +146,16 @@ pub fn requirement(method: &http::Method, path: &str) -> Requirement {
         } else {
             Requirement::Scoped(Scope::Admin)
         }
-    } else if path.starts_with(PRODUCER) || in_facade(path) {
-        Requirement::Scoped(Scope::Produce)
+    } else if path.starts_with(PRODUCER) {
+        Requirement::Scoped(producer_method(path))
+    } else if in_facade(path) {
+        // The facade serves `GET` exactly for the producer's read-only
+        // methods, as it does for the operator's.
+        if method == http::Method::GET {
+            Requirement::Scoped(Scope::Read)
+        } else {
+            Requirement::Scoped(Scope::Produce)
+        }
     } else if path.starts_with(EXECUTOR) {
         Requirement::Scoped(Scope::Execute)
     } else {
@@ -169,6 +202,60 @@ mod tests {
         }
     }
 
+    /// The producer package splits the same way, by the same rule.
+    #[test]
+    fn the_read_methods_are_exactly_the_read_only_ones() {
+        let rpcs = descriptor::rpcs(descriptor::PRODUCER_PACKAGE);
+        assert!(!rpcs.is_empty(), "the producer package declares no RPCs");
+        for rpc in &rpcs {
+            let path = format!("{PRODUCER_SERVICE}{}", rpc.method);
+            let want = if rpc.no_side_effects {
+                Scope::Read
+            } else {
+                Scope::Produce
+            };
+            assert_eq!(grpc(&path), Requirement::Scoped(want), "{path}");
+        }
+        for method in READ_METHODS {
+            assert!(
+                rpcs.iter()
+                    .any(|rpc| rpc.method == method && rpc.no_side_effects),
+                "{method} is not a read-only producer RPC"
+            );
+        }
+    }
+
+    /// A producer method nobody classified is a write until someone says not.
+    #[test]
+    fn an_unknown_producer_method_needs_produce() {
+        for path in [
+            "/flexiq.v1.ProducerService/DeleteEverything",
+            "/flexiq.v1.ProducerService/",
+            "/flexiq.v1.OtherService/GetJob",
+        ] {
+            assert_eq!(grpc(path), Requirement::Scoped(Scope::Produce), "{path}");
+        }
+    }
+
+    /// The facade's reads are `GET`s, and nothing else it serves is.
+    #[test]
+    fn the_facade_producer_paths_split_by_verb() {
+        for path in ["/v1/jobs", "/v1/jobs/01924f", "/v1/queues/emails/stats"] {
+            assert_eq!(
+                requirement(&http::Method::GET, path),
+                Requirement::Scoped(Scope::Read),
+                "{path}"
+            );
+            for verb in [http::Method::POST, http::Method::HEAD, http::Method::DELETE] {
+                assert_eq!(
+                    requirement(&verb, path),
+                    Requirement::Scoped(Scope::Produce),
+                    "{verb} {path}"
+                );
+            }
+        }
+    }
+
     /// A method nobody classified needs the stronger scope, not the weaker.
     #[test]
     fn an_unknown_admin_method_needs_admin() {
@@ -202,6 +289,10 @@ mod tests {
         // A segment match: a lookalike under `/v1` stays the producer's.
         assert_eq!(
             requirement(&http::Method::GET, "/v1/administer"),
+            Requirement::Scoped(Scope::Read)
+        );
+        assert_eq!(
+            requirement(&http::Method::POST, "/v1/administer"),
             Requirement::Scoped(Scope::Produce)
         );
     }

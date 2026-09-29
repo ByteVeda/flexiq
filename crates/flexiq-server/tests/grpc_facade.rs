@@ -405,12 +405,13 @@ async fn an_execute_only_credential_cannot_reach_the_facade() {
     let harness =
         Harness::start_with_scopes("grpc-facade-scope", ScopeSet::of(&[Scope::Execute])).await;
 
+    // A `GET` is one of the producer's reads, so what it lacks is `read`.
     let answer = harness.get("/v1/jobs").await;
     assert_eq!(answer.status, StatusCode::FORBIDDEN);
     assert_eq!(answer.reason(), "SCOPE_DENIED");
     assert_eq!(
         answer.body["error"]["details"][0]["metadata"]["scope"],
-        Value::from("produce")
+        Value::from("read")
     );
 
     harness.stop().await;
