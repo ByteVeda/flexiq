@@ -704,6 +704,7 @@ async fn a_namespace_at_its_depth_quota_refuses_enqueues() {
         reason::QUEUE_FULL
     );
 
+    // SQLite writes a batch in one transaction, so the refusal fails the RPC.
     let batch = harness
         .client
         .enqueue_batch(EnqueueBatchRequest {
@@ -712,7 +713,13 @@ async fn a_namespace_at_its_depth_quota_refuses_enqueues() {
                 request("send", CALL_ENVELOPE.to_vec(), in_queue("emails")),
             ],
         })
-        .await;
+        .await
+        .expect_err("a batch past the quota");
+    assert_eq!(batch.code(), Code::ResourceExhausted);
+    assert_eq!(
+        batch.get_details_error_info().expect("an ErrorInfo").reason,
+        reason::QUEUE_FULL
+    );
     let stats = harness
         .client
         .queue_stats(QueueStatsRequest {
@@ -721,7 +728,7 @@ async fn a_namespace_at_its_depth_quota_refuses_enqueues() {
         .await
         .expect("queue_stats")
         .into_inner();
-    assert_eq!(stats.pending, 1, "nothing past the quota landed: {batch:?}");
+    assert_eq!(stats.pending, 1, "nothing past the quota landed");
 
     harness.stop().await;
 }
