@@ -15,6 +15,7 @@ pub const RESERVED_SETTING_PREFIXES: &[&str] = &[
     "auth:",                // dashboard sessions, OAuth state, API tokens
     "contract:",            // the contract floor a process is checked against
     "middleware:disabled:", // per-task middleware disable lists
+    "quota:",               // per-namespace quotas; a tenant must not raise its own
     "retention:",           // the windows a cleanup leader publishes
     "flexiq.webhooks",      // webhook store
     "webhook:",             // webhook store
