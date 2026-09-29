@@ -136,8 +136,15 @@ fn admit(scoped: &Scoped<'_>, prepared: &Prepared) -> Result<(), WireError> {
 /// enqueue can answer with a job in a queue this caller was never granted.
 /// Nothing was written for it, so refusing is honest; returning the row would
 /// make a narrowed grant a way to read another queue's jobs by guessing keys.
+///
+/// The refusal names neither the hidden job's queue nor its task: either would
+/// be the same read in a smaller form.
 fn conceal(scoped: &Scoped<'_>, job: &Job) -> Result<(), WireError> {
-    scoped.require(Some(&job.queue), Some(&job.task_name))
+    if scoped.reaches(Some(&job.queue), Some(&job.task_name)) {
+        Ok(())
+    } else {
+        Err(scoped.deduplicated_beyond())
+    }
 }
 
 /// [`conceal`] for one batch result, which becomes that item's error.
@@ -148,9 +155,9 @@ fn conceal_item(scoped: &Scoped<'_>, result: &mut pb::EnqueueBatchItemResult, in
     let Some(job) = enqueued.job.as_ref().filter(|_| enqueued.deduplicated) else {
         return;
     };
-    if let Err(error) = scoped.require(Some(&job.queue), Some(&job.task_name)) {
+    if !scoped.reaches(Some(&job.queue), Some(&job.task_name)) {
         result.outcome = Some(pb::enqueue_batch_item_result::Outcome::Error(
-            error.at_index(index).into(),
+            scoped.deduplicated_beyond().at_index(index).into(),
         ));
     }
 }

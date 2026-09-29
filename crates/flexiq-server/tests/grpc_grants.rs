@@ -413,13 +413,34 @@ async fn a_deduplicated_answer_outside_the_grants_is_refused() {
     harness.whole().enqueue(seeded).await.expect("seed");
 
     let mut emails = harness.client(&["produce:queue=emails"]);
-    let mut probe = job("emails", "charge");
+    let mut probe = job("emails", "refund");
     probe.options.as_mut().expect("options").unique_key = Some("k".into());
     let status = emails
-        .enqueue(probe)
+        .enqueue(probe.clone())
         .await
         .expect_err("the answer would be billing's job");
-    assert_beyond(&status, "produce", Some("billing"), Some("charge"));
+    // The refusal names nothing about the job it hides: naming its queue or
+    // task would be the same read in a smaller form.
+    assert_beyond(&status, "produce", None, None);
+    assert!(
+        !status.message().contains("billing") && !status.message().contains("charge"),
+        "{}",
+        status.message()
+    );
+
+    let outcome = emails
+        .enqueue_batch(EnqueueBatchRequest { items: vec![probe] })
+        .await
+        .expect("a batch reports per item")
+        .into_inner();
+    let Some(enqueue_batch_item_result::Outcome::Error(error)) = &outcome.results[0].outcome else {
+        panic!("the item must be refused: {outcome:?}");
+    };
+    let rendered = format!("{error:?}");
+    assert!(
+        !rendered.contains("billing") && !rendered.contains("charge"),
+        "{rendered}"
+    );
     harness.stop().await;
 }
 

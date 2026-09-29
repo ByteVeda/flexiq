@@ -260,6 +260,24 @@ impl WireError {
         }
     }
 
+    /// A `unique_key` that matched an existing job the caller's narrowed
+    /// `scope` grants do not reach.
+    ///
+    /// Carries only `scope`: the hidden job's queue or task in the metadata or
+    /// the message would hand the caller the read the refusal exists to deny.
+    pub fn deduplicated_beyond_grant(scope: &'static str) -> Self {
+        Self {
+            code: Code::PermissionDenied,
+            reason: reason::SCOPE_DENIED,
+            message: format!(
+                "this unique_key already names a job this credential's `{scope}` \
+                 grants do not reach; nothing was enqueued"
+            ),
+            metadata: HashMap::from([(reason::KEY_SCOPE.to_string(), scope.to_string())]),
+            retry_after: None,
+        }
+    }
+
     /// A fault of the server's own, with nothing useful to say to the caller.
     ///
     /// The cause is logged by whoever raises this; the response carries only

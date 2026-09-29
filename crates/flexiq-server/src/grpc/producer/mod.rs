@@ -182,11 +182,21 @@ impl Scoped<'_> {
 
     /// The refusal for a call beyond the caller's grants.
     fn beyond(&self, queue: Option<&str>, task: Option<&str>) -> WireError {
+        WireError::beyond_grant(self.door().as_str(), queue, task)
+    }
+
+    /// The refusal for a deduplicated answer outside the caller's grants,
+    /// which names nothing about the job it hides.
+    pub(crate) fn deduplicated_beyond(&self) -> WireError {
+        WireError::deduplicated_beyond_grant(self.door().as_str())
+    }
+
+    /// The scope the layer let this caller through on.
+    fn door(&self) -> Scope {
         // The layer fixes the door before any handler runs; without one the
         // caller reaches nothing, and `produce` is the scope this package
         // would have asked for.
-        let scope = self.principal.door().unwrap_or(Scope::Produce);
-        WireError::beyond_grant(scope.as_str(), queue, task)
+        self.principal.door().unwrap_or(Scope::Produce)
     }
 
     /// The namespace every storage call is scoped to. Never `None`, never
