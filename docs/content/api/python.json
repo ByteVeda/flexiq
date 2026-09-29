@@ -1880,7 +1880,7 @@
       "owner": "PyQueue",
       "name": "register_periodic",
       "kind": "method",
-      "signature": "register_periodic(name: str, task_name: str, cron_expr: str, args: bytes | None = None, kwargs: bytes | None = None, queue: str = \"default\", timezone: str | None = None) -> None",
+      "signature": "register_periodic(name: str, task_name: str, cron_expr: str, args: bytes | None = None, queue: str = \"default\", timezone: str | None = None) -> None",
       "params": [
         {
           "name": "name",
@@ -1899,11 +1899,6 @@
         },
         {
           "name": "args",
-          "type": "bytes | None",
-          "default": "None"
-        },
-        {
-          "name": "kwargs",
           "type": "bytes | None",
           "default": "None"
         },
