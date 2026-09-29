@@ -71,7 +71,7 @@ anyhow = "1"
 log = { workspace = true }
 env_logger = "0.11"
 clap = { version = "4", features = ["derive"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v7"] }
 rand = { workspace = true }
 base64 = "0.23"
 # `oid` lets the RSA verifier name the digest inside a PKCS#1 v1.5 signature.

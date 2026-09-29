@@ -24,6 +24,7 @@
 //! See [`crate::config::grpc`] and [`auth`].
 
 pub mod admin;
+pub mod audit;
 pub mod auth;
 pub mod blocking;
 pub mod executor;

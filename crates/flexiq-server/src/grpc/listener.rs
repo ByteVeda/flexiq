@@ -28,6 +28,7 @@ use crate::config::grpc::GrpcConfig;
 use crate::config::listen::ListenAddress;
 use crate::events::Events;
 use crate::grpc::admin::Admin;
+use crate::grpc::audit::{AuditLayer, AuditSink};
 use crate::grpc::auth::{self, AuthLayer};
 use crate::grpc::executor::ExecutorDoor;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
@@ -268,8 +269,14 @@ impl Listener {
         // first to end up outermost. It has to be outermost, or a call refused
         // for want of a credential would never reach it — and a refusal missing
         // from the metrics is the one an operator most needs to see.
+        // The audit layer sits between the two: outside auth so a scope
+        // refusal is still answered through it and recorded.
         let mut server = builder
             .layer(metrics::MetricsLayer::new(rpc_metrics))
+            .layer(AuditLayer::new(AuditSink::start(
+                storage.clone(),
+                shutdown.clone(),
+            )))
             .layer(AuthLayer::new(Arc::new(auth::TokenStore::new(
                 storage.clone(),
                 self.config.namespace.as_str(),

@@ -48,6 +48,7 @@ use tower_service::Service;
 use super::authenticator::Authenticator;
 use super::gate::{self, Requirement};
 use super::principal::Principal;
+use crate::grpc::audit::AuditContext;
 use crate::grpc::facade;
 use crate::grpc::status::WireError;
 use crate::tokens::grant::NARROWABLE;
@@ -124,8 +125,15 @@ where
             // contract, and the request still needs its headers afterwards.
             // tonic's own interceptor takes a request apart the same way.
             let metadata = MetadataMap::from_headers(std::mem::take(&mut parts.headers));
-            let outcome =
-                authorize(&*authenticator, &parts.method, parts.uri.path(), &metadata).await;
+            let audit = AuditContext::of(&parts.extensions);
+            let outcome = authorize(
+                &*authenticator,
+                &parts.method,
+                parts.uri.path(),
+                &metadata,
+                audit.as_ref(),
+            )
+            .await;
             parts.headers = metadata.into_headers();
 
             match outcome {
@@ -150,11 +158,15 @@ where
 ///
 /// `Ok(None)` is a public path. Split out of [`Authenticated::call`] so the
 /// policy is testable without a service behind it.
+///
+/// A believed credential is named in `audit` before its scope is checked, so
+/// a call refused for want of one is still attributed in the audit trail.
 async fn authorize(
     authenticator: &dyn Authenticator,
     method: &http::Method,
     path: &str,
     metadata: &MetadataMap,
+    audit: Option<&AuditContext>,
 ) -> Result<Option<Principal>, Status> {
     let requirement = gate::requirement(method, path);
     if requirement == Requirement::Public {
@@ -164,6 +176,9 @@ async fn authorize(
     }
 
     let principal = authenticator.authenticate(metadata).await?;
+    if let Some(audit) = audit {
+        audit.identify(&principal);
+    }
     let Requirement::Scoped(scope) = requirement else {
         return Ok(Some(principal));
     };
@@ -225,6 +240,7 @@ mod tests {
             &POST,
             "/grpc.health.v1.Health/Check",
             &MetadataMap::new(),
+            None,
         )
         .await
         .expect("health must not need a credential");
@@ -238,7 +254,8 @@ mod tests {
             "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
             "/whatever",
         ] {
-            let Err(status) = authorize(&Refuses, &POST, path, &MetadataMap::new()).await else {
+            let Err(status) = authorize(&Refuses, &POST, path, &MetadataMap::new(), None).await
+            else {
                 panic!("{path} must be gated");
             };
             assert_eq!(status.code(), Code::Unauthenticated, "path: {path}");
@@ -252,6 +269,7 @@ mod tests {
             &POST,
             "/flexiq.v1.ProducerService/Enqueue",
             &MetadataMap::new(),
+            None,
         )
         .await
         .expect("accepted")
@@ -270,7 +288,8 @@ mod tests {
             &produce_only,
             &POST,
             "/flexiq.v1.ProducerService/Enqueue",
-            &MetadataMap::new()
+            &MetadataMap::new(),
+            None,
         )
         .await
         .is_ok());
@@ -280,6 +299,7 @@ mod tests {
             &POST,
             "/flexiq.executor.v1.ExecutorService/Dispatch",
             &MetadataMap::new(),
+            None,
         )
         .await
         .expect_err("a produce credential must not open an executor stream");
@@ -291,5 +311,41 @@ mod tests {
             details.metadata.get(reason::KEY_SCOPE).map(String::as_str),
             Some("execute")
         );
+    }
+
+    #[tokio::test]
+    async fn a_scope_refusal_is_still_attributed_for_the_audit_trail() {
+        let read_only = Fixed(Principal::new("tok", "prod", ScopeSet::of(&[Scope::Read])));
+        let audit = AuditContext::default();
+        let status = authorize(
+            &read_only,
+            &POST,
+            "/flexiq.v1.ProducerService/Enqueue",
+            &MetadataMap::new(),
+            Some(&audit),
+        )
+        .await
+        .expect_err("a read credential must not enqueue");
+        assert_eq!(status.code(), Code::PermissionDenied);
+        let (principal, _) = audit.take();
+        assert_eq!(
+            principal.map(|p| p.credential().to_string()).as_deref(),
+            Some("tok")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unbelieved_credential_names_no_one() {
+        let audit = AuditContext::default();
+        authorize(
+            &Refuses,
+            &POST,
+            "/flexiq.v1.ProducerService/Enqueue",
+            &MetadataMap::new(),
+            Some(&audit),
+        )
+        .await
+        .expect_err("refused");
+        assert!(audit.take().0.is_none());
     }
 }
