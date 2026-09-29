@@ -82,6 +82,8 @@ fn pg_quote_ident(name: &str) -> String {
 pub struct PostgresStorage {
     pool: PgPool,
     schema: String,
+    /// Namespace quota documents, shared by every clone of this handle.
+    quotas: std::sync::Arc<crate::quota::QuotaCache>,
     /// Original connection URL, retained only to open the dedicated
     /// (non-pooled) `LISTEN` connection used by push-dispatch.
     #[cfg(feature = "push-dispatch")]
@@ -89,6 +91,11 @@ pub struct PostgresStorage {
 }
 
 impl PostgresStorage {
+    /// This handle's namespace quota cache.
+    pub(crate) fn quota_cache(&self) -> &crate::quota::QuotaCache {
+        &self.quotas
+    }
+
     /// Connect to a PostgreSQL database at the given URL.
     /// Tables are created in the `flexiq` schema by default.
     pub fn new(database_url: &str) -> Result<Self> {
@@ -194,6 +201,7 @@ impl PostgresStorage {
         let storage = Self {
             pool,
             schema: schema.to_string(),
+            quotas: Default::default(),
             #[cfg(feature = "push-dispatch")]
             database_url: database_url.to_string(),
         };

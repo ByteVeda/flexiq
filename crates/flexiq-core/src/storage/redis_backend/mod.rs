@@ -35,9 +35,16 @@ pub struct RedisStorage {
     /// Set once an enqueue's wake `PUBLISH` has been refused and warned about,
     /// so a denied channel warns once per storage, not once per enqueue.
     wake_refusal_warned: Arc<AtomicBool>,
+    /// Namespace quota documents, shared by every clone of this handle.
+    quotas: Arc<crate::quota::QuotaCache>,
 }
 
 impl RedisStorage {
+    /// This handle's namespace quota cache.
+    pub(crate) fn quota_cache(&self) -> &crate::quota::QuotaCache {
+        &self.quotas
+    }
+
     /// Connect to Redis at the given URL with default prefix `"flexiq:"`.
     pub fn new(redis_url: &str) -> Result<Self> {
         Self::with_prefix(redis_url, "flexiq:")
@@ -60,6 +67,7 @@ impl RedisStorage {
             pool: pool::ConnectionPool::new(client, conn),
             prefix: prefix.to_string(),
             wake_refusal_warned: Arc::new(AtomicBool::new(false)),
+            quotas: Default::default(),
         };
         // No shell migrates a Redis store on open, so the one-time index
         // backfill runs here; after the first pass it is a single `GET`.

@@ -1,28 +1,9 @@
-//! Per-namespace quotas (#841): the limits one tenant is held to.
-//!
-//! A quota is one JSON document per namespace in the settings KV, so it lives
-//! where every other runtime policy lives and the admin door can read and write
-//! it without a schema of its own. Every field is optional and an absent field
-//! is unlimited; an absent document is a namespace with no quota at all.
-//!
-//! - default namespace: `quota:default`;
-//! - namespace `N`: `quota:ns:<len>:<N>`.
-//!
-//! `<len>` is `N`'s length in bytes, the scheme [`crate::overrides`] uses, so a
-//! `:` inside `N` cannot make two namespaces share a key. `quota:` is a
-//! [reserved prefix](crate::settings::RESERVED_SETTING_PREFIXES): a tenant's
-//! generic settings surface must never be able to raise its own limit.
+//! The quota document: one namespace's limits, as stored in the settings KV.
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{QueueError, Result};
 use crate::resilience::rate_limiter::RateLimitConfig;
-
-/// Prefix every quota key shares.
-pub const QUOTA_SETTING_PREFIX: &str = "quota:";
-
-const DEFAULT_KEY: &str = "quota:default";
-const NAMESPACED_PREFIX: &str = "quota:ns:";
 
 /// What an enqueue over a namespace's depth or rate quota does.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,64 +120,9 @@ impl NamespaceQuota {
     }
 }
 
-/// The settings key of `namespace`'s quota.
-pub fn quota_key(namespace: Option<&str>) -> String {
-    match namespace {
-        None => DEFAULT_KEY.to_string(),
-        Some(ns) => format!("{NAMESPACED_PREFIX}{}:{ns}", ns.len()),
-    }
-}
-
-/// The namespace a quota key belongs to — the inverse of [`quota_key`].
-/// `None` for a key that is not a well-formed quota key; `Some(None)` for the
-/// default namespace.
-pub fn namespace_of_quota_key(key: &str) -> Option<Option<String>> {
-    if key == DEFAULT_KEY {
-        return Some(None);
-    }
-    let rest = key.strip_prefix(NAMESPACED_PREFIX)?;
-    let (len, ns) = rest.split_once(':')?;
-    let len: usize = len.parse().ok()?;
-    (ns.len() == len).then(|| Some(ns.to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn keys_match_the_cross_sdk_vectors() {
-        assert_eq!(quota_key(None), "quota:default");
-        assert_eq!(quota_key(Some("billing")), "quota:ns:7:billing");
-        assert_eq!(quota_key(Some("a:b")), "quota:ns:3:a:b");
-        assert_eq!(quota_key(Some("")), "quota:ns:0:");
-    }
-
-    #[test]
-    fn a_key_parses_back_to_its_namespace() {
-        for ns in [
-            None,
-            Some("billing"),
-            Some("a:b"),
-            Some(""),
-            Some("default"),
-        ] {
-            assert_eq!(
-                namespace_of_quota_key(&quota_key(ns)),
-                Some(ns.map(String::from))
-            );
-        }
-        assert_eq!(namespace_of_quota_key("quota:ns:9:billing"), None);
-        assert_eq!(namespace_of_quota_key("quota:other"), None);
-        assert_eq!(namespace_of_quota_key("overrides:task:x"), None);
-    }
-
-    #[test]
-    fn every_quota_key_is_reserved() {
-        for ns in [None, Some("billing")] {
-            assert!(crate::settings::is_reserved_setting_key(&quota_key(ns)));
-        }
-    }
 
     #[test]
     fn an_empty_document_is_unlimited() {

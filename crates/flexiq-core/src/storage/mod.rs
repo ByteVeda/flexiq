@@ -11,6 +11,7 @@ pub(crate) mod notify;
 /// PostgreSQL storage backend (feature `postgres`).
 #[cfg(feature = "postgres")]
 pub mod postgres;
+mod quota_gate;
 pub mod records;
 /// Redis storage backend (feature `redis`).
 #[cfg(feature = "redis")]
@@ -1744,33 +1745,63 @@ impl StorageBackend {
     }
 }
 
+// Every enqueue forwarder runs its call through the namespace quotas first
+// (`quota_gate`): this is the one layer every producer door shares.
 impl Storage for StorageBackend {
     fn enqueue(&self, new_job: NewJob) -> Result<Job> {
-        let job = delegate!(self, enqueue, new_job)?;
-        #[cfg(feature = "push-dispatch")]
-        self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
-        Ok(job)
+        let jobs = self.with_quota(
+            vec![new_job],
+            |mut admitted| {
+                let job = delegate!(self, enqueue, admitted.remove(0))?;
+                #[cfg(feature = "push-dispatch")]
+                self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
+                Ok(vec![job])
+            },
+            |shed| shed,
+        )?;
+        quota_gate::single(jobs)
     }
     fn enqueue_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
-        let jobs = delegate!(self, enqueue_batch, new_jobs)?;
-        #[cfg(feature = "push-dispatch")]
-        self.notify_enqueued_batch(jobs.iter());
-        Ok(jobs)
+        self.with_quota(
+            new_jobs,
+            |admitted| {
+                let jobs = delegate!(self, enqueue_batch, admitted)?;
+                #[cfg(feature = "push-dispatch")]
+                self.notify_enqueued_batch(jobs.iter());
+                Ok(jobs)
+            },
+            |shed| shed,
+        )
     }
     fn enqueue_unique(&self, new_job: NewJob) -> Result<Job> {
         Ok(self.enqueue_unique_reporting(new_job)?.0)
     }
     fn enqueue_unique_reporting(&self, new_job: NewJob) -> Result<(Job, bool)> {
-        let (job, deduplicated) = delegate!(self, enqueue_unique_reporting, new_job)?;
-        #[cfg(feature = "push-dispatch")]
-        self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
-        Ok((job, deduplicated))
+        let jobs = self.with_quota(
+            vec![new_job],
+            |mut admitted| {
+                let (job, deduplicated) =
+                    delegate!(self, enqueue_unique_reporting, admitted.remove(0))?;
+                #[cfg(feature = "push-dispatch")]
+                self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
+                Ok(vec![(job, deduplicated)])
+            },
+            |shed| (shed, false),
+        )?;
+        quota_gate::single(jobs)
     }
     fn enqueue_debounced(&self, new_job: NewJob, options: records::DebounceOptions) -> Result<Job> {
-        let job = delegate!(self, enqueue_debounced, new_job, options)?;
-        #[cfg(feature = "push-dispatch")]
-        self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
-        Ok(job)
+        let jobs = self.with_quota(
+            vec![new_job],
+            |mut admitted| {
+                let job = delegate!(self, enqueue_debounced, admitted.remove(0), options)?;
+                #[cfg(feature = "push-dispatch")]
+                self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
+                Ok(vec![job])
+            },
+            |shed| shed,
+        )?;
+        quota_gate::single(jobs)
     }
     fn enqueue_unique_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
         Ok(self
@@ -1780,10 +1811,16 @@ impl Storage for StorageBackend {
             .collect())
     }
     fn enqueue_unique_batch_reporting(&self, new_jobs: Vec<NewJob>) -> Result<Vec<(Job, bool)>> {
-        let jobs = delegate!(self, enqueue_unique_batch_reporting, new_jobs)?;
-        #[cfg(feature = "push-dispatch")]
-        self.notify_enqueued_batch(jobs.iter().map(|(job, _)| job));
-        Ok(jobs)
+        self.with_quota(
+            new_jobs,
+            |admitted| {
+                let jobs = delegate!(self, enqueue_unique_batch_reporting, admitted)?;
+                #[cfg(feature = "push-dispatch")]
+                self.notify_enqueued_batch(jobs.iter().map(|(job, _)| job));
+                Ok(jobs)
+            },
+            |shed| (shed, false),
+        )
     }
     fn dequeue(&self, queue_name: &str, now: i64, namespace: Option<&str>) -> Result<Option<Job>> {
         delegate!(self, dequeue, queue_name, now, namespace)

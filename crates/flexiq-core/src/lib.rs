@@ -67,7 +67,7 @@ pub use http::{DispatchClient, EgressPolicy, EgressRefusal};
 pub use job::{now_millis, Job, JobCompletion, JobStatus, NewJob};
 pub use lease::{lease_authorizes, mint_claim_epoch, Lease, LeaseBook, MAX_LEASE_EXTENSION};
 pub use overrides::{override_key, override_prefix, OverrideScope};
-pub use quota::{namespace_of_quota_key, quota_key, NamespaceQuota, QuotaOverflow};
+pub use quota::{namespace_of_quota_key, quota_key, read_quota, NamespaceQuota, QuotaOverflow};
 pub use resilience::circuit_breaker::{CircuitBreakerConfig, CircuitState};
 pub use resilience::rate_limiter::RateLimitConfig;
 pub use resilience::retry::RetryPolicy;

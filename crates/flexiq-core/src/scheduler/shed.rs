@@ -18,6 +18,13 @@ pub(crate) const RATE_LIMIT_REASON_PREFIX: &str = "rate_limit:";
 /// shed work without parsing the reason string.
 pub(crate) const RATE_LIMIT_SHED_METADATA: &str = r#"{"shed":"rate_limit"}"#;
 
+/// Reason prefix on a job an over-quota enqueue shed because its namespace's
+/// quota asked for `drop` (#841).
+pub(crate) const QUOTA_REASON_PREFIX: &str = "quota:";
+
+/// Dead-letter metadata marking a namespace-quota shed.
+pub(crate) const QUOTA_SHED_METADATA: &str = r#"{"shed":"quota"}"#;
+
 /// What the dispatcher does with a job a rate limit turns away.
 ///
 /// The default defers — the job keeps its place and runs once tokens are
@@ -55,7 +62,9 @@ impl OnExcess {
 /// Whether a dead-letter reason marks a job the scheduler shed on purpose.
 pub(crate) fn is_shed_reason(error: Option<&str>) -> bool {
     error.is_some_and(|e| {
-        e.starts_with(CODEL_REASON_PREFIX) || e.starts_with(RATE_LIMIT_REASON_PREFIX)
+        e.starts_with(CODEL_REASON_PREFIX)
+            || e.starts_with(RATE_LIMIT_REASON_PREFIX)
+            || e.starts_with(QUOTA_REASON_PREFIX)
     })
 }
 
@@ -82,6 +91,7 @@ mod tests {
     fn shed_reasons_are_recognized_and_failures_are_not() {
         assert!(is_shed_reason(Some(&rate_limit_shed_reason("task 'x'"))));
         assert!(is_shed_reason(Some("codel: sojourn 900ms exceeded target")));
+        assert!(is_shed_reason(Some("quota: namespace 'a' max_pending")));
         assert!(!is_shed_reason(Some("ConnectionError: refused")));
         assert!(!is_shed_reason(None));
     }
