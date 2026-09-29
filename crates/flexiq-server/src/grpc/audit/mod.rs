@@ -20,6 +20,7 @@
 pub mod context;
 pub mod layer;
 pub mod metrics;
+pub mod retention;
 pub mod sink;
 
 pub use context::{target, AuditContext, TargetKind};

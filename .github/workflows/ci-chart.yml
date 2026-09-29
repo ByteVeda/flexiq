@@ -230,6 +230,7 @@ jobs:
                   "FLEXIQ_GRPC_KEEPALIVE_INTERVAL",
                   "FLEXIQ_GRPC_REQUEST_TIMEOUT",
                   "FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS",
+                  "FLEXIQ_GRPC_AUDIT_RETENTION_DAYS",
               }
               print(sorted(container["livenessProbe"]),
                     sorted(container["readinessProbe"]),

@@ -28,7 +28,7 @@ use crate::config::grpc::GrpcConfig;
 use crate::config::listen::ListenAddress;
 use crate::events::Events;
 use crate::grpc::admin::Admin;
-use crate::grpc::audit::{AuditLayer, AuditSink};
+use crate::grpc::audit::{self, AuditLayer, AuditSink};
 use crate::grpc::auth::{self, AuthLayer};
 use crate::grpc::executor::ExecutorDoor;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
@@ -199,6 +199,12 @@ impl Listener {
         .await;
 
         let rpc_metrics = metrics::RpcMetrics::new();
+        audit::retention::start(
+            storage.clone(),
+            self.config.namespace.clone(),
+            self.config.audit_retention,
+            shutdown.clone(),
+        );
 
         // `/metrics` is merged into the facade's router rather than the other
         // way round: `facade::router` owns the fallback that keeps an unrouted
