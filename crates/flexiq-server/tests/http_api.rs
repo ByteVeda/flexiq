@@ -439,6 +439,29 @@ async fn a_process_with_no_namespace_cannot_mint_a_grpc_token() {
         .contains("FLEXIQ_NAMESPACE"));
 }
 
+/// A grant narrowed to queues and tasks is minted and listed as spelled (#839).
+#[tokio::test]
+async fn a_grpc_token_can_be_narrowed_to_queues_and_tasks() {
+    let storage = temp_storage("http-grpc-tokens-narrowed");
+    let state = dashboard_state_in_namespace(&storage, AuthMode::Open, "prod");
+
+    let scopes = json!(["read", "produce:queue=emails-*,task=send_receipt"]);
+    let (status, _, created) = call(
+        &state,
+        json_request(
+            "POST",
+            "/api/grpc-tokens",
+            json!({ "name": "edge", "scopes": scopes }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["scopes"], scopes);
+
+    let (_, _, listed) = call(&state, get("/api/grpc-tokens")).await;
+    assert_eq!(listed[0]["scopes"], scopes);
+}
+
 #[tokio::test]
 async fn a_grpc_token_mint_refuses_a_request_it_cannot_honour() {
     let storage = temp_storage("http-grpc-tokens-invalid");
@@ -451,6 +474,14 @@ async fn a_grpc_token_mint_refuses_a_request_it_cannot_honour() {
         (
             "an unknown scope",
             json!({ "name": "ci", "scopes": ["teleport"] }),
+        ),
+        (
+            "a pattern that is not one",
+            json!({ "name": "ci", "scopes": ["produce:queue=a*b"] }),
+        ),
+        (
+            "a scope that cannot be narrowed",
+            json!({ "name": "ci", "scopes": ["execute:task=x"] }),
         ),
         (
             "a lifetime past the cap",
@@ -492,6 +523,14 @@ async fn the_grpc_scope_list_is_served() {
         names,
         vec!["produce", "read", "execute", "inspect", "admin"]
     );
+    let narrowable: Vec<&str> = body
+        .as_array()
+        .expect("an array")
+        .iter()
+        .filter(|scope| scope["narrowable"] == json!(true))
+        .map(|scope| scope["name"].as_str().expect("a name"))
+        .collect();
+    assert_eq!(narrowable, vec!["produce", "read"]);
 }
 
 #[tokio::test]

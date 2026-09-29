@@ -13,12 +13,12 @@
 use std::io::Write;
 
 use anyhow::{bail, Context, Result};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 
 use flexiq_core::{now_millis, StorageBackend};
 
+use super::grant::{Grant, Grants};
 use super::model::{mint_namespace, NewToken};
-use super::scope::{Scope, ScopeSet};
 use super::store;
 use crate::config::{flag, value, Env};
 
@@ -38,9 +38,12 @@ enum Action {
         /// Label shown in listings, so a credential can be told from another.
         #[arg(long)]
         name: String,
-        /// A door this token may open. Repeat for more than one.
-        #[arg(long = "scope", value_enum, required = true)]
-        scopes: Vec<ScopeArg>,
+        /// A door this token may open: produce, read, execute, inspect or
+        /// admin. Narrow produce or read to queues and tasks with
+        /// `produce:queue=emails-*,task=send_receipt` (a trailing `*` is a
+        /// prefix). Repeat for more than one.
+        #[arg(long = "scope", value_parser = Grant::parse, required = true)]
+        scopes: Vec<Grant>,
         /// Days until it expires.
         #[arg(long, default_value_t = super::model::DEFAULT_LIFETIME_DAYS)]
         expires_in_days: i64,
@@ -56,33 +59,6 @@ enum Action {
         /// The id a listing shows, and the part of the token before the dot.
         id: String,
     },
-}
-
-/// A scope, as clap spells it on the command line.
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum ScopeArg {
-    /// `flexiq.v1` — submit, read and cancel work.
-    Produce,
-    /// `flexiq.v1`, read-only methods — see jobs, never submit or cancel.
-    Read,
-    /// `flexiq.executor.v1` — claim work and report on it.
-    Execute,
-    /// `flexiq.admin.v1`, read-only methods.
-    Inspect,
-    /// `flexiq.admin.v1`, every other method.
-    Admin,
-}
-
-impl From<ScopeArg> for Scope {
-    fn from(arg: ScopeArg) -> Self {
-        match arg {
-            ScopeArg::Produce => Self::Produce,
-            ScopeArg::Read => Self::Read,
-            ScopeArg::Execute => Self::Execute,
-            ScopeArg::Inspect => Self::Inspect,
-            ScopeArg::Admin => Self::Admin,
-        }
-    }
 }
 
 /// Run the subcommand against the configured database.
@@ -125,19 +101,28 @@ fn open(env: &Env, namespace: Option<String>) -> Result<StorageBackend> {
     .storage)
 }
 
+/// The parsed `--scope` values, as one token's grants.
+fn grants(scopes: &[Grant]) -> Grants {
+    let mut grants = Grants::default();
+    for grant in scopes {
+        grants.insert(grant.clone());
+    }
+    grants
+}
+
 /// Mint one, and print it the only time it can be printed.
 fn create(
     storage: &StorageBackend,
     namespace: Option<&str>,
     name: &str,
-    scopes: &[ScopeArg],
+    scopes: &[Grant],
     expires_in_days: i64,
 ) -> Result<()> {
     // The namespace comes from the process, never from an argument: a token
     // minted for a namespace this deployment does not schedule would accept
     // enqueues nothing ever dequeues (design doc §5.4).
     let namespace = mint_namespace(namespace, None).map_err(|error| anyhow::anyhow!(error))?;
-    let scopes = ScopeSet::of(&scopes.iter().copied().map(Scope::from).collect::<Vec<_>>());
+    let scopes = grants(scopes);
     let request = NewToken::new(
         name,
         scopes,
@@ -225,6 +210,7 @@ fn revoke(storage: &StorageBackend, id: &str, namespace: Option<&str>) -> Result
 mod tests {
     use super::*;
     use crate::tokens::model::MAX_LIFETIME_DAYS;
+    use crate::tokens::scope::ScopeSet;
     use clap::Parser;
 
     /// The parser as `main` assembles it, so the tests exercise the real
@@ -264,10 +250,45 @@ mod tests {
         else {
             panic!("expected create");
         };
-        let set = ScopeSet::of(&scopes.iter().copied().map(Scope::from).collect::<Vec<_>>());
-        assert_eq!(set, ScopeSet::ALL);
+        assert_eq!(grants(&scopes), Grants::from(ScopeSet::ALL));
         // A scope this build does not have must not parse into one it does.
         assert!(parse(&["token", "create", "--name", "ci", "--scope", "teleport"]).is_err());
+    }
+
+    /// A narrowed grant is refused at parse, not at mint, when it cannot be
+    /// read — so a typo never reaches the store.
+    #[test]
+    fn a_scope_can_be_narrowed_on_the_command_line() {
+        let cli = parse(&[
+            "token",
+            "create",
+            "--name",
+            "edge",
+            "--scope",
+            "produce:queue=emails-*,task=send_receipt",
+            "--scope",
+            "read:queue=emails",
+        ])
+        .expect("narrowed grants parse");
+        let Wrapper::Token(TokenCommand {
+            action: Action::Create { scopes, .. },
+        }) = cli.command
+        else {
+            panic!("expected create");
+        };
+        assert_eq!(
+            grants(&scopes).spelled(),
+            [
+                "produce:queue=emails-*,task=send_receipt",
+                "read:queue=emails"
+            ]
+        );
+        for bad in ["produce:queue=a*b", "execute:task=x", "produce:colour=red"] {
+            assert!(
+                parse(&["token", "create", "--name", "ci", "--scope", bad]).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

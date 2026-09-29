@@ -20,8 +20,9 @@ use crate::dashboard::auth::context::RequestContext;
 use crate::dashboard::blocking::on_storage;
 use crate::dashboard::error::{ApiError, ApiResult};
 use crate::dashboard::state::SharedState;
+use crate::tokens::grant::{Grants, NARROWABLE};
 use crate::tokens::model::{mint_namespace, NewToken};
-use crate::tokens::scope::{Scope, ScopeSet};
+use crate::tokens::scope::Scope;
 use crate::tokens::store;
 
 /// `GET /api/grpc-tokens` — every token, newest first.
@@ -44,11 +45,15 @@ pub async fn list(State(state): State<SharedState>) -> ApiResult<Json<Value>> {
 /// `GET /api/grpc-tokens/scopes` — what a token may be granted.
 ///
 /// Served rather than hard-coded in the SPA so that adding a scope is one
-/// change: the page renders what this build actually understands.
+/// change: the page renders what this build actually understands, including
+/// which scopes may be narrowed to queues and tasks.
 pub async fn scopes() -> Json<Value> {
     Json(json!(Scope::ALL
         .iter()
-        .map(|scope| json!({ "name": scope.as_str() }))
+        .map(|scope| json!({
+            "name": scope.as_str(),
+            "narrowable": NARROWABLE.contains(scope),
+        }))
         .collect::<Vec<_>>()))
 }
 
@@ -128,32 +133,28 @@ fn required_string(body: &Map<String, Value>, field: &str) -> ApiResult<String> 
         .ok_or_else(|| ApiError::BadRequest(format!("'{field}' is required")))
 }
 
-/// The `scopes` array, refusing a name this build does not know.
+/// The `scopes` array — scope names, or grants narrowed to queues and tasks
+/// (`produce:queue=emails`) — refusing any entry this build cannot read.
 ///
 /// Refused rather than ignored, which is the opposite of how a *stored* row is
-/// read (there, an unknown name narrows). The difference is who is asking: a
+/// read (there, an unreadable grant narrows). The difference is who is asking: a
 /// stored row may have been written by a newer build and must still work, while
-/// an operator who typed a scope that does not exist has made a mistake and
+/// an operator who typed a grant that does not parse has made a mistake and
 /// would otherwise receive a credential quietly weaker than they asked for.
-fn parse_scopes(body: &Map<String, Value>) -> ApiResult<ScopeSet> {
+fn parse_scopes(body: &Map<String, Value>) -> ApiResult<Grants> {
     let listed = body
         .get("scopes")
         .and_then(Value::as_array)
         .ok_or_else(|| ApiError::BadRequest("'scopes' must be an array".to_string()))?;
-    let mut scopes = ScopeSet::NONE;
-    for entry in listed {
-        let name = entry
-            .as_str()
-            .ok_or_else(|| ApiError::BadRequest("each scope must be a string".to_string()))?;
-        let scope = Scope::parse(name).ok_or_else(|| {
-            ApiError::BadRequest(format!(
-                "unknown scope '{name}'. Available: {}",
-                Scope::names()
-            ))
-        })?;
-        scopes.insert(scope);
-    }
-    Ok(scopes)
+    let spelled = listed
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .ok_or_else(|| ApiError::BadRequest("each scope must be a string".to_string()))
+        })
+        .collect::<ApiResult<Vec<_>>>()?;
+    Grants::parse_all(spelled).map_err(ApiError::BadRequest)
 }
 
 /// An optional whole-number day count.
