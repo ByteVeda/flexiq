@@ -157,6 +157,13 @@ Two more of those are refusals worth knowing about:
   payload. A narrowed token cannot see which job that would be, so it cannot
   debounce at all.
 
+One effect crosses the boundary on purpose. **Cancelling a job cancels the
+pending jobs that depend on it**, in whatever queue they sit, exactly as it does
+for any token. Whoever enqueued the dependent chose that edge. A job whose
+dependency is cancelled could never run anyway, and it would be cancelled the
+same way if the dependency had failed. Refusing the cancel instead would let a
+job in another queue stop a narrowed token from cancelling its own work.
+
 The JSON facade calls the same handlers, so it gives the same answers — `403`
 for a refusal and `404` for a hidden job.
 
