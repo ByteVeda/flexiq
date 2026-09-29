@@ -66,12 +66,13 @@ credential must never be able to mint itself a wider one.
 
 ## Scopes
 
-A token grants scopes, and none of them is a hierarchy — no scope implies
-another:
+A token grants scopes. They are not a hierarchy, with one exception: `produce`
+also opens everything `read` does, because it always has.
 
 | Scope | Package | What it opens |
 | --- | --- | --- |
 | `produce` | `flexiq.v1` | Submit, read and cancel work |
+| `read` | `flexiq.v1`, read-only methods | See jobs, queue stats and workflow runs, and watch them; never submit or cancel |
 | `execute` | `flexiq.executor.v1` | Claim work and report on it |
 | `inspect` | `flexiq.admin.v1`, read-only methods | Look at queues, dead letters, workers, schedules and overrides |
 | `admin` | `flexiq.admin.v1`, every other method | Pause queues, replay and purge dead letters, manage schedules and overrides |
@@ -82,10 +83,12 @@ refused with `PERMISSION_DENIED` and the reason `SCOPE_DENIED`, carrying the
 scope it lacked in the error metadata. Repeat `--scope` to grant several, and
 grant each only to something that genuinely needs it.
 
-The operator package is split by method rather than granted whole: a method
-that declares `idempotency_level = NO_SIDE_EFFECTS` needs `inspect`, and every
-other one needs `admin`. An alerting job or a support tool gets `inspect` and
-can change nothing; an operator's token carries both:
+The producer and operator packages are split by method rather than granted
+whole: a method that declares `idempotency_level = NO_SIDE_EFFECTS` needs `read`
+(producer) or `inspect` (operator), and every other one needs `produce` or
+`admin`. A dashboard or an alerting job that watches jobs gets `read` and can
+neither submit nor cancel. A support tool gets `inspect` and can change
+nothing. An operator's token carries both operator scopes:
 
 ```bash
 flexiq-server token create --name ops --scope inspect --scope admin
@@ -103,6 +106,64 @@ that a caller be authenticated, so any row above reads every package — a
 gRPC door's
 [Reflection, and what it hands out](/server/operate/grpc#reflection-and-what-it-hands-out)
 has the shape of that, and why revoking is the control rather than scoping.
+
+## Narrowing a token to queues and tasks
+
+A `produce` or `read` grant can be narrowed to some queues, some tasks, or both.
+This is how you give a webhook receiver or an untrusted edge service a token that
+can enqueue exactly one task and nothing else:
+
+```bash
+flexiq-server token create --name receipts-webhook \
+  --scope 'produce:queue=emails,task=send_receipt'
+```
+
+A grant is `<scope>:queue=<pattern>,task=<pattern>`, and either qualifier can be
+left out. A pattern is an exact name, a prefix ending in `*` (`emails-*`), or
+`*` for every name. `*` anywhere else is refused, and so are commas, `=` and
+whitespace. Repeat `--scope` to hold several grants. A call is allowed when any
+one of them covers it:
+
+```bash
+flexiq-server token create --name billing-support \
+  --scope 'read:queue=billing' \
+  --scope 'produce:queue=billing,task=refund'
+```
+
+The dashboard's token dialog has the same two fields, and they narrow the
+`produce` and `read` switches. `execute`, `inspect` and `admin` cannot be
+narrowed: none of their methods checks a queue or a task, so a narrowed grant
+there would be a restriction nothing enforces. The mint refuses it.
+
+What a narrowed token gets, call by call:
+
+| Call | A queue or task outside the grants |
+| --- | --- |
+| `Enqueue`, `EnqueueBatch` | Refused `SCOPE_DENIED`, carrying `scope`, `queue` and `task`. A batch is refused whole, before anything is written. The queue checked is the one the job lands in, so an empty queue is checked as `default`. |
+| `GetJob`, `CancelJob` | `JOB_NOT_FOUND` — the same answer as a job in another namespace, so a narrowed token cannot probe for ids it cannot reach. |
+| `ListJobs` | Must name a `queue` the grants reach, and a `task_name` too if the grant names a task. A listing is never filtered after the fact, so a page's size says nothing about rows the token cannot see. |
+| `QueueStats` | Must name a reachable queue. A task-narrowed grant is refused, because the counts include every task in the queue. |
+| `WatchJobs` | A queue watch must name a queue the grants reach, and a task-narrowed grant is refused. On an id watch, a job outside the grants reads as not found. |
+| `SubmitWorkflow`, `GetWorkflowRun`, a debounced `Enqueue` | Refused, whatever the queue. |
+
+Two more of those are refusals worth knowing about:
+
+- **A `unique_key` is matched across the whole namespace**, so an enqueue can be
+  deduplicated to an existing job in another queue. When that job is outside a
+  narrowed token's grants, the enqueue is refused rather than handing the job
+  back. Nothing was written.
+- **A debounce key is matched across the namespace too**, and a debounced
+  enqueue that coalesces moves an existing job's deadline, or replaces its
+  payload. A narrowed token cannot see which job that would be, so it cannot
+  debounce at all.
+
+The JSON facade calls the same handlers, so it gives the same answers — `403`
+for a refusal and `404` for a hidden job.
+
+Every token minted before narrowing existed keeps exactly what it had. A grant
+is stored in the same list as the scope names always were. A server older than
+this one drops a narrowed grant it cannot read, so rolling back can only take
+access away from a narrowed token, never widen it.
 
 ## One namespace, fixed at mint time
 
