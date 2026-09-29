@@ -630,6 +630,74 @@ pub fn queue_override_envelope_json(value: Option<&pb::QueueOverride>) -> Value 
     wrapping("queueOverride", value, queue_override_json)
 }
 
+/// The columns of a quota listing: one row per limit.
+pub const QUOTA_COLUMNS: [&str; 2] = ["limit", "value"];
+
+/// A `QuotaOverflow` by the name the flags take, or its number when unknown.
+fn overflow_name(value: i32) -> String {
+    match pb::QuotaOverflow::try_from(value) {
+        Ok(pb::QuotaOverflow::Unspecified | pb::QuotaOverflow::Reject) => "reject".to_string(),
+        Ok(pb::QuotaOverflow::Drop) => "drop".to_string(),
+        Err(_) => value.to_string(),
+    }
+}
+
+/// A `NamespaceQuota` as rows of [`QUOTA_COLUMNS`], an unset limit as [`UNSET`].
+pub fn quota_rows(value: &pb::NamespaceQuota) -> Vec<Vec<String>> {
+    vec![
+        vec![
+            "max_pending".to_string(),
+            optional_cell(value.max_pending.as_ref()),
+        ],
+        vec![
+            "enqueue_rate".to_string(),
+            optional_cell(value.enqueue_rate.as_ref()),
+        ],
+        vec!["on_excess".to_string(), overflow_name(value.on_excess)],
+        vec![
+            "max_running".to_string(),
+            optional_cell(value.max_running.as_ref()),
+        ],
+        vec![
+            "max_archived_rows".to_string(),
+            optional_cell(value.max_archived_rows.as_ref()),
+        ],
+        vec![
+            "max_dead_rows".to_string(),
+            optional_cell(value.max_dead_rows.as_ref()),
+        ],
+    ]
+}
+
+/// One `NamespaceQuota`.
+fn namespace_quota_json(value: &pb::NamespaceQuota) -> Value {
+    let mut object = Map::new();
+    for (key, limit) in [
+        ("maxPending", value.max_pending),
+        ("maxRunning", value.max_running),
+        ("maxArchivedRows", value.max_archived_rows),
+        ("maxDeadRows", value.max_dead_rows),
+    ] {
+        if let Some(limit) = limit {
+            object.insert(key.to_string(), int64(limit));
+        }
+    }
+    if let Some(rate) = value.enqueue_rate.as_ref() {
+        object.insert("enqueueRate".to_string(), rate.clone().into());
+    }
+    let on_excess = match pb::QuotaOverflow::try_from(value.on_excess) {
+        Ok(known) => known.as_str_name().into(),
+        Err(_) => value.on_excess.into(),
+    };
+    object.insert("onExcess".to_string(), on_excess);
+    Value::Object(object)
+}
+
+/// `GetNamespaceQuotaResponse` / `SetNamespaceQuotaResponse`: both `{quota}`.
+pub fn quota_envelope_json(value: Option<&pb::NamespaceQuota>) -> Value {
+    wrapping("quota", value, namespace_quota_json)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

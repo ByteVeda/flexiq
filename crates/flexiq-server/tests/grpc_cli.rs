@@ -20,8 +20,8 @@ use flexiq_cli::cli::{
     AuditListArgs, DeadLetterIdArgs, DlqCommand, DlqListArgs, DlqPurgeArgs, DlqShowArgs,
     EnqueueArgs, JobsCancelArgs, JobsCommand, JobsGetArgs, JobsListArgs, OverridesCommand,
     PeriodicCommand, PeriodicNameArgs, PeriodicPutArgs, PeriodicShowArgs, QueueNameArgs,
-    QueuesArgs, SetQueueOverrideArgs, SetTaskOverrideArgs, TaskNameArgs, ThroughputArgs,
-    WorkerIdArgs,
+    QueuesArgs, SetQueueOverrideArgs, SetQuotaArgs, SetTaskOverrideArgs, TaskNameArgs,
+    ThroughputArgs, WorkerIdArgs,
 };
 use flexiq_cli::commands;
 use flexiq_cli::connect::ClientTls;
@@ -1150,6 +1150,35 @@ async fn the_admin_json_render_matches_the_facade() {
         &overrides,
         cli_render::list_overrides_json,
         server_render::list_overrides,
+    );
+
+    let set_quota = admin
+        .set_namespace_quota(commands::quota::set_request(&SetQuotaArgs {
+            max_pending: Some(1_000),
+            on_excess: Some("drop".to_string()),
+            enqueue_rate: Some("50/s".to_string()),
+            max_running: Some(8),
+            max_archived_rows: Some(10_000),
+            max_dead_rows: None,
+        }))
+        .await
+        .expect("set quota")
+        .into_inner();
+    assert_same_render(
+        &set_quota,
+        |r: &cli_pb::SetNamespaceQuotaResponse| cli_render::quota_envelope_json(r.quota.as_ref()),
+        server_render::set_namespace_quota,
+    );
+    let got_quota = admin
+        .get_namespace_quota(cli_pb::GetNamespaceQuotaRequest {})
+        .await
+        .expect("get quota")
+        .into_inner();
+    assert_eq!(got_quota.quota, set_quota.quota);
+    assert_same_render(
+        &got_quota,
+        |r: &cli_pb::GetNamespaceQuotaResponse| cli_render::quota_envelope_json(r.quota.as_ref()),
+        server_render::get_namespace_quota,
     );
 
     // The empty responses, which both sides must write as `{}`.

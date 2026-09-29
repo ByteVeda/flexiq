@@ -107,6 +107,45 @@ pub enum Command {
     /// Read the audit trail: which token made each write, refusals included.
     #[command(subcommand)]
     Audit(AuditCommand),
+    /// Read and set the namespace's quota. Every running process enforces a
+    /// change within a couple of seconds.
+    #[command(subcommand)]
+    Quota(QuotaCommand),
+}
+
+/// `fq quota`.
+#[derive(Debug, Subcommand)]
+pub enum QuotaCommand {
+    /// Show every limit; `-` is unlimited.
+    Get,
+    /// Replace the quota. Not a merge: a flag left out lifts that limit.
+    Set(SetQuotaArgs),
+    /// Remove the quota, lifting every limit.
+    Clear,
+}
+
+/// `fq quota set`. Every flag is optional, and an omitted one is unlimited.
+#[derive(Debug, Args)]
+pub struct SetQuotaArgs {
+    /// Most pending jobs, delayed ones included.
+    #[arg(long)]
+    pub max_pending: Option<i64>,
+    /// What an enqueue over --max-pending or --enqueue-rate does: `reject`
+    /// refuses it, `drop` dead-letters its jobs unrun. Default `reject`.
+    #[arg(long, value_parser = ["reject", "drop"])]
+    pub on_excess: Option<String>,
+    /// Enqueues per interval, `<count>/<unit>`, unit one of `s`, `m`, `h`.
+    #[arg(long)]
+    pub enqueue_rate: Option<String>,
+    /// Most jobs running at once.
+    #[arg(long)]
+    pub max_running: Option<i64>,
+    /// Archive row ceiling; the retention sweep deletes the oldest over it.
+    #[arg(long)]
+    pub max_archived_rows: Option<i64>,
+    /// Dead-letter row ceiling, trimmed the same way.
+    #[arg(long)]
+    pub max_dead_rows: Option<i64>,
 }
 
 /// `fq audit`.
