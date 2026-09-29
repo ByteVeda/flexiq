@@ -1,6 +1,7 @@
 package org.byteveda.flexiq.worker;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -188,6 +189,9 @@ public final class Executor implements AutoCloseable {
         private @Nullable Long connectTimeoutMs;
         private @Nullable Long heartbeatIntervalMs;
         private @Nullable Long shutdownDrainMs;
+        private @Nullable Path tlsCa;
+        private @Nullable Path tlsCert;
+        private @Nullable Path tlsKey;
 
         private Builder() {}
 
@@ -248,13 +252,36 @@ public final class Executor implements AutoCloseable {
         }
 
         /**
-         * Scheduler address: {@code host:port}, {@code :port}, or {@code unix:/path}.
+         * Scheduler address: {@code host:port}, {@code :port}, {@code tls://host:port},
+         * or {@code unix:/path}.
          *
          * @param address where the scheduler is listening
          * @return {@code this}, for chaining
          */
         public Builder attach(String address) {
             this.address = address;
+            return this;
+        }
+
+        /**
+         * PEM files for a {@code tls://} address.
+         *
+         * <p>Setting any of them beside a plaintext address fails {@link #start()}
+         * rather than dialling in the clear. The attach token is still sent: a
+         * client certificate lets the connection exist, it does not name who is
+         * on it.
+         *
+         * @param ca bundle the scheduler's certificate must chain to, or
+         *     {@code null} for the bundled web roots
+         * @param cert client certificate, for a scheduler that requires mTLS, or
+         *     {@code null} to present none
+         * @param key private key for {@code cert}, or {@code null} with it
+         * @return {@code this}, for chaining
+         */
+        public Builder tls(@Nullable Path ca, @Nullable Path cert, @Nullable Path key) {
+            this.tlsCa = ca;
+            this.tlsCert = cert;
+            this.tlsKey = key;
             return this;
         }
 
@@ -491,6 +518,15 @@ public final class Executor implements AutoCloseable {
             }
             if (shutdownDrainMs != null) {
                 options.put("shutdownDrainMs", shutdownDrainMs);
+            }
+            if (tlsCa != null) {
+                options.put("tlsCa", tlsCa.toString());
+            }
+            if (tlsCert != null) {
+                options.put("tlsCert", tlsCert.toString());
+            }
+            if (tlsKey != null) {
+                options.put("tlsKey", tlsKey.toString());
             }
             try {
                 return JSON.writeValueAsString(options);

@@ -31,8 +31,8 @@ prost = "0.14"
 prost-types = "0.14"
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
-# `tls-native-roots` is what the https:// scheme verifies against; the server
-# terminates no TLS itself, so the peer is a proxy or a mesh with a real chain.
+# `tls-native-roots` is what the https:// scheme verifies against by default;
+# `--tls-ca` replaces it for a server whose certificate a private CA issued.
 tonic = { version = "0.14", features = ["tls-ring", "tls-native-roots"] }
 tonic-prost = "0.14"
 # google.rpc: the ErrorInfo and RetryInfo every non-OK response attaches, and

@@ -115,3 +115,50 @@ caCert: {{ $cached.caCert }}
 tlsCert: {{ $cached.tlsCert }}
 tlsKey: {{ $cached.tlsKey }}
 {{- end -}}
+
+{{/*
+TLS on a credentialled listener (attach or gRPC), from a Secret mounted at
+/etc/flexiq/<dir>-tls and, for mTLS, a client-CA Secret at
+/etc/flexiq/<dir>-client-ca. The server re-reads both when a renewal swaps the
+files, so neither needs a restart or a checksum annotation.
+
+Called with (dict "prefix" "FLEXIQ_GRPC" "dir" "grpc" "tls" .Values.grpc.tls).
+*/}}
+{{- define "flexiq-server.tlsEnv" -}}
+{{- if .tls.secretName }}
+- name: {{ .prefix }}_TLS_CERT
+  value: /etc/flexiq/{{ .dir }}-tls/tls.crt
+- name: {{ .prefix }}_TLS_KEY
+  value: /etc/flexiq/{{ .dir }}-tls/tls.key
+{{- if .tls.clientCaSecretName }}
+- name: {{ .prefix }}_TLS_CLIENT_CA
+  value: /etc/flexiq/{{ .dir }}-client-ca/{{ .tls.clientCaKey }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{- define "flexiq-server.tlsMounts" -}}
+{{- if .tls.secretName }}
+- name: {{ .dir }}-tls
+  mountPath: /etc/flexiq/{{ .dir }}-tls
+  readOnly: true
+{{- if .tls.clientCaSecretName }}
+- name: {{ .dir }}-client-ca
+  mountPath: /etc/flexiq/{{ .dir }}-client-ca
+  readOnly: true
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{- define "flexiq-server.tlsVolumes" -}}
+{{- if .tls.secretName }}
+- name: {{ .dir }}-tls
+  secret:
+    secretName: {{ .tls.secretName }}
+{{- if .tls.clientCaSecretName }}
+- name: {{ .dir }}-client-ca
+  secret:
+    secretName: {{ .tls.clientCaSecretName }}
+{{- end }}
+{{- end }}
+{{- end -}}

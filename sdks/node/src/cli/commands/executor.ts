@@ -9,6 +9,9 @@ interface ExecutorOptions {
   executorId?: string;
   connectTimeout?: string;
   drainTimeout?: string;
+  tlsCa?: string;
+  tlsCert?: string;
+  tlsKey?: string;
 }
 
 export function registerExecutor(program: Command): void {
@@ -20,8 +23,14 @@ export function registerExecutor(program: Command): void {
     )
     .option(
       "--attach <address>",
-      "scheduler address: host:port, :port, or unix:/path (env: FLEXIQ_ATTACH)",
+      "scheduler address: host:port, :port, tls://host:port, or unix:/path (env: FLEXIQ_ATTACH)",
     )
+    .option(
+      "--tls-ca <path>",
+      "PEM bundle the scheduler's certificate must chain to (env: FLEXIQ_ATTACH_TLS_CA)",
+    )
+    .option("--tls-cert <path>", "PEM client certificate, for mTLS (env: FLEXIQ_ATTACH_TLS_CERT)")
+    .option("--tls-key <path>", "PEM key for --tls-cert (env: FLEXIQ_ATTACH_TLS_KEY)")
     .option("--slots <n>", "jobs to run concurrently (env: FLEXIQ_SLOTS)")
     .option("--executor-id <id>", "identity announced to the scheduler")
     .option("--connect-timeout <ms>", "how long to wait for the connection")
@@ -40,6 +49,8 @@ export function registerExecutor(program: Command): void {
         executorId: options.executorId,
         connectTimeoutMs: positiveIntFlag(options.connectTimeout, "connect-timeout"),
         shutdownDrainMs: positiveIntFlag(options.drainTimeout, "drain-timeout"),
+        // Unset fields fall back to their FLEXIQ_ATTACH_TLS_* variable there.
+        tls: { ca: options.tlsCa, cert: options.tlsCert, key: options.tlsKey },
       });
 
       process.stdout.write(

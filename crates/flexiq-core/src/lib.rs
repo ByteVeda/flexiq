@@ -101,7 +101,7 @@ pub use worker::http_target::{
 };
 pub use worker::registry_fingerprint;
 pub use worker::{
-    AttachAddress, AttachError, AttachedExecutor, Capacity, Dispatch, ExecutorClient,
+    AttachAddress, AttachError, AttachTls, AttachedExecutor, Capacity, Dispatch, ExecutorClient,
     ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorMessage, ExecutorSession,
     ExecutorSideChannel, ExecutorStepStore, ExecutorSteps, HelloBuilder, NativeDispatcher,
     ProtocolError, RemoteConfig, RemoteDispatcher, SchedulerMessage, Secret, SideChannel,

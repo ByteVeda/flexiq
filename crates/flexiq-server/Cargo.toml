@@ -30,6 +30,7 @@ grpc = [
   "dep:tonic-health",
   "dep:tonic-reflection",
   "dep:tokio-stream",
+  "dep:tokio-rustls",
   "dep:prost",
   "dep:prost-types",
   "dep:tonic-prost",
@@ -57,7 +58,9 @@ events-kafka = ["flexiq-core/events-kafka"]
 events-nats = ["flexiq-core/events-nats"]
 
 [dependencies]
-flexiq-core = { workspace = true }
+# `attach-tls`: the attach listener wraps accepted sockets in core's TLS
+# transport, and every listener loads its PEM files through core's readers.
+flexiq-core = { workspace = true, features = ["attach-tls"] }
 flexiq-workflows = { workspace = true }
 axum = "0.8"
 tokio = { workspace = true }
@@ -106,7 +109,12 @@ rustls = { version = "0.23.43", default-features = false, features = ["ring"] }
 # The `Authenticator` seam answers from storage, which is blocking, so the
 # trait returns a boxed future — `dyn Authenticator` rules out a plain async fn.
 async-trait = { workspace = true, optional = true }
-tonic = { version = "0.14", optional = true }
+# `tls-ring` is what makes a handshaken `TlsStream` a `Connected` stream, so a
+# call's `remote_addr` survives TLS. The listener still terminates TLS itself —
+# tonic's own acceptor cannot swap its config on a certificate rotation.
+tonic = { version = "0.14", features = ["tls-ring"], optional = true }
+# The gRPC listener's handshake, over a config it replaces on rotation.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"], optional = true }
 tonic-health = { version = "0.14", optional = true }
 tonic-reflection = { version = "0.14", optional = true }
 # Wraps a bound UnixListener as the incoming stream tonic serves over.

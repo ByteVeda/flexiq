@@ -48,6 +48,10 @@ jobs:
           render --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
             --set dashboard.enabled=false --set namespace=prod --set triggers.enabled=true \
             --set triggers.existingConfigMap=hooks --set triggers.ingress.enabled=true
+          # In-process TLS on both credentialled listeners, mTLS on attach.
+          render --set storage.dsn=postgres://u:p@db/x --set attach.token="$TOKEN" \
+            --set attach.tls.secretName=attach-cert --set attach.tls.clientCaSecretName=exec-ca \
+            --set grpc.enabled=true --set namespace=prod --set grpc.tls.secretName=grpc-cert
           render --set storage.dsn=postgres://u:p@db/x --set attach.token="$TOKEN" \
             --set events.enabled=true \
             --set-json 'events.config={"sinks":[{"kind":"http","name":"w","url":"https://events.example.com/in","allow":["events.example.com"]}]}'
@@ -67,6 +71,14 @@ jobs:
           refuses "attach without a token" --set storage.dsn=postgres://u:p@db/x
           refuses "a guessable token" --set storage.dsn=postgres://u:p@db/x --set attach.token=short
           refuses "a scheduler without a DSN" --set attach.token="$TOKEN"
+          # Mirrors tls/config.rs: client certificates are verified on a TLS
+          # listener, so mTLS without the listener's own certificate is refused.
+          refuses "attach mTLS without a server certificate" \
+            --set storage.dsn=postgres://u:p@db/x --set attach.token="$TOKEN" \
+            --set attach.tls.clientCaSecretName=exec-ca
+          refuses "gRPC mTLS without a server certificate" \
+            --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
+            --set grpc.enabled=true --set namespace=prod --set grpc.tls.clientCaSecretName=ca
           refuses "an unacknowledged open dashboard" \
             --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false --set dashboard.auth=off
           # The server refuses the same combination at boot: the gRPC door

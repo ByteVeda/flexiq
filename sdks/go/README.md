@@ -345,10 +345,11 @@ Nothing on the wire warns you that yours is about to: track the expiry you were 
 names one, because anything a client can name is something a client can forge. If enqueues succeed
 and nothing ever runs them, check that the token's namespace is the one your workers drain.
 
-`flexiq-server` terminates no TLS, so this client verifies the peer by default and refuses to send
-a token over a plaintext connection. A deployment puts a TLS-terminating proxy or a service mesh in
-front of the listener. The exemptions are the hops with no network to observe — a Unix socket, or a
-loopback bind — and for those:
+This client verifies the peer by default and refuses to send a token over a plaintext connection.
+TLS is terminated either by `flexiq-server` itself (`FLEXIQ_GRPC_TLS_CERT`) or by a proxy or a
+service mesh in front of it; for a private CA or a client certificate (mTLS), pass `WithTLS` a
+`tls.Config` carrying them. The exemptions are the hops with no network to observe — a Unix socket,
+or a loopback bind — and for those:
 
 ```go
 client, err := flexiq.New("unix:///run/flexiq.sock",

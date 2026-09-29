@@ -644,13 +644,18 @@ revoked, expired, wrong namespace — collapses to a single indistinguishable
 one is an oracle for whether a guessed token exists. A client **SHOULD** refresh
 its credential and retry once, and **MUST NOT** try to infer which case it hit.
 
-**`flexiq-server` terminates no TLS, on either door.** The token is a *bearer*
-credential: anything that observes one can replay it, and nothing on the wire
-tells the replay from the original. So every hop that carries a token **MUST**
-be authenticated and encrypted, and a client **MUST** verify the peer it is
-presenting the token to rather than trust the name it dialled. Since this
-process will not terminate that, it is a TLS-terminating proxy or a service mesh
-in front of the listener.
+**TLS is terminated either by `flexiq-server` or in front of it.** The token is
+a *bearer* credential: anything that observes one can replay it, and nothing on
+the wire tells the replay from the original. So every hop that carries a token
+**MUST** be authenticated and encrypted, and a client **MUST** verify the peer
+it is presenting the token to rather than trust the name it dialled. The server
+terminates TLS itself when `FLEXIQ_GRPC_TLS_CERT` and `FLEXIQ_GRPC_TLS_KEY` are
+set, and can demand a client certificate chaining to `FLEXIQ_GRPC_TLS_CLIENT_CA`
+(mTLS); otherwise it is a TLS-terminating proxy or a service mesh in front of
+the listener. A client certificate never replaces the token: every
+authenticated call on either door **MUST** still present one. mTLS changes
+nothing about which calls those are — `grpc.health.v1` `Check` and `Watch`
+stay exempt, as they are without it.
 
 The exemptions are the hops with no network to observe: a Unix-domain socket,
 and a loopback bind whose peers are on the same host. Both still present a

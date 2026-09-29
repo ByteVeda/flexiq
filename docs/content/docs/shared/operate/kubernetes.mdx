@@ -82,6 +82,60 @@ grpc:
 The chart validates unsafe combinations during `helm template` and `helm
 install`, before they can become crash-looping pods.
 
+## TLS and mTLS on the attach and gRPC listeners
+
+Both listeners can terminate TLS themselves, from a `kubernetes.io/tls`
+Secret — the kind `cert-manager` issues — rather than needing a sidecar or a
+mesh in front of the pod:
+
+```yaml
+namespace: prod
+attach:
+  enabled: true
+  tls:
+    secretName: flexiq-attach-tls
+grpc:
+  enabled: true
+  tls:
+    secretName: flexiq-grpc-tls
+```
+
+A certificate is checked against the name its client dialled, so the attach
+one must name the attach Service executors reach,
+`<fullname>-attach.<namespace>.svc`, and the gRPC one the gRPC Service's.
+
+The chart mounts each Secret's `tls.crt`/`tls.key` at
+`/etc/flexiq/{attach,grpc}-tls` and points the matching
+`FLEXIQ_{LISTEN,GRPC}_TLS_CERT`/`_TLS_KEY` at the mounted files — see
+[The gRPC door](/server/operate/grpc#tls-and-mtls) for what the server does
+with them, reload included. Because the server polls the mounted files for
+changes rather than reading them once, **renewing the Secret needs no
+`checksum/` annotation and no restart**: cert-manager's rotation takes effect
+on its own, within a minute of the kubelet projecting the new files.
+
+For mTLS, add the CA bundle that signs client certificates:
+
+```yaml
+attach:
+  tls:
+    secretName: flexiq-attach-tls
+    clientCaSecretName: flexiq-attach-client-ca
+    clientCaKey: ca.crt   # default
+```
+
+`clientCaSecretName` mounts at `/etc/flexiq/{attach,grpc}-client-ca` and sets
+`_TLS_CLIENT_CA` from the key named by `clientCaKey`, `ca.crt` unless
+overridden. `grpc.tls` takes the same two fields. Setting
+`clientCaSecretName` without `secretName` is refused — mTLS with no
+certificate to pair it with — at `helm template` time, before it reaches a
+cluster.
+
+<Callout type="warn" title="A gRPC TLS listener needs a TCP readiness probe">
+Kubelet's `grpc:` probe has no TLS mode. With `grpc.tls.secretName` set, the
+chart falls back to a `tcpSocket` readiness probe on its own — a `grpc:` probe
+here would fail every check and take the pod out of rotation permanently.
+</Callout>
+
 ## Assign maintenance to one replica
 
 Every server can schedule and claim jobs through shared storage, but only one

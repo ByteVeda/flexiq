@@ -3,8 +3,8 @@
 //! An attach connection receives job frames, so the handshake has to prove who
 //! is on the other end. The token is a bearer credential: it proves the peer
 //! knows it, it does not encrypt the connection. Over an untrusted network,
-//! terminate mTLS in front of the listener and treat the token as the second
-//! factor.
+//! attach over `tls://` (or through an mTLS proxy) and treat the token as the
+//! second factor.
 
 use std::fmt;
 

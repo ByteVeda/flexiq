@@ -11,6 +11,14 @@ guard in crates/flexiq-server/src/config.
 {{- fail "flexiq-server: nothing to run. Enable at least one of attach.enabled, dashboard.enabled, webhook.enabled, grpc.enabled, push.enabled or triggers.enabled." -}}
 {{- end -}}
 
+{{/* Mirrors tls/config.rs: verifying client certificates needs a TLS listener. */}}
+{{- range $role := list "attach" "grpc" -}}
+{{- $tls := (index $.Values $role).tls -}}
+{{- if and $tls.clientCaSecretName (not $tls.secretName) -}}
+{{- fail (printf "flexiq-server: %s.tls.clientCaSecretName needs %s.tls.secretName — mTLS verifies client certificates on a TLS listener, so the listener needs its own certificate first." $role $role) -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Only the webhook runs without storage. */}}
 {{- if or .Values.attach.enabled .Values.dashboard.enabled .Values.grpc.enabled .Values.push.enabled .Values.triggers.enabled -}}
 {{- if not (or .Values.storage.dsn .Values.storage.existingSecret) -}}

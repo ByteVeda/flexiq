@@ -232,4 +232,4 @@ Decode what you are given; do not re-encode it.
 | No CPU-parallelism story: a remote executor is a network hop from the scheduler | Colocate it with the scheduler when throughput matters more than isolation |
 | You cannot enqueue from here | Hold a second, `produce`-scoped credential and use the producer door |
 | A missed `lease` echo loses a job's result silently | Echo it structurally — attach it where you build the frame, not per call site |
-| TLS is not terminated by `flexiq-server` | Put a sidecar proxy or service mesh in front of the listener |
+| TLS is off by default | Set `FLEXIQ_GRPC_TLS_CERT`/`_TLS_KEY` to terminate it in process ([TLS and mTLS](/server/operate/grpc#tls-and-mtls)), or put a sidecar proxy or service mesh in front |

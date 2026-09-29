@@ -23,6 +23,7 @@ use flexiq_cli::cli::{
     SetQueueOverrideArgs, SetTaskOverrideArgs, TaskNameArgs, ThroughputArgs, WorkerIdArgs,
 };
 use flexiq_cli::commands;
+use flexiq_cli::connect::ClientTls;
 use flexiq_cli::output::admin as cli_render;
 use flexiq_cli::pb::admin as cli_pb;
 use flexiq_core::job::{now_millis, NewJob};
@@ -80,10 +81,11 @@ impl Harness {
         let endpoint = format!("http://{addr}");
         // The CLI's own dialler, not a hand-built channel: the interceptor and
         // the scheme handling are part of what this suite is testing.
-        let client = flexiq_cli::connect::connect(&endpoint, &token)
+        let plaintext = ClientTls::default();
+        let client = flexiq_cli::connect::connect(&endpoint, &token, &plaintext)
             .await
             .expect("the listener must accept a credentialled connection");
-        let admin = flexiq_cli::connect::connect_admin(&endpoint, &token)
+        let admin = flexiq_cli::connect::connect_admin(&endpoint, &token, &plaintext)
             .await
             .expect("the listener must accept a credentialled admin connection");
 
@@ -100,7 +102,7 @@ impl Harness {
     /// A second client, on a token with the scopes given.
     async fn client_with(&self, scopes: ScopeSet) -> flexiq_cli::connect::Client {
         let token = mint_token(&self.storage, NAMESPACE, scopes);
-        flexiq_cli::connect::connect(&self.endpoint, &token)
+        flexiq_cli::connect::connect(&self.endpoint, &token, &ClientTls::default())
             .await
             .expect("connect")
     }
@@ -108,7 +110,7 @@ impl Harness {
     /// A second admin client, on a token with the scopes given.
     async fn admin_with(&self, scopes: ScopeSet) -> flexiq_cli::connect::AdminClient {
         let token = mint_token(&self.storage, NAMESPACE, scopes);
-        flexiq_cli::connect::connect_admin(&self.endpoint, &token)
+        flexiq_cli::connect::connect_admin(&self.endpoint, &token, &ClientTls::default())
             .await
             .expect("connect")
     }

@@ -32,6 +32,14 @@ Configuration (environment only):
                                  or unix:/run/flexiq.sock (default: off)
   FLEXIQ_ATTACH_TOKEN           shared secret executors present when attaching;
                                  required for a non-loopback FLEXIQ_LISTEN
+  FLEXIQ_LISTEN_TLS_CERT        PEM chain the attach listener terminates TLS
+                                 with; executors then dial tls://host:port.
+                                 Needs FLEXIQ_LISTEN_TLS_KEY; TCP binds only
+  FLEXIQ_LISTEN_TLS_KEY         PEM key for that chain
+  FLEXIQ_LISTEN_TLS_CLIENT_CA   PEM CA bundle executors' client certificates
+                                 must chain to (mTLS). The token is still
+                                 required. All three are re-read when they
+                                 change on disk, with no restart
   FLEXIQ_DASHBOARD              dashboard address, e.g. 127.0.0.1:8080 (default: off)
   FLEXIQ_DASHBOARD_AUTH         off | session (default: off)
   FLEXIQ_DASHBOARD_ASSETS       serve the SPA from this directory
@@ -55,6 +63,14 @@ Configuration (environment only):
                                  With FLEXIQ_PUSH_TARGET_URL set, only the
                                  producer door is served — this process dials
                                  out, so there is nothing to attach to
+  FLEXIQ_GRPC_TLS_CERT          PEM chain the gRPC listener terminates TLS
+                                 with, the JSON facade included; clients dial
+                                 https://. Needs FLEXIQ_GRPC_TLS_KEY; TCP
+                                 binds only
+  FLEXIQ_GRPC_TLS_KEY           PEM key for that chain
+  FLEXIQ_GRPC_TLS_CLIENT_CA     PEM CA bundle client certificates must chain
+                                 to (mTLS), beside the API token. All three are
+                                 re-read when they change on disk
   FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE  seconds an executor's attach stream lives
                                  before the scheduler drains it and closes it,
                                  so the executor reconnects and can be placed

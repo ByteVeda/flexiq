@@ -174,6 +174,7 @@ impl Harness {
         let attach = socket_door.then(|| {
             listener::spawn(
                 ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
+                None,
                 dispatcher.clone(),
                 supervisor.clone(),
                 shutdown.clone(),

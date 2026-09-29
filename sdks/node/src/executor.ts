@@ -14,13 +14,32 @@ import { createLogger } from "./utils";
 
 const log = createLogger("executor");
 
+/** Client-side TLS for a `tls://` attach address. Every value is a file path. */
+export interface ExecutorTlsOptions {
+  /**
+   * PEM bundle the scheduler's certificate must chain to. Defaults to
+   * `$FLEXIQ_ATTACH_TLS_CA`, then the bundled web roots.
+   */
+  ca?: string;
+  /** PEM client certificate, for mTLS. Defaults to `$FLEXIQ_ATTACH_TLS_CERT`. */
+  cert?: string;
+  /** PEM key for `cert`. Defaults to `$FLEXIQ_ATTACH_TLS_KEY`. */
+  key?: string;
+}
+
 /** How an executor attaches. Durations are milliseconds, per Node convention. */
 export interface ExecutorRunOptions {
   /**
-   * Scheduler address: `host:port`, `:port`, or `unix:/run/flexiq.sock`.
-   * Defaults to `$FLEXIQ_ATTACH`.
+   * Scheduler address: `host:port`, `:port`, `tls://host:port`, or
+   * `unix:/run/flexiq.sock`. Defaults to `$FLEXIQ_ATTACH`.
    */
   attach?: string;
+  /**
+   * PEM paths for a `tls://` address. Each field defaults to its
+   * `$FLEXIQ_ATTACH_TLS_*` variable. Setting any of them beside a plaintext
+   * address is refused rather than ignored.
+   */
+  tls?: ExecutorTlsOptions;
   /** Jobs to run at once. Defaults to `$FLEXIQ_SLOTS`, then 1. */
   slots?: number;
   /** Shared secret, when the scheduler requires one. Defaults to `$FLEXIQ_ATTACH_TOKEN`. */
@@ -165,6 +184,11 @@ export class Executor {
       connectTimeoutMs: run?.connectTimeoutMs,
       heartbeatIntervalMs: run?.heartbeatIntervalMs,
       shutdownDrainMs: run?.shutdownDrainMs,
+      // `||`, not `??`: a blank variable, as Compose sets freely, is unset —
+      // not a path, which would make a plaintext attach refuse.
+      tlsCa: run?.tls?.ca || process.env.FLEXIQ_ATTACH_TLS_CA || undefined,
+      tlsCert: run?.tls?.cert || process.env.FLEXIQ_ATTACH_TLS_CERT || undefined,
+      tlsKey: run?.tls?.key || process.env.FLEXIQ_ATTACH_TLS_KEY || undefined,
     });
 
     attached = native;

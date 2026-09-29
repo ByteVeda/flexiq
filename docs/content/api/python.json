@@ -56,7 +56,7 @@
       "owner": "Executor",
       "name": "__init__",
       "kind": "method",
-      "signature": "__init__(address: str, app_path: str, tasks: list[str], slots: int, token: str | None = None, executor_id: str | None = None) -> None",
+      "signature": "__init__(address: str, app_path: str, tasks: list[str], slots: int, token: str | None = None, executor_id: str | None = None, tls_ca: str | os.PathLike[str] | None = None, tls_cert: str | os.PathLike[str] | None = None, tls_key: str | os.PathLike[str] | None = None) -> None",
       "params": [
         {
           "name": "address",
@@ -86,6 +86,21 @@
         {
           "name": "executor_id",
           "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "tls_ca",
+          "type": "str | os.PathLike[str] | None",
+          "default": "None"
+        },
+        {
+          "name": "tls_cert",
+          "type": "str | os.PathLike[str] | None",
+          "default": "None"
+        },
+        {
+          "name": "tls_key",
+          "type": "str | os.PathLike[str] | None",
           "default": "None"
         }
       ],

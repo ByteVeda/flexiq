@@ -1229,11 +1229,14 @@ The attach port dispatches code. These are requirements, not options:
 - **The token comes from the environment, never `argv`.** No SDK offers a flag
   for it — a secret in `argv` shows up in `ps` output and shell history. Mount it
   from a Secret or a compose `.env`, not a `command:` line.
-- **Off loopback, terminate mTLS in front of the listener.** The token is a
-  bearer credential, not transport security. `flexiq-server` does not terminate
-  TLS itself, and setting `FLEXIQ_LISTEN_TLS_CERT`/`FLEXIQ_LISTEN_TLS_KEY`
-  fails at startup rather than being quietly ignored — a deployment can't come up
-  believing it is encrypted when it isn't.
+- **Off loopback, terminate TLS — in process or in front of the listener.**
+  The token is a bearer credential, not transport security on its own.
+  `FLEXIQ_LISTEN_TLS_CERT` and `FLEXIQ_LISTEN_TLS_KEY` terminate TLS on this
+  listener directly; `FLEXIQ_LISTEN_TLS_CLIENT_CA` turns on mTLS beside it, as
+  defence in depth alongside the token rather than instead of it. Unset,
+  plaintext behind a sidecar proxy or a service mesh works just as well — see
+  [The gRPC door](/server/operate/grpc#tls-and-mtls) for the shared shape these
+  variables take on every listener.
 - **Never publish the attach port.** Keep it on the pod or compose network. The
   compose example maps `8080` and not `7777`; the Service exposes `attach` inside
   the cluster and nothing to a LoadBalancer.
@@ -1276,7 +1279,8 @@ the JSON facade and reflection.
 
 It has its own pages, because a network endpoint is a different operational
 object from the process model above — a credential to mint and rotate, a
-namespace it refuses to start without, a TLS gap, and its own scrape:
+namespace it refuses to start without, TLS it can terminate itself, and its
+own scrape:
 
 <Cards>
   <Card
@@ -2386,4 +2390,5 @@ already held to one.
       (<SdkSwap python="pass --auth / auth_enabled=True" node="pass --auth / authEnabled: true, or a bearer token" java="pass --auth / authEnabled=true, or use legacy token mode" rust="set FLEXIQ_DASHBOARD_AUTH=session on flexiq-server" />)
 - [ ] Running [attached executors](#attached-executors)? Keep the attach port off
       the host network, set `FLEXIQ_ATTACH_TOKEN` for any bind but loopback, and
-      terminate mTLS in front of it
+      terminate TLS — `FLEXIQ_LISTEN_TLS_CERT`/`_TLS_KEY` in process, or a proxy
+      in front of it

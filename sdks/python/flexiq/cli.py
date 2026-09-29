@@ -78,9 +78,30 @@ def _build_parser() -> argparse.ArgumentParser:
         "--attach",
         default=None,
         help=(
-            "Scheduler address: host:port, :port, or unix:/run/flexiq.sock "
-            "(default: $FLEXIQ_ATTACH)"
+            "Scheduler address: host:port, :port, tls://host:port, or "
+            "unix:/run/flexiq.sock (default: $FLEXIQ_ATTACH)"
         ),
+    )
+    exec_parser.add_argument(
+        "--tls-ca",
+        default=None,
+        help=(
+            "PEM bundle the scheduler's certificate must chain to, for a tls:// "
+            "address (default: $FLEXIQ_ATTACH_TLS_CA, or the bundled web roots)"
+        ),
+    )
+    exec_parser.add_argument(
+        "--tls-cert",
+        default=None,
+        help=(
+            "PEM client certificate, for a scheduler that requires mTLS "
+            "(default: $FLEXIQ_ATTACH_TLS_CERT)"
+        ),
+    )
+    exec_parser.add_argument(
+        "--tls-key",
+        default=None,
+        help="PEM key for --tls-cert (default: $FLEXIQ_ATTACH_TLS_KEY)",
     )
     exec_parser.add_argument(
         "--slots",
@@ -394,6 +415,11 @@ def run_executor(args: argparse.Namespace) -> None:
             # and lands in shell history.
             os.environ.get("FLEXIQ_ATTACH_TOKEN"),
             args.executor_id,
+            # `or None`: a blank variable, as Compose sets freely, is unset —
+            # not a path, which would make a plaintext attach refuse.
+            tls_ca=args.tls_ca or os.environ.get("FLEXIQ_ATTACH_TLS_CA") or None,
+            tls_cert=args.tls_cert or os.environ.get("FLEXIQ_ATTACH_TLS_CERT") or None,
+            tls_key=args.tls_key or os.environ.get("FLEXIQ_ATTACH_TLS_KEY") or None,
         )
     except (RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

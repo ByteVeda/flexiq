@@ -35,6 +35,7 @@ use crate::grpc::producer::watch::Watches;
 use crate::grpc::producer::Producer;
 use crate::grpc::{facade, health, metrics, reflection};
 use crate::runtime::shutdown::Shutdown;
+use crate::tls::{watch, ServerTls};
 
 /// How long the listener waits for open connections after shutdown before it
 /// stops waiting.
@@ -78,9 +79,15 @@ pub struct Listener {
 /// The bound socket, in whichever shape the address asked for.
 enum Incoming {
     Tcp(TcpListener),
+    /// TCP whose connections are handshaken before tonic sees them.
+    Tls(TcpListener, ServerTls),
     #[cfg(unix)]
     Unix(UnixListener, PathBuf),
 }
+
+/// What the gRPC listener offers in ALPN. `h2` first for gRPC; `http/1.1`
+/// because the JSON facade answers `curl`, which negotiates it over TLS.
+const ALPN: [&[u8]; 2] = [b"h2", b"http/1.1"];
 
 impl Listener {
     /// Bind the address in `config`.
@@ -93,8 +100,29 @@ impl Listener {
                 // Report what was bound, not what was asked for: port 0
                 // resolves to an ephemeral port only the listener knows.
                 let bound = listener.local_addr().unwrap_or(*addr);
-                log::info!("[flexiq] gRPC listener on tcp://{bound}");
-                Incoming::Tcp(listener)
+                match &config.tls {
+                    // Loaded before the first accept, so a bad pair fails the
+                    // boot rather than every handshake.
+                    Some(files) => {
+                        let tls = ServerTls::load(files.clone(), &ALPN).with_context(|| {
+                            format!(
+                                "failed to load the gRPC listener's TLS certificate from {}",
+                                files.cert.display()
+                            )
+                        })?;
+                        let mtls = if files.client_ca.is_some() {
+                            ", client certificates required"
+                        } else {
+                            ""
+                        };
+                        log::info!("[flexiq] gRPC listener on https://{bound} (TLS{mtls})");
+                        Incoming::Tls(listener, tls)
+                    }
+                    None => {
+                        log::info!("[flexiq] gRPC listener on tcp://{bound}");
+                        Incoming::Tcp(listener)
+                    }
+                }
             }
             #[cfg(unix)]
             ListenAddress::Unix(path) => {
@@ -128,7 +156,7 @@ impl Listener {
     /// Address actually bound, for a TCP listener.
     pub fn local_addr(&self) -> Option<std::net::SocketAddr> {
         match &self.incoming {
-            Incoming::Tcp(listener) => listener.local_addr().ok(),
+            Incoming::Tcp(listener) | Incoming::Tls(listener, _) => listener.local_addr().ok(),
             #[cfg(unix)]
             Incoming::Unix(..) => None,
         }
@@ -255,6 +283,18 @@ impl Listener {
                 within_grace(
                     router.serve_with_incoming_shutdown(
                         TcpListenerStream::new(listener),
+                        async move { signal.wait().await },
+                    ),
+                    shutdown.clone(),
+                )
+                .await
+            }
+            Incoming::Tls(listener, tls) => {
+                tls.spawn_watch("gRPC", watch::POLL, shutdown.clone());
+                let signal = shutdown.clone();
+                within_grace(
+                    router.serve_with_incoming_shutdown(
+                        super::tls::incoming(listener, tls, shutdown.clone()),
                         async move { signal.wait().await },
                     ),
                     shutdown.clone(),

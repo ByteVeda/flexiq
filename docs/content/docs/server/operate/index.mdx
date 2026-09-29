@@ -115,6 +115,8 @@ half a schema.
 | --- | --- | --- |
 | `FLEXIQ_LISTEN` | Unset | `host:port`, `:port` (loopback), or `unix:/run/flexiq.sock` |
 | `FLEXIQ_ATTACH_TOKEN` | Unset | Bearer credential an executor presents in its `hello`. Minimum 16 characters |
+| `FLEXIQ_LISTEN_TLS_CERT` / `_TLS_KEY` | Unset | PEM certificate and key. Together they terminate TLS on this listener |
+| `FLEXIQ_LISTEN_TLS_CLIENT_CA` | Unset | PEM CA bundle. Turns on mTLS beside the cert and key |
 
 An attach connection receives jobs, which makes it a code-dispatch path rather
 than a data one. **A non-loopback TCP bind refuses to start without a token** —
@@ -123,10 +125,24 @@ the filesystem is already the boundary. The token is read once and then removed
 from the process environment, so nothing later in the process reads it back
 and no child process inherits it.
 
-`FLEXIQ_LISTEN_TLS_CERT` and `FLEXIQ_LISTEN_TLS_KEY` are **rejected at boot**,
-not ignored: this listener terminates no TLS, and a variable that looks like it
-encrypts a connection and does not is worse than no variable at all. Terminate
-mTLS in a proxy in front of it and keep the token as the second factor.
+`FLEXIQ_LISTEN_TLS_CERT`, `FLEXIQ_LISTEN_TLS_KEY` and
+`FLEXIQ_LISTEN_TLS_CLIENT_CA` are the same three-variable shape as
+[the gRPC door's](/server/operate/grpc#tls-and-mtls) TLS variables, `_LISTEN_`
+in place of `_GRPC_`: cert and key together turn TLS on, the client CA bundle
+beside them turns on mTLS, and all three reload on the same 30-second content
+poll — see that page for the boot refusals, the reload mechanics and the
+handshake limits, which are shared between the two listeners.
+
+With TLS on, an executor dials `tls://host:port` rather than `host:port`, and
+the boot log prints `attach listener on tls://ADDR`. That is the bind address;
+`FLEXIQ_ATTACH` takes `tls://` with the reachable host name the certificate
+was issued for, since that name is what the executor verifies — a
+`tls://0.0.0.0:7777` copied from the log fails the handshake. Each connection's handshake runs on its own handshake thread
+with a 10 s timeout, so a slow or silent peer stalls only itself. mTLS sits
+beside `FLEXIQ_ATTACH_TOKEN`, never instead of it: the certificate says the
+connection may exist, and the token — read only once the handshake succeeds —
+says which principal it is. Unset, the listener stays exactly as plaintext as
+it has always been.
 
 ### Dashboard
 
@@ -180,6 +196,12 @@ restarted it.
 | `FLEXIQ_GRPC_REQUEST_TIMEOUT` | `30` | Per-call deadline, seconds. `0` is unbounded |
 | `FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS` | `256` | Calls in flight per connection. `0` is unlimited |
 | `FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE` | `1800` | Executor stream rotation, seconds. `0` never rotates |
+| `FLEXIQ_GRPC_TLS_CERT` / `_TLS_KEY` | Unset | PEM certificate and key. Together they terminate TLS on this door |
+| `FLEXIQ_GRPC_TLS_CLIENT_CA` | Unset | PEM CA bundle. Turns on mTLS beside the cert and key |
+
+TLS termination — reload behaviour, mTLS, and the handshake and boot-refusal
+rules — is covered in full on
+[The gRPC door](/server/operate/grpc#tls-and-mtls).
 
 There is no token variable: callers present a
 [scoped API token](/server/operate/tokens) stored in the
@@ -272,7 +294,7 @@ choosing roles, assigning maintenance, probes and secret rotation.
   <Card
     href="/server/operate/grpc"
     title="The gRPC door"
-    description="The producer and executor doors, the JSON facade, reflection, and the TLS gap"
+    description="The producer and executor doors, the JSON facade, reflection, and TLS/mTLS termination"
   />
   <Card
     href="/server/operate/events"

@@ -211,8 +211,11 @@ authentication tells it which services the build carries. The two
 carry a credential.
 
 <Callout type="warn" title="A bearer token is one factor">
-It proves the peer holds a string. It does not encrypt the connection, and
-`flexiq-server` terminates no TLS on either door — so on anything but a loopback
-bind, put a sidecar proxy or a service mesh in front of it. Tracking:
-[#838](https://github.com/ByteVeda/flexiq/issues/838).
+It proves the peer holds a string. It does not encrypt the connection on its
+own — `flexiq-server` can terminate TLS on this door itself
+([TLS and mTLS](/server/operate/grpc#tls-and-mtls)), or leave it to a sidecar
+proxy or a service mesh in front of it. Either way the token is what decides
+*which* principal a connection belongs to, not whether the connection can be
+read off the wire. Where mTLS is on, it is defence in depth beside the token —
+never a replacement for it.
 </Callout>

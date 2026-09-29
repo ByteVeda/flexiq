@@ -3,9 +3,11 @@
 //! Two rules the rest of the crate depends on.
 //!
 //! The transport is chosen by the endpoint's scheme and never guessed. The
-//! server terminates no TLS of its own, so a default would be wrong for one
-//! deployment or the other, and being wrong would surface as a handshake error
-//! naming nothing an operator can act on.
+//! server terminates TLS only when it is configured to, and a proxy or a mesh
+//! may do it instead, so a default would be wrong for one deployment or the
+//! other, and being wrong would surface as a handshake error naming nothing an
+//! operator can act on. A private CA and a client certificate for mTLS come
+//! from [`ClientTls`]; setting either beside `http://` is refused.
 //!
 //! The credential comes from the environment only. A token in `argv` is a token
 //! in `ps` and in shell history, which is the position all three SDK CLIs
@@ -20,7 +22,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use tonic::metadata::{Ascii, MetadataValue};
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::{Channel, ClientTlsConfig, Uri};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity, Uri};
 
 use crate::pb::admin::admin_service_client::AdminServiceClient;
 use crate::pb::producer_service_client::ProducerServiceClient;
@@ -138,42 +140,92 @@ impl tonic::service::Interceptor for Bearer {
     }
 }
 
+/// PEM files for an `https://` endpoint. All `None` trusts the platform's root
+/// store and presents no client certificate.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClientTls {
+    /// CA bundle the server's certificate must chain to, replacing the
+    /// platform's roots — the private-CA case.
+    pub ca: Option<PathBuf>,
+    /// Client certificate, for a door that requires mTLS.
+    pub cert: Option<PathBuf>,
+    /// Private key for `cert`.
+    pub key: Option<PathBuf>,
+}
+
+impl ClientTls {
+    fn is_empty(&self) -> bool {
+        self.ca.is_none() && self.cert.is_none() && self.key.is_none()
+    }
+
+    /// The tonic config these files describe.
+    fn config(&self) -> Result<ClientTlsConfig> {
+        let read = |path: &PathBuf| {
+            std::fs::read(path).with_context(|| format!("reading {}", path.display()))
+        };
+        let mut config = match &self.ca {
+            Some(ca) => ClientTlsConfig::new().ca_certificate(Certificate::from_pem(read(ca)?)),
+            None => ClientTlsConfig::new().with_native_roots(),
+        };
+        match (&self.cert, &self.key) {
+            (Some(cert), Some(key)) => {
+                config = config.identity(Identity::from_pem(read(cert)?, read(key)?));
+            }
+            (None, None) => {}
+            _ => {
+                return Err(anyhow!(
+                    "--tls-cert and --tls-key are set together or not at all"
+                ))
+            }
+        }
+        Ok(config)
+    }
+}
+
 /// Dial `endpoint` and return a producer client that presents `token`.
-pub async fn connect(endpoint: &str, token: &str) -> Result<Client> {
-    let (channel, bearer) = dial(endpoint, token).await?;
+pub async fn connect(endpoint: &str, token: &str, tls: &ClientTls) -> Result<Client> {
+    let (channel, bearer) = dial(endpoint, token, tls).await?;
     Ok(ProducerServiceClient::with_interceptor(channel, bearer))
 }
 
 /// Dial `endpoint` and return an admin client that presents `token`.
-pub async fn connect_admin(endpoint: &str, token: &str) -> Result<AdminClient> {
-    let (channel, bearer) = dial(endpoint, token).await?;
+pub async fn connect_admin(endpoint: &str, token: &str, tls: &ClientTls) -> Result<AdminClient> {
+    let (channel, bearer) = dial(endpoint, token, tls).await?;
     Ok(AdminServiceClient::with_interceptor(channel, bearer))
 }
 
 /// The channel and credential both clients wrap. The token is checked before
 /// the socket opens, so a non-ASCII one fails without a round trip.
-async fn dial(endpoint: &str, token: &str) -> Result<(Channel, Bearer)> {
+async fn dial(endpoint: &str, token: &str, tls: &ClientTls) -> Result<(Channel, Bearer)> {
     let bearer = Bearer::new(token)?;
-    let channel = match parse_endpoint(endpoint)? {
-        Endpoint::Tcp { uri, tls } => connect_tcp(uri, tls).await,
+    let parsed = parse_endpoint(endpoint)?;
+    if !tls.is_empty() && !matches!(parsed, Endpoint::Tcp { tls: true, .. }) {
+        // Configured for TLS and pointed somewhere it does not apply: the
+        // operator believes the call is encrypted, so it must not be sent.
+        return Err(anyhow!(
+            "TLS files are set, but `{endpoint}` is not an https:// endpoint"
+        ));
+    }
+    let channel = match parsed {
+        Endpoint::Tcp { uri, tls: true } => connect_tcp(uri, Some(tls)).await,
+        Endpoint::Tcp { uri, tls: false } => connect_tcp(uri, None).await,
         Endpoint::Unix(path) => connect_unix(&path).await,
     }
     .with_context(|| format!("connecting to {endpoint}"))?;
     Ok((channel, bearer))
 }
 
-/// Dial a TCP address, negotiating TLS when the scheme asked for it.
-async fn connect_tcp(uri: Uri, tls: bool) -> Result<Channel> {
-    if !tls && !is_local(&uri) {
+/// Dial a TCP address, negotiating TLS with `tls` when the scheme asked for it.
+async fn connect_tcp(uri: Uri, tls: Option<&ClientTls>) -> Result<Channel> {
+    if tls.is_none() && !is_local(&uri) {
         // The credential rides this connection in a header. Over plaintext to
         // somewhere other than this machine, anything on the path can read it
         // and replay it until it expires.
         //
-        // A warning rather than a refusal: the door terminates no TLS itself,
-        // so `http://` to a sidecar or a mesh proxy on the same host is the
-        // supported deployment, and a peer behind a TLS-terminating ingress is
-        // reached as `https://`. Refusing plaintext outright would reject the
-        // configuration the server documents.
+        // A warning rather than a refusal: a door that leaves TLS to a sidecar
+        // or a mesh proxy on the same host is reached as `http://`, and
+        // refusing plaintext outright would reject a configuration the server
+        // documents.
         eprintln!(
             "warning: sending {TOKEN_VAR} in cleartext to {}. Use https:// or unix: unless the \
              path to this host is already private.",
@@ -183,8 +235,8 @@ async fn connect_tcp(uri: Uri, tls: bool) -> Result<Channel> {
     let mut builder = tonic::transport::Endpoint::from(uri)
         .timeout(REQUEST_TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT);
-    if tls {
-        builder = builder.tls_config(ClientTlsConfig::new().with_native_roots())?;
+    if let Some(tls) = tls {
+        builder = builder.tls_config(tls.config()?)?;
     }
     Ok(builder.connect().await?)
 }

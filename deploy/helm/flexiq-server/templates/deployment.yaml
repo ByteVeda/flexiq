@@ -1,5 +1,6 @@
 {{- include "flexiq-server.validate" . -}}
 {{- $fullname := include "flexiq-server.fullname" . -}}
+{{- $listenerTls := or (and .Values.attach.enabled .Values.attach.tls.secretName) (and .Values.grpc.enabled .Values.grpc.tls.secretName) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -148,6 +149,7 @@ spec:
                   name: {{ include "flexiq-server.secretName" . }}
                   key: attach-token
             {{- end }}
+            {{- include "flexiq-server.tlsEnv" (dict "prefix" "FLEXIQ_LISTEN" "dir" "attach" "tls" .Values.attach.tls) | nindent 12 }}
             {{- end }}
             {{- if .Values.dashboard.enabled }}
             - name: FLEXIQ_DASHBOARD
@@ -203,6 +205,7 @@ spec:
               value: "{{ .Values.grpc.requestTimeout }}"
             - name: FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS
               value: "{{ .Values.grpc.maxConcurrentRequests }}"
+            {{- include "flexiq-server.tlsEnv" (dict "prefix" "FLEXIQ_GRPC" "dir" "grpc" "tls" .Values.grpc.tls) | nindent 12 }}
             {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: FLEXIQ_WEBHOOK_LISTEN
@@ -340,7 +343,8 @@ spec:
           livenessProbe:
             tcpSocket: { port: grpc }
           readinessProbe:
-            {{- if .Values.grpc.healthProbe }}
+            {{- /* A kubelet gRPC probe speaks plaintext only. */}}
+            {{- if and .Values.grpc.healthProbe (not .Values.grpc.tls.secretName) }}
             grpc: { port: {{ .Values.grpc.port }} }
             {{- else }}
             tcpSocket: { port: grpc }
@@ -366,8 +370,14 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.webhook.enabled .Values.triggers.enabled .Values.events.enabled }}
+          {{- if or .Values.webhook.enabled .Values.triggers.enabled .Values.events.enabled $listenerTls }}
           volumeMounts:
+            {{- if .Values.attach.enabled }}
+            {{- include "flexiq-server.tlsMounts" (dict "dir" "attach" "tls" .Values.attach.tls) | nindent 12 }}
+            {{- end }}
+            {{- if .Values.grpc.enabled }}
+            {{- include "flexiq-server.tlsMounts" (dict "dir" "grpc" "tls" .Values.grpc.tls) | nindent 12 }}
+            {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: webhook-tls
               mountPath: /etc/flexiq/webhook-tls
@@ -384,8 +394,14 @@ spec:
               readOnly: true
             {{- end }}
           {{- end }}
-      {{- if or .Values.webhook.enabled .Values.triggers.enabled .Values.events.enabled }}
+      {{- if or .Values.webhook.enabled .Values.triggers.enabled .Values.events.enabled $listenerTls }}
       volumes:
+        {{- if .Values.attach.enabled }}
+        {{- include "flexiq-server.tlsVolumes" (dict "dir" "attach" "tls" .Values.attach.tls) | nindent 8 }}
+        {{- end }}
+        {{- if .Values.grpc.enabled }}
+        {{- include "flexiq-server.tlsVolumes" (dict "dir" "grpc" "tls" .Values.grpc.tls) | nindent 8 }}
+        {{- end }}
         {{- if .Values.webhook.enabled }}
         - name: webhook-tls
           secret:

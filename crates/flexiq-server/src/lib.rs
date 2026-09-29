@@ -16,6 +16,7 @@ pub mod grpc;
 pub mod log_safe;
 pub mod metrics;
 pub mod runtime;
+pub mod tls;
 pub mod tokens;
 pub mod trigger;
 pub mod webhook;

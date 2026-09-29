@@ -1,6 +1,7 @@
 //! Process orchestration: open storage, start the parts the environment asked
 //! for, and stop them in an order that drains work instead of dropping it.
 
+pub mod attach_tls;
 pub mod listener;
 pub mod overrides;
 pub mod scheduler;
@@ -23,6 +24,7 @@ use crate::dashboard::state::AppState;
 use crate::dashboard::static_assets::StaticAssets;
 use crate::runtime::scheduler::{DispatchPath, Lane, SchedulerSettings, SchedulerSupervisor};
 use crate::runtime::shutdown::{wait_for_signal, Shutdown};
+use crate::tls::{watch, ServerTls};
 
 /// Create the configured admin, if the deployment asked for one.
 fn prepare_auth(storage: &flexiq_core::StorageBackend, config: &DashboardConfig) {
@@ -308,9 +310,22 @@ pub fn run(config: Config, events: Option<Arc<EventHub>>) -> Result<()> {
         _ => None,
     };
 
+    // Loaded before the bind, so a bad pair fails the boot rather than every
+    // executor's handshake.
+    let attach_tls = match config.attach.as_ref().and_then(|attach| attach.tls.clone()) {
+        Some(files) => Some(ServerTls::load(files.clone(), &[]).with_context(|| {
+            format!(
+                "failed to load the attach listener's TLS certificate from {}",
+                files.cert.display()
+            )
+        })?),
+        None => None,
+    };
+
     let attach_listener = match (config.attach.clone(), &dispatcher, &supervisor) {
         (Some(attach), Some(dispatcher), Some(supervisor)) => Some(listener::spawn(
             attach.listen,
+            attach_tls.clone(),
             dispatcher.clone(),
             supervisor.clone(),
             shutdown.clone(),
@@ -322,6 +337,11 @@ pub fn run(config: Config, events: Option<Arc<EventHub>>) -> Result<()> {
         .enable_all()
         .build()
         .context("failed to build the async runtime")?;
+
+    if let Some(tls) = &attach_tls {
+        let _runtime = runtime.enter();
+        tls.spawn_watch("attach", watch::POLL, shutdown.clone());
+    }
 
     // Expired sessions and abandoned logins are swept on a cadence, not just
     // at boot: a server that never restarts would otherwise accumulate them.

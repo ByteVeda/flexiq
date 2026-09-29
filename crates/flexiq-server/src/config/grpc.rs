@@ -20,9 +20,11 @@
 //! non-loopback bind: there is no longer such a thing as an uncredentialled
 //! listener to refuse.
 //!
-//! **TLS is not terminated here**, same posture as attach: transport security
-//! belongs to a sidecar proxy or a service mesh, and a variable that looks like
-//! it encrypts the connection but does not is worse than no variable.
+//! **TLS is optional and terminated in process** when `FLEXIQ_GRPC_TLS_CERT`
+//! and `FLEXIQ_GRPC_TLS_KEY` are set, with client certificates verified
+//! against `FLEXIQ_GRPC_TLS_CLIENT_CA` when that is set too (#838). Unset, the
+//! listener is plaintext, which is right behind a sidecar proxy or a mesh that
+//! already terminates it — such a deployment configures TLS once, there.
 
 use std::time::Duration;
 
@@ -31,6 +33,7 @@ use anyhow::{bail, Context, Result};
 use crate::config::listen::{parse, ListenAddress};
 use crate::config::watch::{self, WatchConfig};
 use crate::config::{value, Env};
+use crate::tls::{self, TlsFiles};
 
 /// The variable that turns the role on, named once.
 pub const LISTEN_VAR: &str = "FLEXIQ_GRPC_LISTEN";
@@ -98,9 +101,8 @@ const DEFAULT_STREAM_MAX_AGE: Duration = Duration::from_secs(1_800);
 /// Variables an earlier build honoured that this one does not read at all.
 ///
 /// A leftover value is not harmless: it is a credential the operator believes
-/// is in force. Same reasoning as [`UNHONOURED_TLS_VARS`] — a variable that
-/// looks like a security control and does nothing is worse than no variable —
-/// and the Helm chart refuses the matching value at template time, but a
+/// is in force. A variable that looks like a security control and does nothing
+/// is worse than no variable, and the Helm chart refuses the matching value at template time, but a
 /// Compose, systemd or bare-environment deployment has no such gate.
 const RETIRED_VARS: [(&str, &str); 1] = [(
     "FLEXIQ_GRPC_TOKEN",
@@ -109,9 +111,8 @@ const RETIRED_VARS: [(&str, &str); 1] = [(
      create --name <name> --scope produce`, or from the dashboard.",
 )];
 
-/// TLS variables the gRPC listener does not terminate. Accepting them would let
-/// an operator believe the connection is encrypted when it is not.
-const UNHONOURED_TLS_VARS: [&str; 2] = ["FLEXIQ_GRPC_TLS_CERT", "FLEXIQ_GRPC_TLS_KEY"];
+/// The prefix of the listener's `_TLS_CERT` / `_TLS_KEY` / `_TLS_CLIENT_CA`.
+pub const TLS_PREFIX: &str = "FLEXIQ_GRPC";
 
 /// The gRPC listener's address and the one namespace it serves.
 #[derive(Debug, Clone)]
@@ -132,6 +133,8 @@ pub struct GrpcConfig {
     pub max_concurrent_requests: usize,
     /// The bounds on `WatchJobs` streams.
     pub watch: WatchConfig,
+    /// The key material TLS is terminated with. `None` serves plaintext.
+    pub tls: Option<TlsFiles>,
 }
 
 impl GrpcConfig {
@@ -151,6 +154,7 @@ impl GrpcConfig {
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
             watch: WatchConfig::default(),
+            tls: None,
         }
     }
 
@@ -206,16 +210,6 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<GrpcConfig>
         }
     }
 
-    for name in UNHONOURED_TLS_VARS {
-        if value(env, name).is_some() {
-            bail!(
-                "{name} is set, but this build does not terminate TLS on the gRPC \
-                 listener. Terminate TLS in a proxy in front of it, rather than \
-                 running with a security control that does nothing."
-            );
-        }
-    }
-
     let Some(namespace) = namespace.filter(|name| !name.is_empty()) else {
         bail!(
             "{LISTEN_VAR} requires FLEXIQ_NAMESPACE. An unset namespace means \
@@ -227,6 +221,7 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<GrpcConfig>
     };
 
     let listen = parse(LISTEN_VAR, &spec)?;
+    let tls = tls::config::from_env(env, TLS_PREFIX, &listen)?;
 
     // Zero is honoured rather than rejected: an operator behind a proxy that
     // already recycles connections has a reason to turn this off, and the
@@ -248,6 +243,7 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<GrpcConfig>
         request_timeout,
         max_concurrent_requests,
         watch: watch::from_env(env)?,
+        tls,
         ..GrpcConfig::new(listen, namespace)
     }))
 }
@@ -506,15 +502,37 @@ mod tests {
 
     #[cfg(feature = "grpc")]
     #[test]
-    fn an_unhonoured_tls_variable_fails_loudly() {
-        for name in UNHONOURED_TLS_VARS {
-            let error = from_env(
-                &env(&[(LISTEN_VAR, "127.0.0.1:50051"), (name, "/certs/x")]),
-                Some("prod"),
+    fn the_tls_variables_are_honoured() {
+        let fixture = |name: &str| {
+            format!(
+                "{}/../flexiq-core/tests/fixtures/tls/{name}",
+                env!("CARGO_MANIFEST_DIR")
             )
-            .expect_err("must refuse");
-            assert!(error.to_string().contains(name));
-        }
+        };
+        let (cert, key) = (fixture("server.pem"), fixture("server-key.pem"));
+        let config = from_env(
+            &env(&[
+                (LISTEN_VAR, "127.0.0.1:50051"),
+                ("FLEXIQ_GRPC_TLS_CERT", cert.as_str()),
+                ("FLEXIQ_GRPC_TLS_KEY", key.as_str()),
+            ]),
+            Some("prod"),
+        )
+        .expect("valid")
+        .expect("configured");
+        let tls = config.tls.expect("TLS must be configured");
+        assert_eq!(tls.cert.to_str(), Some(cert.as_str()));
+
+        // Half a pair is a boot failure, never a quiet plaintext listener.
+        let error = from_env(
+            &env(&[
+                (LISTEN_VAR, "127.0.0.1:50051"),
+                ("FLEXIQ_GRPC_TLS_CERT", cert.as_str()),
+            ]),
+            Some("prod"),
+        )
+        .expect_err("must refuse");
+        assert!(error.to_string().contains("FLEXIQ_GRPC_TLS_KEY"), "{error}");
     }
 
     /// The other side of the same coin: a build with no gRPC server must not

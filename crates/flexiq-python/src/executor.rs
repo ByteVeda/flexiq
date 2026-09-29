@@ -11,6 +11,7 @@
 //! A single blocking call with the GIL released would make the process
 //! unkillable by `SIGTERM`, which is exactly the signal a container gets.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -18,7 +19,8 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 use flexiq_core::worker::{
-    AttachAddress, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, CAP_STEPS,
+    AttachAddress, AttachTls, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle,
+    CAP_STEPS,
 };
 
 use crate::prefork::PreforkPool;
@@ -45,9 +47,15 @@ impl PyExecutor {
     /// Attach to `address` and start running `tasks` from `app_path`.
     ///
     /// `slots` is the number of prefork children, so it is also the number of
-    /// jobs that can run at once.
+    /// jobs that can run at once. `tls_ca`, `tls_cert` and `tls_key` are PEM
+    /// paths for a `tls://` address: the CAs the scheduler must chain to, and
+    /// the client certificate a scheduler requiring mTLS asks for.
     #[new]
-    #[pyo3(signature = (address, app_path, tasks, slots, token=None, executor_id=None))]
+    #[pyo3(signature = (
+        address, app_path, tasks, slots, token=None, executor_id=None,
+        tls_ca=None, tls_cert=None, tls_key=None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         address: &str,
@@ -56,6 +64,9 @@ impl PyExecutor {
         slots: u32,
         token: Option<String>,
         executor_id: Option<String>,
+        tls_ca: Option<PathBuf>,
+        tls_cert: Option<PathBuf>,
+        tls_key: Option<PathBuf>,
     ) -> PyResult<Self> {
         if slots == 0 {
             return Err(PyValueError::new_err("slots must be at least 1"));
@@ -83,15 +94,23 @@ impl PyExecutor {
         if let Some(id) = executor_id {
             config.executor_id = id;
         }
+        let tls = AttachTls {
+            ca: tls_ca,
+            cert: tls_cert,
+            key: tls_key,
+        };
 
         // Dialling and the handshake both block on the network; holding the GIL
         // across them would freeze every other Python thread in the process.
         let client = py
             .detach(|| -> Result<ExecutorClient, String> {
                 let target = AttachAddress::parse(address).map_err(|error| error.to_string())?;
-                let transport = target.connect(CONNECT_TIMEOUT).map_err(|error| {
-                    format!("could not reach the scheduler at {target}: {error}")
-                })?;
+                let transport =
+                    target
+                        .connect_with(CONNECT_TIMEOUT, Some(&tls))
+                        .map_err(|error| {
+                            format!("could not reach the scheduler at {target}: {error}")
+                        })?;
                 ExecutorClient::connect(transport, config).map_err(|error| match error {
                     // Named so a wrong token reads as a refusal rather than as
                     // a network fault.

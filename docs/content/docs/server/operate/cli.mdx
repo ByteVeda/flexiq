@@ -60,12 +60,13 @@ substitution above captures the credential and nothing else.
 | Endpoint | Transport |
 | --- | --- |
 | `http://host:port` | Plaintext |
-| `https://host:port` | TLS, verified against the platform's root store |
+| `https://host:port` | TLS, verified against the platform's root store unless `--tls-ca` names another one |
 | `unix:/path/to.sock` | Unix domain socket |
 
-`flexiq-server` [terminates no TLS of its own](/server/operate/grpc), so
-`https://` is for a door behind a proxy or a service mesh. An endpoint with no
-scheme is refused rather than guessed:
+`flexiq-server` can terminate TLS on the gRPC door itself now —
+[TLS and mTLS](/server/operate/grpc#tls-and-mtls) covers the server side — or
+leave it to a proxy or a service mesh in front of it; `https://` is the right
+scheme either way. An endpoint with no scheme is refused rather than guessed:
 
 ```text
 error: `127.0.0.1:50051` names no transport. Write http://host:port for plaintext, https://host:port for TLS, or unix:/path/to.sock for a Unix socket
@@ -81,10 +82,10 @@ for:
 warning: sending FLEXIQ_TOKEN in cleartext to queue.example. Use https:// or unix: unless the path to this host is already private.
 ```
 
-It warns rather than refuses because the server terminates no TLS itself: a
-sidecar or mesh proxy on the same host is reached over plaintext by design, and
-a door behind a TLS-terminating ingress is reached as `https://`. Loopback and
-Unix sockets never warn — nothing leaves the machine.
+It warns rather than refuses: a sidecar or mesh proxy on the same host is
+reached over plaintext by design, and a door with TLS terminated — whether by
+`flexiq-server` itself or by a proxy in front of it — is reached as
+`https://`. Loopback and Unix sockets never warn — nothing leaves the machine.
 </Callout>
 
 **The token comes from `FLEXIQ_TOKEN` and there is no flag for it.** A secret in
@@ -95,6 +96,23 @@ needs the `produce` scope.
 **There is no `--namespace`.** A namespace is fixed when the token is minted and
 one server process serves exactly one, so a flag would be a control the server
 ignores. Reads carry the namespace back, and `--json` shows it.
+
+### TLS material
+
+Three global flags, all optional, for a door with TLS terminated — in process
+or by a proxy — that needs more than the platform's root store:
+
+| Flag | Env | Meaning |
+| --- | --- | --- |
+| `--tls-ca` | `FLEXIQ_TLS_CA` | A PEM CA bundle to verify the server against, replacing the platform root store — the private-CA case |
+| `--tls-cert` | `FLEXIQ_TLS_CERT` | A client certificate, for mTLS |
+| `--tls-key` | `FLEXIQ_TLS_KEY` | Its key |
+
+Without `--tls-ca`, `https://` still verifies against the platform's native
+roots, exactly as before. Any of the three set beside an `http://` or `unix:`
+endpoint is refused — "TLS files are set, but `<endpoint>` is not an
+`https://` endpoint" — because a flag that looks like it changes the
+connection and is silently ignored is worse than a refusal.
 
 ## `fq enqueue`
 

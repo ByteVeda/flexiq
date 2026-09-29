@@ -23,6 +23,8 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLServerSocket;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -85,9 +87,35 @@ public final class FakeScheduler implements AutoCloseable {
      * @throws IOException if the listening socket cannot be opened
      */
     public FakeScheduler(boolean refuse, List<String> capabilities) throws IOException {
+        this(refuse, capabilities, null, false);
+    }
+
+    /**
+     * A {@code tls://} scheduler: the executor handshakes first, and the frames
+     * inside are the same either way.
+     *
+     * @param tls the server-side context the listener terminates TLS with
+     * @param requireClientCert whether a client certificate is demanded (mTLS)
+     * @return a scheduler that acknowledges the handshake and advertises nothing
+     * @throws IOException if the listening socket cannot be opened
+     */
+    public static FakeScheduler tls(SSLContext tls, boolean requireClientCert) throws IOException {
+        return new FakeScheduler(false, List.of(), tls, requireClientCert);
+    }
+
+    private FakeScheduler(
+            boolean refuse, List<String> capabilities, @Nullable SSLContext tls, boolean requireClientCert)
+            throws IOException {
         this.refuse = refuse;
         this.capabilities = capabilities;
-        this.server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        if (tls == null) {
+            this.server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        } else {
+            SSLServerSocket secure = (SSLServerSocket)
+                    tls.getServerSocketFactory().createServerSocket(0, 1, InetAddress.getLoopbackAddress());
+            secure.setNeedClientAuth(requireClientCert);
+            this.server = secure;
+        }
         this.accepting = new Thread(this::accept, "fake-scheduler");
         this.accepting.setDaemon(true);
         this.accepting.start();

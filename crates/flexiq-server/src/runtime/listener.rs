@@ -22,8 +22,10 @@ use flexiq_core::worker::UnixTransport;
 use flexiq_core::{RemoteDispatcher, Transport};
 
 use crate::config::listen::ListenAddress;
+use crate::runtime::attach_tls::AcceptingTls;
 use crate::runtime::scheduler::SchedulerSupervisor;
 use crate::runtime::shutdown::Shutdown;
+use crate::tls::ServerTls;
 
 /// How long the accept loop sleeps between polls when no peer is waiting.
 const ACCEPT_POLL: Duration = Duration::from_millis(100);
@@ -61,9 +63,15 @@ impl ListenerHandle {
     }
 }
 
-/// Bind `address` and start accepting executor attachments.
+/// Bind `address` and start accepting executor attachments, terminating TLS
+/// with `tls` when it is set.
+///
+/// Reloading `tls` on rotation is the caller's to start, with
+/// [`ServerTls::spawn_watch`], because this runs before the async runtime
+/// exists.
 pub fn spawn(
     address: ListenAddress,
+    tls: Option<ServerTls>,
     dispatcher: RemoteDispatcher,
     supervisor: Arc<SchedulerSupervisor>,
     shutdown: Shutdown,
@@ -74,13 +82,22 @@ pub fn spawn(
                 .with_context(|| format!("failed to bind the attach listener on {addr}"))?;
             listener.set_nonblocking(true)?;
             // Report what was bound, not what was asked for: port 0 resolves
-            // to an ephemeral port only the listener knows.
+            // to an ephemeral port only the listener knows. The scheme is the
+            // one an executor dials; under TLS the host it dials must be the
+            // name on the certificate, not this bind address.
             let bound = listener.local_addr().unwrap_or(addr);
-            log::info!("[flexiq] attach listener on tcp://{bound}");
+            let scheme = if tls.is_some() { "tls" } else { "tcp" };
+            log::info!("[flexiq] attach listener on {scheme}://{bound}");
             Ok(ListenerHandle {
                 accept_thread: accept_loop(
                     move || match listener.accept() {
-                        Ok((stream, _)) => Ok(Some(Box::new(TcpTransport::new(stream)?) as _)),
+                        // The handshake runs on the connection's own thread,
+                        // never here, where one silent peer would stall every
+                        // other attach.
+                        Ok((stream, _)) => Ok(Some(match &tls {
+                            Some(tls) => Box::new(AcceptingTls::new(stream, tls.current())) as _,
+                            None => Box::new(TcpTransport::new(stream)?) as _,
+                        })),
                         Err(error) => Err(error),
                     },
                     dispatcher,
@@ -94,6 +111,14 @@ pub fn spawn(
         }
         #[cfg(unix)]
         ListenAddress::Unix(path) => {
+            // The config parser refuses this pairing; a caller that built the
+            // pair itself must not get a plaintext socket it thinks is TLS.
+            if tls.is_some() {
+                anyhow::bail!(
+                    "TLS cannot be terminated on the Unix socket unix:{}",
+                    path.display()
+                );
+            }
             let listener = bind_unix(&path)?;
             listener.set_nonblocking(true)?;
             log::info!("[flexiq] attach listener on unix:{}", path.display());

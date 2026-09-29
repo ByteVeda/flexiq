@@ -31,7 +31,8 @@ name = "_flexiq"
 crate-type = ["cdylib"]
 
 [dependencies]
-flexiq-core = { workspace = true }
+# `attach-tls`: `flexiq executor` dials `tls://` schedulers.
+flexiq-core = { workspace = true, features = ["attach-tls"] }
 pyo3 = { workspace = true }
 tokio = { workspace = true }
 crossbeam-channel = { workspace = true }
