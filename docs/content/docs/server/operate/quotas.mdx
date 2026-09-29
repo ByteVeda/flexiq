@@ -1,0 +1,118 @@
+---
+title: Namespace quotas
+description: "Cap what one tenant namespace can queue, enqueue, run and retain: the limits, where each is enforced, reject versus drop, and how a change reaches every process."
+---
+
+A namespace shares its database with every other namespace, so one tenant's
+backlog, burst or history can crowd the rest. A quota bounds a namespace on the
+dimensions that hurt: how many jobs wait, how fast they arrive, how many run at
+once, and how many finished or dead rows are kept.
+
+```bash
+fq quota set --max-pending 10000 --on-excess drop --enqueue-rate 500/s \
+  --max-running 50 --max-archived-rows 1000000 --max-dead-rows 50000
+fq quota get
+```
+
+A quota is one document per namespace, set through
+[the admin door](/server/operate/admin#namespace-quotas) or
+[`fq quota`](/server/operate/cli), and the namespace is always the token's.
+Enforcement lives in the Rust core, so it is identical for every SDK and for the
+server: a Python, Node or Java producer and a gRPC caller meet the same limit
+with the same outcome.
+
+## The limits
+
+Every field is optional. An unset limit is unlimited, zero is a real limit, and
+a negative value is refused.
+
+| Field | Limits | Enforced |
+| --- | --- | --- |
+| `max_pending` | Pending jobs, delayed ones included | At enqueue |
+| `on_excess` | What an over-quota enqueue does: `reject` (the default) or `drop` | At enqueue |
+| `enqueue_rate` | Jobs enqueued per unit of time, as `<count>/<unit>` with unit `s`, `m` or `h` and a count of at least one, e.g. `500/s` | At enqueue |
+| `max_running` | Jobs running at once | At dispatch |
+| `max_archived_rows` | Archived (completed) jobs kept | By the retention sweep |
+| `max_dead_rows` | Dead letters kept | By the retention sweep |
+
+Byte ceilings are not supported: there is no portable way to measure them across
+the three backends.
+
+## Enqueue: depth and rate
+
+Depth and rate are checked on every producer path: SDK `enqueue` and
+`enqueue_many`, the gRPC producer, [triggers](/server/operate/triggers),
+periodic fires, and a dead-letter replay, which goes through enqueue. A call's
+share of a namespace is admitted or refused as a unit, so a batch never half
+lands.
+
+Depth is checked first, so a call refused for depth spends no rate tokens.
+Admission runs before unique-key deduplication and debounce coalescing: a
+duplicate enqueue is still refused while the namespace is over quota.
+
+<Callout type="info" title="Depth is count, then insert">
+Concurrent producers can each pass the count and then insert, so a namespace
+can briefly overshoot `max_pending` by the batches in flight at that moment.
+The limit holds again as soon as they land.
+</Callout>
+
+### `reject` and `drop`
+
+`on_excess` picks what happens to a call over `max_pending` or `enqueue_rate`.
+
+| | `reject` (default) | `drop` |
+| --- | --- | --- |
+| The call | Fails; nothing of it is written | Succeeds |
+| The over-quota jobs | Never exist | Dead-lettered immediately as shed |
+| Depth error | `queue '<q>' is full: <pending> pending >= max_pending <cap>`, gRPC `RESOURCE_EXHAUSTED` with reason `QUEUE_FULL` | None |
+| Rate error | `rate limit exceeded for: namespace '<ns>' enqueue_rate <rate>`, gRPC `RESOURCE_EXHAUSTED` with reason `RATE_LIMITED` | None |
+
+A shed job has status `Dead`, an error starting `quota:`, and dead-letter
+metadata `{"shed":"quota"}`. It is never live, so no worker sees it, and the
+dead-letter auto-retry sweep never retries it. It carries no unique or debounce
+key, so it cannot block a later enqueue of the same work.
+
+## Dispatch: `max_running`
+
+`max_running` is gated after a job is claimed, beside the queue-level and
+per-task `max_concurrent` caps. Over the cap, the claim is rolled back and the
+job is rescheduled; no retry is spent.
+
+## Retention: row ceilings
+
+The retention leader trims after the TTL windows have run. It deletes the oldest
+archived jobs and dead letters over their ceiling, oldest first, in bounded
+batches per cleanup tick, so a namespace far over a new ceiling converges over
+several ticks rather than in one long delete. Like the TTL sweeps, this runs
+only where [`FLEXIQ_MAINTENANCE`](/server/operate/scaling) is on.
+
+## How a change reaches processes
+
+Every process caches a namespace's quota for two seconds, so a change made
+through the admin door reaches every running process within about that long.
+That is unlike [overrides](/server/operate/admin#overrides), which workers read
+only when they start.
+
+<Callout type="warn" title="An unreadable quota fails closed">
+A quota document that cannot be read or decoded is treated as a reason to stop,
+not to run unlimited. Enqueues in that namespace fail, dispatch holds the job
+back and rolls it back to pending, and the retention sweep skips the namespace
+with a warning. Other namespaces are unaffected. Fix or clear the quota to
+resume.
+</Callout>
+
+## Backends and rolling upgrades
+
+SQLite and Postgres count from the jobs table itself. On Redis counts come
+from a per-namespace index set. During a rolling upgrade, a job enqueued by a process
+that predates quotas is not in that index until it finishes, so it is not
+counted against `max_pending` or `max_running` while it is live. Finish the
+upgrade before relying on a tight limit.
+
+## Storage and the settings API
+
+The document lives in the settings store, under `quota:default` for the default
+namespace and `quota:ns:<len>:<ns>` otherwise, where `<len>` is the namespace's
+byte length. `quota:` is a reserved settings prefix, so the dashboard's generic
+settings API hides it; use `fq quota` or the admin door. Writes are recorded in
+the [audit trail](/server/operate/audit) with target kind `namespace`.

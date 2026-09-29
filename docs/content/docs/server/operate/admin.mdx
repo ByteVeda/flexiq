@@ -16,7 +16,7 @@ share a credential:
 
 | Scope | Reaches |
 | --- | --- |
-| `inspect` | Every read-only method: `ListQueues`, `GetThroughput`, `ListDeadLetters`, `GetDeadLetter`, `ListWorkers`, `ListPeriodicTasks`, `GetPeriodicTask`, `ListOverrides`, `ListAuditRecords` |
+| `inspect` | Every read-only method: `ListQueues`, `GetThroughput`, `ListDeadLetters`, `GetDeadLetter`, `ListWorkers`, `ListPeriodicTasks`, `GetPeriodicTask`, `ListOverrides`, `GetNamespaceQuota`, `ListAuditRecords` |
 | `admin` | Every other method |
 
 The split is not a list someone keeps: a method that declares
@@ -157,6 +157,22 @@ The server's scheduler applies the fields a scheduler consumes: `retryBackoff`,
 on a queue. `timeout`, `priority` and a task's pause are applied where jobs are
 enqueued, by an SDK, so an override of them does not reach a job enqueued
 through this door.
+
+## Namespace quotas
+
+`GET /v1/admin/quota` reads the namespace's [quota](/server/operate/quotas),
+`POST /v1/admin/quota` sets it and `POST /v1/admin/quota:clear` lifts it. The
+namespace is always the token's; the request never names one.
+
+```bash
+curl -s -X POST -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  -H 'content-type: application/json' localhost:50051/v1/admin/quota \
+  -d '{"maxPending": "10000", "onExcess": "QUOTA_OVERFLOW_DROP", "enqueueRate": "500/s"}'
+```
+
+`SetNamespaceQuota` **replaces** the whole quota, like an override, and a quota
+with every field unset is the same as `:clear`. 64-bit limits are strings over
+JSON.
 
 ## Audit trail
 

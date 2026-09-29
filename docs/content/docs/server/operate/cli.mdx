@@ -332,6 +332,19 @@ fq overrides clear-task send_email
 longer overridden — and a worker reads overrides when it starts, so a change
 reaches no worker already running.
 
+[Namespace quotas](/server/operate/quotas):
+
+```bash
+fq quota get
+fq quota set --max-pending 10000 --on-excess drop --enqueue-rate 500/s
+fq quota clear
+```
+
+`set` also takes `--max-running`, `--max-archived-rows` and
+`--max-dead-rows`. It **replaces** the quota, so a flag left out lifts that
+limit. `get` prints a `limit` / `value` table, with `-` for a limit that is not
+set.
+
 The [audit trail](/server/operate/audit) — which token made each write:
 
 ```bash

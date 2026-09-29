@@ -12,7 +12,7 @@
 use serde::Deserialize;
 
 use super::request::Structured;
-use super::wkt::{JsonBytes, JsonDuration, JsonTimestamp};
+use super::wkt::{JsonBytes, JsonDuration, JsonInt64, JsonTimestamp};
 use crate::grpc::pb::admin as pb;
 use crate::grpc::pb::admin::purge_dead_letters_request::Filter;
 use crate::grpc::pb::admin::put_periodic_task_request::Body;
@@ -275,9 +275,100 @@ impl QueueOverride {
     }
 }
 
+/// `POST /v1/admin/quota` — the body is the `NamespaceQuota`. `int64` limits
+/// read from a number or a string, as proto3 JSON allows.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct NamespaceQuota {
+    /// `maxPending`.
+    #[serde(default, alias = "max_pending")]
+    pub max_pending: Option<JsonInt64>,
+    /// `onExcess`, a `QuotaOverflow` by name or number.
+    #[serde(default, alias = "on_excess")]
+    pub on_excess: Option<QuotaOverflowName>,
+    /// `<count>/<unit>`, `enqueueRate`.
+    #[serde(default, alias = "enqueue_rate")]
+    pub enqueue_rate: Option<String>,
+    /// `maxRunning`.
+    #[serde(default, alias = "max_running")]
+    pub max_running: Option<JsonInt64>,
+    /// `maxArchivedRows`.
+    #[serde(default, alias = "max_archived_rows")]
+    pub max_archived_rows: Option<JsonInt64>,
+    /// `maxDeadRows`.
+    #[serde(default, alias = "max_dead_rows")]
+    pub max_dead_rows: Option<JsonInt64>,
+}
+
+/// A `QuotaOverflow` as proto3 JSON spells an enum: its name, or its number.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum QuotaOverflowName {
+    /// `QUOTA_OVERFLOW_DROP`, …
+    Name(String),
+    /// The number; an unknown one reaches the handler, which refuses it.
+    Number(i32),
+}
+
+impl NamespaceQuota {
+    /// The message, or why an `onExcess` name is not one.
+    pub fn into_message(self) -> Result<pb::NamespaceQuota, String> {
+        let on_excess = match self.on_excess {
+            None => pb::QuotaOverflow::Unspecified as i32,
+            Some(QuotaOverflowName::Number(number)) => number,
+            Some(QuotaOverflowName::Name(name)) => pb::QuotaOverflow::from_str_name(&name)
+                .map(|value| value as i32)
+                .ok_or_else(|| {
+                    format!(
+                        "`{name}` is not a quota overflow action; one of {}",
+                        [pb::QuotaOverflow::Reject, pb::QuotaOverflow::Drop]
+                            .map(|value| value.as_str_name())
+                            .join(", ")
+                    )
+                })?,
+        };
+        Ok(pb::NamespaceQuota {
+            max_pending: self.max_pending.map(|value| value.0),
+            on_excess,
+            enqueue_rate: self.enqueue_rate,
+            max_running: self.max_running.map(|value| value.0),
+            max_archived_rows: self.max_archived_rows.map(|value| value.0),
+            max_dead_rows: self.max_dead_rows.map(|value| value.0),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_quota_reads_both_spellings_and_int64_as_a_string() {
+        let quota: NamespaceQuota = serde_json::from_value(serde_json::json!({
+            "maxPending": "10",
+            "on_excess": "QUOTA_OVERFLOW_DROP",
+            "enqueueRate": "5/s",
+            "max_running": 2,
+        }))
+        .expect("parses");
+        let message = quota.into_message().expect("a known overflow");
+        assert_eq!(message.max_pending, Some(10));
+        assert_eq!(message.on_excess, pb::QuotaOverflow::Drop as i32);
+        assert_eq!(message.enqueue_rate.as_deref(), Some("5/s"));
+        assert_eq!(message.max_running, Some(2));
+        assert_eq!(message.max_dead_rows, None);
+    }
+
+    #[test]
+    fn an_unknown_overflow_name_is_refused() {
+        let quota: NamespaceQuota =
+            serde_json::from_value(serde_json::json!({"onExcess": "DEFER"})).expect("parses");
+        let error = quota.into_message().unwrap_err();
+        assert!(error.contains("QUOTA_OVERFLOW_REJECT"), "{error}");
+        assert!(
+            serde_json::from_value::<NamespaceQuota>(serde_json::json!({"maxBytes": 1})).is_err()
+        );
+    }
 
     fn purge(body: serde_json::Value) -> Result<pb::PurgeDeadLettersRequest, String> {
         serde_json::from_value::<PurgeDeadLetters>(body)

@@ -402,6 +402,41 @@ pub fn set_queue_override(response: &pb::SetQueueOverrideResponse) -> Value {
     )
 }
 
+/// A `NamespaceQuota`. Unset limits are omitted; `int64`s are strings, as
+/// proto3 JSON writes them; `onExcess` by name, or by number when unknown.
+fn namespace_quota(value: &pb::NamespaceQuota) -> Value {
+    let mut object = Map::new();
+    for (key, limit) in [
+        ("maxPending", value.max_pending),
+        ("maxRunning", value.max_running),
+        ("maxArchivedRows", value.max_archived_rows),
+        ("maxDeadRows", value.max_dead_rows),
+    ] {
+        if let Some(limit) = limit {
+            object.insert(key.to_string(), int64(limit));
+        }
+    }
+    if let Some(rate) = value.enqueue_rate.as_ref() {
+        object.insert("enqueueRate".to_string(), rate.clone().into());
+    }
+    let on_excess = match pb::QuotaOverflow::try_from(value.on_excess) {
+        Ok(known) => known.as_str_name().into(),
+        Err(_) => value.on_excess.into(),
+    };
+    object.insert("onExcess".to_string(), on_excess);
+    Value::Object(object)
+}
+
+/// `GetNamespaceQuotaResponse`.
+pub fn get_namespace_quota(response: &pb::GetNamespaceQuotaResponse) -> Value {
+    wrapping("quota", response.quota.as_ref(), namespace_quota)
+}
+
+/// `SetNamespaceQuotaResponse`.
+pub fn set_namespace_quota(response: &pb::SetNamespaceQuotaResponse) -> Value {
+    wrapping("quota", response.quota.as_ref(), namespace_quota)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -656,6 +691,43 @@ mod tests {
         assert_names(
             "ClearQueueOverrideResponse",
             &empty(&pb::ClearQueueOverrideResponse {}),
+        );
+
+        let quota = pb::NamespaceQuota {
+            max_pending: Some(10),
+            on_excess: pb::QuotaOverflow::Drop as i32,
+            enqueue_rate: Some("5/s".to_string()),
+            max_running: Some(2),
+            max_archived_rows: Some(100),
+            max_dead_rows: Some(0),
+        };
+        assert_names("NamespaceQuota", &namespace_quota(&quota));
+        assert_names(
+            "GetNamespaceQuotaResponse",
+            &get_namespace_quota(&pb::GetNamespaceQuotaResponse {
+                quota: Some(quota.clone()),
+            }),
+        );
+        assert_names(
+            "SetNamespaceQuotaResponse",
+            &set_namespace_quota(&pb::SetNamespaceQuotaResponse { quota: Some(quota) }),
+        );
+        assert_names(
+            "ClearNamespaceQuotaResponse",
+            &empty(&pb::ClearNamespaceQuotaResponse {}),
+        );
+    }
+
+    #[test]
+    fn a_quota_renders_int64_as_strings_and_the_overflow_by_name() {
+        let rendered = namespace_quota(&pb::NamespaceQuota {
+            max_pending: Some(10),
+            on_excess: pb::QuotaOverflow::Drop as i32,
+            ..Default::default()
+        });
+        assert_eq!(
+            rendered,
+            serde_json::json!({"maxPending": "10", "onExcess": "QUOTA_OVERFLOW_DROP"})
         );
     }
 

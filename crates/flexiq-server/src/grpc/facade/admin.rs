@@ -378,6 +378,42 @@ pub(super) async fn set_queue_override(
     .await
 }
 
+// ── Quota ────────────────────────────────────────────────────────────
+
+pub(super) async fn get_namespace_quota(State(admin): State<Admin>, parts: Parts) -> Response {
+    answer(
+        &parts,
+        Ok(pb::GetNamespaceQuotaRequest {}),
+        |request| admin.get_namespace_quota(request),
+        write::get_namespace_quota,
+    )
+    .await
+}
+
+/// The body is the `NamespaceQuota` itself — the binding names `quota` as the
+/// body. The namespace is the credential's, never the request's.
+pub(super) async fn set_namespace_quota(State(admin): State<Admin>, request: Request) -> Response {
+    let (parts, quota) = body(request, read::NamespaceQuota::into_message).await;
+    let message = quota.map(|quota| pb::SetNamespaceQuotaRequest { quota: Some(quota) });
+    answer(
+        &parts,
+        message,
+        |request| admin.set_namespace_quota(request),
+        write::set_namespace_quota,
+    )
+    .await
+}
+
+pub(super) async fn clear_namespace_quota(State(admin): State<Admin>, parts: Parts) -> Response {
+    answer(
+        &parts,
+        Ok(pb::ClearNamespaceQuotaRequest {}),
+        |request| admin.clear_namespace_quota(request),
+        write::empty,
+    )
+    .await
+}
+
 pub(super) async fn clear_queue_override(
     State(admin): State<Admin>,
     queue: Result<Path<String>, PathRejection>,

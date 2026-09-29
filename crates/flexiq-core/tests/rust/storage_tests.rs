@@ -3303,7 +3303,186 @@ fn test_audit_purge_is_namespace_scoped(s: &impl Storage) {
     assert_eq!(s.purge_audit(ns, 3_000).unwrap(), 0, "purge is idempotent");
 }
 
+/// #841: `count_by_namespace` counts one tenant's live jobs in one status —
+/// never another tenant's, and `None` is the default namespace, not a wildcard.
+fn test_count_by_namespace(s: &impl Storage) {
+    let q = "q-count-by-namespace";
+    let (a, b) = (Some("count-ns-a"), Some("count-ns-b"));
+    let enqueue = |ns: Option<&str>| {
+        let mut job = make_job(q, "count_task");
+        job.namespace = ns.map(str::to_string);
+        s.enqueue(job).unwrap()
+    };
+    let count = |ns: Option<&str>, status| s.count_by_namespace(ns, status).unwrap();
+
+    // Other tests share the default namespace, so it is asserted as a delta.
+    let default_before = count(None, JobStatus::Pending);
+    for _ in 0..3 {
+        enqueue(a);
+    }
+    enqueue(b);
+    enqueue(None);
+    enqueue(None);
+
+    assert_eq!(count(a, JobStatus::Pending), 3);
+    assert_eq!(count(b, JobStatus::Pending), 1);
+    assert_eq!(count(None, JobStatus::Pending), default_before + 2);
+    assert_eq!(count(Some("count-ns-none"), JobStatus::Pending), 0);
+
+    // A claim moves one job from Pending to Running, in its own namespace only.
+    let claimed = s.dequeue(q, now_millis() + 1, a).unwrap().expect("a job");
+    assert_eq!(count(a, JobStatus::Pending), 2);
+    assert_eq!(count(a, JobStatus::Running), 1);
+    assert_eq!(count(b, JobStatus::Running), 0);
+
+    // A terminal job leaves the live count.
+    s.complete(&claimed.id, None, a).unwrap();
+    assert_eq!(count(a, JobStatus::Running), 0);
+    assert_eq!(count(a, JobStatus::Pending), 2);
+}
+
+/// #841: a job shed at enqueue goes straight to the DLQ and the archive —
+/// never live, never counted, and its unique key stays with the live job.
+fn test_shed_new_jobs_never_go_live(s: &impl Storage) {
+    let q = "q-shed-new";
+    let ns = Some("shed-new-ns");
+    let mut live = make_job(q, "shed_task");
+    live.namespace = ns.map(str::to_string);
+    live.unique_key = Some("shed-uk".to_string());
+    let live = s.enqueue_unique(live).unwrap();
+
+    let mut shed = make_job(q, "shed_task");
+    shed.namespace = ns.map(str::to_string);
+    shed.unique_key = Some("shed-uk".to_string());
+    let mut shed = shed.into_job();
+    shed.error = Some("quota:max_pending".to_string());
+    // One call, two reasons: every job carries its own.
+    let mut other = make_job(q, "shed_task");
+    other.namespace = ns.map(str::to_string);
+    let mut other = other.into_job();
+    other.error = Some("quota:enqueue_rate".to_string());
+    s.shed_new_jobs(&[shed.clone(), other.clone()], None)
+        .unwrap();
+
+    // A job with no reason refuses the whole call before anything is written.
+    let mut bare = make_job(q, "shed_task");
+    bare.namespace = ns.map(str::to_string);
+    let with_reason = {
+        let mut job = make_job(q, "shed_task");
+        job.namespace = ns.map(str::to_string);
+        let mut job = job.into_job();
+        job.error = Some("quota:max_pending".to_string());
+        job
+    };
+    assert!(s
+        .shed_new_jobs(&[with_reason.clone(), bare.into_job()], None)
+        .is_err());
+    assert!(s.get_job(&with_reason.id, ns).unwrap().is_none());
+
+    assert_eq!(s.count_by_namespace(ns, JobStatus::Pending).unwrap(), 1);
+    let archived = s.get_job(&shed.id, ns).unwrap().expect("archived");
+    assert_eq!(archived.status, JobStatus::Dead);
+    let dead = s.list_dead(100, 0, ns).unwrap();
+    let entry = dead
+        .iter()
+        .find(|d| d.original_job_id == shed.id)
+        .expect("dead-letter entry");
+    assert_eq!(entry.error.as_deref(), Some("quota:max_pending"));
+    let other_entry = dead
+        .iter()
+        .find(|d| d.original_job_id == other.id)
+        .expect("the second reason's entry");
+    assert_eq!(other_entry.error.as_deref(), Some("quota:enqueue_rate"));
+
+    // The live job still owns the key: a same-key enqueue dedupes onto it.
+    let mut again = make_job(q, "shed_task");
+    again.namespace = ns.map(str::to_string);
+    again.unique_key = Some("shed-uk".to_string());
+    let (job, deduplicated) = s.enqueue_unique_reporting(again).unwrap();
+    assert!(deduplicated);
+    assert_eq!(job.id, live.id);
+    assert!(s.dequeue(q, now_millis() + 1, ns).unwrap().is_some());
+    assert!(
+        s.dequeue(q, now_millis() + 1, ns).unwrap().is_none(),
+        "the shed job must never be claimable"
+    );
+}
+
+/// Enqueue, claim and finish `n` jobs in `namespace` one after another, so
+/// each lands in the archive later than the one before; their ids, oldest first.
+fn archive_in(
+    s: &impl Storage,
+    q: &str,
+    namespace: Option<&str>,
+    n: usize,
+    dead: bool,
+) -> Vec<String> {
+    (0..n)
+        .map(|_| {
+            let mut job = make_job(q, "trim_task");
+            job.namespace = namespace.map(str::to_string);
+            s.enqueue(job).unwrap();
+            let job = s
+                .dequeue(q, now_millis() + 1, namespace)
+                .unwrap()
+                .expect("claimed");
+            if dead {
+                s.move_to_dlq(&job, "boom", None).unwrap();
+            } else {
+                s.complete(&job.id, None, namespace).unwrap();
+            }
+            // Distinct completion instants, so oldest-first is unambiguous.
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            job.id
+        })
+        .collect()
+}
+
+/// #841: `max_archived_rows` trims one namespace's archive oldest-first down
+/// to the ceiling, and never touches another namespace's rows.
+fn test_trim_archived_over(s: &impl Storage) {
+    let q = "q-trim-archived";
+    let (a, b) = (Some("trim-archived-a"), Some("trim-archived-b"));
+    let ids = archive_in(s, q, a, 5, false);
+    archive_in(s, q, b, 2, false);
+
+    assert_eq!(s.trim_archived_over(a, 10).unwrap(), 0, "under the ceiling");
+    assert_eq!(s.trim_archived_over(a, 2).unwrap(), 3);
+    let mut kept: Vec<String> = s
+        .list_archived(100, 0, a)
+        .unwrap()
+        .into_iter()
+        .map(|job| job.id)
+        .collect();
+    kept.sort();
+    let mut newest = ids[3..].to_vec();
+    newest.sort();
+    assert_eq!(kept, newest, "the two newest survive");
+    assert_eq!(s.list_archived(100, 0, b).unwrap().len(), 2);
+    assert_eq!(s.trim_archived_over(a, 2).unwrap(), 0, "idempotent");
+}
+
+/// #841: `max_dead_rows` trims one namespace's dead letters oldest-first.
+fn test_trim_dead_over(s: &impl Storage) {
+    let q = "q-trim-dead";
+    let (a, b) = (Some("trim-dead-a"), Some("trim-dead-b"));
+    let ids = archive_in(s, q, a, 4, true);
+    archive_in(s, q, b, 1, true);
+
+    assert_eq!(s.trim_dead_over(a, 1).unwrap(), 3);
+    let kept = s.list_dead(100, 0, a).unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].original_job_id, ids[3], "the newest survives");
+    assert_eq!(s.list_dead(100, 0, b).unwrap().len(), 1);
+    assert_eq!(s.trim_dead_over(a, 0).unwrap(), 1, "zero keeps nothing");
+    assert!(s.list_dead(100, 0, a).unwrap().is_empty());
+}
+
 fn run_storage_tests(s: &impl Storage) {
+    test_count_by_namespace(s);
+    test_trim_archived_over(s);
+    test_trim_dead_over(s);
+    test_shed_new_jobs_never_go_live(s);
     test_enqueue_and_get(s);
     test_dequeue(s);
     test_dequeue_batch(s);
@@ -3389,6 +3568,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_listing_is_blob_free(s);
     test_concurrent_dequeue_no_double_claim(s);
     test_rate_limit_token_exhaustion(s);
+    test_rate_limit_multi_token_is_all_or_nothing(s);
     test_task_logs_after_cursor(s);
     test_keyset_pagination_jobs(s);
     test_keyset_pagination_dlq_and_archive(s);
@@ -4677,6 +4857,24 @@ fn test_rate_limit_token_exhaustion(s: &impl Storage) {
     assert!(
         !s.try_acquire_token(key, max_tokens, 0.0).unwrap(),
         "bucket must be empty after max_tokens acquisitions"
+    );
+}
+
+fn test_rate_limit_multi_token_is_all_or_nothing(s: &impl Storage) {
+    // A batch takes every token it asks for or none: a refusal spends nothing,
+    // so the remainder is still there for a smaller batch.
+    let key = "q-rate-multi";
+    assert!(s.try_acquire_tokens(key, 3, 5.0, 0.0).unwrap());
+    assert!(
+        !s.try_acquire_tokens(key, 3, 5.0, 0.0).unwrap(),
+        "only 2 left"
+    );
+    assert!(s.try_acquire_tokens(key, 2, 5.0, 0.0).unwrap());
+    assert!(!s.try_acquire_token(key, 5.0, 0.0).unwrap(), "bucket empty");
+    assert!(
+        !s.try_acquire_tokens("q-rate-multi-big", 6, 5.0, 0.0)
+            .unwrap(),
+        "a batch above capacity never passes"
     );
 }
 

@@ -11,6 +11,7 @@ pub(crate) mod notify;
 /// PostgreSQL storage backend (feature `postgres`).
 #[cfg(feature = "postgres")]
 pub mod postgres;
+mod quota_gate;
 pub mod records;
 /// Redis storage backend (feature `redis`).
 #[cfg(feature = "redis")]
@@ -797,6 +798,13 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Vec<$crate::job::Job>> {
                 self.shed_to_dlq_reporting(job, error, metadata)
             }
+            fn shed_new_jobs(
+                &self,
+                jobs: &[$crate::job::Job],
+                metadata: Option<&str>,
+            ) -> $crate::error::Result<()> {
+                self.shed_new_jobs(jobs, metadata)
+            }
             fn list_dead(
                 &self,
                 limit: i64,
@@ -863,6 +871,20 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<u64> {
                 self.purge_dead_with_ttl(global_cutoff_ms)
             }
+            fn trim_dead_over(
+                &self,
+                namespace: Option<&str>,
+                keep: i64,
+            ) -> $crate::error::Result<u64> {
+                self.trim_dead_over(namespace, keep)
+            }
+            fn trim_archived_over(
+                &self,
+                namespace: Option<&str>,
+                keep: i64,
+            ) -> $crate::error::Result<u64> {
+                self.trim_archived_over(namespace, keep)
+            }
             fn list_dead_for_retry(
                 &self,
                 cutoff_ms: i64,
@@ -892,6 +914,15 @@ macro_rules! impl_storage {
                 refill_rate: f64,
             ) -> $crate::error::Result<bool> {
                 self.try_acquire_token(key, max_tokens, refill_rate)
+            }
+            fn try_acquire_tokens(
+                &self,
+                key: &str,
+                count: u32,
+                max_tokens: f64,
+                refill_rate: f64,
+            ) -> $crate::error::Result<bool> {
+                self.try_acquire_tokens(key, count, max_tokens, refill_rate)
             }
             fn register_periodic(
                 &self,
@@ -1444,6 +1475,13 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<i64> {
                 self.count_running_by_task(task_name, namespace)
             }
+            fn count_by_namespace(
+                &self,
+                namespace: Option<&str>,
+                status: $crate::job::JobStatus,
+            ) -> $crate::error::Result<i64> {
+                self.count_by_namespace(namespace, status)
+            }
             fn count_pending_by_queue(
                 &self,
                 queue_name: &str,
@@ -1551,6 +1589,21 @@ macro_rules! impl_storage {
 }
 
 pub(crate) use impl_storage;
+
+/// Each shed job's dead-letter reason — its own `error` — checked for every
+/// job before a backend writes any of them.
+pub(crate) fn shed_reasons(jobs: &[Job]) -> Result<Vec<String>> {
+    jobs.iter()
+        .map(|job| {
+            job.error.clone().ok_or_else(|| {
+                crate::error::QueueError::Other(format!(
+                    "shed job {} carries no dead-letter reason",
+                    job.id
+                ))
+            })
+        })
+        .collect()
+}
 
 // ── Backend-agnostic storage wrapper ──────────────────────────────────
 
@@ -1720,33 +1773,63 @@ impl StorageBackend {
     }
 }
 
+// Every enqueue forwarder runs its call through the namespace quotas first
+// (`quota_gate`): this is the one layer every producer door shares.
 impl Storage for StorageBackend {
     fn enqueue(&self, new_job: NewJob) -> Result<Job> {
-        let job = delegate!(self, enqueue, new_job)?;
-        #[cfg(feature = "push-dispatch")]
-        self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
-        Ok(job)
+        let jobs = self.with_quota(
+            vec![new_job],
+            |mut admitted| {
+                let job = delegate!(self, enqueue, admitted.remove(0))?;
+                #[cfg(feature = "push-dispatch")]
+                self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
+                Ok(vec![job])
+            },
+            |shed| shed,
+        )?;
+        quota_gate::single(jobs)
     }
     fn enqueue_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
-        let jobs = delegate!(self, enqueue_batch, new_jobs)?;
-        #[cfg(feature = "push-dispatch")]
-        self.notify_enqueued_batch(jobs.iter());
-        Ok(jobs)
+        self.with_quota(
+            new_jobs,
+            |admitted| {
+                let jobs = delegate!(self, enqueue_batch, admitted)?;
+                #[cfg(feature = "push-dispatch")]
+                self.notify_enqueued_batch(jobs.iter());
+                Ok(jobs)
+            },
+            |shed| shed,
+        )
     }
     fn enqueue_unique(&self, new_job: NewJob) -> Result<Job> {
         Ok(self.enqueue_unique_reporting(new_job)?.0)
     }
     fn enqueue_unique_reporting(&self, new_job: NewJob) -> Result<(Job, bool)> {
-        let (job, deduplicated) = delegate!(self, enqueue_unique_reporting, new_job)?;
-        #[cfg(feature = "push-dispatch")]
-        self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
-        Ok((job, deduplicated))
+        let jobs = self.with_quota(
+            vec![new_job],
+            |mut admitted| {
+                let (job, deduplicated) =
+                    delegate!(self, enqueue_unique_reporting, admitted.remove(0))?;
+                #[cfg(feature = "push-dispatch")]
+                self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
+                Ok(vec![(job, deduplicated)])
+            },
+            |shed| (shed, false),
+        )?;
+        quota_gate::single(jobs)
     }
     fn enqueue_debounced(&self, new_job: NewJob, options: records::DebounceOptions) -> Result<Job> {
-        let job = delegate!(self, enqueue_debounced, new_job, options)?;
-        #[cfg(feature = "push-dispatch")]
-        self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
-        Ok(job)
+        let jobs = self.with_quota(
+            vec![new_job],
+            |mut admitted| {
+                let job = delegate!(self, enqueue_debounced, admitted.remove(0), options)?;
+                #[cfg(feature = "push-dispatch")]
+                self.notify_enqueued(job.namespace.as_deref(), &job.queue, job.scheduled_at);
+                Ok(vec![job])
+            },
+            |shed| shed,
+        )?;
+        quota_gate::single(jobs)
     }
     fn enqueue_unique_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
         Ok(self
@@ -1756,10 +1839,16 @@ impl Storage for StorageBackend {
             .collect())
     }
     fn enqueue_unique_batch_reporting(&self, new_jobs: Vec<NewJob>) -> Result<Vec<(Job, bool)>> {
-        let jobs = delegate!(self, enqueue_unique_batch_reporting, new_jobs)?;
-        #[cfg(feature = "push-dispatch")]
-        self.notify_enqueued_batch(jobs.iter().map(|(job, _)| job));
-        Ok(jobs)
+        self.with_quota(
+            new_jobs,
+            |admitted| {
+                let jobs = delegate!(self, enqueue_unique_batch_reporting, admitted)?;
+                #[cfg(feature = "push-dispatch")]
+                self.notify_enqueued_batch(jobs.iter().map(|(job, _)| job));
+                Ok(jobs)
+            },
+            |shed| (shed, false),
+        )
     }
     fn dequeue(&self, queue_name: &str, now: i64, namespace: Option<&str>) -> Result<Option<Job>> {
         delegate!(self, dequeue, queue_name, now, namespace)
@@ -1973,6 +2062,9 @@ impl Storage for StorageBackend {
     ) -> Result<Vec<Job>> {
         delegate!(self, shed_to_dlq_reporting, job, error, metadata)
     }
+    fn shed_new_jobs(&self, jobs: &[Job], metadata: Option<&str>) -> Result<()> {
+        delegate!(self, shed_new_jobs, jobs, metadata)
+    }
     fn list_dead(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<DeadJob>> {
         delegate!(self, list_dead, limit, offset, namespace)
     }
@@ -2011,6 +2103,12 @@ impl Storage for StorageBackend {
     fn purge_dead_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64> {
         delegate!(self, purge_dead_with_ttl, global_cutoff_ms)
     }
+    fn trim_dead_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64> {
+        delegate!(self, trim_dead_over, namespace, keep)
+    }
+    fn trim_archived_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64> {
+        delegate!(self, trim_archived_over, namespace, keep)
+    }
     fn list_dead_for_retry(
         &self,
         cutoff_ms: i64,
@@ -2037,6 +2135,22 @@ impl Storage for StorageBackend {
     }
     fn try_acquire_token(&self, key: &str, max_tokens: f64, refill_rate: f64) -> Result<bool> {
         delegate!(self, try_acquire_token, key, max_tokens, refill_rate)
+    }
+    fn try_acquire_tokens(
+        &self,
+        key: &str,
+        count: u32,
+        max_tokens: f64,
+        refill_rate: f64,
+    ) -> Result<bool> {
+        delegate!(
+            self,
+            try_acquire_tokens,
+            key,
+            count,
+            max_tokens,
+            refill_rate
+        )
     }
     fn register_periodic(&self, task: &records::NewPeriodicTask) -> Result<()> {
         delegate!(self, register_periodic, task)
@@ -2521,6 +2635,9 @@ impl Storage for StorageBackend {
     }
     fn count_running_by_task(&self, task_name: &str, namespace: Option<&str>) -> Result<i64> {
         delegate!(self, count_running_by_task, task_name, namespace)
+    }
+    fn count_by_namespace(&self, namespace: Option<&str>, status: JobStatus) -> Result<i64> {
+        delegate!(self, count_by_namespace, namespace, status)
     }
     fn count_pending_by_queue(&self, queue_name: &str) -> Result<i64> {
         delegate!(self, count_pending_by_queue, queue_name)

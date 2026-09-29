@@ -33,6 +33,18 @@ impl RedisStorage {
     /// Atomically refill and consume one token via a Lua script. Returns
     /// `false` when the bucket is empty.
     pub fn try_acquire_token(&self, key: &str, max_tokens: f64, refill_rate: f64) -> Result<bool> {
+        self.try_acquire_tokens(key, 1, max_tokens, refill_rate)
+    }
+
+    /// [`try_acquire_token`](Self::try_acquire_token) for `count` tokens at
+    /// once: all of them or none, so a refused batch spends nothing.
+    pub fn try_acquire_tokens(
+        &self,
+        key: &str,
+        count: u32,
+        max_tokens: f64,
+        refill_rate: f64,
+    ) -> Result<bool> {
         let mut conn = self.conn()?;
         let now = now_millis();
 
@@ -62,10 +74,11 @@ impl RedisStorage {
             tokens = math.min(max_tokens, tokens + elapsed_sec * refill_rate)
             last_refill = now
 
-            -- Try consume
+            -- Try consume `count` tokens, all or none
+            local count = tonumber(ARGV[5])
             local acquired = 0
-            if tokens >= 1.0 then
-                tokens = tokens - 1.0
+            if tokens >= count then
+                tokens = tokens - count
                 acquired = 1
             end
 
@@ -89,6 +102,7 @@ impl RedisStorage {
             .arg(max_tokens)
             .arg(refill_rate)
             .arg(key)
+            .arg(count)
             .invoke(&mut conn)
             .map_err(map_err)?;
 

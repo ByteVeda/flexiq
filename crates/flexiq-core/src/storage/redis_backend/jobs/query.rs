@@ -323,6 +323,15 @@ impl RedisStorage {
             .count() as i64)
     }
 
+    /// Live jobs in one namespace and status (namespace quotas): a server-side
+    /// `SINTERCARD` of `jobs:by_ns:<seg>` with the status set. `None` is the
+    /// default namespace, not every namespace.
+    pub fn count_by_namespace(&self, namespace: Option<&str>, status: JobStatus) -> Result<i64> {
+        let mut conn = self.conn()?;
+        let by_ns_key = self.by_namespace_key(namespace);
+        self.count_in_status(&mut conn, &by_ns_key, status)
+    }
+
     /// Count pending jobs on a queue (for the `max_pending` admission cap).
     pub fn count_pending_by_queue(&self, queue_name: &str) -> Result<i64> {
         let mut conn = self.conn()?;

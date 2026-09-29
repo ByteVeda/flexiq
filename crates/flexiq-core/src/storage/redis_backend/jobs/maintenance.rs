@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::events::reason;
 use crate::job::{now_millis, Job, JobStatus};
 use crate::storage::records::StaleJob;
-use crate::storage::redis_backend::{map_err, RedisStorage, SCAN_BATCH};
+use crate::storage::redis_backend::{map_err, RedisStorage, MAX_TRIM_BATCHES, SCAN_BATCH};
 use crate::storage::{RetentionCounts, RetentionCutoffs};
 
 impl RedisStorage {
@@ -166,6 +166,113 @@ impl RedisStorage {
         }
 
         Ok(count)
+    }
+
+    /// Delete `namespace`'s oldest archived jobs until at most `keep` remain —
+    /// the `max_archived_rows` quota (#841) — walking `archived:by_ns:<seg>`
+    /// oldest-first. Each call first indexes one more batch of an archive that
+    /// predates the index; until that finishes the count reads low, so the
+    /// trim errs toward keeping rows, never toward deleting extra.
+    pub fn trim_archived_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64> {
+        let mut conn = self.conn()?;
+        self.backfill_batch(
+            &mut conn,
+            &self.key(&["archived", "all"]),
+            &self.key(&["archived", "by_ns"]),
+            |conn, ids| {
+                let pipe = &mut redis::pipe();
+                for id in ids {
+                    if let Some(job) = self.load_archived_job(conn, id)? {
+                        let completed_at = job.completed_at.unwrap_or(job.created_at);
+                        pipe.zadd(
+                            self.archived_by_namespace_key(job.namespace.as_deref()),
+                            id,
+                            completed_at as f64,
+                        )
+                        .ignore();
+                    }
+                }
+                // An empty pipeline is an error reply, not a no-op.
+                if pipe.is_empty() {
+                    return Ok(());
+                }
+                pipe.query::<()>(conn).map_err(map_err)
+            },
+        )?;
+
+        let index = self.archived_by_namespace_key(namespace);
+        let total: i64 = conn.zcard(&index).map_err(map_err)?;
+        let mut remaining = total - keep.max(0);
+        let mut removed = 0u64;
+        for _ in 0..MAX_TRIM_BATCHES {
+            if remaining <= 0 {
+                break;
+            }
+            let take = remaining.min(SCAN_BATCH as i64) as isize;
+            let ids: Vec<String> = conn.zrange(&index, 0, take - 1).map_err(map_err)?;
+            if ids.is_empty() {
+                break;
+            }
+            for id in &ids {
+                match self.load_archived_job(&mut conn, id)? {
+                    Some(job) => {
+                        self.delete_archived_job(&mut conn, &job, false)?;
+                        removed += 1;
+                    }
+                    // Left behind by a delete that could not name the
+                    // namespace; it was counted, so pruning it is progress.
+                    None => conn.zrem::<_, _, ()>(&index, id).map_err(map_err)?,
+                }
+            }
+            remaining -= ids.len() as i64;
+        }
+        Ok(removed)
+    }
+
+    /// Enter every live job written before `jobs:by_ns` existed into it, once:
+    /// one `ZSCAN` pass over `jobs:all`, then a done marker. Runs when the
+    /// store opens, so a shell pays it at startup rather than on a hot path.
+    ///
+    /// A job a pre-#841 process enqueues after this pass is never indexed and
+    /// goes uncounted until it finishes — the price of a rolling upgrade.
+    pub(in crate::storage::redis_backend) fn backfill_namespace_index(&self) -> Result<()> {
+        let mut conn = self.conn()?;
+        let done_key = self.key(&["jobs", "by_ns", "backfilled"]);
+        let done: Option<String> = conn.get(&done_key).map_err(map_err)?;
+        if done.is_some() {
+            return Ok(());
+        }
+
+        let all_key = self.key(&["jobs", "all"]);
+        let mut cursor: u64 = 0;
+        loop {
+            let (next, flat): (u64, Vec<String>) = redis::cmd("ZSCAN")
+                .arg(&all_key)
+                .arg(cursor)
+                .arg("COUNT")
+                .arg(SCAN_BATCH)
+                .query(&mut conn)
+                .map_err(map_err)?;
+            // ZSCAN returns a flat [member, score, member, score, ...] list.
+            let pipe = &mut redis::pipe();
+            for id in flat.iter().step_by(2) {
+                if let Some(job) = self.load_job(&mut conn, id)? {
+                    pipe.sadd(self.by_namespace_key(job.namespace.as_deref()), &job.id)
+                        .ignore();
+                }
+            }
+            // An empty store scans to nothing, and an empty pipeline is an
+            // error reply rather than a no-op.
+            if !pipe.is_empty() {
+                pipe.query::<()>(&mut conn).map_err(map_err)?;
+            }
+            if next == 0 {
+                break;
+            }
+            cursor = next;
+        }
+
+        conn.set::<_, _, ()>(&done_key, "1").map_err(map_err)
     }
 
     /// Index one batch of pre-existing archived rows that carry a per-entry TTL

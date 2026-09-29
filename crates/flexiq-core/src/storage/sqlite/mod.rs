@@ -62,6 +62,8 @@ impl CustomizeConnection<SqliteConnection, diesel::r2d2::Error> for SqlitePragma
 #[derive(Clone)]
 pub struct SqliteStorage {
     pool: DbPool,
+    /// Namespace quota documents, shared by every clone of this handle.
+    quotas: std::sync::Arc<crate::quota::QuotaCache>,
     /// In-process wake handle, set by the scheduler when push-dispatch is
     /// enabled. Enqueue calls `notify_one()` so the scheduler dispatches a
     /// ready job immediately instead of waiting for the next poll.
@@ -78,6 +80,11 @@ pub struct SqliteStorage {
 }
 
 impl SqliteStorage {
+    /// This handle's namespace quota cache.
+    pub(crate) fn quota_cache(&self) -> &crate::quota::QuotaCache {
+        &self.quotas
+    }
+
     /// Open (or create) a SQLite database at the given path.
     pub fn new(db_path: &str) -> Result<Self> {
         Self::with_pool_size(db_path, 8)
@@ -97,6 +104,7 @@ impl SqliteStorage {
 
         let storage = Self {
             pool,
+            quotas: Default::default(),
             #[cfg(feature = "push-dispatch")]
             notify: std::sync::Arc::new(tokio::sync::Notify::new()),
             #[cfg(feature = "push-dispatch")]
@@ -168,6 +176,7 @@ impl SqliteStorage {
 
         let storage = Self {
             pool,
+            quotas: Default::default(),
             #[cfg(feature = "push-dispatch")]
             notify: std::sync::Arc::new(tokio::sync::Notify::new()),
             #[cfg(feature = "push-dispatch")]

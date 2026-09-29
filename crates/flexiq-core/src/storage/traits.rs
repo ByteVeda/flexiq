@@ -1,5 +1,5 @@
 use crate::error::{QueueError, Result};
-use crate::job::{Job, NewJob};
+use crate::job::{Job, JobStatus, NewJob};
 use crate::step::StepLimits;
 use crate::storage::records::{
     AttemptFence, AuditFilter, AuditRecord, CircuitBreakerState, DebounceOptions, Dequeued,
@@ -428,6 +428,15 @@ pub trait Storage: Send + Sync + Clone {
     ) -> Result<Vec<Job>> {
         self.move_to_dlq_reporting(job, error, metadata)
     }
+    /// Dead-letter never-enqueued jobs as shed — the `drop` answer to an
+    /// over-quota enqueue (#841). Each lands in the DLQ (`shed`) and the
+    /// archive (`Dead`) in one write and is never live, so no scheduler can
+    /// claim it first. Unique and debounce keys are not recorded.
+    ///
+    /// Each job's own `error` is its dead-letter reason, so one call records
+    /// jobs shed for different reasons in a single atomic write. A job with no
+    /// `error` refuses the whole call before anything is written.
+    fn shed_new_jobs(&self, jobs: &[Job], metadata: Option<&str>) -> Result<()>;
     /// Dead-letter entries, newest first, paginated.
     /// `namespace` of `None` returns every namespace, matching `list_jobs`.
     fn list_dead(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<DeadJob>>;
@@ -467,6 +476,14 @@ pub trait Storage: Send + Sync + Clone {
     /// Purge dead-letter entries by the global/per-entry TTL. Returns the
     /// count removed.
     fn purge_dead_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64>;
+    /// Delete `namespace`'s oldest dead-letter entries until at most `keep`
+    /// remain — the `max_dead_rows` quota (#841). `None` is the default
+    /// namespace. Bounded per call like the TTL purges; returns rows removed.
+    fn trim_dead_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64>;
+    /// Delete `namespace`'s oldest archived jobs until at most `keep` remain —
+    /// the `max_archived_rows` quota (#841). `None` is the default namespace.
+    /// Bounded per call like the TTL purges; returns rows removed.
+    fn trim_archived_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64>;
     /// Dead-letter entries eligible for automatic retry, bounded by `limit`.
     ///
     /// Entries written by [`shed_to_dlq`](Self::shed_to_dlq) are excluded: the
@@ -490,6 +507,15 @@ pub trait Storage: Send + Sync + Clone {
     /// Atomically refill and consume one token. Returns `false` when the
     /// bucket is empty.
     fn try_acquire_token(&self, key: &str, max_tokens: f64, refill_rate: f64) -> Result<bool>;
+    /// Atomically refill and consume `count` tokens — all or none, so a
+    /// refused batch spends nothing. A `count` above `max_tokens` never passes.
+    fn try_acquire_tokens(
+        &self,
+        key: &str,
+        count: u32,
+        max_tokens: f64,
+        refill_rate: f64,
+    ) -> Result<bool>;
 
     // ── Periodic task operations ────────────────────────────────────
     //
@@ -1140,6 +1166,11 @@ pub trait Storage: Send + Sync + Clone {
     /// Running-job count for a task — the per-task concurrency-cap primitive.
     /// Scoped, so a job elsewhere never consumes this scheduler's budget.
     fn count_running_by_task(&self, task_name: &str, namespace: Option<&str>) -> Result<i64>;
+
+    /// Live jobs in one namespace and status — the namespace-quota primitive.
+    /// `None` is the default namespace, never a wildcard: a quota bounds one
+    /// tenant, and the default namespace is a tenant like any other.
+    fn count_by_namespace(&self, namespace: Option<&str>, status: JobStatus) -> Result<i64>;
 
     // ── Per-queue stats ──────────────────────────────────────────
 

@@ -60,6 +60,9 @@ const (
 	AdminService_ClearTaskOverride_FullMethodName   = "/flexiq.admin.v1.AdminService/ClearTaskOverride"
 	AdminService_SetQueueOverride_FullMethodName    = "/flexiq.admin.v1.AdminService/SetQueueOverride"
 	AdminService_ClearQueueOverride_FullMethodName  = "/flexiq.admin.v1.AdminService/ClearQueueOverride"
+	AdminService_GetNamespaceQuota_FullMethodName   = "/flexiq.admin.v1.AdminService/GetNamespaceQuota"
+	AdminService_SetNamespaceQuota_FullMethodName   = "/flexiq.admin.v1.AdminService/SetNamespaceQuota"
+	AdminService_ClearNamespaceQuota_FullMethodName = "/flexiq.admin.v1.AdminService/ClearNamespaceQuota"
 	AdminService_ListAuditRecords_FullMethodName    = "/flexiq.admin.v1.AdminService/ListAuditRecords"
 )
 
@@ -152,6 +155,14 @@ type AdminServiceClient interface {
 	SetQueueOverride(ctx context.Context, in *SetQueueOverrideRequest, opts ...grpc.CallOption) (*SetQueueOverrideResponse, error)
 	// Remove one queue's override.
 	ClearQueueOverride(ctx context.Context, in *ClearQueueOverrideRequest, opts ...grpc.CallOption) (*ClearQueueOverrideResponse, error)
+	// The namespace's quota. A namespace with none answers with every limit
+	// unset: unlimited.
+	GetNamespaceQuota(ctx context.Context, in *GetNamespaceQuotaRequest, opts ...grpc.CallOption) (*GetNamespaceQuotaResponse, error)
+	// Replace the namespace's quota. Not a merge: a limit left unset is lifted.
+	// Every running process enforces the new limits within a couple of seconds.
+	SetNamespaceQuota(ctx context.Context, in *SetNamespaceQuotaRequest, opts ...grpc.CallOption) (*SetNamespaceQuotaResponse, error)
+	// Remove the namespace's quota, lifting every limit.
+	ClearNamespaceQuota(ctx context.Context, in *ClearNamespaceQuotaRequest, opts ...grpc.CallOption) (*ClearNamespaceQuotaResponse, error)
 	// Page through the audit trail, newest first: one record per
 	// token-authorised write this namespace's doors answered, refusals included.
 	// Reads are not recorded.
@@ -396,6 +407,36 @@ func (c *adminServiceClient) ClearQueueOverride(ctx context.Context, in *ClearQu
 	return out, nil
 }
 
+func (c *adminServiceClient) GetNamespaceQuota(ctx context.Context, in *GetNamespaceQuotaRequest, opts ...grpc.CallOption) (*GetNamespaceQuotaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetNamespaceQuotaResponse)
+	err := c.cc.Invoke(ctx, AdminService_GetNamespaceQuota_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) SetNamespaceQuota(ctx context.Context, in *SetNamespaceQuotaRequest, opts ...grpc.CallOption) (*SetNamespaceQuotaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetNamespaceQuotaResponse)
+	err := c.cc.Invoke(ctx, AdminService_SetNamespaceQuota_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) ClearNamespaceQuota(ctx context.Context, in *ClearNamespaceQuotaRequest, opts ...grpc.CallOption) (*ClearNamespaceQuotaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClearNamespaceQuotaResponse)
+	err := c.cc.Invoke(ctx, AdminService_ClearNamespaceQuota_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *adminServiceClient) ListAuditRecords(ctx context.Context, in *ListAuditRecordsRequest, opts ...grpc.CallOption) (*ListAuditRecordsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListAuditRecordsResponse)
@@ -495,6 +536,14 @@ type AdminServiceServer interface {
 	SetQueueOverride(context.Context, *SetQueueOverrideRequest) (*SetQueueOverrideResponse, error)
 	// Remove one queue's override.
 	ClearQueueOverride(context.Context, *ClearQueueOverrideRequest) (*ClearQueueOverrideResponse, error)
+	// The namespace's quota. A namespace with none answers with every limit
+	// unset: unlimited.
+	GetNamespaceQuota(context.Context, *GetNamespaceQuotaRequest) (*GetNamespaceQuotaResponse, error)
+	// Replace the namespace's quota. Not a merge: a limit left unset is lifted.
+	// Every running process enforces the new limits within a couple of seconds.
+	SetNamespaceQuota(context.Context, *SetNamespaceQuotaRequest) (*SetNamespaceQuotaResponse, error)
+	// Remove the namespace's quota, lifting every limit.
+	ClearNamespaceQuota(context.Context, *ClearNamespaceQuotaRequest) (*ClearNamespaceQuotaResponse, error)
 	// Page through the audit trail, newest first: one record per
 	// token-authorised write this namespace's doors answered, refusals included.
 	// Reads are not recorded.
@@ -577,6 +626,15 @@ func (UnimplementedAdminServiceServer) SetQueueOverride(context.Context, *SetQue
 }
 func (UnimplementedAdminServiceServer) ClearQueueOverride(context.Context, *ClearQueueOverrideRequest) (*ClearQueueOverrideResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ClearQueueOverride not implemented")
+}
+func (UnimplementedAdminServiceServer) GetNamespaceQuota(context.Context, *GetNamespaceQuotaRequest) (*GetNamespaceQuotaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetNamespaceQuota not implemented")
+}
+func (UnimplementedAdminServiceServer) SetNamespaceQuota(context.Context, *SetNamespaceQuotaRequest) (*SetNamespaceQuotaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetNamespaceQuota not implemented")
+}
+func (UnimplementedAdminServiceServer) ClearNamespaceQuota(context.Context, *ClearNamespaceQuotaRequest) (*ClearNamespaceQuotaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClearNamespaceQuota not implemented")
 }
 func (UnimplementedAdminServiceServer) ListAuditRecords(context.Context, *ListAuditRecordsRequest) (*ListAuditRecordsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListAuditRecords not implemented")
@@ -1016,6 +1074,60 @@ func _AdminService_ClearQueueOverride_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AdminService_GetNamespaceQuota_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNamespaceQuotaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).GetNamespaceQuota(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_GetNamespaceQuota_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).GetNamespaceQuota(ctx, req.(*GetNamespaceQuotaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_SetNamespaceQuota_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetNamespaceQuotaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).SetNamespaceQuota(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_SetNamespaceQuota_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).SetNamespaceQuota(ctx, req.(*SetNamespaceQuotaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_ClearNamespaceQuota_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearNamespaceQuotaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).ClearNamespaceQuota(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_ClearNamespaceQuota_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).ClearNamespaceQuota(ctx, req.(*ClearNamespaceQuotaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AdminService_ListAuditRecords_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListAuditRecordsRequest)
 	if err := dec(in); err != nil {
@@ -1132,6 +1244,18 @@ var AdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ClearQueueOverride",
 			Handler:    _AdminService_ClearQueueOverride_Handler,
+		},
+		{
+			MethodName: "GetNamespaceQuota",
+			Handler:    _AdminService_GetNamespaceQuota_Handler,
+		},
+		{
+			MethodName: "SetNamespaceQuota",
+			Handler:    _AdminService_SetNamespaceQuota_Handler,
+		},
+		{
+			MethodName: "ClearNamespaceQuota",
+			Handler:    _AdminService_ClearNamespaceQuota_Handler,
 		},
 		{
 			MethodName: "ListAuditRecords",

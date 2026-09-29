@@ -6,7 +6,7 @@ use tokio::sync::mpsc::error::TrySendError;
 
 use crate::error::Result;
 use crate::events::reason;
-use crate::job::{now_millis, Job};
+use crate::job::{now_millis, Job, JobStatus};
 use crate::resilience::retry::desync_delay;
 use crate::storage::Storage;
 
@@ -83,17 +83,21 @@ fn rate_limited(on_excess: shed::OnExcess, scope: &str) -> GateDecision {
 struct GateCounts {
     task_running: HashMap<String, i64>,
     queue_running: HashMap<String, i64>,
+    namespace_running: HashMap<Option<String>, i64>,
 }
 
 impl GateCounts {
     /// Drop a provisionally-counted job from the cached counts after it was
     /// rolled back, so its slot is available to the rest of the batch. A no-op
     /// for a key not yet loaded — the next load reads the already-updated DB.
-    fn release(&mut self, task_name: &str, queue: &str) {
-        if let Some(n) = self.task_running.get_mut(task_name) {
+    fn release(&mut self, job: &Job) {
+        if let Some(n) = self.task_running.get_mut(&job.task_name) {
             *n -= 1;
         }
-        if let Some(n) = self.queue_running.get_mut(queue) {
+        if let Some(n) = self.queue_running.get_mut(&job.queue) {
+            *n -= 1;
+        }
+        if let Some(n) = self.namespace_running.get_mut(&job.namespace) {
             *n -= 1;
         }
     }
@@ -316,7 +320,7 @@ impl Scheduler {
             GateDecision::Proceed => {}
             GateDecision::Defer(delay_ms) => {
                 self.reschedule_deferred(&job.id, now + desync_delay(delay_ms))?;
-                counts.release(&job.task_name, &job.queue);
+                counts.release(&job);
                 return Ok(false);
             }
             // Progress, not a rejection: the job is terminal and gone from the
@@ -325,7 +329,7 @@ impl Scheduler {
             // doubles because it saw no progress.
             GateDecision::Shed(reason) => {
                 self.shed_rate_limited(&job, &reason, false)?;
-                counts.release(&job.task_name, &job.queue);
+                counts.release(&job);
                 return Ok(true);
             }
         }
@@ -343,7 +347,7 @@ impl Scheduler {
             // fast orphan-recovery path and would sit stuck until the slow
             // timeout sweep. Return it to `Pending` now.
             ClaimOutcome::Errored => {
-                counts.release(&job.task_name, &job.queue);
+                counts.release(&job);
                 self.rollback_claim_and_reschedule(
                     &job.id,
                     now + desync_delay(CLAIM_ERROR_RETRY_DELAY_MS),
@@ -371,13 +375,13 @@ impl Scheduler {
         match self.check_pre_claim_gates(&job)? {
             GateDecision::Proceed => {}
             GateDecision::Defer(delay_ms) => {
-                counts.release(&job.task_name, &job.queue);
+                counts.release(&job);
                 self.rollback_claim_and_reschedule(&job.id, now + desync_delay(delay_ms))?;
                 return Ok(false);
             }
             // Progress, like the single path's shed — see there for why.
             GateDecision::Shed(reason) => {
-                counts.release(&job.task_name, &job.queue);
+                counts.release(&job);
                 self.shed_rate_limited(&job, &reason, true)?;
                 return Ok(true);
             }
@@ -402,8 +406,23 @@ impl Scheduler {
         // cannot both pass the cap. Status was already transitioned to
         // `Running` by the dequeue, so the running-count includes this job —
         // the cache's strict `>` allows exactly `max_concurrent` jobs.
-        if !self.check_post_claim_concurrency(&job, counts)? {
-            counts.release(&job.task_name, &job.queue);
+        let admitted = match self.check_post_claim_concurrency(&job, counts) {
+            Ok(admitted) => admitted,
+            Err(error) => {
+                // A gate that cannot be evaluated — an unreadable quota, a
+                // failed count — must not strand the claim in `Running` until
+                // the reaper mislabels it a timeout. Hand the job back, then
+                // report the error.
+                counts.release(&job);
+                self.rollback_claim_and_reschedule(
+                    &job.id,
+                    now + desync_delay(CONCURRENCY_RETRY_DELAY_MS),
+                )?;
+                return Err(error);
+            }
+        };
+        if !admitted {
+            counts.release(&job);
             self.rollback_claim_and_reschedule(
                 &job.id,
                 now + desync_delay(CONCURRENCY_RETRY_DELAY_MS),
@@ -439,7 +458,7 @@ impl Scheduler {
             Err(TrySendError::Full(job)) => {
                 warn!("worker channel full; rescheduling job {job_id} (worker pool is behind)",);
                 self.untrack_in_flight(&job_id);
-                counts.release(&job.task_name, &job.queue);
+                counts.release(&job);
                 self.rollback_claim_and_reschedule(
                     &job_id,
                     now + desync_delay(CHANNEL_BACKPRESSURE_RETRY_DELAY_MS),
@@ -451,7 +470,7 @@ impl Scheduler {
                     "worker channel closed; rescheduling job {job_id} (worker pool shutting down)",
                 );
                 self.untrack_in_flight(&job_id);
-                counts.release(&job.task_name, &job.queue);
+                counts.release(&job);
                 self.rollback_claim_and_reschedule(
                     &job_id,
                     now + desync_delay(CHANNEL_BACKPRESSURE_RETRY_DELAY_MS),
@@ -585,11 +604,24 @@ impl Scheduler {
         }
     }
 
-    /// Apply the post-claim hard gates (per-queue and per-task concurrency
-    /// caps). Returns `Ok(true)` if the job may proceed to dispatch,
-    /// `Ok(false)` if the cap is exceeded — caller is responsible for
-    /// rolling back the claim.
+    /// Apply the post-claim hard gates (per-namespace, per-queue and per-task
+    /// concurrency caps). Returns `Ok(true)` if the job may proceed to
+    /// dispatch, `Ok(false)` if the cap is exceeded — caller is responsible
+    /// for rolling back the claim.
     fn check_post_claim_concurrency(&self, job: &Job, counts: &mut GateCounts) -> Result<bool> {
+        // The namespace quota (#841) keys on the job's own namespace, not the
+        // scheduler's: an unscoped scheduler serves every tenant. A quota that
+        // cannot be read is an error here too — the claim stays put rather
+        // than the tenant running unlimited.
+        let namespace = job.namespace.as_deref();
+        if let Some(quota) = self.storage.quota_cache().get(&self.storage, namespace)? {
+            if let Some(max_running) = quota.max_running {
+                if self.cached_namespace_running(counts, namespace)? > max_running {
+                    return Ok(false);
+                }
+            }
+        }
+
         if let Some(qcfg) = self.queue_configs.get(&job.queue) {
             if let Some(max_conc) = qcfg.max_concurrent {
                 if self.cached_queue_running(counts, &job.queue)? > max_conc as i64 {
@@ -631,6 +663,24 @@ impl Scheduler {
             .storage
             .count_running_by_task(task_name, self.namespace.as_deref())?;
         counts.task_running.insert(task_name.to_string(), n);
+        Ok(n)
+    }
+
+    /// Running-job count for a namespace, cached exactly like
+    /// [`Self::cached_task_running`]. `None` is the default namespace.
+    fn cached_namespace_running(
+        &self,
+        counts: &mut GateCounts,
+        namespace: Option<&str>,
+    ) -> Result<i64> {
+        let slot = namespace.map(str::to_string);
+        if let Some(&n) = counts.namespace_running.get(&slot) {
+            return Ok(n);
+        }
+        let n = self
+            .storage
+            .count_by_namespace(namespace, JobStatus::Running)?;
+        counts.namespace_running.insert(slot, n);
         Ok(n)
     }
 

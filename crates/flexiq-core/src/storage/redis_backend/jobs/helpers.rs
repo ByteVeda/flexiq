@@ -5,7 +5,7 @@ use redis::Commands;
 use super::dequeue_score;
 use crate::error::{QueueError, Result};
 use crate::job::{Job, JobStatus};
-use crate::storage::redis_backend::{map_err, RedisConnection, RedisStorage};
+use crate::storage::redis_backend::{map_err, RedisConnection, RedisStorage, SCAN_BATCH};
 
 /// Lua: release a unique-key pointer only if it still points at `ARGV[1]`.
 /// A newer job may have reused the same `unique_key` after this job left the
@@ -29,6 +29,74 @@ impl RedisStorage {
             Some(ns) => format!("{}:{ns}", ns.len()),
             None => "-".to_string(),
         }
+    }
+
+    /// The set of live job ids in `namespace` — the membership half of a
+    /// per-namespace count, intersected server-side with a status set the way
+    /// `jobs:by_task` is. Entered at every insert, left in `push_archive_ops`.
+    pub(in crate::storage::redis_backend) fn by_namespace_key(
+        &self,
+        namespace: Option<&str>,
+    ) -> String {
+        self.key(&["jobs", "by_ns", &Self::namespace_segment(namespace)])
+    }
+
+    /// `namespace`'s archived job ids, scored by `completed_at` — the
+    /// oldest-first order the `max_archived_rows` trim (#841) walks.
+    pub(in crate::storage::redis_backend) fn archived_by_namespace_key(
+        &self,
+        namespace: Option<&str>,
+    ) -> String {
+        self.key(&["archived", "by_ns", &Self::namespace_segment(namespace)])
+    }
+
+    /// `namespace`'s dead-letter ids, scored by `failed_at` — the order the
+    /// `max_dead_rows` trim walks.
+    pub(in crate::storage::redis_backend) fn dlq_by_namespace_key(
+        &self,
+        namespace: Option<&str>,
+    ) -> String {
+        self.key(&["dlq", "by_ns", &Self::namespace_segment(namespace)])
+    }
+
+    /// Enter one `ZSCAN` batch of `source`'s members into an index that
+    /// postdates them, via `index`. Resumable: the cursor lives at
+    /// `<state>:cursor` and a `<state>:backfilled` marker ends it for good, so
+    /// a large set is indexed a batch per call without blocking a sweep.
+    pub(in crate::storage::redis_backend) fn backfill_batch(
+        &self,
+        conn: &mut RedisConnection,
+        source: &str,
+        state: &str,
+        index: impl FnOnce(&mut RedisConnection, &[String]) -> Result<()>,
+    ) -> Result<()> {
+        let done_key = format!("{state}:backfilled");
+        let cursor_key = format!("{state}:cursor");
+        let done: Option<String> = conn.get(&done_key).map_err(map_err)?;
+        if done.is_some() {
+            return Ok(());
+        }
+        let cursor: u64 = conn
+            .get::<_, Option<u64>>(&cursor_key)
+            .map_err(map_err)?
+            .unwrap_or(0);
+        let (next, flat): (u64, Vec<String>) = redis::cmd("ZSCAN")
+            .arg(source)
+            .arg(cursor)
+            .arg("COUNT")
+            .arg(SCAN_BATCH)
+            .query(conn)
+            .map_err(map_err)?;
+        // ZSCAN returns a flat [member, score, member, score, ...] list.
+        let ids: Vec<String> = flat.into_iter().step_by(2).collect();
+        index(conn, &ids)?;
+        if next == 0 {
+            conn.set::<_, _, ()>(&done_key, "1").map_err(map_err)?;
+            conn.del::<_, ()>(&cursor_key).map_err(map_err)?;
+        } else {
+            conn.set::<_, _, ()>(&cursor_key, next).map_err(map_err)?;
+        }
+        Ok(())
     }
 
     /// The debounce index of a `(namespace, debounce_key)` pair: a sorted set of
@@ -244,6 +312,7 @@ impl RedisStorage {
         let status_key = self.key(&["jobs", "status", &(old_status as i32).to_string()]);
         let by_queue_key = self.key(&["jobs", "by_queue", &job.queue]);
         let by_task_key = self.key(&["jobs", "by_task", &job.task_name]);
+        let by_ns_key = self.by_namespace_key(job.namespace.as_deref());
         let all_key = self.key(&["jobs", "all"]);
         let pending_key = self.key(&["queue", &job.queue, "pending"]);
         let archived_key = self.key(&["archived", &job.id]);
@@ -259,6 +328,7 @@ impl RedisStorage {
         pipe.srem(&status_key, &job.id).ignore();
         pipe.srem(&by_queue_key, &job.id).ignore();
         pipe.srem(&by_task_key, &job.id).ignore();
+        pipe.srem(&by_ns_key, &job.id).ignore();
         pipe.zrem(&all_key, &job.id).ignore();
         // Pending jobs still sit in the per-queue pending zset; running jobs
         // were removed at dequeue, so only remove on a Pending→terminal move.
@@ -288,6 +358,12 @@ impl RedisStorage {
         pipe.sadd(&archived_by_queue, &job.id).ignore();
         pipe.zadd(&archived_all, &job.id, completed_at as f64)
             .ignore();
+        pipe.zadd(
+            self.archived_by_namespace_key(job.namespace.as_deref()),
+            &job.id,
+            completed_at as f64,
+        )
+        .ignore();
 
         // A per-entry TTL gets its own expiry index, scored by when it expires
         // (`completed_at + result_ttl_ms`). The retention purge drains this by
@@ -349,6 +425,10 @@ impl RedisStorage {
         pipe.srem(&archived_status_key, &job.id);
         pipe.srem(&archived_by_queue, &job.id);
         pipe.zrem(&archived_all, &job.id);
+        pipe.zrem(
+            self.archived_by_namespace_key(job.namespace.as_deref()),
+            &job.id,
+        );
         pipe.zrem(&archived_expiry, &job.id);
         pipe.del(&deps_key);
         pipe.del(&dependents_key);

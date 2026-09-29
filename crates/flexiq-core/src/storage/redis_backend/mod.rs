@@ -35,9 +35,16 @@ pub struct RedisStorage {
     /// Set once an enqueue's wake `PUBLISH` has been refused and warned about,
     /// so a denied channel warns once per storage, not once per enqueue.
     wake_refusal_warned: Arc<AtomicBool>,
+    /// Namespace quota documents, shared by every clone of this handle.
+    quotas: Arc<crate::quota::QuotaCache>,
 }
 
 impl RedisStorage {
+    /// This handle's namespace quota cache.
+    pub(crate) fn quota_cache(&self) -> &crate::quota::QuotaCache {
+        &self.quotas
+    }
+
     /// Connect to Redis at the given URL with default prefix `"flexiq:"`.
     pub fn new(redis_url: &str) -> Result<Self> {
         Self::with_prefix(redis_url, "flexiq:")
@@ -56,11 +63,16 @@ impl RedisStorage {
             .query::<String>(&mut conn)
             .map_err(|e| QueueError::Config(format!("Redis ping failed: {e}")))?;
 
-        Ok(Self {
+        let storage = Self {
             pool: pool::ConnectionPool::new(client, conn),
             prefix: prefix.to_string(),
             wake_refusal_warned: Arc::new(AtomicBool::new(false)),
-        })
+            quotas: Default::default(),
+        };
+        // No shell migrates a Redis store on open, so the one-time index
+        // backfill runs here; after the first pass it is a single `GET`.
+        storage.backfill_namespace_index()?;
+        Ok(storage)
     }
 
     /// Report that there is nothing to migrate.
@@ -252,6 +264,11 @@ where
 /// ZRANGEBYSCORE LIMIT window). Caps how many ids a purge/list holds in memory
 /// per round trip so a sweep over millions of rows never loads the whole set.
 const SCAN_BATCH: isize = 500;
+
+/// Max `SCAN_BATCH`-sized batches one row-ceiling trim (#841) deletes, so a
+/// namespace far over its ceiling is cut down across ticks rather than in one
+/// sweep — the Diesel purges' batch cap, applied here.
+const MAX_TRIM_BATCHES: u32 = 200;
 
 /// Drop the `payload`/`result` blobs from a job before it enters a listing.
 /// Redis loads the whole job JSON in one read, so this saves no I/O; it exists

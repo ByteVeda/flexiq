@@ -363,10 +363,13 @@ descriptor.
 | `TriggerPeriodicTask` | none | `admin` | Each call makes a job. |
 | `ListOverrides` | `NO_SIDE_EFFECTS` | `inspect` | |
 | `SetTaskOverride`, `SetQueueOverride`, `ClearTaskOverride`, `ClearQueueOverride` | `IDEMPOTENT` | `admin` | A set replaces the whole override. A worker reads overrides at start, so a change reaches no running worker. |
+| `GetNamespaceQuota` | `NO_SIDE_EFFECTS` | `inspect` | The token's own namespace; the request names none. An unset limit is absent. |
+| `SetNamespaceQuota` | `IDEMPOTENT` | `admin` | Replaces the whole quota, and an all-unset quota is a clear. Every process reads it within about two seconds. |
+| `ClearNamespaceQuota` | `IDEMPOTENT` | `admin` | Lifts every limit. Clearing a namespace with no quota succeeds. |
 
 ### If there is no gRPC library either
 
-The eight `flexiq.v1` RPCs and the twenty-three `flexiq.admin.v1` RPCs — the
+The eight `flexiq.v1` RPCs and the twenty-six `flexiq.admin.v1` RPCs — the
 latter under `/v1/admin/` — are also served as ordinary HTTP with JSON bodies, on
 the same listener and the same credential. `GET` is served for exactly the
 `NO_SIDE_EFFECTS` RPCs and `POST` for everything else, so the method is never a

@@ -92,7 +92,7 @@ worker and dashboard pointed at the same backend reads the same values.
 
 <Callout type="warn">
   Some prefixes belong to the runtime: `auth:`, `contract:`,
-  `middleware:disabled:`, `retention:`, `webhook:`, `webhooks:` and
+  `middleware:disabled:`, `quota:`, `retention:`, `webhook:`, `webhooks:` and
   `flexiq.webhooks` — the list the native `reservedSettingPrefixes()` returns,
   and the one the dashboard's settings handler hides behind. Writing under them
   corrupts state that dashboard sessions, the contract floor, per-task

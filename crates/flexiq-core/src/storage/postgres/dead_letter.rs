@@ -7,4 +7,4 @@ use crate::error::{QueueError, Result};
 use crate::job::{now_millis, Job, JobStatus, NewJob};
 use crate::storage::DeadJob;
 
-crate::storage::diesel_common::impl_diesel_dead_letter_ops!(PostgresStorage);
+crate::storage::diesel_common::impl_diesel_dead_letter_ops!(PostgresStorage, PgConnection);

@@ -1,7 +1,9 @@
 use redis::Commands;
 use serde::{Deserialize, Serialize};
 
-use super::{map_err, strip_dead_blob, watched_transaction, RedisStorage, SCAN_BATCH};
+use super::{
+    map_err, strip_dead_blob, watched_transaction, RedisStorage, MAX_TRIM_BATCHES, SCAN_BATCH,
+};
 use crate::error::{QueueError, Result};
 use crate::events::reason;
 use crate::job::{now_millis, Job, JobStatus, NewJob};
@@ -48,6 +50,57 @@ struct DeadJobEntry {
     /// `m0015_dead_letter_job_metadata`.
     #[serde(default)]
     pub job_metadata: Option<String>,
+}
+
+impl DeadJobEntry {
+    /// The entry dead-lettering `job` writes, under a fresh id.
+    fn of(job: &Job, error: &str, metadata: Option<&str>, shed: bool, now: i64) -> Self {
+        let dlq_retry_count = job
+            .metadata
+            .as_deref()
+            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+            .and_then(|v| v.get("__dlq_retry_count")?.as_i64())
+            .unwrap_or(0) as i32;
+
+        Self {
+            id: uuid::Uuid::now_v7().to_string(),
+            original_job_id: job.id.clone(),
+            queue: job.queue.clone(),
+            task_name: job.task_name.clone(),
+            payload: job.payload.clone(),
+            error: Some(error.to_string()),
+            retry_count: job.retry_count,
+            failed_at: now,
+            // Preserve the job's own metadata so it survives the round trip;
+            // an explicit `metadata` arg overrides it. The run's origin rides
+            // its own field instead, out of reach of that replacement.
+            metadata: metadata
+                .map(str::to_string)
+                .or_else(|| job.metadata.clone()),
+            notes: job.notes.clone(),
+            priority: job.priority,
+            max_retries: job.max_retries,
+            timeout_ms: job.timeout_ms,
+            result_ttl_ms: job.result_ttl_ms,
+            namespace: job.namespace.clone(),
+            dlq_retry_count,
+            shed,
+            origin_job_id: Some(crate::step::run_key(job)),
+            // Only when the replacement would otherwise displace it: with no
+            // replacement, `metadata` already is the job's own and copying an
+            // unbounded blob twice buys nothing.
+            job_metadata: metadata.and(job.metadata.as_deref()).map(str::to_string),
+        }
+    }
+}
+
+/// `job` as the archive records it once dead-lettered.
+fn dead_copy(job: &Job, error: &str, now: i64) -> Job {
+    let mut dead = job.clone();
+    dead.status = JobStatus::Dead;
+    dead.error = Some(error.to_string());
+    dead.completed_at = Some(now);
+    dead
 }
 
 impl From<DeadJobEntry> for DeadJob {
@@ -108,6 +161,130 @@ impl RedisStorage {
         self.dead_letter(job, error, metadata, true)
     }
 
+    /// Dead-letter jobs an over-quota enqueue shed (#841): the DLQ entries and
+    /// archived `Dead` rows in one `MULTI`, never the live indexes, so no
+    /// scheduler ever sees them. Unique and debounce keys are dropped — a job
+    /// that never went live never held its key, and archiving one that names a
+    /// key would touch the index entries of the live job that does.
+    pub fn shed_new_jobs(&self, jobs: &[Job], metadata: Option<&str>) -> Result<()> {
+        if jobs.is_empty() {
+            return Ok(());
+        }
+        let reasons = crate::storage::shed_reasons(jobs)?;
+        let now = now_millis();
+        let dlq_all = self.key(&["dlq", "all"]);
+        let pipe = &mut redis::pipe();
+        pipe.atomic();
+        for (job, error) in jobs.iter().zip(&reasons) {
+            let error = error.as_str();
+            let mut job = job.clone();
+            job.unique_key = None;
+            job.debounce_key = None;
+            let entry = DeadJobEntry::of(&job, error, metadata, true, now);
+            pipe.set(
+                self.key(&["dlq", &entry.id]),
+                serde_json::to_string(&entry)?,
+            )
+            .ignore();
+            pipe.zadd(&dlq_all, &entry.id, now as f64).ignore();
+            pipe.zadd(
+                self.dlq_by_namespace_key(job.namespace.as_deref()),
+                &entry.id,
+                now as f64,
+            )
+            .ignore();
+            let dead_job = dead_copy(&job, error, now);
+            let dead_json = serde_json::to_string(&dead_job)?;
+            self.push_archive_ops(pipe, &dead_job, JobStatus::Pending, &dead_json);
+        }
+        let mut conn = self.conn()?;
+        pipe.query::<()>(&mut conn).map_err(map_err)
+    }
+
+    /// Delete `namespace`'s oldest dead-letter entries until at most `keep`
+    /// remain — the `max_dead_rows` quota (#841) — walking `dlq:by_ns:<seg>`
+    /// oldest-first. Like the archive trim, each call first indexes one more
+    /// batch of entries that predate the index, erring toward keeping rows.
+    pub fn trim_dead_over(&self, namespace: Option<&str>, keep: i64) -> Result<u64> {
+        let mut conn = self.conn()?;
+        self.backfill_batch(
+            &mut conn,
+            &self.key(&["dlq", "all"]),
+            &self.key(&["dlq", "by_ns"]),
+            |conn, ids| {
+                let pipe = &mut redis::pipe();
+                for id in ids {
+                    let data: Option<String> = conn.get(self.key(&["dlq", id])).map_err(map_err)?;
+                    let entry = data.and_then(|d| serde_json::from_str::<DeadJobEntry>(&d).ok());
+                    if let Some(entry) = entry {
+                        pipe.zadd(
+                            self.dlq_by_namespace_key(entry.namespace.as_deref()),
+                            id,
+                            entry.failed_at as f64,
+                        )
+                        .ignore();
+                    }
+                }
+                // An empty pipeline is an error reply, not a no-op.
+                if pipe.is_empty() {
+                    return Ok(());
+                }
+                pipe.query::<()>(conn).map_err(map_err)
+            },
+        )?;
+
+        let index = self.dlq_by_namespace_key(namespace);
+        let total: i64 = conn.zcard(&index).map_err(map_err)?;
+        let mut remaining = total - keep.max(0);
+        let mut removed = 0u64;
+        for _ in 0..MAX_TRIM_BATCHES {
+            if remaining <= 0 {
+                break;
+            }
+            let take = remaining.min(SCAN_BATCH as i64) as isize;
+            let ids: Vec<String> = conn.zrange(&index, 0, take - 1).map_err(map_err)?;
+            if ids.is_empty() {
+                break;
+            }
+            let pipe = &mut redis::pipe();
+            for id in &ids {
+                let data: Option<String> = conn.get(self.key(&["dlq", id])).map_err(map_err)?;
+                match data.map(|d| serde_json::from_str::<DeadJobEntry>(&d)) {
+                    Some(Ok(entry)) => {
+                        self.push_dlq_remove(pipe, id, &entry);
+                        removed += 1;
+                    }
+                    // Undecodable, but indexed here, so this namespace's.
+                    Some(Err(_)) => {
+                        pipe.del(self.key(&["dlq", id])).ignore();
+                        pipe.zrem(self.key(&["dlq", "all"]), id).ignore();
+                        pipe.zrem(&index, id).ignore();
+                        removed += 1;
+                    }
+                    // Left behind by a delete that could not name the
+                    // namespace; it was counted, so pruning it is progress.
+                    None => {
+                        pipe.zrem(&index, id).ignore();
+                    }
+                }
+            }
+            pipe.query::<()>(&mut conn).map_err(map_err)?;
+            remaining -= ids.len() as i64;
+        }
+        Ok(removed)
+    }
+
+    /// Queue the removal of dead-letter entry `id` and every index it sits in:
+    /// the global set, its namespace's set, and — for a pub/sub delivery — its
+    /// subscription's `sub:dead` index.
+    fn push_dlq_remove(&self, pipe: &mut redis::Pipeline, id: &str, entry: &DeadJobEntry) {
+        pipe.del(self.key(&["dlq", id])).ignore();
+        pipe.zrem(self.key(&["dlq", "all"]), id).ignore();
+        pipe.zrem(self.dlq_by_namespace_key(entry.namespace.as_deref()), id)
+            .ignore();
+        self.push_pubsub_dead_remove(pipe, entry.notes.as_deref(), &entry.original_job_id);
+    }
+
     /// Shared body of `move_to_dlq`/`shed_to_dlq`; `shed` is the only
     /// difference between them. Returns the cascaded dependents.
     fn dead_letter(
@@ -118,56 +295,18 @@ impl RedisStorage {
         shed: bool,
     ) -> Result<Vec<Job>> {
         let now = now_millis();
-        let dlq_id = uuid::Uuid::now_v7().to_string();
+        let entry = DeadJobEntry::of(job, error, metadata, shed, now);
+        let dlq_id = entry.id.clone();
         let mut conn = self.conn()?;
-
-        let dlq_retry_count = job
-            .metadata
-            .as_deref()
-            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
-            .and_then(|v| v.get("__dlq_retry_count")?.as_i64())
-            .unwrap_or(0) as i32;
-
-        let entry = DeadJobEntry {
-            id: dlq_id.clone(),
-            original_job_id: job.id.clone(),
-            queue: job.queue.clone(),
-            task_name: job.task_name.clone(),
-            payload: job.payload.clone(),
-            error: Some(error.to_string()),
-            retry_count: job.retry_count,
-            failed_at: now,
-            // Preserve the job's own metadata so it survives the round trip;
-            // an explicit `metadata` arg overrides it. The run's origin rides
-            // its own field instead, out of reach of that replacement.
-            metadata: metadata
-                .map(str::to_string)
-                .or_else(|| job.metadata.clone()),
-            notes: job.notes.clone(),
-            priority: job.priority,
-            max_retries: job.max_retries,
-            timeout_ms: job.timeout_ms,
-            result_ttl_ms: job.result_ttl_ms,
-            namespace: job.namespace.clone(),
-            dlq_retry_count,
-            shed,
-            origin_job_id: Some(crate::step::run_key(job)),
-            // Only when the replacement would otherwise displace it: with no
-            // replacement, `metadata` already is the job's own and copying an
-            // unbounded blob twice buys nothing.
-            job_metadata: metadata.and(job.metadata.as_deref()).map(str::to_string),
-        };
 
         let json = serde_json::to_string(&entry)?;
 
         let dlq_key = self.key(&["dlq", &dlq_id]);
         let dlq_all = self.key(&["dlq", "all"]);
+        let dlq_by_ns = self.dlq_by_namespace_key(job.namespace.as_deref());
 
-        let mut dead_job = job.clone();
-        let old_status = dead_job.status;
-        dead_job.status = JobStatus::Dead;
-        dead_job.error = Some(error.to_string());
-        dead_job.completed_at = Some(now);
+        let old_status = job.status;
+        let dead_job = dead_copy(job, error, now);
         let dead_json = serde_json::to_string(&dead_job)?;
 
         // Commit the DLQ entry and the live→archive move together, but only if the
@@ -183,6 +322,7 @@ impl RedisStorage {
                 }
                 pipe.set(&dlq_key, &json).ignore();
                 pipe.zadd(&dlq_all, &dlq_id, now as f64).ignore();
+                pipe.zadd(&dlq_by_ns, &dlq_id, now as f64).ignore();
                 self.push_archive_ops(pipe, &dead_job, old_status, &dead_json);
                 Ok(pipe.query::<Option<()>>(conn)?.map(|()| true))
             })
@@ -395,9 +535,7 @@ impl RedisStorage {
         // ids whose entry matches `task_name`.
         let ids: Vec<String> = conn.zrevrange(&dlq_all, 0, -1).map_err(map_err)?;
 
-        // (dlq_id, notes, original_job_id) — notes + original id let the
-        // sub:dead index shrink with the purge (no-op for non-pub/sub rows).
-        let mut to_delete: Vec<(String, Option<String>, String)> = Vec::new();
+        let mut to_delete: Vec<(String, DeadJobEntry)> = Vec::new();
         for id in ids {
             let dlq_key = self.key(&["dlq", &id]);
             let data: Option<String> = conn.get(&dlq_key).map_err(map_err)?;
@@ -408,7 +546,7 @@ impl RedisStorage {
                 let in_scope =
                     namespace.is_none_or(|scope| entry.namespace.as_deref() == Some(scope));
                 if entry.task_name == task_name && in_scope {
-                    to_delete.push((id, entry.notes, entry.original_job_id));
+                    to_delete.push((id, entry));
                 }
             }
         }
@@ -418,10 +556,8 @@ impl RedisStorage {
         }
 
         let pipe = &mut redis::pipe();
-        for (id, notes, member) in &to_delete {
-            pipe.del(self.key(&["dlq", id]));
-            pipe.zrem(&dlq_all, id.as_str());
-            self.push_pubsub_dead_remove(pipe, notes.as_deref(), member);
+        for (id, entry) in &to_delete {
+            self.push_dlq_remove(pipe, id, entry);
         }
         pipe.query::<()>(&mut conn).map_err(map_err)?;
         Ok(to_delete.len() as u64)
@@ -512,6 +648,7 @@ impl RedisStorage {
         let pipe = &mut redis::pipe();
         pipe.del(&dlq_key);
         pipe.zrem(&dlq_all, dead_id);
+        pipe.zrem(self.dlq_by_namespace_key(job.namespace.as_deref()), dead_id);
         self.push_pubsub_dead_remove(pipe, dead_notes.as_deref(), &dead_member);
         pipe.query::<()>(&mut conn).map_err(map_err)?;
 
@@ -564,14 +701,14 @@ impl RedisStorage {
                     skipped += 1;
                     continue;
                 }
-                pipe.del(self.key(&["dlq", id]));
-                pipe.zrem(&dlq_all, id.as_str());
-                if let Some(entry) = entry {
-                    self.push_pubsub_dead_remove(
-                        pipe,
-                        entry.notes.as_deref(),
-                        &entry.original_job_id,
-                    );
+                match entry {
+                    Some(entry) => self.push_dlq_remove(pipe, id, &entry),
+                    // Unreadable, so its namespace index is unknown: the
+                    // `max_dead_rows` trim prunes the entry it leaves there.
+                    None => {
+                        pipe.del(self.key(&["dlq", id]));
+                        pipe.zrem(&dlq_all, id.as_str());
+                    }
                 }
                 purged += 1;
             }
@@ -592,7 +729,6 @@ impl RedisStorage {
     pub fn delete_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<bool> {
         let mut conn = self.conn()?;
         let dlq_key = self.key(&["dlq", dead_id]);
-        let dlq_all = self.key(&["dlq", "all"]);
 
         // Load the row (rather than a bare EXISTS) so its subscription
         // attribution is known and the sub:dead index shrinks with the delete.
@@ -606,9 +742,7 @@ impl RedisStorage {
         }
 
         let pipe = &mut redis::pipe();
-        pipe.del(&dlq_key);
-        pipe.zrem(&dlq_all, dead_id);
-        self.push_pubsub_dead_remove(pipe, entry.notes.as_deref(), &entry.original_job_id);
+        self.push_dlq_remove(pipe, dead_id, &entry);
         pipe.query::<()>(&mut conn).map_err(map_err)?;
         Ok(true)
     }
@@ -636,7 +770,7 @@ impl RedisStorage {
             cursor = next;
 
             // ZSCAN returns a flat [member, score, member, score, ...] list.
-            let mut to_delete: Vec<(String, Option<String>, String)> = Vec::new();
+            let mut to_delete: Vec<(String, DeadJobEntry)> = Vec::new();
             for id in flat.iter().step_by(2) {
                 let dlq_key = self.key(&["dlq", id]);
                 let data: Option<String> = conn.get(&dlq_key).map_err(map_err)?;
@@ -652,7 +786,7 @@ impl RedisStorage {
                             None => global_cutoff_ms.is_some_and(|c| entry.failed_at < c),
                         };
                         if expired {
-                            to_delete.push((id.clone(), entry.notes, entry.original_job_id));
+                            to_delete.push((id.clone(), entry));
                         }
                     }
                 }
@@ -660,10 +794,8 @@ impl RedisStorage {
 
             if !to_delete.is_empty() {
                 let pipe = &mut redis::pipe();
-                for (id, notes, member) in &to_delete {
-                    pipe.del(self.key(&["dlq", id]));
-                    pipe.zrem(&dlq_all, id.as_str());
-                    self.push_pubsub_dead_remove(pipe, notes.as_deref(), member);
+                for (id, entry) in &to_delete {
+                    self.push_dlq_remove(pipe, id, entry);
                 }
                 pipe.query::<()>(&mut conn).map_err(map_err)?;
                 total += to_delete.len() as u64;
