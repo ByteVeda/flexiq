@@ -98,6 +98,19 @@ jobs:
             --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
             --set dashboard.enabled=false --set grpc.enabled=true --set namespace=prod \
             --set grpc.existingSecret=my-secret
+          # Mirrors config/watch.rs: every watch bound is an unsigned whole
+          # number, and a buffer or stall of 0 is refused at boot.
+          grpc_on=(--set storage.dsn=postgres://u:p@db/x --set attach.enabled=false --set grpc.enabled=true --set namespace=prod)
+          refuses "an empty watch buffer" "${grpc_on[@]}" --set grpc.watch.buffer=0
+          refuses "a zero watch stall" "${grpc_on[@]}" --set grpc.watch.stallSeconds=0
+          refuses "a negative watch reconcile" "${grpc_on[@]}" --set grpc.watch.reconcileSeconds=-1
+          refuses "a fractional watch cap" "${grpc_on[@]}" --set grpc.watch.maxPerToken=2.5
+          refuses "a null watch cap, which would render as unlimited" "${grpc_on[@]}" --set grpc.watch.maxPerToken=null
+          refuses "a non-numeric watch reconcile" "${grpc_on[@]}" --set grpc.watch.reconcileSeconds=5s
+          # int64 reads both of these wrongly: an out-of-range string as 0
+          # (unlimited), a leading zero as octal.
+          refuses "a watch cap past int64" "${grpc_on[@]}" --set grpc.watch.maxPerToken=99999999999999999999
+          refuses "a leading-zero watch buffer" "${grpc_on[@]}" --set-string grpc.watch.buffer=0010
           # Mirrors config/trigger.rs: one namespace, and exactly one source of
           # definitions — a listener with none would answer every request 404.
           refuses "triggers with no namespace" \
@@ -231,6 +244,10 @@ jobs:
                   "FLEXIQ_GRPC_REQUEST_TIMEOUT",
                   "FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS",
                   "FLEXIQ_GRPC_AUDIT_RETENTION_DAYS",
+                  "FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN",
+                  "FLEXIQ_GRPC_WATCH_RECONCILE",
+                  "FLEXIQ_GRPC_WATCH_BUFFER",
+                  "FLEXIQ_GRPC_WATCH_STALL",
               }
               print(sorted(container["livenessProbe"]),
                     sorted(container["readinessProbe"]),
@@ -250,6 +267,31 @@ jobs:
             || { echo "::error::readiness must use the grpc probe and liveness the socket, with no token in env and the listener tunables set"; exit 1; }
           [ "$legacy" = "['tcpSocket'] ['tcpSocket'] False True" ] \
             || { echo "::error::grpc.healthProbe=false must fall readiness back to the socket"; exit 1; }
+
+      # A watch bound set in values must reach the server as the variable it
+      # reads — including 0, which is meaningful for the cap and the reconcile,
+      # and a number large enough that a float64 would print as 1e+06.
+      - name: The WatchJobs bounds reach the gRPC listener's env
+        run: |
+          set -euo pipefail
+          printf 'grpc:\n  watch:\n    maxPerToken: 0\n    reconcileSeconds: 0\n    buffer: 1000000\n    stallSeconds: 7\n' > /tmp/watch.yaml
+          watch="$(helm template t "$CHART" --set storage.dsn=postgres://u:p@db/x \
+            --set attach.enabled=false --set dashboard.enabled=false \
+            --set grpc.enabled=true --set namespace=prod -f /tmp/watch.yaml \
+            | python3 -c '
+          import sys, yaml
+          for doc in yaml.safe_load_all(sys.stdin):
+              if doc and doc.get("kind") == "Deployment":
+                  env = {e["name"]: e.get("value") for e in doc["spec"]["template"]["spec"]["containers"][0]["env"]}
+                  print(" ".join(env[k] for k in (
+                      "FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN",
+                      "FLEXIQ_GRPC_WATCH_RECONCILE",
+                      "FLEXIQ_GRPC_WATCH_BUFFER",
+                      "FLEXIQ_GRPC_WATCH_STALL")))
+          ')"
+          echo "watch bounds: $watch"
+          [ "$watch" = "0 0 1000000 7" ] \
+            || { echo "::error::grpc.watch values must reach FLEXIQ_GRPC_WATCH_* verbatim"; exit 1; }
 
       # Same reasoning as the gRPC tunables above — a chart value nothing emits
       # is a knob an operator turns with no effect — plus the `0` case, which

@@ -124,6 +124,36 @@ rows" to a dequeue, and neither is a thing to put on a network port.
 {{- fail "flexiq-server: grpc.enabled requires namespace. The gRPC door serves one named namespace, and the server refuses to start without FLEXIQ_NAMESPACE." -}}
 {{- end -}}
 
+{{/*
+Mirrors config/watch.rs: every bound parses as an unsigned whole number, and a
+buffer or stall of 0 is refused. A null is refused too — rendered, it would be
+0, which for maxPerToken silently means unlimited.
+*/}}
+{{- if .Values.grpc.enabled -}}
+{{- $bounds := list
+  (dict "key" "maxPerToken" "min" 0 "why" "")
+  (dict "key" "reconcileSeconds" "min" 0 "why" "")
+  (dict "key" "buffer" "min" 1 "why" " — a stream needs somewhere to read from")
+  (dict "key" "stallSeconds" "min" 1 "why" " — 0 would end a stream the first time its client was a moment slow") -}}
+{{- range $bounds -}}
+{{- $v := index $.Values.grpc.watch .key -}}
+{{- $whole := false -}}
+{{- if kindIs "string" $v -}}
+{{- /* Must round-trip through int64, which reads an out-of-range string as 0
+     (unlimited) and a leading zero as octal. */}}
+{{- $whole = and (regexMatch "^(0|[1-9][0-9]*)$" $v) (eq (toString (int64 $v)) $v) -}}
+{{- else if or (kindIs "int" $v) (kindIs "int64" $v) (kindIs "float64" $v) -}}
+{{- $whole = and (eq (float64 $v) (float64 (int64 $v))) (ge (int64 $v) 0) -}}
+{{- end -}}
+{{- if not $whole -}}
+{{- fail (printf "flexiq-server: grpc.watch.%s must be a whole number of at least %d, got '%v'." .key (int .min) $v) -}}
+{{- end -}}
+{{- if lt (int64 $v) (int64 .min) -}}
+{{- fail (printf "flexiq-server: grpc.watch.%s must be at least %d%s." .key (int .min) .why) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Mirrors config/trigger.rs: one namespace, and a definitions file. */}}
 {{- if .Values.triggers.enabled -}}
 {{- if not .Values.namespace -}}

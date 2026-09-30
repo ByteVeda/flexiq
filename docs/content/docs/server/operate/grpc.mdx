@@ -475,12 +475,18 @@ producer door on the same process as the scheduler, or watch ids.
 
 ### Limits
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN` | `16` | Concurrent watches one API token may hold. `0` is unlimited |
-| `FLEXIQ_GRPC_WATCH_RECONCILE` | `5` | Seconds between re-reads of watched ids. `0` turns the re-read off, and with it every transition another process makes |
-| `FLEXIQ_GRPC_WATCH_BUFFER` | `4096` | Transitions kept in memory for streams to catch up on and resume from |
-| `FLEXIQ_GRPC_WATCH_STALL` | `30` | Seconds a stream waits on a client that stopped reading |
+| Variable | Helm value | Default | Meaning |
+|---|---|---|---|
+| `FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN` | `grpc.watch.maxPerToken` | `16` | Concurrent watches one API token may hold. `0` is unlimited |
+| `FLEXIQ_GRPC_WATCH_RECONCILE` | `grpc.watch.reconcileSeconds` | `5` | Seconds between re-reads of watched ids. `0` turns the re-read off, and with it every transition another process makes |
+| `FLEXIQ_GRPC_WATCH_BUFFER` | `grpc.watch.buffer` | `4096` | Transitions kept in memory for streams to catch up on and resume from. At least `1` |
+| `FLEXIQ_GRPC_WATCH_STALL` | `grpc.watch.stallSeconds` | `30` | Seconds a stream waits on a client that stopped reading. At least `1` |
+
+On Kubernetes, two of these depend on the deployment. With more than one
+replica, most transitions reach a watch through the reconcile, so
+`reconcileSeconds` is their latency. `maxPerToken` is shared by every client pod
+that uses the same token. The chart refuses at `helm template` time a value the
+server would refuse at boot.
 
 A token over its cap is refused `RESOURCE_EXHAUSTED` with reason `WATCH_LIMIT`.
 The server never slows down for a client that stops reading. When the client
