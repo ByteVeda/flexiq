@@ -184,6 +184,56 @@ fn workflow_node_status(status: i32) -> Value {
     }
 }
 
+/// One `WatchJobsResponse`, the `data` of one Server-Sent Event.
+///
+/// The oneof writes the arm it holds, or nothing on a queue watch's opening
+/// checkpoint; `cursor` is always written, empty on an id watch.
+pub fn watch_jobs(response: &pb::WatchJobsResponse) -> Value {
+    let mut object = Map::new();
+    match response.item.as_ref() {
+        Some(pb::watch_jobs_response::Item::Transition(value)) => {
+            object.insert("transition".to_string(), job_transition(value));
+        }
+        Some(pb::watch_jobs_response::Item::NotFoundJobId(id)) => {
+            object.insert("notFoundJobId".to_string(), id.clone().into());
+        }
+        None => {}
+    }
+    object.insert("cursor".to_string(), response.cursor.clone().into());
+    Value::Object(object)
+}
+
+fn job_transition(transition: &pb::JobTransition) -> Value {
+    let mut object = Map::new();
+    object.insert("jobId".to_string(), transition.job_id.clone().into());
+    object.insert("queue".to_string(), transition.queue.clone().into());
+    object.insert("taskName".to_string(), transition.task_name.clone().into());
+    object.insert("kind".to_string(), transition_kind(transition.kind));
+    object.insert("status".to_string(), status(transition.status));
+    object.insert("attempt".to_string(), transition.attempt.into());
+    insert_timestamp(&mut object, "time", transition.time.as_ref());
+    object.insert("terminal".to_string(), transition.terminal.into());
+    if let Some(error) = transition.error.as_ref() {
+        object.insert("error".to_string(), error.clone().into());
+    }
+    if let Some(reason) = transition.reason.as_ref() {
+        object.insert("reason".to_string(), reason.clone().into());
+    }
+    if let Some(timed_out) = transition.timed_out {
+        object.insert("timedOut".to_string(), timed_out.into());
+    }
+    insert_timestamp(&mut object, "wakeAt", transition.wake_at.as_ref());
+    Value::Object(object)
+}
+
+/// A `JobTransitionKind` by name, or by number when this build does not know it.
+fn transition_kind(kind: i32) -> Value {
+    match pb::JobTransitionKind::try_from(kind) {
+        Ok(known) => known.as_str_name().into(),
+        Err(_) => kind.into(),
+    }
+}
+
 /// One `Job`.
 pub fn job(job: &pb::Job) -> Value {
     let mut object = Map::new();
@@ -376,6 +426,53 @@ pub(super) mod tests {
                 results: Vec::new(),
             }),
         );
+    }
+
+    #[test]
+    fn a_watch_item_carries_every_field_the_contract_names() {
+        let transition = pb::JobTransition {
+            job_id: "01924f".to_string(),
+            queue: "emails".to_string(),
+            task_name: "send_email".to_string(),
+            kind: pb::JobTransitionKind::Retrying as i32,
+            status: pb::JobStatus::Pending as i32,
+            attempt: 2,
+            time: Some(crate::grpc::producer::convert::timestamp(1_756_900_000_000)),
+            terminal: false,
+            error: Some("boom".to_string()),
+            reason: Some("TIMEOUT".to_string()),
+            timed_out: Some(true),
+            wake_at: Some(crate::grpc::producer::convert::timestamp(1_756_900_001_000)),
+        };
+        assert_names("JobTransition", &job_transition(&transition));
+
+        // One arm per rendering, so the union of both is the message's names.
+        let mut emitted = std::collections::BTreeSet::new();
+        for item in [
+            pb::watch_jobs_response::Item::Transition(transition),
+            pb::watch_jobs_response::Item::NotFoundJobId("gone".to_string()),
+        ] {
+            let rendered = watch_jobs(&pb::WatchJobsResponse {
+                item: Some(item),
+                cursor: "c".to_string(),
+            });
+            let keys = rendered.as_object().expect("an object");
+            assert_eq!(keys.len(), 2, "a oneof renders exactly its own arm");
+            emitted.extend(keys.keys().cloned());
+        }
+        assert_eq!(
+            emitted,
+            descriptor::json_names(descriptor::PRODUCER_PACKAGE, "WatchJobsResponse")
+        );
+    }
+
+    #[test]
+    fn a_checkpoint_is_a_cursor_alone() {
+        let rendered = watch_jobs(&pb::WatchJobsResponse {
+            item: None,
+            cursor: "c".to_string(),
+        });
+        assert_eq!(rendered, serde_json::json!({"cursor": "c"}));
     }
 
     /// A oneof renders one arm at a time, so each case is pinned to the key it
