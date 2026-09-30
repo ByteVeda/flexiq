@@ -92,9 +92,15 @@ pub fn body(status: &tonic_types::pb::Status) -> Value {
     json!({ "error": status_json(status) })
 }
 
+/// The body of a failed response, for a failure that arrives after the
+/// response has started: a watch stream's final `error` event.
+pub fn failure(status: &Status) -> Value {
+    body(&rich(status))
+}
+
 /// A failed response, rendered for a JSON client.
 pub fn response(status: &Status) -> Response {
-    let rendered = body(&rich(status));
+    let rendered = failure(status);
     let code = http_status(status.code());
     let bytes = serde_json::to_vec(&rendered).unwrap_or_else(|error| {
         // Serialising a map of strings cannot fail; if it somehow did, an empty
