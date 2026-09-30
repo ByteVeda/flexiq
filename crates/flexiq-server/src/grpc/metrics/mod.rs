@@ -47,9 +47,10 @@ const WATCH_JOBS: &str = "flexiq.v1.ProducerService/WatchJobs";
 /// Written out rather than derived: the executor package is not transcoded, so
 /// the facade's closed set does not name its RPCs, and health and reflection
 /// come from crates that publish no such list. `WatchJobs` is here because a
-/// stream has no facade route. Six names is cheaper than a lookup that could go
-/// stale silently, and a name missing from here degrades to `other` rather than
-/// misreporting.
+/// stream has no binding in the facade's table; its Server-Sent Events path is
+/// matched separately in [`labels`]. Six names is cheaper than a lookup that
+/// could go stale silently, and a name missing from here degrades to `other`
+/// rather than misreporting.
 const OTHER_SERVED_METHODS: [&str; 6] = [
     WATCH_JOBS,
     "flexiq.executor.v1.ExecutorService/Attach",

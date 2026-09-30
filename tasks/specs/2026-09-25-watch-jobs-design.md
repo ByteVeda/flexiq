@@ -68,6 +68,9 @@ must not maintain its own terminal-status table.
 facade coverage test exempts streaming RPCs by the descriptor's flag; SSE would
 be a separate door.
 
+> Historical: superseded by #978, which added that separate door —
+> `GET /v1/jobs:watch` as Server-Sent Events, routed outside the bindings.
+
 ## Where it lives
 
 - core: `events/tap.rs`, `EventHub::{add_tap, without_sinks}`,
