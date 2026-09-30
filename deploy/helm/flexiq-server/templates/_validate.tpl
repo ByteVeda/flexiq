@@ -139,7 +139,9 @@ buffer or stall of 0 is refused. A null is refused too — rendered, it would be
 {{- $v := index $.Values.grpc.watch .key -}}
 {{- $whole := false -}}
 {{- if kindIs "string" $v -}}
-{{- $whole = regexMatch "^[0-9]+$" $v -}}
+{{- /* Must round-trip through int64, which reads an out-of-range string as 0
+     (unlimited) and a leading zero as octal. */}}
+{{- $whole = and (regexMatch "^(0|[1-9][0-9]*)$" $v) (eq (toString (int64 $v)) $v) -}}
 {{- else if or (kindIs "int" $v) (kindIs "int64" $v) (kindIs "float64" $v) -}}
 {{- $whole = and (eq (float64 $v) (float64 (int64 $v))) (ge (int64 $v) 0) -}}
 {{- end -}}

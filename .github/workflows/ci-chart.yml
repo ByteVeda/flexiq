@@ -107,6 +107,10 @@ jobs:
           refuses "a fractional watch cap" "${grpc_on[@]}" --set grpc.watch.maxPerToken=2.5
           refuses "a null watch cap, which would render as unlimited" "${grpc_on[@]}" --set grpc.watch.maxPerToken=null
           refuses "a non-numeric watch reconcile" "${grpc_on[@]}" --set grpc.watch.reconcileSeconds=5s
+          # int64 reads both of these wrongly: an out-of-range string as 0
+          # (unlimited), a leading zero as octal.
+          refuses "a watch cap past int64" "${grpc_on[@]}" --set grpc.watch.maxPerToken=99999999999999999999
+          refuses "a leading-zero watch buffer" "${grpc_on[@]}" --set-string grpc.watch.buffer=0010
           # Mirrors config/trigger.rs: one namespace, and exactly one source of
           # definitions — a listener with none would answer every request 404.
           refuses "triggers with no namespace" \
