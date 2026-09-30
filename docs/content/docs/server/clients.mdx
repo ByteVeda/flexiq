@@ -101,8 +101,10 @@ Either way you get `flexiq.v1.ProducerService` with nine RPCs: `Enqueue`,
 
 With neither, generate against the JSON facade instead:
 [`contracts/openapi.json`](https://github.com/ByteVeda/flexiq/blob/master/contracts/openapi.json)
-describes the eight unary RPCs as HTTP paths, in OpenAPI 3.1. `WatchJobs` has no
-HTTP path, because a stream has no request/response mapping. It is generated
+describes the eight unary RPCs as HTTP paths, in OpenAPI 3.1. `WatchJobs` is not
+in it, because a stream has no request/response mapping; the facade serves it as
+Server-Sent Events at `GET /v1/jobs:watch`, documented in
+[Watching jobs](/server/operate/grpc#without-grpc). The document is generated
 from the `.proto` files above and gated against them, so it is the same contract
 read through a different generator ecosystem — not a second one. What it costs
 is the payload envelope: see

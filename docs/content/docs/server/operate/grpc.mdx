@@ -249,6 +249,7 @@ process.
 | `GET` | `/v1/stats` | `QueueStats` for the namespace, or for `?queue=` |
 | `POST` | `/v1/workflows` | `SubmitWorkflow` |
 | `GET` | `/v1/workflows/{run_id}` | `GetWorkflowRun` |
+| `GET` | `/v1/jobs:watch` | `WatchJobs`, as Server-Sent Events — see [Without gRPC](#without-grpc) |
 
 ```bash
 curl -X POST http://localhost:50051/v1/jobs \
@@ -299,8 +300,9 @@ Three things this door does not do. It serves the producer service and, under
 token's scope decides which of the two a call reaches. It **does not expose the
 executor API** — a worker surface has different credentials and different
 failure modes, and no reason to be reachable from a browser. And it **transcodes
-no streams**: `WatchJobs` is a server stream, and a stream has no
-request/response HTTP mapping. Watch over gRPC, or poll `GET /v1/jobs/{job_id}`.
+no streams**: a stream has no request/response HTTP mapping. The one exception
+is `WatchJobs`, served as Server-Sent Events on a path of its own — see
+[Without gRPC](#without-grpc).
 
 A request without a credential comes back `401` with `"reason":
 "UNAUTHENTICATED"` rather than a gRPC trailer. Where this listener terminates
@@ -329,6 +331,11 @@ what the door does. And a `oneof` is described as arms that exclude each other,
 not as one that must be set: "exactly one of `raw` and `structured`" is a rule
 the service enforces and states in its own prose, alongside the others it
 enforces on values.
+
+`GET /v1/jobs:watch` is not in it. OpenAPI describes an event stream only
+loosely, and the document is generated from `google.api.http` options, which a
+server stream does not carry. The path is documented under
+[Without gRPC](#without-grpc) instead.
 
 ## Health, and which probe it belongs in
 
@@ -497,6 +504,74 @@ so clients reconnect to another replica.
 
 `FLEXIQ_GRPC_REQUEST_TIMEOUT` does not bound a watch, for the same reason it
 does not bound `Attach`.
+
+### Without gRPC
+
+The same stream is served as
+[Server-Sent Events](https://html.spec.whatwg.org/multipage/server-sent-events.html)
+on the JSON facade, for `curl`, a browser or an HTTP-only gateway. Same
+listener, same handler, same token scope (`read`), same limits:
+
+```bash
+curl -N "http://localhost:50051/v1/jobs:watch?jobIds=$JOB_ID" \
+  -H "authorization: Bearer $FLEXIQ_TOKEN"
+```
+
+The query takes `jobIds` (repeat it for more than one id) or `queue`, and
+`resumeCursor` for a queue watch. Each `WatchJobsResponse` is one event. Its
+`data` is the response as proto3 JSON, and its `id` is the `cursor` when there
+is one:
+
+```text
+data: {"cursor":"b8R-DXP126kAAAAAAAAAAQ"}
+id: b8R-DXP126kAAAAAAAAAAQ
+
+data: {"cursor":"b8R-DXP126kAAAAAAAAAAg","transition":{"jobId":"01a0f0e7-…","kind":"JOB_TRANSITION_KIND_CANCELLED","terminal":true,…}}
+id: b8R-DXP126kAAAAAAAAAAg
+```
+
+An id watch hands out no cursor, so its events carry no `id`, and it ends:
+
+```text
+event: end
+data: {}
+```
+
+- **A refusal before the stream opens** — a bad query, `WATCH_LIMIT`,
+  `WATCH_CURSOR_EXPIRED`, no credential — is the facade's ordinary JSON error
+  with its HTTP status.
+- **A failure after it opens** — `WATCH_OVERFLOW`, `SHUTTING_DOWN` — is a final
+  `event: error` whose `data` is that same error body. Then the connection
+  closes.
+- **A watch that finishes** — every watched id terminal — ends with
+  `event: end`. Then the connection closes.
+- **An idle stream** sends a `: keepalive` comment every 15 seconds, so a proxy
+  with an idle timeout keeps it open.
+
+A browser's `EventSource` resumes a queue watch with no code of its own: it sends
+the last event `id` back as `Last-Event-ID` when it reconnects, and the server
+takes that over any `resumeCursor` still in the URL. It also reconnects after
+*every* close, so call `close()` on `end` and on `error`:
+
+```js
+const events = new EventSource("/v1/jobs:watch?queue=orders");
+events.onmessage = (e) => handle(JSON.parse(e.data));
+events.addEventListener("end", () => events.close());
+events.addEventListener("error", (e) => {
+  // A server `error` event has data; a dropped connection does not, and is
+  // left to EventSource to retry.
+  if (e.data) events.close();
+});
+```
+
+`EventSource` cannot set an `authorization` header, so a browser reaches this
+path through something that adds one — a same-origin gateway or proxy.
+
+**Behind an HTTP load balancer, a queue watch sees only the replica that took
+the connection.** That is the same rule as over gRPC ([Where transitions come
+from](#where-transitions-come-from)), but a load balancer picks the replica per
+connection, and a reconnect can land somewhere else — where the cursor fails
+`WATCH_CURSOR_EXPIRED`. Watch ids, or pin the connection to one replica.
 
 ## The executor door
 
