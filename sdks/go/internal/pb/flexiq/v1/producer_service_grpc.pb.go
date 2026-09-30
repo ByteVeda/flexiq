@@ -109,8 +109,10 @@ type ProducerServiceClient interface {
 	// Watch a set of job ids, or a queue. See WatchJobsRequest for what each
 	// reports, how to resume after a dropped stream, and the limits.
 	//
-	// The only streaming RPC in the package, and the only one with no JSON
-	// facade path: a server stream has no request/response HTTP mapping.
+	// The only streaming RPC in the package, and the only one with no
+	// google.api.http binding: a server stream has no request/response HTTP
+	// mapping. The JSON facade serves it as Server-Sent Events at
+	// GET /v1/jobs:watch, routed outside the bindings.
 	WatchJobs(ctx context.Context, in *WatchJobsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchJobsResponse], error)
 }
 
@@ -291,8 +293,10 @@ type ProducerServiceServer interface {
 	// Watch a set of job ids, or a queue. See WatchJobsRequest for what each
 	// reports, how to resume after a dropped stream, and the limits.
 	//
-	// The only streaming RPC in the package, and the only one with no JSON
-	// facade path: a server stream has no request/response HTTP mapping.
+	// The only streaming RPC in the package, and the only one with no
+	// google.api.http binding: a server stream has no request/response HTTP
+	// mapping. The JSON facade serves it as Server-Sent Events at
+	// GET /v1/jobs:watch, routed outside the bindings.
 	WatchJobs(*WatchJobsRequest, grpc.ServerStreamingServer[WatchJobsResponse]) error
 	mustEmbedUnimplementedProducerServiceServer()
 }

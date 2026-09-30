@@ -1183,6 +1183,20 @@ mod tests {
         }
     }
 
+    /// The one stream the facade serves is hand-routed beside the table, and
+    /// it is `WatchJobs`: a new stream needs a door of its own, not a binding.
+    #[test]
+    fn the_only_hand_routed_stream_is_watch_jobs() {
+        let streams: Vec<String> = SERVED
+            .iter()
+            .flat_map(|service| descriptor::rpcs(service.package()))
+            .filter(|rpc| rpc.streaming)
+            .map(|rpc| format!("{}.{}", rpc.service, rpc.method))
+            .collect();
+        assert_eq!(streams, ["ProducerService.WatchJobs"]);
+        assert_eq!(resolve(&http::Method::GET, super::super::watch::PATH), None);
+    }
+
     /// The worker surface has different credentials and different failure
     /// modes; the facade transcodes two packages and not the third.
     ///

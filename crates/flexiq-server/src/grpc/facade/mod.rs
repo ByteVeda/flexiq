@@ -37,8 +37,8 @@
 //! facade covers, and a test.
 //!
 //! Streaming is not transcoded either. `WatchJobs` is a server stream, and a
-//! stream has no request/response HTTP mapping; an HTTP client that wants one
-//! needs Server-Sent Events, which is a door of its own rather than a route.
+//! stream has no request/response HTTP mapping; an HTTP client gets it as
+//! Server-Sent Events from [`watch`], a door of its own rather than a route.
 //!
 //! ## One listener, two doors
 //!
@@ -56,8 +56,10 @@ pub mod descriptor;
 pub mod error;
 pub mod json;
 pub mod routes;
+pub mod watch;
 
 use axum::response::Response;
+use axum::routing::get;
 use axum::Router;
 use http::request::Parts;
 use http::{header, HeaderMap};
@@ -69,7 +71,8 @@ use crate::grpc::status::WireError;
 
 /// The facade's routes, with the two fallbacks that keep every answer JSON.
 pub fn router(producer: Producer, admin: Admin) -> Router {
-    routes::router(producer, admin)
+    routes::router(producer.clone(), admin)
+        .route(watch::PATH, get(watch::watch).with_state(producer))
         // A path this door serves, with a method it does not: there is no such
         // RPC, which is the same answer an unrouted path gets.
         .method_not_allowed_fallback(unrouted)

@@ -39,16 +39,20 @@ pub const METRICS_PATH: &str = "/metrics";
 /// The label a path that is not a served method collapses to.
 const OTHER: &str = "other";
 
+/// `WatchJobs`, reached over gRPC or as Server-Sent Events.
+const WATCH_JOBS: &str = "flexiq.v1.ProducerService/WatchJobs";
+
 /// Full method paths this build serves outside the two transcoded services.
 ///
 /// Written out rather than derived: the executor package is not transcoded, so
 /// the facade's closed set does not name its RPCs, and health and reflection
 /// come from crates that publish no such list. `WatchJobs` is here because a
-/// stream has no facade route. Six names is cheaper than a lookup that could go
-/// stale silently, and a name missing from here degrades to `other` rather than
-/// misreporting.
+/// stream has no binding in the facade's table; its Server-Sent Events path is
+/// matched separately in [`labels`]. Six names is cheaper than a lookup that
+/// could go stale silently, and a name missing from here degrades to `other`
+/// rather than misreporting.
 const OTHER_SERVED_METHODS: [&str; 6] = [
-    "flexiq.v1.ProducerService/WatchJobs",
+    WATCH_JOBS,
     "flexiq.executor.v1.ExecutorService/Attach",
     "flexiq.executor.v1.ExecutorService/Heartbeat",
     "grpc.health.v1.Health/Check",
@@ -93,6 +97,11 @@ pub fn labels(
         return (Cow::Borrowed(served), door);
     }
 
+    // The facade's one stream, routed outside the binding table.
+    if method == http::Method::GET && path == facade::watch::PATH {
+        return (Cow::Borrowed(WATCH_JOBS), door);
+    }
+
     if let Some(binding) = facade::routes::resolve(method, path) {
         return (Cow::Owned(binding.rpc().full_method()), door);
     }
@@ -128,6 +137,21 @@ mod tests {
         );
         assert_eq!(method, "flexiq.v1.ProducerService/Enqueue");
         assert_eq!(door, "grpc");
+    }
+
+    /// One series for one RPC, whichever door the stream was opened through.
+    #[test]
+    fn a_watch_is_one_series_on_both_doors() {
+        let (method, door) = labels(
+            &http::Method::POST,
+            "/flexiq.v1.ProducerService/WatchJobs",
+            &grpc(),
+        );
+        assert_eq!((method.as_ref(), door), (WATCH_JOBS, "grpc"));
+        let (method, door) = labels(&http::Method::GET, facade::watch::PATH, &headers(""));
+        assert_eq!((method.as_ref(), door), (WATCH_JOBS, "http"));
+        let (method, _) = labels(&http::Method::POST, facade::watch::PATH, &headers(""));
+        assert_eq!(method, OTHER);
     }
 
     /// The whole point of the closed set: an unrouted path must not be able to

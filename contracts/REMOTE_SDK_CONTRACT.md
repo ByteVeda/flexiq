@@ -236,8 +236,23 @@ Coverage and bounds:
 - A shutting-down server ends every stream `UNAVAILABLE` with reason
   `SHUTTING_DOWN`. Reopening is always safe: the RPC reads and writes nothing.
 
-`WatchJobs` has no JSON facade path, because a server stream has no
-request/response HTTP mapping.
+Over the JSON facade, `WatchJobs` is served as Server-Sent Events at
+`GET /v1/jobs:watch`, outside the `google.api.http` bindings and the OpenAPI
+document:
+
+- The query carries `jobIds` (repeated) or `queue`, and `resumeCursor`. A
+  `Last-Event-ID` header on a queue watch takes precedence over `resumeCursor`;
+  on an id watch it is ignored.
+- Each `WatchJobsResponse` is one event: `data` is its proto3 JSON, and `id` is
+  its `cursor` when that is non-empty.
+- A refusal before the stream opens is the facade's JSON error with its HTTP
+  status. A status the stream ends with after it opens is a final
+  `event: error` whose `data` is the same error body. A stream that ends `OK`
+  sends a final `event: end`. Either is followed by the connection closing, and
+  a client **MUST NOT** reconnect after `end`.
+- Coverage is the gRPC stream's. A queue watch sees only the process that holds
+  the connection, which behind an HTTP load balancer is whichever replica the
+  connection reached.
 
 ### An executor client — `flexiq.executor.v1.ExecutorService`
 

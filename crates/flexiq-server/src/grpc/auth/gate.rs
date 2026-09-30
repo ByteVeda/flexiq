@@ -242,7 +242,13 @@ mod tests {
     /// The facade's reads are `GET`s, and nothing else it serves is.
     #[test]
     fn the_facade_producer_paths_split_by_verb() {
-        for path in ["/v1/jobs", "/v1/jobs/01924f", "/v1/queues/emails/stats"] {
+        // `/v1/jobs:watch` is `WatchJobs`, which gRPC puts in `READ_METHODS`.
+        for path in [
+            "/v1/jobs",
+            "/v1/jobs/01924f",
+            "/v1/jobs:watch",
+            "/v1/queues/emails/stats",
+        ] {
             assert_eq!(
                 requirement(&http::Method::GET, path),
                 Requirement::Scoped(Scope::Read),
