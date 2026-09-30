@@ -207,6 +207,15 @@ spec:
               value: "{{ .Values.grpc.maxConcurrentRequests }}"
             - name: FLEXIQ_GRPC_AUDIT_RETENTION_DAYS
               value: "{{ .Values.grpc.auditRetentionDays }}"
+            {{- /* int64: a values.yaml number is a float64, which prints 1e+06. */}}
+            - name: FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN
+              value: "{{ .Values.grpc.watch.maxPerToken | int64 }}"
+            - name: FLEXIQ_GRPC_WATCH_RECONCILE
+              value: "{{ .Values.grpc.watch.reconcileSeconds | int64 }}"
+            - name: FLEXIQ_GRPC_WATCH_BUFFER
+              value: "{{ .Values.grpc.watch.buffer | int64 }}"
+            - name: FLEXIQ_GRPC_WATCH_STALL
+              value: "{{ .Values.grpc.watch.stallSeconds | int64 }}"
             {{- include "flexiq-server.tlsEnv" (dict "prefix" "FLEXIQ_GRPC" "dir" "grpc" "tls" .Values.grpc.tls) | nindent 12 }}
             {{- end }}
             {{- if .Values.webhook.enabled }}

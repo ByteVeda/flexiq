@@ -138,6 +138,24 @@ grpc:
   # Days an audit record of a token-authorised write is kept before the
   # listener prunes it. At least 1: the trail is not optional.
   auditRetentionDays: 90
+  # Bounds on WatchJobs streams. Each must be a whole number; the chart refuses
+  # at render what the server would refuse at boot.
+  watch:
+    # Concurrent watches one API token may hold. Every client pod sharing a
+    # token shares this cap, so size it for the pods, not for one. 0 is
+    # unlimited.
+    maxPerToken: 16
+    # Seconds between re-reads of every watched job id, in one batched query
+    # per tick. This is how a watch hears about a job another replica ran, so
+    # with replicaCount > 1 it is the latency of most transitions. 0 turns the
+    # re-read off, and with it every transition another process makes.
+    reconcileSeconds: 5
+    # Transitions kept in memory, per pod, for streams to catch up on and
+    # resume a queue watch from. At least 1.
+    buffer: 4096
+    # Seconds a stream waits on a client that stopped reading before ending it
+    # with WATCH_OVERFLOW. At least 1.
+    stallSeconds: 30
   # There is no credential to set here. Callers present a scoped API token
   # stored in the database, which is why this chart no longer carries a gRPC
   # secret: a token is minted per client, expires, and is revoked on its own
