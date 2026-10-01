@@ -34,9 +34,17 @@ pub const TOKEN_KEY: &str = "flexiq.dev/token-key";
 pub const SOCKET_VOLUME: &str = "flexiq.dev/socket-volume";
 /// Whether to copy the source container's `env` and `envFrom`.
 pub const INHERIT_ENV: &str = "flexiq.dev/inherit-env";
+/// Secret holding the CA bundle a `tls://` attach verifies the scheduler with.
+pub const TLS_CA_SECRET: &str = "flexiq.dev/tls-ca-secret";
+/// Key within that secret.
+pub const TLS_CA_KEY: &str = "flexiq.dev/tls-ca-key";
+/// `kubernetes.io/tls` Secret holding the client certificate for mTLS.
+pub const TLS_CLIENT_SECRET: &str = "flexiq.dev/tls-client-secret";
 
 /// Default key read from the token secret.
 const DEFAULT_TOKEN_KEY: &str = "token";
+/// Default key read from the CA secret — where cert-manager writes the issuer.
+const DEFAULT_TLS_CA_KEY: &str = "ca.crt";
 
 /// What a pod's annotations asked the injector to add.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,16 +64,23 @@ pub struct InjectionSpec {
     pub socket_volume: Option<String>,
     /// Whether the sidecar inherits the source container's environment.
     pub inherit_env: bool,
+    /// Secret and key holding the CA bundle for a `tls://` attach.
+    pub tls_ca: Option<SecretKey>,
+    /// `kubernetes.io/tls` Secret holding the client certificate for mTLS.
+    pub tls_client: Option<String>,
 }
 
-/// A `secretKeyRef` for the attach token.
+/// One key within a Secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TokenRef {
+pub struct SecretKey {
     /// Secret name.
     pub name: String,
     /// Key within it.
     pub key: String,
 }
+
+/// A `secretKeyRef` for the attach token.
+pub type TokenRef = SecretKey;
 
 /// Read the injection request out of `annotations`, or `None` when the pod did
 /// not opt in.
@@ -89,6 +104,18 @@ pub fn parse(annotations: &BTreeMap<String, String>) -> Result<Option<InjectionS
         );
     }
 
+    let tls_ca = parse_tls_ca(annotations)?;
+    let tls_client = optional(annotations, TLS_CLIENT_SECRET);
+    // Mirrors the executor, which refuses TLS material beside a plaintext
+    // address: admitting the pod would only move that refusal into a
+    // crash-looping sidecar.
+    if (tls_ca.is_some() || tls_client.is_some()) && !attach.starts_with("tls://") {
+        bail!(
+            "{TLS_CA_SECRET} and {TLS_CLIENT_SECRET} configure a TLS attach, but \
+             {ATTACH}={attach} is not a tls:// address — dial tls://host:port or drop them"
+        );
+    }
+
     Ok(Some(InjectionSpec {
         attach,
         command,
@@ -100,6 +127,8 @@ pub fn parse(annotations: &BTreeMap<String, String>) -> Result<Option<InjectionS
             boolean(annotations, INHERIT_ENV).as_deref(),
             Some("false") | Some("0") | Some("no") | Some("off")
         ),
+        tls_ca,
+        tls_client,
     }))
 }
 
@@ -174,6 +203,21 @@ fn parse_token(annotations: &BTreeMap<String, String>) -> Option<TokenRef> {
     let name = optional(annotations, TOKEN_SECRET)?;
     let key = optional(annotations, TOKEN_KEY).unwrap_or_else(|| DEFAULT_TOKEN_KEY.to_string());
     Some(TokenRef { name, key })
+}
+
+/// The CA reference, if a secret was named. As with the token, a key alone is
+/// ignored.
+fn parse_tls_ca(annotations: &BTreeMap<String, String>) -> Result<Option<SecretKey>> {
+    let Some(name) = optional(annotations, TLS_CA_SECRET) else {
+        return Ok(None);
+    };
+    let key = optional(annotations, TLS_CA_KEY).unwrap_or_else(|| DEFAULT_TLS_CA_KEY.to_string());
+    // The key becomes a file name under the mount, so a path would point the
+    // executor somewhere the volume never put anything.
+    if key.contains('/') || key == "." || key == ".." {
+        bail!("{TLS_CA_KEY} must be a key within the Secret, not a path: '{key}'");
+    }
+    Ok(Some(SecretKey { name, key }))
 }
 
 #[cfg(test)]
@@ -360,5 +404,100 @@ mod tests {
             .expect("valid")
             .expect("opted in");
         assert_eq!(spec.source_container, None);
+    }
+
+    fn tls_minimal() -> Vec<(&'static str, &'static str)> {
+        let mut pairs = minimal();
+        pairs[1] = (ATTACH, "tls://flexiq-scheduler:7777");
+        pairs
+    }
+
+    #[test]
+    fn no_tls_annotations_means_no_tls_material() {
+        let spec = parse(&annotations(&tls_minimal()))
+            .expect("valid")
+            .expect("opted in");
+        assert_eq!(spec.tls_ca, None);
+        assert_eq!(spec.tls_client, None);
+    }
+
+    #[test]
+    fn a_ca_key_defaults_to_ca_crt() {
+        let mut pairs = tls_minimal();
+        pairs.push((TLS_CA_SECRET, "attach-ca"));
+        let spec = parse(&annotations(&pairs))
+            .expect("valid")
+            .expect("opted in");
+        assert_eq!(
+            spec.tls_ca,
+            Some(SecretKey {
+                name: "attach-ca".to_string(),
+                key: "ca.crt".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_ca_key_can_be_overridden() {
+        let mut pairs = tls_minimal();
+        pairs.push((TLS_CA_SECRET, "attach-ca"));
+        pairs.push((TLS_CA_KEY, "bundle.pem"));
+        let spec = parse(&annotations(&pairs))
+            .expect("valid")
+            .expect("opted in");
+        assert_eq!(spec.tls_ca.expect("a CA").key, "bundle.pem");
+    }
+
+    #[test]
+    fn a_ca_key_without_a_secret_is_ignored() {
+        let mut pairs = tls_minimal();
+        pairs.push((TLS_CA_KEY, "bundle.pem"));
+        let spec = parse(&annotations(&pairs))
+            .expect("valid")
+            .expect("opted in");
+        assert_eq!(spec.tls_ca, None);
+    }
+
+    #[test]
+    fn a_ca_key_that_is_a_path_is_rejected() {
+        for key in ["../etc/passwd", "certs/ca.crt", "..", "."] {
+            let mut pairs = tls_minimal();
+            pairs.push((TLS_CA_SECRET, "attach-ca"));
+            pairs.push((TLS_CA_KEY, key));
+            let error = parse(&annotations(&pairs)).expect_err("must reject");
+            assert!(error.to_string().contains(TLS_CA_KEY), "{key}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_client_secret_on_a_tls_address_parses() {
+        let mut pairs = tls_minimal();
+        pairs.push((TLS_CA_SECRET, "attach-ca"));
+        pairs.push((TLS_CLIENT_SECRET, "executor-cert"));
+        let spec = parse(&annotations(&pairs))
+            .expect("valid")
+            .expect("opted in");
+        assert_eq!(spec.tls_client.as_deref(), Some("executor-cert"));
+    }
+
+    #[test]
+    fn tls_material_beside_a_plaintext_address_is_rejected() {
+        for (key, value) in [(TLS_CA_SECRET, "attach-ca"), (TLS_CLIENT_SECRET, "cert")] {
+            let mut pairs = minimal();
+            pairs.push((key, value));
+            let error = parse(&annotations(&pairs)).expect_err("must reject");
+            assert!(error.to_string().contains("tls://"), "{key}: {error}");
+            assert!(error.to_string().contains(ATTACH), "{key}: {error}");
+        }
+    }
+
+    #[test]
+    fn tls_material_beside_a_unix_socket_is_rejected() {
+        let mut pairs = minimal();
+        pairs[1] = (ATTACH, "unix:/run/flexiq/attach.sock");
+        pairs.push((SOCKET_VOLUME, "attach"));
+        pairs.push((TLS_CA_SECRET, "attach-ca"));
+        let error = parse(&annotations(&pairs)).expect_err("must reject");
+        assert!(error.to_string().contains(TLS_CA_SECRET), "{error}");
     }
 }
