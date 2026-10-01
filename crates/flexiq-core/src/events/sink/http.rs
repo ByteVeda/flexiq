@@ -80,14 +80,14 @@ impl HttpSink {
         let url = validate_target_url(&config.url, client.policy())
             .map_err(|e| fail(target_message(e)))?;
         let bearer =
-            secret(&env, "bearer_token_env", config.bearer_token_env.as_deref()).map_err(&fail)?;
+            secret(&env, "bearer_token_env", config.bearer_token_env.as_deref()).map_err(fail)?;
         if let Some(token) = &bearer {
             // Checked here so a token no header can carry fails at start.
             bearer_header(token)
                 .map_err(|_| fail("bearer token is not a valid header value".into()))?;
         }
         let hmac =
-            secret(&env, "hmac_secret_env", config.hmac_secret_env.as_deref()).map_err(&fail)?;
+            secret(&env, "hmac_secret_env", config.hmac_secret_env.as_deref()).map_err(fail)?;
         Ok(Self {
             source: source.to_string(),
             url,
