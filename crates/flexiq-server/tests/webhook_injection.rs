@@ -134,6 +134,54 @@ async fn a_pod_missing_a_required_annotation_is_denied_with_the_reason() {
 }
 
 #[tokio::test]
+async fn a_tls_attach_mounts_the_ca_and_client_secrets() {
+    let (status, body) = review(admission_review(pod(json!({
+        "flexiq.dev/inject": "true",
+        "flexiq.dev/attach": "tls://flexiq-scheduler:7777",
+        "flexiq.dev/command": "flexiq executor --app myapp:queue",
+        "flexiq.dev/tls-ca-secret": "attach-ca",
+        "flexiq.dev/tls-client-secret": "executor-cert",
+    }))))
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["response"]["allowed"], true);
+    let ops = patch(&body);
+    let volumes = ops
+        .iter()
+        .find(|op| op["path"] == "/spec/volumes")
+        .expect("the pod had no volumes, so the array is created");
+    assert_eq!(volumes["value"].as_array().expect("volumes").len(), 2);
+    let env = ops
+        .iter()
+        .find(|op| op["path"] == "/spec/containers/-")
+        .expect("a container is added")["value"]["env"]
+        .clone();
+    assert!(env.as_array().expect("env").contains(&json!({
+        "name": "FLEXIQ_ATTACH_TLS_KEY",
+        "value": "/etc/flexiq/attach-client/tls.key",
+    })));
+}
+
+#[tokio::test]
+async fn tls_secrets_beside_a_plaintext_attach_are_denied() {
+    let (status, body) = review(admission_review(pod(json!({
+        "flexiq.dev/inject": "true",
+        "flexiq.dev/attach": "flexiq-scheduler:7777",
+        "flexiq.dev/command": "flexiq executor --app myapp:queue",
+        "flexiq.dev/tls-ca-secret": "attach-ca",
+    }))))
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["response"]["allowed"], false);
+    let message = body["response"]["status"]["message"]
+        .as_str()
+        .expect("a message");
+    assert!(message.contains("tls://"), "got: {message}");
+}
+
+#[tokio::test]
 async fn re_admitting_an_injected_pod_adds_nothing() {
     let already = json!({
         "metadata": { "name": "app-1", "annotations": {

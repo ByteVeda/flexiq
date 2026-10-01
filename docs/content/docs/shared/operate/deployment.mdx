@@ -1218,6 +1218,38 @@ Worth knowing before you rely on it:
 - **A `unix:` address needs `flexiq.dev/socket-volume`** naming the volume that
   carries the socket; the sidecar cannot reach a path it has not mounted, and the
   webhook rejects the pod rather than letting it crash-loop on `ENOENT`.
+- **The sidecar inherits environment, not volume mounts.** A
+  `FLEXIQ_ATTACH_TLS_CA` copied from the app names a file only the app container
+  can see. Name the Secrets instead, and the webhook mounts them — see below.
+
+#### Attaching over TLS
+
+For a `tls://` address, two more annotations hand the sidecar its TLS material
+from Secrets. The webhook mounts each one read-only under `/etc/flexiq/` and
+points the matching variable at it:
+
+```yaml
+flexiq.dev/attach: "tls://flexiq-flexiq-server-attach.default.svc:7777"
+# The CA the listener's certificate chains to → FLEXIQ_ATTACH_TLS_CA.
+flexiq.dev/tls-ca-secret: "flexiq-attach-tls"
+flexiq.dev/tls-ca-key: "ca.crt" # the default
+# For mTLS: a kubernetes.io/tls Secret → FLEXIQ_ATTACH_TLS_CERT / _KEY.
+flexiq.dev/tls-client-secret: "myapp-executor-cert"
+```
+
+A Secret mounts only into pods in its own namespace, so copy the CA into the
+workload's namespace when the two differ. Either annotation beside an address
+that is not `tls://` gets the pod rejected — the executor would refuse TLS
+material next to a plaintext address anyway. Without `tls-ca-secret`, the
+sidecar verifies against the web PKI roots built into the SDK.
+
+**Rotation.** The executor reads its TLS files once, when it dials, and TLS
+checks a certificate only at the handshake, so a live session survives the old
+certificate expiring. The kubelet refreshes the mounted Secret in place (the
+mounts are whole directories, never `subPath`). When the session ends, the
+executor exits, the kubelet restarts the container, and the new attach presents
+the new certificate. Nothing needs a restart for a routine renewal; to cut off a
+revoked certificate now, `kubectl rollout restart` the workload.
 
 ### Security requirements
 

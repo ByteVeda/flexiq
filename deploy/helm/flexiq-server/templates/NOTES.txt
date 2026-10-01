@@ -67,6 +67,16 @@ Sidecar injection is on. Annotate a pod template:
         flexiq.dev/token-secret: "{{ if .Values.attach.existingSecret }}{{ .Values.attach.existingSecret }}{{ else }}{{ include "flexiq-server.secretName" . }}{{ end }}"
         flexiq.dev/token-key: "{{ if .Values.attach.existingSecret }}{{ .Values.attach.existingSecretKey }}{{ else }}attach-token{{ end }}"
 {{- end }}
+{{- if .Values.attach.tls.secretName }}
+        # Private CA only: a Secret in the pod's namespace holding the CA
+        # that signed the listener. Omit both when the SDK's built-in web
+        # PKI roots already trust it.
+        # flexiq.dev/tls-ca-secret: "<CA Secret in the pod's namespace>"
+        # flexiq.dev/tls-ca-key: "<key holding the CA, default ca.crt>"
+{{- if .Values.attach.tls.clientCaSecretName }}
+        flexiq.dev/tls-client-secret: "<kubernetes.io/tls Secret signed by the CA in {{ .Values.attach.tls.clientCaSecretName }}>"
+{{- end }}
+{{- end }}
 {{- else }}
         # This release runs no attach listener, so point these at the scheduler
         # that does — another release, or one outside the cluster — along with
@@ -78,9 +88,10 @@ Sidecar injection is on. Annotate a pod template:
 {{- end }}
 {{- if and .Values.attach.enabled .Values.attach.tls.secretName }}
 
-The sidecar dials tls:// and trusts the web PKI roots built into the SDK. It
-inherits the app container's environment but none of its volume mounts, so
-for a private CA, FLEXIQ_ATTACH_TLS_CA must name a file baked into the image.
+The sidecar dials tls:// and verifies the listener against the CA Secret
+mounted from flexiq.dev/tls-ca-secret; without it, the web PKI roots built
+into the SDK. A rotated client certificate takes effect when the sidecar next
+attaches — the live session is not re-verified, so nothing needs a restart.
 {{- end }}
 
 The sidecar reuses the pod's own image, so nothing new is pulled.
