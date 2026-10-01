@@ -83,11 +83,11 @@ hmac = "0.12"
 # signature version 1 is SHA1withRSA, which is what `oid` is for.
 sha1 = { version = "0.10", features = ["oid"] }
 # SNS signs every message with RSA over a certificate it publishes. `rsa` is
-# already in the lock through jsonwebtoken's rust_crypto backend, and
-# `x509-cert` shares its `der`/`spki` generation, so the certificate's key
-# needs no second ASN.1 stack. PEM is unwrapped by hand, so no `pem` feature.
+# already in the lock through jsonwebtoken's rust_crypto backend. `x509-cert`
+# is a newer `der`/`spki` generation than `rsa`, so the key crosses as DER
+# bytes, never as a shared type. PEM is unwrapped by hand, so no `pem` feature.
 rsa = { version = "0.9", default-features = false, features = ["std"] }
-x509-cert = { version = "0.2", default-features = false, features = ["std"] }
+x509-cert = { version = "0.3", default-features = false, features = ["std"] }
 # Hex-encoded signatures (GitHub, Stripe, a generic HMAC header).
 hex = "0.4"
 thiserror = { workspace = true }
