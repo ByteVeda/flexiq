@@ -16,7 +16,7 @@
 //! `Storage::authorize_attempt` already fences a result on the claim's owner
 //! and the job's `retry_count`, and between them those cover a reclaim (the
 //! owner moves) and a reap (the retry bumps the attempt). They do not cover
-//! [`Storage::requeue_stuck`](crate::storage::Storage::requeue_stuck) — the
+//! [`Storage::requeue_stuck`] — the
 //! dashboard's requeue button — which returns the job to `Pending` and deletes
 //! the claim without touching `retry_count`. The next dispatch is then
 //! *indistinguishable* from the stalled one: same job, same owner, same
@@ -30,7 +30,7 @@
 //! - **In memory, at the dispatcher.** [`LeaseBook`] holds the lease of each
 //!   job's *current* dispatch. A frame whose lease **disagrees** with the
 //!   book's entry is refused before it can become a
-//!   [`JobResult`](crate::scheduler::JobResult).
+//!   [`JobResult`].
 //! - **Durably, at the fence.** `authorize_attempt` compares the epoch to the
 //!   `execution_claims` row, so a result that outlives the book, or that
 //!   reaches a different process, is still superseded.
