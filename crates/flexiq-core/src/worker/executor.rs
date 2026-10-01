@@ -1104,6 +1104,8 @@ impl Shared {
     /// Saturating, so a result for a job this executor never counted cannot
     /// wrap the counter and strand the drain forever.
     fn job_finished(&self) {
+        // `try_update`, the new name, needs Rust 1.99; the MSRV is older.
+        #[allow(deprecated)]
         let _ = self
             .in_flight
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |running| {
