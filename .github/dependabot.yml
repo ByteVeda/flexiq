@@ -25,6 +25,17 @@ updates:
         update-types:
           - patch
           - minor
+    # The digest-0.11 generation of these needs `rsa` 0.10 (still a release
+    # candidate) for SNS's SHA1withRSA; move them together once it ships.
+    ignore:
+      - dependency-name: sha1
+        versions: [">=0.11"]
+      - dependency-name: sha2
+        versions: [">=0.11"]
+      - dependency-name: hmac
+        versions: [">=0.13"]
+      - dependency-name: pbkdf2
+        versions: [">=0.13"]
 
   - package-ecosystem: pip
     directory: /
