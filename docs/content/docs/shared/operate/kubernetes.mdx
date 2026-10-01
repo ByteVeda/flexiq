@@ -204,6 +204,20 @@ metadata:
 application image; the full manual deployment shapes are in
 <SdkLink to="operate/deployment">Deployment</SdkLink>.
 
+With `attach.tls.secretName` set, the sidecar dials `tls://`. It inherits the
+app's environment but not its volume mounts, so name the CA and, for mTLS, the
+client certificate as Secrets; the webhook mounts them and sets
+`FLEXIQ_ATTACH_TLS_CA`/`_CERT`/`_KEY`:
+
+```yaml
+    flexiq.dev/attach: "tls://flexiq-flexiq-server-attach.default.svc:7777"
+    flexiq.dev/tls-ca-secret: "flexiq-attach-tls" # key ca.crt; tls-ca-key overrides
+    flexiq.dev/tls-client-secret: "myapp-executor-cert" # kubernetes.io/tls, for mTLS
+```
+
+A rotated certificate takes effect when the sidecar next attaches; see
+<SdkLink to="operate/deployment">Deployment</SdkLink> for the rotation details.
+
 The webhook defaults to `failurePolicy: Ignore`, so an unavailable injector
 does not block pod creation cluster-wide. Change it to `Fail` after workloads
 depend on injection and the webhook is monitored.
