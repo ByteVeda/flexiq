@@ -247,7 +247,7 @@ pub fn public_key(pem: &[u8], now_secs: i64) -> Result<RsaPublicKey, Rejection> 
     let certificate =
         Certificate::from_der(&der).map_err(|_| Rejection("the SNS certificate is malformed"))?;
 
-    let validity = &certificate.tbs_certificate.validity;
+    let validity = certificate.tbs_certificate().validity();
     let now = u64::try_from(now_secs).unwrap_or_default();
     if now < validity.not_before.to_unix_duration().as_secs()
         || now > validity.not_after.to_unix_duration().as_secs()
@@ -256,8 +256,8 @@ pub fn public_key(pem: &[u8], now_secs: i64) -> Result<RsaPublicKey, Rejection> 
     }
 
     let spki = certificate
-        .tbs_certificate
-        .subject_public_key_info
+        .tbs_certificate()
+        .subject_public_key_info()
         .to_der()
         .map_err(|_| Rejection("the SNS certificate's key is malformed"))?;
     RsaPublicKey::from_public_key_der(&spki)

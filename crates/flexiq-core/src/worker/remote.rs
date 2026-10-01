@@ -1516,11 +1516,7 @@ impl Shared {
         if let ExecutorMessage::Heartbeat { free_slots } = message {
             // Local accounting is exact, so a heartbeat may only *shrink*
             // capacity — an executor shedding slots — never invent it.
-            let _ = executor
-                .free
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                    Some(current.min(free_slots))
-                });
+            executor.free.fetch_min(free_slots, Ordering::Relaxed);
             return;
         }
 
