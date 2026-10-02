@@ -214,6 +214,11 @@ message HelloAckFrame {
   uint32 protocol_version = 2;
   // Behaviours this scheduler supports. An executor that sees no capability
   // sends no frames that depend on one.
+  //
+  // A capability is in force only where it is in both this list and the
+  // HelloFrame's, settled for the whole attach. Listing one is not a demand:
+  // "lease" is listed on every attach, and a peer that did not claim it is
+  // dispatched no lease and sends none.
   repeated string capabilities = 3;
 }
 
@@ -243,7 +248,8 @@ message JobFrame {
   // The lease this dispatch was made under. Opaque, minted by the scheduler,
   // and required back on every frame that settles or advances the attempt.
   //
-  // Absent when the executor did not advertise the "lease" capability. It is
+  // Absent unless "lease" is in both the HelloFrame's and the HelloAckFrame's
+  // capabilities, so echoing whatever arrived here is always correct. It is
   // not a credential and grants nothing: it identifies *which dispatch* of this
   // job a frame belongs to, so a stalled executor cannot write over the attempt
   // that replaced it.

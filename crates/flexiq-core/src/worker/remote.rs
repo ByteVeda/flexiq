@@ -240,7 +240,7 @@ impl RemoteDispatcher {
                 side_channel_drain: Mutex::new(drain),
                 steps,
                 claim_owner: Mutex::new(None),
-                leases: Mutex::new(None),
+                leases: Mutex::new(Arc::new(LeaseBook::default())),
             }),
         }
     }
@@ -302,8 +302,18 @@ impl WorkerDispatcher for RemoteDispatcher {
         *self.shared.claim_owner.lock().unwrap_or_else(recover) = Some(owner.to_string());
     }
 
+    /// Still honoured, for a caller that builds its own `Scheduler` and hands
+    /// its book over the pre-#947 way: a no-op here would acknowledge `lease`
+    /// and then check frames against a book the scheduler never writes.
     fn set_lease_book(&self, leases: Arc<LeaseBook>) {
-        *self.shared.leases.lock().unwrap_or_else(recover) = Some(leases);
+        *self.shared.leases.lock().unwrap_or_else(recover) = leases;
+    }
+
+    /// The book is minted with the dispatcher, so an executor that attaches
+    /// before any scheduler exists still negotiates leases; the scheduler
+    /// adopts this one rather than handing over its own.
+    fn own_lease_book(&self) -> Option<Arc<LeaseBook>> {
+        Some(self.shared.lease_book())
     }
 }
 
@@ -401,10 +411,8 @@ struct Executor {
     ///
     /// Both halves, never just the peer's. What this executor advertised says
     /// it *can* echo a lease; what the `hello_ack` carried is what it was told
-    /// to expect. An executor that attaches before the scheduler role installs
-    /// the lease book is acknowledged without the capability, and one obeying
-    /// the contract then sends no lease — so recording the peer's half alone
-    /// would read every frame it ever sends as stale and drop it.
+    /// to expect. This dispatcher always acknowledges it today, but the check
+    /// and the advertisement stay one decision so they cannot drift apart.
     leases: bool,
     /// Job id → what was dispatched. Taking an entry is the exactly-once token
     /// for emitting that job's single `JobResult`; holding one is also this
@@ -830,11 +838,12 @@ struct Shared {
     /// it; without one, steps are refused, because a write fenced on a guess is
     /// a write into whichever attempt happens to hold the job.
     claim_owner: Mutex<Option<String>>,
-    /// The scheduler's lease book, installed by
-    /// [`WorkerDispatcher::set_lease_book`]. `None` leaves every dispatch
-    /// leaseless and every frame accepted, which is how this dispatcher behaved
-    /// before leases existed.
-    leases: Mutex<Option<Arc<LeaseBook>>>,
+    /// The lease book, minted here so `lease` is acknowledged on every attach,
+    /// and offered to the scheduler through
+    /// [`WorkerDispatcher::own_lease_book`] (#947). Replaceable only through
+    /// [`WorkerDispatcher::set_lease_book`]; a mutex rather than a bare `Arc`
+    /// for that alone.
+    leases: Mutex<Arc<LeaseBook>>,
 }
 
 impl Drop for Shared {
@@ -1041,18 +1050,15 @@ impl Shared {
         if self.steps.is_some() {
             capabilities.push(CAP_STEPS.to_string());
         }
-        // Likewise withheld without a book: a scheduler that asked for a lease
-        // it would never check would be advertising a guarantee it does not
-        // provide.
-        if self.lease_book().is_some() {
-            capabilities.push(CAP_LEASE.to_string());
-        }
+        // Always: the book exists from construction, and nothing is dispatched
+        // before a scheduler adopts it, so this promises nothing undeliverable.
+        capabilities.push(CAP_LEASE.to_string());
         capabilities
     }
 
-    /// The lease book, once a worker has installed one.
-    fn lease_book(&self) -> Option<Arc<LeaseBook>> {
-        self.leases.lock().unwrap_or_else(recover).clone()
+    /// The book leases are currently issued into.
+    fn lease_book(&self) -> Arc<LeaseBook> {
+        Arc::clone(&self.leases.lock().unwrap_or_else(recover))
     }
 
     /// Whether a frame naming `job_id` belongs to the dispatch that is current.
@@ -1060,20 +1066,16 @@ impl Shared {
     /// The one predicate behind every rejection below; what a rejection *does*
     /// differs per frame, which is why the call sites are separate.
     ///
-    /// Three answers are `true` without comparing anything, and each is an
+    /// Two answers are `true` without comparing anything, and each is an
     /// absence rather than a match:
     ///
-    /// - no book — this dispatcher was never given one, so it mints no leases;
     /// - no entry for the job — nothing was dispatched under a lease, or the
     ///   dispatch has already settled, and in both cases the storage fence is
     ///   what still decides;
     /// - no lease on the frame from a peer that never negotiated [`CAP_LEASE`] —
     ///   the documented give-up.
     fn frame_is_current(&self, executor: &Executor, job_id: &str, lease: Option<&Lease>) -> bool {
-        let Some(book) = self.lease_book() else {
-            return true;
-        };
-        let Some(current) = book.current(job_id) else {
+        let Some(current) = self.lease_book().current(job_id) else {
             return true;
         };
         match lease {
@@ -1363,7 +1365,7 @@ impl Shared {
         // rejection of every result that executor sends.
         let lease = executor
             .leases
-            .then(|| self.lease_book()?.current(&job.id))
+            .then(|| self.lease_book().current(&job.id))
             .flatten();
 
         let registered = register_dispatch(

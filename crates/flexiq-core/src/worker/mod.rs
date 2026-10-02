@@ -99,5 +99,21 @@ pub trait WorkerDispatcher: Send + Sync {
     /// without a lease, and its results are fenced on `(owner, attempt, epoch)`
     /// alone — which cannot tell one dispatch of a job from a later one made
     /// under a *new* claim. See [`crate::lease`].
+    ///
+    /// Not called on a pool that answers [`own_lease_book`](Self::own_lease_book):
+    /// there the scheduler adopts the pool's book instead.
     fn set_lease_book(&self, _leases: std::sync::Arc<crate::lease::LeaseBook>) {}
+
+    /// The pool's own lease book, for the scheduler to adopt instead of
+    /// handing over its own.
+    ///
+    /// For a pool that negotiates leases before any scheduler exists — an
+    /// attach door accepts executors long before the scheduler role starts,
+    /// and the handshake is where `lease` is agreed. Nothing is dispatched
+    /// before a scheduler adopts the book, so offering it early promises
+    /// nothing the pool cannot keep. `None`, the default, keeps the
+    /// [`set_lease_book`](Self::set_lease_book) direction.
+    fn own_lease_book(&self) -> Option<std::sync::Arc<crate::lease::LeaseBook>> {
+        None
+    }
 }

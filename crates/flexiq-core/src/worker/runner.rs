@@ -248,7 +248,7 @@ impl Worker {
         dispatcher.set_claim_owner(&worker_id);
         // And the book naming *which* claim, so a dispatch can be told from a
         // later one of the same job made under a new claim.
-        dispatcher.set_lease_book(scheduler.lease_book());
+        share_lease_book(&mut scheduler, dispatcher.as_ref());
         for (task_name, config) in task_configs {
             scheduler.register_task(task_name, config);
         }
@@ -426,6 +426,18 @@ fn spawn_error(io_error: std::io::Error) -> crate::error::QueueError {
     crate::error::QueueError::Worker(format!("failed to spawn worker thread: {io_error}"))
 }
 
+/// Put the scheduler and the pool on one lease book.
+///
+/// A pool that owns a book keeps it and the scheduler adopts it, because that
+/// pool may already have negotiated leases on its handshakes (#947). Any other
+/// pool is handed the scheduler's.
+fn share_lease_book(scheduler: &mut Scheduler, dispatcher: &dyn WorkerDispatcher) {
+    match dispatcher.own_lease_book() {
+        Some(book) => scheduler.set_lease_book(book),
+        None => dispatcher.set_lease_book(scheduler.lease_book()),
+    }
+}
+
 /// Apply [`Worker::push_dispatch`]; `None` keeps the backend default. Call
 /// inside the runtime, before `run`: enabling spawns the backend's listener.
 fn apply_push_dispatch(scheduler: &Scheduler, push: Option<bool>) {
@@ -588,5 +600,91 @@ mod tests {
         let scheduler = scheduler_over(storage);
         apply_push_dispatch(&scheduler, Some(false));
         assert!(scheduler.resolve_wake_source().is_none());
+    }
+}
+
+#[cfg(test)]
+mod lease_book_tests {
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+    use crossbeam_channel::Sender;
+
+    use super::*;
+    use crate::job::Job;
+    use crate::lease::LeaseBook;
+    use crate::scheduler::JobResult;
+    use crate::storage::sqlite::SqliteStorage;
+    use crate::worker::{RemoteConfig, RemoteDispatcher};
+
+    fn scheduler() -> Scheduler {
+        Scheduler::new(
+            StorageBackend::Sqlite(SqliteStorage::in_memory().expect("storage")),
+            vec!["default".to_string()],
+            SchedulerConfig::default(),
+            None,
+        )
+    }
+
+    /// A pool that reads the book it is handed and owns none of its own.
+    #[derive(Default)]
+    struct ReadingPool {
+        handed: Mutex<Option<Arc<LeaseBook>>>,
+    }
+
+    #[async_trait]
+    impl WorkerDispatcher for ReadingPool {
+        async fn run(&self, _jobs: tokio::sync::mpsc::Receiver<Job>, _results: Sender<JobResult>) {}
+        fn shutdown(&self) {}
+        fn set_lease_book(&self, leases: Arc<LeaseBook>) {
+            *self.handed.lock().expect("lock") = Some(leases);
+        }
+    }
+
+    #[test]
+    fn the_scheduler_adopts_a_book_the_pool_already_owns() {
+        // #947: the remote pool negotiates `lease` on attaches that happen
+        // before any scheduler exists, so the scheduler has to write into the
+        // book those attaches were promised — not a fresh one of its own.
+        let dispatcher = RemoteDispatcher::new(RemoteConfig::default());
+        let owned = dispatcher
+            .own_lease_book()
+            .expect("a remote pool owns its book");
+        let mut scheduler = scheduler();
+
+        share_lease_book(&mut scheduler, &dispatcher);
+
+        assert!(Arc::ptr_eq(&scheduler.lease_book(), &owned));
+    }
+
+    #[test]
+    fn every_scheduler_over_one_remote_pool_shares_its_book() {
+        // Whoever builds a scheduler over this dispatcher writes into the one
+        // book its attaches were acknowledged against.
+        let dispatcher = RemoteDispatcher::new(RemoteConfig::default());
+        let (mut first, mut second) = (scheduler(), scheduler());
+
+        share_lease_book(&mut first, &dispatcher);
+        share_lease_book(&mut second, &dispatcher.clone());
+
+        assert!(Arc::ptr_eq(&first.lease_book(), &second.lease_book()));
+    }
+
+    #[test]
+    fn a_pool_without_a_book_is_handed_the_schedulers() {
+        let pool = ReadingPool::default();
+        let mut scheduler = scheduler();
+        let own = scheduler.lease_book();
+
+        share_lease_book(&mut scheduler, &pool);
+
+        let handed = pool
+            .handed
+            .lock()
+            .expect("lock")
+            .clone()
+            .expect("handed a book");
+        assert!(Arc::ptr_eq(&handed, &own));
+        assert!(Arc::ptr_eq(&scheduler.lease_book(), &own));
     }
 }

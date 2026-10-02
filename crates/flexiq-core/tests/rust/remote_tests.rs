@@ -933,16 +933,20 @@ impl FakeExecutor {
 fn a_scheduler_with_storage_advertises_the_side_channel() {
     let dispatcher = dispatcher_with_sink(Arc::new(RecordingSink::default()));
     let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
-    assert_eq!(executor.expect_ack_capabilities(), [CAP_SIDE_CHANNEL]);
+    assert_eq!(
+        executor.expect_ack_capabilities(),
+        [CAP_SIDE_CHANNEL, CAP_LEASE]
+    );
 }
 
 #[test]
-fn a_scheduler_without_storage_advertises_nothing() {
+fn a_scheduler_without_storage_advertises_only_the_lease() {
     // The negotiation contract from the other side: with nothing to apply
-    // through, the ack promises nothing and a correct executor sends no frame.
+    // through, the ack promises no side channel and a correct executor sends no
+    // such frame. The lease needs no storage — the dispatcher holds its book.
     let dispatcher = dispatcher_with(Duration::from_secs(5));
     let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
-    assert!(executor.expect_ack_capabilities().is_empty());
+    assert_eq!(executor.expect_ack_capabilities(), [CAP_LEASE]);
 }
 
 #[test]
@@ -1939,15 +1943,22 @@ fn a_superseded_dispatch_leaves_the_running_attempt_reportable() {
 
 // ── The dispatch lease ──────────────────────────────────────────────
 
-/// A dispatcher wired to a book, plus the executor that negotiated the
-/// capability — the pairing every lease test needs.
-fn dispatcher_with_leases(book: &Arc<LeaseBook>) -> (RemoteDispatcher, FakeExecutor) {
+/// The book a remote dispatcher mints for itself, which a scheduler adopts.
+fn book_of(dispatcher: &RemoteDispatcher) -> Arc<LeaseBook> {
+    dispatcher
+        .own_lease_book()
+        .expect("a remote dispatcher owns its lease book")
+}
+
+/// A dispatcher, its book, and the executor that negotiated the capability —
+/// the triple every lease test needs.
+fn dispatcher_with_leases() -> (RemoteDispatcher, FakeExecutor, Arc<LeaseBook>) {
     let dispatcher = dispatcher_with(Duration::from_secs(5));
-    dispatcher.set_lease_book(book.clone());
+    let book = book_of(&dispatcher);
     let executor =
         FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["resize"], 2, &[CAP_LEASE])
             .expect("attach");
-    (dispatcher, executor)
+    (dispatcher, executor, book)
 }
 
 #[test]
@@ -1955,8 +1966,7 @@ fn a_result_under_a_lease_that_is_no_longer_current_is_refused() {
     // The `requeue_stuck` case, one level down from storage: nothing about the
     // job moved except the claim it is dispatched under, so the frame's lease
     // is the only thing that separates the stalled attempt from the live one.
-    let book = Arc::new(LeaseBook::default());
-    let (dispatcher, mut executor) = dispatcher_with_leases(&book);
+    let (dispatcher, mut executor, book) = dispatcher_with_leases();
 
     with_running(&dispatcher, 4, |jobs, results| {
         book.issue("job-1", Lease::from_epoch(1));
@@ -1984,10 +1994,40 @@ fn a_result_under_a_lease_that_is_no_longer_current_is_refused() {
 }
 
 #[test]
+fn a_book_handed_over_the_old_way_is_the_one_frames_are_checked_against() {
+    // A caller that builds its own scheduler and hands its book over through
+    // `set_lease_book`. Ignoring the call would acknowledge `lease` and then
+    // check frames against a book that scheduler never writes — every stale
+    // result would find no entry and land.
+    let (dispatcher, mut executor, _) = dispatcher_with_leases();
+    let book = Arc::new(LeaseBook::default());
+    dispatcher.set_lease_book(Arc::clone(&book));
+    assert!(Arc::ptr_eq(&book_of(&dispatcher), &book));
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        book.issue("job-1", Lease::from_epoch(1));
+        jobs.blocking_send(make_job("job-1", "resize", b""))
+            .expect("dispatch");
+        assert_eq!(executor.expect_job().0, "job-1");
+        assert_eq!(executor.lease, Some(Lease::from_epoch(1)));
+
+        book.issue("job-1", Lease::from_epoch(2));
+        executor.succeed("job-1", "resize", None);
+        wait_until(
+            || dispatcher.executors()[0].in_flight == 0,
+            "the refused result must still free the executor's slot",
+        );
+        assert!(
+            results.try_recv().is_err(),
+            "a stale result must be refused against the handed-over book"
+        );
+    });
+}
+
+#[test]
 fn a_result_under_the_current_lease_is_applied() {
     // The other half, so the refusal above cannot pass by refusing everything.
-    let book = Arc::new(LeaseBook::default());
-    let (dispatcher, mut executor) = dispatcher_with_leases(&book);
+    let (dispatcher, mut executor, book) = dispatcher_with_leases();
 
     with_running(&dispatcher, 4, |jobs, results| {
         book.issue("job-1", Lease::from_epoch(1));
@@ -2004,9 +2044,8 @@ fn an_executor_that_never_claimed_the_lease_capability_still_reports() {
     // The give-up `CAP_LEASE` documents, and the reason the check is written as
     // three absences rather than one comparison: a peer that will not echo a
     // lease must not be dispatched one, or every result it sends is refused.
-    let book = Arc::new(LeaseBook::default());
     let dispatcher = dispatcher_with(Duration::from_secs(5));
-    dispatcher.set_lease_book(book.clone());
+    let book = book_of(&dispatcher);
     let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 2).expect("attach");
 
     with_running(&dispatcher, 4, |jobs, results| {
@@ -2023,96 +2062,57 @@ fn an_executor_that_never_claimed_the_lease_capability_still_reports() {
     });
 }
 
-/// An executor attached in the window before the scheduler role installs the
-/// lease book: it advertises `lease`, the acknowledgement withholds it, and the
-/// book arrives a moment later.
-///
-/// The shape of #932. Returned already handshaken, with the ack asserted, so
-/// both tests below start from the state that matters.
-fn dispatcher_with_a_late_lease_book(book: &Arc<LeaseBook>) -> (RemoteDispatcher, FakeExecutor) {
+#[test]
+fn an_executor_attached_before_any_scheduler_is_fenced_by_lease() {
+    // #947: the server starts its scheduler on the first attach, so that attach
+    // always lands before any scheduler exists. The dispatcher's own book is
+    // what lets it be acknowledged `lease` anyway — and so fenced against the
+    // `requeue_stuck` re-dispatch, rather than on storage alone until the
+    // stream rotates.
     let dispatcher = dispatcher_with(Duration::from_secs(5));
     let mut executor =
         FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["resize"], 2, &[CAP_LEASE])
             .expect("attach");
     assert!(
-        !executor
+        executor
             .expect_ack_capabilities()
             .contains(&CAP_LEASE.to_string()),
-        "a scheduler holding no book must not acknowledge the capability"
+        "an attach that precedes every scheduler must still be acknowledged `lease`"
     );
 
-    // The scheduler role starts, and from here this scheduler does hold leases.
-    dispatcher.set_lease_book(book.clone());
-    (dispatcher, executor)
-}
-
-#[test]
-fn a_leaseless_frame_lands_when_the_acknowledgement_withheld_the_capability() {
-    // What #932 costs, from the client that reads the contract literally:
-    // `hello_ack.capabilities` is what the scheduler will do on its behalf, it
-    // was not acknowledged `lease`, so it sends none. Reading only its half of
-    // the handshake makes every frame it ever sends look stale — successes,
-    // failures, progress, logs — and the job waits for the reaper.
-    let book = Arc::new(LeaseBook::default());
-    let (dispatcher, mut executor) = dispatcher_with_a_late_lease_book(&book);
+    // The scheduler starts now and adopts the book the attach was promised.
+    let book = book_of(&dispatcher);
 
     with_running(&dispatcher, 4, |jobs, results| {
         book.issue("job-1", Lease::from_epoch(1));
         jobs.blocking_send(make_job("job-1", "resize", b""))
             .expect("dispatch");
         assert_eq!(executor.expect_job().0, "job-1");
+        assert_eq!(executor.lease, Some(Lease::from_epoch(1)));
 
-        // Withheld explicitly rather than left to what the dispatch carried:
-        // echoing the dispatch's value is the *workaround* #928's client
-        // applies, and a test that leans on it would assert nothing about the
-        // client this issue is about.
-        executor.lease = None;
+        book.issue("job-1", Lease::from_epoch(2));
         executor.succeed("job-1", "resize", None);
-
-        assert_eq!(
-            kind(&expect_result(results)),
-            "success",
-            "a frame with no lease, from an attach that was told there are none, must land"
+        wait_until(
+            || dispatcher.executors()[0].in_flight == 0,
+            "the refused result must still free the executor's slot",
         );
-    });
-}
-
-#[test]
-fn an_acknowledgement_without_the_lease_capability_dispatches_no_lease() {
-    // The cause, one level up from the cost above: the check and the
-    // advertisement come from one decision, so a dispatch cannot require what
-    // the acknowledgement did not promise.
-    let book = Arc::new(LeaseBook::default());
-    let (dispatcher, mut executor) = dispatcher_with_a_late_lease_book(&book);
-
-    with_running(&dispatcher, 4, |jobs, results| {
-        book.issue("job-1", Lease::from_epoch(1));
-        jobs.blocking_send(make_job("job-1", "resize", b""))
-            .expect("dispatch");
-        assert_eq!(executor.expect_job().0, "job-1");
         assert!(
-            executor.lease.is_none(),
-            "an attach that was not acknowledged `lease` is dispatched none either — \
-             the ack and the dispatch have to say the same thing"
+            results.try_recv().is_err(),
+            "a result under a superseded lease must be refused on an early attach too"
         );
-
-        executor.succeed("job-1", "resize", None);
-        assert_eq!(kind(&expect_result(results)), "success");
     });
 }
 
 #[test]
 fn an_executor_that_negotiated_the_lease_capability_is_dispatched_one() {
-    // The other side of the pair, so neither of the two above can pass by
-    // dropping leases wholesale: with the book already installed the ack
-    // promises the capability and the dispatch carries the value.
-    let book = Arc::new(LeaseBook::default());
-    let (dispatcher, mut executor) = dispatcher_with_leases(&book);
+    // The pair to the give-up above, so it cannot pass by dropping leases
+    // wholesale: the ack promises the capability and the dispatch carries it.
+    let (dispatcher, mut executor, book) = dispatcher_with_leases();
     assert!(
         executor
             .expect_ack_capabilities()
             .contains(&CAP_LEASE.to_string()),
-        "a scheduler holding a book acknowledges the capability"
+        "a remote dispatcher always acknowledges the capability"
     );
 
     with_running(&dispatcher, 4, |jobs, results| {
@@ -2176,9 +2176,8 @@ fn a_step_commit_under_a_stale_lease_is_refused_without_waiting() {
     // and `Superseded` is what ends that attempt now instead of at the end of
     // its ack timeout.
     let storage = SqliteStorage::in_memory().expect("storage");
-    let book = Arc::new(LeaseBook::default());
     let dispatcher = dispatcher_with_storage(&storage);
-    dispatcher.set_lease_book(book.clone());
+    let book = book_of(&dispatcher);
     let mut executor = FakeExecutor::attach_with_capabilities(
         &dispatcher,
         "exec-1",

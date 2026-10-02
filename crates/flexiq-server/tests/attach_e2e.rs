@@ -11,7 +11,7 @@ use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flexiq_core::worker::protocol::{FrameReader, FrameWriter, ProtocolError};
+use flexiq_core::worker::protocol::{FrameReader, FrameWriter, ProtocolError, CAP_LEASE};
 use flexiq_core::{
     ExecutorMessage, JobStatus, NewJob, RemoteConfig, RemoteDispatcher, SchedulerMessage, Secret,
     Storage, StorageSideChannel, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
@@ -461,6 +461,12 @@ fn an_executor_reports_progress_and_logs_through_the_scheduler() {
     assert!(
         capabilities.iter().any(|cap| cap == CAP_STEPS),
         "a scheduler over a backend with a step store must advertise steps, got {capabilities:?}"
+    );
+    // #947: this attach is the one that starts the scheduler, so it lands
+    // before any scheduler exists — and must still be offered leases.
+    assert!(
+        capabilities.iter().any(|cap| cap == CAP_LEASE),
+        "the attach that starts the scheduler must be offered leases, got {capabilities:?}"
     );
 
     let dispatched = executor.expect_job();

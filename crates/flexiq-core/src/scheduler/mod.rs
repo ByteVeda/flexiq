@@ -665,6 +665,16 @@ impl Scheduler {
         self.leases.clone()
     }
 
+    /// Write leases into `leases` instead of this scheduler's own book.
+    ///
+    /// For a pool that holds its book from construction — see
+    /// [`WorkerDispatcher::own_lease_book`](crate::worker::WorkerDispatcher::own_lease_book).
+    /// Call before the first dispatch: entries already in the replaced book
+    /// are not carried over.
+    pub fn set_lease_book(&mut self, leases: Arc<LeaseBook>) {
+        self.leases = leases;
+    }
+
     /// Record a job as in flight once it is handed to the worker channel, under
     /// the `(owner, attempt, epoch)` this scheduler claimed it with, and issue
     /// the lease its dispatch travels under.
