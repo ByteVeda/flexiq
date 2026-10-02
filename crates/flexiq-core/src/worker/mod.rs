@@ -40,7 +40,9 @@ pub use protocol::{
     ProtocolError, SchedulerMessage, CAP_LEASE, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};
-pub use remote::{AttachError, AttachedExecutor, Capacity, RemoteConfig, RemoteDispatcher};
+pub use remote::{
+    Admission, AttachError, AttachedExecutor, Capacity, RemoteConfig, RemoteDispatcher,
+};
 pub use runner::{Worker, WorkerHandle};
 pub use side_channel::{SideChannel, StorageSideChannel};
 #[cfg(feature = "attach-tls")]

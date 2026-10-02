@@ -20,7 +20,7 @@ use flexiq_core::worker::protocol::{
     decode_step_snapshot, ExecutorMessage, FrameReader, FrameWriter, ProtocolError,
     SchedulerMessage, CAP_LEASE, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
-use flexiq_core::worker::remote::{AttachError, RemoteConfig, RemoteDispatcher};
+use flexiq_core::worker::remote::{Admission, AttachError, RemoteConfig, RemoteDispatcher};
 use flexiq_core::worker::side_channel::{SideChannel, StorageSideChannel};
 use flexiq_core::worker::transport::{MemoryTransport, ReadHalf, Transport, WriteHalf};
 use flexiq_core::worker::Worker;
@@ -94,6 +94,7 @@ impl FakeExecutor {
             PROTOCOL_VERSION,
             None,
             capabilities,
+            None,
         );
         attached.map(|_| executor)
     }
@@ -114,7 +115,30 @@ impl FakeExecutor {
             protocol_version,
             token,
             &[],
+            None,
         )
+    }
+
+    /// Attach under `admission`, the limit a door holding more than the
+    /// handshake (a narrowed token) places on its peer.
+    fn attach_admitting(
+        dispatcher: &RemoteDispatcher,
+        executor_id: &str,
+        tasks: &[&str],
+        admission: Arc<dyn Admission>,
+    ) -> Self {
+        let (executor, attached) = Self::dial_with(
+            dispatcher,
+            executor_id,
+            tasks,
+            1,
+            PROTOCOL_VERSION,
+            None,
+            &[],
+            Some(admission),
+        );
+        attached.expect("attach");
+        executor
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -126,6 +150,7 @@ impl FakeExecutor {
         protocol_version: u32,
         token: Option<&str>,
         capabilities: &[&str],
+        admission: Option<Arc<dyn Admission>>,
     ) -> (Self, Result<String, AttachError>) {
         let (scheduler_end, executor_end) = MemoryTransport::pair();
         let (read, write, _timeout) = Box::new(executor_end).split().expect("split executor end");
@@ -152,7 +177,11 @@ impl FakeExecutor {
             )
             .expect("send hello");
 
-        let attached = dispatcher.attach(Box::new(scheduler_end));
+        let transport = Box::new(scheduler_end);
+        let attached = match admission {
+            Some(admission) => dispatcher.attach_admitting(transport, admission),
+            None => dispatcher.attach(transport),
+        };
         (executor, attached)
     }
 
@@ -508,6 +537,85 @@ fn unadvertised_task_is_never_sent_and_fails_retryably() {
 
     // The next frame after the ack is the shutdown — no job was ever written.
     executor.expect_shutdown();
+}
+
+/// Admits jobs on one queue only.
+struct OnlyQueue(&'static str);
+
+impl Admission for OnlyQueue {
+    fn admits(&self, queue: &str, _task: &str) -> bool {
+        queue == self.0
+    }
+}
+
+fn job_on(id: &str, queue: &str, task_name: &str) -> Job {
+    Job {
+        queue: queue.to_string(),
+        ..make_job(id, task_name, b"")
+    }
+}
+
+#[test]
+fn a_job_its_admission_refuses_is_never_sent_to_the_executor() {
+    let dispatcher = dispatcher_with(Duration::from_millis(100));
+    let mut executor = FakeExecutor::attach_admitting(
+        &dispatcher,
+        "exec-1",
+        &["resize"],
+        Arc::new(OnlyQueue("images")),
+    );
+    assert_eq!(executor.expect_hello_ack(), PROTOCOL_VERSION);
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(job_on("job-1", "emails", "resize"))
+            .expect("send job");
+
+        match expect_result(results) {
+            JobResult::Failure {
+                job_id,
+                should_retry,
+                ..
+            } => {
+                assert_eq!(job_id, "job-1");
+                assert!(should_retry, "an unplaced job must be retryable");
+            }
+            ref other => panic!("expected a retryable failure, got {}", kind(other)),
+        }
+
+        jobs.blocking_send(job_on("job-2", "images", "resize"))
+            .expect("send job");
+        let (job_id, _, _) = executor.expect_job();
+        assert_eq!(
+            job_id, "job-2",
+            "the refused job must never have been written"
+        );
+        executor.succeed("job-2", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+}
+
+#[test]
+fn a_refused_job_goes_to_a_peer_that_admits_it() {
+    let dispatcher = dispatcher_with(Duration::from_secs(5));
+    let mut narrowed = FakeExecutor::attach_admitting(
+        &dispatcher,
+        "narrowed",
+        &["resize"],
+        Arc::new(OnlyQueue("images")),
+    );
+    assert_eq!(narrowed.expect_hello_ack(), PROTOCOL_VERSION);
+    let mut whole = FakeExecutor::attach(&dispatcher, "whole", &["resize"], 1).expect("attach");
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(job_on("job-1", "emails", "resize"))
+            .expect("send job");
+        let (job_id, _, _) = whole.expect_job();
+        assert_eq!(job_id, "job-1");
+        whole.succeed("job-1", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+
+    narrowed.expect_shutdown();
 }
 
 #[test]
