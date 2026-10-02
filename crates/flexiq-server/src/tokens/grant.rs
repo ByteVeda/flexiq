@@ -131,9 +131,9 @@ impl Grant {
     /// Parse the spelled form: `scope` or `scope:queue=<pattern>,task=<pattern>`,
     /// either qualifier optional, neither repeated.
     ///
-    /// Only the producer's scopes take qualifiers. The executor and operator
-    /// doors have no method that checks a queue or a task against a grant, so a
-    /// narrowed grant on one of them would be a restriction nothing enforces.
+    /// Only [`NARROWABLE`] scopes take qualifiers. The operator doors have no
+    /// method that checks a queue or a task against a grant, so a narrowed
+    /// grant on one of them would be a restriction nothing enforces.
     pub fn parse(spelled: &str) -> Result<Self, String> {
         let (name, qualifiers) = match spelled.split_once(':') {
             Some((name, qualifiers)) => (name, Some(qualifiers)),
@@ -148,7 +148,7 @@ impl Grant {
         if !narrowable(scope) {
             return Err(format!(
                 "scope '{scope}' cannot be narrowed to queues or tasks; only {} can",
-                NARROWABLE.map(Scope::as_str).join(" and ")
+                NARROWABLE.map(Scope::as_str).join(", ")
             ));
         }
         let (mut queue, mut task) = (None, None);
@@ -202,8 +202,9 @@ impl fmt::Display for Grant {
     }
 }
 
-/// The scopes a grant may narrow.
-pub const NARROWABLE: [Scope; 2] = [Scope::Produce, Scope::Read];
+/// The scopes a grant may narrow. `execute` is checked at attach, against the
+/// tasks an executor declares, and again on every dispatch (#988).
+pub const NARROWABLE: [Scope; 3] = [Scope::Produce, Scope::Read, Scope::Execute];
 
 /// Whether `scope` may carry a queue or task qualifier.
 fn narrowable(scope: Scope) -> bool {
@@ -373,6 +374,15 @@ impl Access {
         }
     }
 
+    /// Whether `task` is reachable on *some* queue — what an executor declaring
+    /// the tasks it serves can be checked against, since it names no queue.
+    pub fn reaches_task_somewhere(&self, task: &str) -> bool {
+        match self {
+            Self::Whole => true,
+            Self::Narrowed(grants) => grants.iter().any(|grant| grant.task.matches(task)),
+        }
+    }
+
     /// Whether this access reaches every queue and every task.
     pub fn is_whole(&self) -> bool {
         matches!(self, Self::Whole)
@@ -457,7 +467,6 @@ mod tests {
             "produce:colour=red",
             "produce:queue=a,queue=b",
             "produce:queue=a*b",
-            "execute:task=send_receipt",
             "inspect:queue=emails",
             "admin:queue=emails",
         ] {
@@ -469,11 +478,39 @@ mod tests {
     /// anywhere else the qualifier would be a restriction nothing enforces.
     #[test]
     fn narrowing_a_door_that_cannot_enforce_it_says_which_can() {
-        let error = Grant::parse("execute:task=x").expect_err("refused");
+        let error = Grant::parse("inspect:task=x").expect_err("refused");
         assert!(
-            error.contains("produce") && error.contains("read"),
+            error.contains("produce") && error.contains("read") && error.contains("execute"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn an_execute_grant_narrows_to_queues_and_tasks() {
+        let narrowed = grant("execute:queue=emails,task=send_*");
+        assert_eq!(narrowed.scope, Scope::Execute);
+        assert!(narrowed.reaches(Some("emails"), Some("send_receipt")));
+        assert!(!narrowed.reaches(Some("billing"), Some("send_receipt")));
+        assert_eq!(narrowed.to_string(), "execute:queue=emails,task=send_*");
+    }
+
+    /// An executor names tasks, never queues: a task is declarable when any
+    /// grant reaches it on some queue, and the queue is left to dispatch.
+    #[test]
+    fn a_task_is_reachable_somewhere_when_any_grant_names_it() {
+        let grants = Grants::parse_all(["execute:queue=emails,task=send_*", "execute:task=charge"])
+            .expect("valid");
+        let access = grants.access(Scope::Execute);
+        assert!(access.reaches_task_somewhere("send_receipt"));
+        assert!(access.reaches_task_somewhere("charge"));
+        assert!(!access.reaches_task_somewhere("refund"));
+        assert!(Access::Whole.reaches_task_somewhere("refund"));
+        assert!(!Access::Narrowed(Vec::new()).reaches_task_somewhere("refund"));
+        // Queue-only: every task, on its queues.
+        let queue_only = Grants::parse_all(["execute:queue=emails"]).expect("valid");
+        assert!(queue_only
+            .access(Scope::Execute)
+            .reaches_task_somewhere("refund"));
     }
 
     #[test]
@@ -523,7 +560,7 @@ mod tests {
     #[test]
     fn an_unreadable_grant_narrows_rather_than_failing() {
         let decoded: Grants =
-            serde_json::from_str(r#"["read","teleport","produce:queue=a*b","execute:task=x"]"#)
+            serde_json::from_str(r#"["read","teleport","produce:queue=a*b","admin:task=x"]"#)
                 .expect("unreadable grants are ignored");
         assert_eq!(decoded, Grants::from(ScopeSet::of(&[Scope::Read])));
     }

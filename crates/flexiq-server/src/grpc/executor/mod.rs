@@ -10,12 +10,15 @@
 //! * [`session`] answers "which stream" for the one RPC that is not on a
 //!   stream.
 //! * [`service`] is the plumbing, and the stream's bounded lifetime.
+//! * [`grant`] is what a narrowed `execute` credential may run.
 //!
 //! The credential is the scoped API token every call on this listener carries;
 //! `/flexiq.executor.v1.` requires `Scope::Execute`, classified once in
-//! [`crate::grpc::auth::gate`] and inherited by every RPC in the package.
+//! [`crate::grpc::auth::gate`] and inherited by every RPC in the package. A
+//! grant narrowed to queues and tasks is checked by [`grant`].
 
 pub mod frames;
+pub mod grant;
 pub mod service;
 pub mod session;
 

@@ -28,16 +28,18 @@ use flexiq_server::grpc::executor::{ExecutorDoor, Rotation, SESSION_METADATA};
 use flexiq_server::grpc::limits::EXECUTOR_MAX_MESSAGE_BYTES;
 use flexiq_server::grpc::pb::executor as pb;
 use flexiq_server::grpc::pb::executor::executor_service_client::ExecutorServiceClient;
+use flexiq_server::grpc::status::reason;
 use flexiq_server::grpc::Listener;
 use flexiq_server::runtime::listener;
 use flexiq_server::runtime::scheduler::{DispatchPath, SchedulerSettings, SchedulerSupervisor};
 use flexiq_server::runtime::shutdown::Shutdown;
-use flexiq_server::tokens::{Scope, ScopeSet};
+use flexiq_server::tokens::{Grants, Scope, ScopeSet};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tonic::{Code, Streaming};
+use tonic_types::StatusExt;
 
 use support::{mint_token, temp_storage, temp_workflows, Bearer, TempStorage};
 
@@ -1183,5 +1185,123 @@ async fn a_stream_that_ends_leaves_no_session_behind() {
         "a stream that ended must not leave its session registered"
     );
 
+    harness.stop().await;
+}
+
+// ── Narrowed execute grants (#988) ────────────────────────────────
+
+/// A token carrying exactly `grants`.
+fn narrowed_token(harness: &Harness, grants: &[&str]) -> String {
+    let grants = Grants::parse_all(grants.iter().copied()).expect("valid grants");
+    mint_token(&harness.storage, NAMESPACE, grants)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_task_narrowed_executor_runs_the_tasks_it_was_granted() {
+    let harness = Harness::start("grpc-attach-grant-task").await;
+    let job_id = harness.enqueue("send_receipt");
+    let token = narrowed_token(&harness, &["execute:task=send_*"]);
+
+    let mut executor = Executor::dial(&harness, &token, "exec-1", &["send_receipt"], 2)
+        .await
+        .expect("a granted hello must be accepted");
+    executor.expect_ack().await;
+    let dispatched = executor.expect_job().await;
+    assert_eq!(dispatched.0, job_id);
+    executor.succeed(&dispatched).await;
+
+    assert!(
+        poll_until(Duration::from_secs(15), || harness.status(&job_id)
+            == Some(JobStatus::Complete))
+        .await,
+        "the granted job must complete"
+    );
+
+    executor.close();
+    harness.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hello_naming_one_ungranted_task_is_refused_whole() {
+    let harness = Harness::start("grpc-attach-grant-refused").await;
+    let job_id = harness.enqueue("send_receipt");
+    let token = narrowed_token(&harness, &["execute:task=send_*"]);
+
+    let mut executor = Executor::dial(&harness, &token, "exec-1", &["send_receipt", "charge"], 2)
+        .await
+        .expect("the stream opens; the hello is judged on it");
+    let refused = executor
+        .inbound
+        .message()
+        .await
+        .expect_err("an ungranted hello must be refused, never trimmed");
+
+    assert_eq!(refused.code(), Code::PermissionDenied, "{refused:?}");
+    let info = refused
+        .get_error_details()
+        .error_info()
+        .cloned()
+        .expect("the refusal carries an ErrorInfo");
+    assert_eq!(info.reason, reason::SCOPE_DENIED);
+    assert_eq!(
+        info.metadata.get(reason::KEY_SCOPE).map(String::as_str),
+        Some("execute")
+    );
+    assert_eq!(
+        info.metadata.get(reason::KEY_TASK).map(String::as_str),
+        Some("charge")
+    );
+
+    // Nothing registered, nothing started, and the granted task did not slip
+    // through on the refused stream.
+    assert!(harness.dispatcher.executors().is_empty());
+    assert!(
+        !harness.supervisor.is_running(),
+        "a refused attach must not start the scheduler"
+    );
+    assert!(
+        poll_until(Duration::from_secs(10), || harness
+            .door
+            .sessions()
+            .is_empty())
+        .await,
+        "a refused attach must not leave its session registered"
+    );
+    assert_eq!(harness.status(&job_id), Some(JobStatus::Pending));
+
+    harness.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_queue_narrowed_executor_is_never_handed_another_queues_job() {
+    let harness = Harness::start("grpc-attach-grant-queue").await;
+    let job_id = harness.enqueue("greet");
+    // Every task, on a queue this job is not on: the hello is admitted, and
+    // dispatch is what has to hold the line.
+    let token = narrowed_token(&harness, &["execute:queue=elsewhere"]);
+
+    let mut narrowed = Executor::dial(&harness, &token, "narrowed", &["greet"], 2)
+        .await
+        .expect("a hello naming no queue is admitted");
+    narrowed.expect_ack().await;
+    assert_eq!(
+        narrowed.next_job(Duration::from_secs(2)).await,
+        None,
+        "a job on another queue must never reach a queue-narrowed executor"
+    );
+
+    let mut whole = Executor::attach(&harness, "whole", &["greet"]).await;
+    let dispatched = whole.expect_job().await;
+    assert_eq!(dispatched.0, job_id);
+    whole.succeed(&dispatched).await;
+    assert!(
+        poll_until(Duration::from_secs(15), || harness.status(&job_id)
+            == Some(JobStatus::Complete))
+        .await,
+        "the job must complete on the executor whose grant reaches it"
+    );
+
+    narrowed.close();
+    whole.close();
     harness.stop().await;
 }

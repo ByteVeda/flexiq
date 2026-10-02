@@ -189,7 +189,7 @@ async fn authorize(
     // handler reads it rather than recomputing it (#839).
     let principal = principal.behind(scope);
     // A door none of whose methods checks a queue or a task admits whole
-    // grants only. The grammar already refuses to narrow these scopes; this is
+    // grants only (a narrowable door's handlers check, or refuse narrowed). The grammar already refuses to narrow these scopes; this is
     // the line that holds if a row ever says otherwise.
     if !NARROWABLE.contains(&scope) && !principal.reaches_everything() {
         return Err(WireError::scope_denied(scope.as_str()).into());
