@@ -175,6 +175,14 @@ their entries below keep that name.
 - **Dead-letter purges honour the namespace** (#836). `purge_dead` and `purge_dead_by_task` take
   one, so an SDK or dashboard purge from a namespaced handle no longer deletes other tenants'
   entries.
+- **Every executor attach negotiates `lease`** (#947). The lease book belonged to the scheduler,
+  which `flexiq-server` starts on the first attach, so that attach — and any other before the
+  scheduler role started — was acknowledged without `lease` and fenced on `(owner, attempt)`
+  alone until its stream rotated. `RemoteDispatcher` now mints the book itself and always
+  acknowledges `lease`, and the scheduler adopts it through the new
+  `WorkerDispatcher::own_lease_book`; a pool that owns no book is handed the scheduler's through
+  `set_lease_book`, as before. One book now also spans scheduler restarts, so a straggler from
+  the previous one stays fenced.
 
 ### Fixed
 
