@@ -283,7 +283,7 @@ mod tests {
                 "read:queue=emails"
             ]
         );
-        for bad in ["produce:queue=a*b", "execute:task=x", "produce:colour=red"] {
+        for bad in ["produce:queue=a*b", "inspect:task=x", "produce:colour=red"] {
             assert!(
                 parse(&["token", "create", "--name", "ci", "--scope", bad]).is_err(),
                 "{bad}"
