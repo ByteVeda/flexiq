@@ -39,7 +39,7 @@ enum Action {
         #[arg(long)]
         name: String,
         /// A door this token may open: produce, read, execute, inspect or
-        /// admin. Narrow produce or read to queues and tasks with
+        /// admin. Narrow produce, read or execute to queues and tasks with
         /// `produce:queue=emails-*,task=send_receipt` (a trailing `*` is a
         /// prefix). Repeat for more than one.
         #[arg(long = "scope", value_parser = Grant::parse, required = true)]
