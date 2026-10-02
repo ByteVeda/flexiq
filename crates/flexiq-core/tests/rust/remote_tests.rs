@@ -1994,6 +1994,37 @@ fn a_result_under_a_lease_that_is_no_longer_current_is_refused() {
 }
 
 #[test]
+fn a_book_handed_over_the_old_way_is_the_one_frames_are_checked_against() {
+    // A caller that builds its own scheduler and hands its book over through
+    // `set_lease_book`. Ignoring the call would acknowledge `lease` and then
+    // check frames against a book that scheduler never writes — every stale
+    // result would find no entry and land.
+    let (dispatcher, mut executor, _) = dispatcher_with_leases();
+    let book = Arc::new(LeaseBook::default());
+    dispatcher.set_lease_book(Arc::clone(&book));
+    assert!(Arc::ptr_eq(&book_of(&dispatcher), &book));
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        book.issue("job-1", Lease::from_epoch(1));
+        jobs.blocking_send(make_job("job-1", "resize", b""))
+            .expect("dispatch");
+        assert_eq!(executor.expect_job().0, "job-1");
+        assert_eq!(executor.lease, Some(Lease::from_epoch(1)));
+
+        book.issue("job-1", Lease::from_epoch(2));
+        executor.succeed("job-1", "resize", None);
+        wait_until(
+            || dispatcher.executors()[0].in_flight == 0,
+            "the refused result must still free the executor's slot",
+        );
+        assert!(
+            results.try_recv().is_err(),
+            "a stale result must be refused against the handed-over book"
+        );
+    });
+}
+
+#[test]
 fn a_result_under_the_current_lease_is_applied() {
     // The other half, so the refusal above cannot pass by refusing everything.
     let (dispatcher, mut executor, book) = dispatcher_with_leases();

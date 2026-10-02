@@ -240,7 +240,7 @@ impl RemoteDispatcher {
                 side_channel_drain: Mutex::new(drain),
                 steps,
                 claim_owner: Mutex::new(None),
-                leases: Arc::new(LeaseBook::default()),
+                leases: Mutex::new(Arc::new(LeaseBook::default())),
             }),
         }
     }
@@ -302,11 +302,18 @@ impl WorkerDispatcher for RemoteDispatcher {
         *self.shared.claim_owner.lock().unwrap_or_else(recover) = Some(owner.to_string());
     }
 
-    /// Offered, never adopted: the book is minted with the dispatcher, so an
-    /// executor that attaches before any scheduler exists still negotiates
-    /// leases, and every scheduler built over this dispatcher shares one book.
+    /// Still honoured, for a caller that builds its own `Scheduler` and hands
+    /// its book over the pre-#947 way: a no-op here would acknowledge `lease`
+    /// and then check frames against a book the scheduler never writes.
+    fn set_lease_book(&self, leases: Arc<LeaseBook>) {
+        *self.shared.leases.lock().unwrap_or_else(recover) = leases;
+    }
+
+    /// The book is minted with the dispatcher, so an executor that attaches
+    /// before any scheduler exists still negotiates leases; the scheduler
+    /// adopts this one rather than handing over its own.
     fn own_lease_book(&self) -> Option<Arc<LeaseBook>> {
-        Some(Arc::clone(&self.shared.leases))
+        Some(self.shared.lease_book())
     }
 }
 
@@ -831,14 +838,12 @@ struct Shared {
     /// it; without one, steps are refused, because a write fenced on a guess is
     /// a write into whichever attempt happens to hold the job.
     claim_owner: Mutex<Option<String>>,
-    /// The lease book, minted here and offered to every scheduler built over
-    /// this dispatcher through [`WorkerDispatcher::own_lease_book`] (#947).
-    ///
-    /// It outlives any one scheduler, so a straggler from a previous scheduler
-    /// generation still meets the entry its job was re-dispatched under. The
-    /// cost is an entry per job in flight when a generation stops, until that
-    /// job is dispatched again — bounded, and paid only at a shutdown.
-    leases: Arc<LeaseBook>,
+    /// The lease book, minted here so `lease` is acknowledged on every attach,
+    /// and offered to the scheduler through
+    /// [`WorkerDispatcher::own_lease_book`] (#947). Replaceable only through
+    /// [`WorkerDispatcher::set_lease_book`]; a mutex rather than a bare `Arc`
+    /// for that alone.
+    leases: Mutex<Arc<LeaseBook>>,
 }
 
 impl Drop for Shared {
@@ -1051,6 +1056,11 @@ impl Shared {
         capabilities
     }
 
+    /// The book leases are currently issued into.
+    fn lease_book(&self) -> Arc<LeaseBook> {
+        Arc::clone(&self.leases.lock().unwrap_or_else(recover))
+    }
+
     /// Whether a frame naming `job_id` belongs to the dispatch that is current.
     ///
     /// The one predicate behind every rejection below; what a rejection *does*
@@ -1065,7 +1075,7 @@ impl Shared {
     /// - no lease on the frame from a peer that never negotiated [`CAP_LEASE`] —
     ///   the documented give-up.
     fn frame_is_current(&self, executor: &Executor, job_id: &str, lease: Option<&Lease>) -> bool {
-        let Some(current) = self.leases.current(job_id) else {
+        let Some(current) = self.lease_book().current(job_id) else {
             return true;
         };
         match lease {
@@ -1355,7 +1365,7 @@ impl Shared {
         // rejection of every result that executor sends.
         let lease = executor
             .leases
-            .then(|| self.leases.current(&job.id))
+            .then(|| self.lease_book().current(&job.id))
             .flatten();
 
         let registered = register_dispatch(

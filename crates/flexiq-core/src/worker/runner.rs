@@ -659,8 +659,8 @@ mod lease_book_tests {
 
     #[test]
     fn every_scheduler_over_one_remote_pool_shares_its_book() {
-        // A server restarting its scheduler role keeps one dispatcher, so a
-        // straggler from the previous generation still meets its job's entry.
+        // Whoever builds a scheduler over this dispatcher writes into the one
+        // book its attaches were acknowledged against.
         let dispatcher = RemoteDispatcher::new(RemoteConfig::default());
         let (mut first, mut second) = (scheduler(), scheduler());
 
