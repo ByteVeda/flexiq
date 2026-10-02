@@ -708,7 +708,7 @@ will ever be individually grantable.
 The exception: `produce` also opens everything `read` does, because it opened
 the producer's reads before `read` existed. `admin` does not open `inspect`.
 
-**A `produce` or `read` grant may be narrowed to queues and tasks**
+**A `produce`, `read` or `execute` grant may be narrowed to queues and tasks**
 (`produce:queue=emails-*,task=send_receipt`). A call on a queue or task the
 narrowed grants do not reach is refused `PERMISSION_DENIED` with reason
 `SCOPE_DENIED`, carrying `scope` and whichever of `queue` and `task` it named.
@@ -723,6 +723,22 @@ from a genuinely absent job:
 
 RPCs that check no queue — `SubmitWorkflow`, `GetWorkflowRun`, and a debounced
 `Enqueue` — refuse a narrowed credential outright.
+
+On the executor door, a narrowed `execute` credential is checked twice:
+
+- **At `Attach`**, every task in `HelloFrame.tasks` must be reached by some
+  grant, on any queue. One task beyond them refuses the whole `hello` —
+  `PERMISSION_DENIED`, `SCOPE_DENIED`, `scope=execute`, `task` naming the first
+  such task — as the stream's first message. It is never trimmed to the granted
+  tasks; nothing registers.
+- **On every dispatch**, the job's queue and task must be reached. A `hello`
+  names no queue, so this is where a queue grant holds: a job outside the grants
+  is never sent to that stream, exactly as if it had not declared the task.
+
+Frames on an `Attach` stream need no second check — they settle only jobs that
+stream was dispatched. `Settle`, `ExtendLease`, `ReportProgress` and
+`WriteTaskLog` name a lease rather than a task, so they refuse a narrowed
+credential outright. `Heartbeat` is bound to its session.
 
 ### The namespace
 

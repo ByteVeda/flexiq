@@ -71,8 +71,8 @@ and it is also the source of every limit below.
 `read` is the one overlap. A token that can poll for work cannot enqueue it. A
 token that can read the dead-letter queue cannot replay it. The refusal is
 `PERMISSION_DENIED` with the reason `SCOPE_DENIED`, carrying the scope it
-lacked. Grant each only to something that genuinely needs it. A `produce` or
-`read` grant can also be narrowed to some queues and tasks. [API
+lacked. Grant each only to something that genuinely needs it. A `produce`,
+`read` or `execute` grant can also be narrowed to some queues and tasks. [API
 tokens](/server/operate/tokens) covers that and the token lifecycle.
 
 ## Where a remote client is simply different
