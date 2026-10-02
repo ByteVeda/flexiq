@@ -606,6 +606,11 @@ type HelloAckFrame struct {
 	ProtocolVersion uint32 `protobuf:"varint,2,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	// Behaviours this scheduler supports. An executor that sees no capability
 	// sends no frames that depend on one.
+	//
+	// A capability is in force only where it is in both this list and the
+	// HelloFrame's, settled for the whole attach. Listing one is not a demand:
+	// "lease" is listed on every attach, and a peer that did not claim it is
+	// dispatched no lease and sends none.
 	Capabilities  []string `protobuf:"bytes,3,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -689,7 +694,8 @@ type JobFrame struct {
 	// The lease this dispatch was made under. Opaque, minted by the scheduler,
 	// and required back on every frame that settles or advances the attempt.
 	//
-	// Absent when the executor did not advertise the "lease" capability. It is
+	// Absent unless "lease" is in both the HelloFrame's and the HelloAckFrame's
+	// capabilities, so echoing whatever arrived here is always correct. It is
 	// not a credential and grants nothing: it identifies *which dispatch* of this
 	// job a frame belongs to, so a stalled executor cannot write over the attempt
 	// that replaced it.
