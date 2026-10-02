@@ -306,11 +306,13 @@ lists `lease` whenever it holds a lease book, including to a client that never
 claimed the capability, and such a client is dispatched no lease and is right to
 send none.
 
-The scheduler's half can move between attaches, because it holds no lease book
-until its scheduler role starts — which can be *after* a client has attached. So
-the same peer can be acknowledged `lease` on one attach and not the next.
-Whichever it was, that intersection binds both ends: the scheduler dispatches a
-lease only where the capability was negotiated, and checks for one only there.
+The scheduler holds its lease book from the moment its attach door exists, not
+from when its scheduler role starts, so it lists `lease` on every attach —
+including one that lands before any job can be dispatched. A scheduler
+predating the fix for #947 did not, and could acknowledge the same peer `lease`
+on one attach and not the next. Whatever the intersection is, it binds both
+ends: the scheduler dispatches a lease only where the capability was
+negotiated, and checks for one only there.
 
 So "echo iff both sides listed `lease`" and "echo whatever the `job` frame
 carried" are the same rule, and a client may implement either. The second is the
