@@ -43,6 +43,7 @@ use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::grpc::executor::frames;
+use crate::grpc::executor::grant::{self, ExecuteGrant};
 use crate::grpc::executor::session::SessionRegistry;
 use crate::grpc::limits::EXECUTOR_MAX_MESSAGE_BYTES;
 use crate::grpc::pb::executor as pb;
@@ -268,6 +269,14 @@ fn refusal(error: &AttachError) -> Status {
     }
 }
 
+/// The task a `hello` declares beyond `grant`, if `frame` is a `hello` at all.
+fn refused_hello_task<'a>(grant: &ExecuteGrant, frame: &'a ExecutorMessage) -> Option<&'a str> {
+    match frame {
+        ExecutorMessage::Hello { tasks, .. } => grant.first_refused(tasks),
+        _ => None,
+    }
+}
+
 #[tonic::async_trait]
 impl ExecutorService for ExecutorDoor {
     type AttachStream = Pin<Box<dyn Stream<Item = Result<pb::AttachResponse, Status>> + Send>>;
@@ -284,6 +293,8 @@ impl ExecutorService for ExecutorDoor {
         let peer = request
             .remote_addr()
             .map_or_else(|| "grpc:unknown".to_string(), |addr| format!("grpc:{addr}"));
+        // Read before `into_inner` consumes the extensions it lives in.
+        let execute_grant = ExecuteGrant::of(grant::principal(&request)?).map(Arc::new);
         let mut inbound = request.into_inner();
 
         // `true`: the auth layer checked a scoped token before this RPC was
@@ -332,6 +343,9 @@ impl ExecutorService for ExecutorDoor {
         tokio::spawn({
             let endpoint = Arc::clone(&endpoint);
             let peer = peer.clone();
+            // Held only until the handshake frame is checked: a sender kept
+            // past it would hold a finished response stream open (see below).
+            let mut handshake = execute_grant.clone().map(|grant| (grant, refusals.clone()));
             async move {
                 // `_done` is never sent on: dropping it is the signal, so the
                 // lifecycle task learns the stream ended however it ended.
@@ -343,6 +357,18 @@ impl ExecutorService for ExecutorDoor {
                             else {
                                 continue;
                             };
+                            // Before the `hello` reaches the dispatcher, so an
+                            // ungranted one never registers or starts anything.
+                            if let Some((grant, refusals)) = handshake.take() {
+                                if let Some(task) = refused_hello_task(&grant, &frame) {
+                                    log::warn!(
+                                        "[flexiq] attach from {peer} refused: task {task} is \
+                                         beyond its execute grants"
+                                    );
+                                    let _ = refusals.send(Err(grant::refused_task(task))).await;
+                                    break;
+                                }
+                            }
                             if let Err(error) = endpoint.send(&frame, &payload) {
                                 log::warn!(
                                     "[flexiq] executor stream {peer} could not be written: {error}"
@@ -375,7 +401,11 @@ impl ExecutorService for ExecutorDoor {
                 let attached = {
                     let dispatcher = dispatcher.clone();
                     tokio::task::spawn_blocking(move || {
-                        let executor_id = dispatcher.attach(Box::new(transport))?;
+                        let transport = Box::new(transport);
+                        let executor_id = match execute_grant {
+                            Some(grant) => dispatcher.attach_admitting(transport, grant)?,
+                            None => dispatcher.attach(transport)?,
+                        };
                         if let Err(error) = supervisor.ensure_started() {
                             log::error!(
                                 "[flexiq] executor {executor_id} attached but the scheduler \
@@ -485,6 +515,7 @@ impl ExecutorService for ExecutorDoor {
         &self,
         request: Request<pb::SettleRequest>,
     ) -> Result<Response<pb::SettleResponse>, Status> {
+        grant::require_whole(&request)?;
         #[cfg(feature = "http-target")]
         {
             self.require_targets()?;
@@ -512,6 +543,7 @@ impl ExecutorService for ExecutorDoor {
         &self,
         request: Request<pb::ExtendLeaseRequest>,
     ) -> Result<Response<pb::ExtendLeaseResponse>, Status> {
+        grant::require_whole(&request)?;
         #[cfg(feature = "http-target")]
         {
             self.require_targets()?;
@@ -542,6 +574,7 @@ impl ExecutorService for ExecutorDoor {
         &self,
         request: Request<pb::ReportProgressRequest>,
     ) -> Result<Response<pb::ReportProgressResponse>, Status> {
+        grant::require_whole(&request)?;
         #[cfg(feature = "http-target")]
         {
             self.require_targets()?;
@@ -574,6 +607,7 @@ impl ExecutorService for ExecutorDoor {
         &self,
         request: Request<pb::WriteTaskLogRequest>,
     ) -> Result<Response<pb::WriteTaskLogResponse>, Status> {
+        grant::require_whole(&request)?;
         #[cfg(feature = "http-target")]
         {
             self.require_targets()?;

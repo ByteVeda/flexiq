@@ -5,27 +5,27 @@ import { spellGrants } from "./utils";
 const AVAILABLE: GrpcScope[] = [
   { name: "produce", narrowable: true },
   { name: "read", narrowable: true },
-  { name: "execute", narrowable: false },
+  { name: "inspect", narrowable: false },
 ];
 
 describe("spellGrants", () => {
   it("sends every scope whole when nothing is narrowed", () => {
-    expect(spellGrants(["produce", "execute"], AVAILABLE, { queue: "", task: "" })).toEqual([
+    expect(spellGrants(["produce", "inspect"], AVAILABLE, { queue: "", task: "" })).toEqual([
       "produce",
-      "execute",
+      "inspect",
     ]);
   });
 
   it("narrows only the scopes the server says can be", () => {
     expect(
-      spellGrants(["produce", "read", "execute"], AVAILABLE, {
+      spellGrants(["produce", "read", "inspect"], AVAILABLE, {
         queue: " emails-* ",
         task: "send_receipt",
       }),
     ).toEqual([
       "produce:queue=emails-*,task=send_receipt",
       "read:queue=emails-*,task=send_receipt",
-      "execute",
+      "inspect",
     ]);
   });
 

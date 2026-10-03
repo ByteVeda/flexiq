@@ -481,7 +481,7 @@ async fn a_grpc_token_mint_refuses_a_request_it_cannot_honour() {
         ),
         (
             "a scope that cannot be narrowed",
-            json!({ "name": "ci", "scopes": ["execute:task=x"] }),
+            json!({ "name": "ci", "scopes": ["inspect:task=x"] }),
         ),
         (
             "a lifetime past the cap",
@@ -530,7 +530,7 @@ async fn the_grpc_scope_list_is_served() {
         .filter(|scope| scope["narrowable"] == json!(true))
         .map(|scope| scope["name"].as_str().expect("a name"))
         .collect();
-    assert_eq!(narrowable, vec!["produce", "read"]);
+    assert_eq!(narrowable, vec!["produce", "read", "execute"]);
 }
 
 #[tokio::test]

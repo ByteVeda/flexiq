@@ -144,6 +144,19 @@ pub enum AttachError {
     ShuttingDown,
 }
 
+/// Which jobs one attached executor may be handed, beyond the tasks it
+/// advertised.
+///
+/// A door that knows more about its peer than the handshake carries — a gRPC
+/// token narrowed to queues and tasks — attaches with one through
+/// [`RemoteDispatcher::attach_admitting`]. Placement skips an executor that
+/// does not admit a job exactly as if it had never advertised the task, so the
+/// limit is enforced on every dispatch rather than trusted from the `hello`.
+pub trait Admission: Send + Sync {
+    /// Whether a job of `task` on `queue` may be dispatched to this executor.
+    fn admits(&self, queue: &str, task: &str) -> bool;
+}
+
 /// A snapshot of one attached executor.
 ///
 /// `#[non_exhaustive]`: a snapshot grows every time the handshake does, and
@@ -247,7 +260,17 @@ impl RemoteDispatcher {
 
     /// Complete the handshake on `transport` and register the executor.
     pub fn attach(&self, transport: Box<dyn Transport>) -> Result<String, AttachError> {
-        self.shared.attach(transport)
+        self.shared.attach(transport, None)
+    }
+
+    /// [`attach`](Self::attach), placing on this executor only the jobs
+    /// `admission` admits.
+    pub fn attach_admitting(
+        &self,
+        transport: Box<dyn Transport>,
+        admission: Arc<dyn Admission>,
+    ) -> Result<String, AttachError> {
+        self.shared.attach(transport, Some(admission))
     }
 
     /// Send one executor away gracefully: stop matching work to it, wait up to
@@ -394,6 +417,9 @@ struct Executor {
     sdk: String,
     version: String,
     tasks: HashSet<String>,
+    /// The door's limit on what this executor may run; `None` is no limit
+    /// beyond `tasks`.
+    admission: Option<Arc<dyn Admission>>,
     /// Fingerprint of `tasks`, kept so the divergence check costs one hash per
     /// attach rather than one per attach per peer.
     registry_fingerprint: Option<String>,
@@ -435,6 +461,15 @@ struct Executor {
 }
 
 impl Executor {
+    /// Whether placement may hand `job` to this executor at all.
+    fn serves(&self, job: &Job) -> bool {
+        self.tasks.contains(&job.task_name)
+            && self
+                .admission
+                .as_ref()
+                .is_none_or(|admission| admission.admits(&job.queue, &job.task_name))
+    }
+
     fn is_busy(executor: &Arc<Self>) -> bool {
         !executor.in_flight.lock().unwrap_or_else(recover).is_empty()
     }
@@ -864,7 +899,11 @@ impl Shared {
     /// registry, so it can never be handed a job; returning drops the transport
     /// and closes the socket. Past that gate the ack is sent even on a version
     /// mismatch, so both ends log both versions.
-    fn attach(self: &Arc<Self>, transport: Box<dyn Transport>) -> Result<String, AttachError> {
+    fn attach(
+        self: &Arc<Self>,
+        transport: Box<dyn Transport>,
+        admission: Option<Arc<dyn Admission>>,
+    ) -> Result<String, AttachError> {
         if self.shutdown.load(Ordering::SeqCst) {
             return Err(AttachError::ShuttingDown);
         }
@@ -965,6 +1004,7 @@ impl Shared {
             sdk,
             version,
             tasks: tasks.into_iter().collect(),
+            admission,
             registry_fingerprint,
             slots,
             free: AtomicU32::new(slots),
@@ -1237,7 +1277,9 @@ impl Shared {
         let mut best: Option<&Arc<Executor>> = None;
 
         for executor in executors.values() {
-            if !executor.tasks.contains(&job.task_name) {
+            // Not admitted counts as not advertised: a job only a narrowed
+            // executor could take fails as unplaceable, never runs past it.
+            if !executor.serves(job) {
                 continue;
             }
             // Advertised, then skipped: a draining executor is still the reason
@@ -2128,6 +2170,7 @@ mod tests {
             sdk: "test".to_string(),
             version: "0.0.0".to_string(),
             tasks: HashSet::new(),
+            admission: None,
             registry_fingerprint: None,
             slots: 1,
             free: AtomicU32::new(1),

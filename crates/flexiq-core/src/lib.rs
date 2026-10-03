@@ -104,10 +104,11 @@ pub use worker::http_target::{
 };
 pub use worker::registry_fingerprint;
 pub use worker::{
-    AttachAddress, AttachError, AttachTls, AttachedExecutor, Capacity, Dispatch, ExecutorClient,
-    ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorMessage, ExecutorSession,
-    ExecutorSideChannel, ExecutorStepStore, ExecutorSteps, HelloBuilder, NativeDispatcher,
-    ProtocolError, RemoteConfig, RemoteDispatcher, SchedulerMessage, Secret, SideChannel,
-    StepRelay, StorageSideChannel, TaskError, TaskHandler, TaskRegistry, TaskResult, Transport,
-    Worker, WorkerDispatcher, WorkerHandle, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
+    Admission, AttachAddress, AttachError, AttachTls, AttachedExecutor, Capacity, Dispatch,
+    ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorMessage,
+    ExecutorSession, ExecutorSideChannel, ExecutorStepStore, ExecutorSteps, HelloBuilder,
+    NativeDispatcher, ProtocolError, RemoteConfig, RemoteDispatcher, SchedulerMessage, Secret,
+    SideChannel, StepRelay, StorageSideChannel, TaskError, TaskHandler, TaskRegistry, TaskResult,
+    Transport, Worker, WorkerDispatcher, WorkerHandle, CAP_SIDE_CHANNEL, CAP_STEPS,
+    PROTOCOL_VERSION,
 };

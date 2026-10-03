@@ -47,7 +47,7 @@ export function CreateGrpcTokenDialog() {
     .filter((scope) => scope.narrowable)
     .map((scope) => scope.name);
   // The narrowing fields show only while they would narrow something: typed
-  // against `execute` alone, a pattern would be dropped and the grant sent whole.
+  // against `inspect` alone, a pattern would be dropped and the grant sent whole.
   const narrowing = scopes.some((scope) => narrowable.includes(scope));
 
   function reset() {
@@ -184,7 +184,7 @@ export function CreateGrpcTokenDialog() {
                   </label>
                 </div>
                 <span className="text-xs text-[var(--fg-subtle)]">
-                  Applies to {narrowable.join(" and ")}. A name, or a prefix ending in{" "}
+                  Applies to {narrowable.join(", ")}. A name, or a prefix ending in{" "}
                   <code className="font-mono">*</code>. Blank reaches every one.
                 </span>
               </div>

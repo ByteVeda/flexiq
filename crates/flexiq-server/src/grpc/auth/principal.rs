@@ -93,6 +93,12 @@ impl Principal {
         self.door.as_ref().map(|(scope, _)| *scope)
     }
 
+    /// What this caller reaches behind its door, for a handler that has to
+    /// carry the answer past the request — `None` until a door is fixed.
+    pub fn access(&self) -> Option<&Access> {
+        self.door.as_ref().map(|(_, access)| access)
+    }
+
     /// Whether this caller may touch the queue and task a call names, `None`
     /// meaning every queue (or task). A principal no door was fixed for reaches
     /// nothing: a handler asking has no business being reachable without one.
