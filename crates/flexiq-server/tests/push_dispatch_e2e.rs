@@ -1353,6 +1353,7 @@ fn each_named_target_receives_only_its_own_queues() {
 #[cfg(feature = "grpc")]
 #[test]
 fn the_door_hands_a_settle_to_the_target_that_made_the_dispatch() {
+    use flexiq_server::grpc::auth::principal::{Principal, Scope as GrpcScope, ScopeSet};
     use flexiq_server::grpc::pb::executor as pb;
     use flexiq_server::grpc::pb::executor::executor_service_server::ExecutorService as _;
     use flexiq_server::grpc::ExecutorDoor;
@@ -1412,16 +1413,22 @@ fn the_door_hands_a_settle_to_the_target_that_made_the_dispatch() {
     );
     assert_eq!(door.awaiting_settle(), Some(1));
 
+    let mut settle = tonic::Request::new(pb::SettleRequest {
+        outcome: Some(pb::settle_request::Outcome::Cancelled(pb::CancelledFrame {
+            job_id: job.id.clone(),
+            task_name: job.task_name.clone(),
+            wall_time: None,
+            lease: Some(lease),
+        })),
+    });
+    // Called past the auth layer, so stand in for it: a whole `execute` grant.
+    settle.extensions_mut().insert(
+        Principal::new("test", "push-tests", ScopeSet::of(&[GrpcScope::Execute]))
+            .behind(GrpcScope::Execute),
+    );
     let runtime = tokio::runtime::Runtime::new().expect("a runtime for the door");
     runtime
-        .block_on(door.settle(tonic::Request::new(pb::SettleRequest {
-            outcome: Some(pb::settle_request::Outcome::Cancelled(pb::CancelledFrame {
-                job_id: job.id.clone(),
-                task_name: job.task_name.clone(),
-                wall_time: None,
-                lease: Some(lease),
-            })),
-        })))
+        .block_on(door.settle(settle))
         .expect("the settle reaches the target holding the dispatch");
 
     poll_until(Duration::from_secs(15), || {
