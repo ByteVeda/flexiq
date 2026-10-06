@@ -350,6 +350,15 @@ def test_health_check_recreation(poll_until: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_banner_spells_flexiq(queue: Queue, capsys: pytest.CaptureFixture[str]) -> None:
+    """The ASCII art carries the current name, not the pre-rename one."""
+    queue._print_banner(["default"])
+    captured = capsys.readouterr().out
+    assert r"|_| |_|\___/_/\_\_|\__, |" in captured
+    assert "taskito" not in captured.lower()
+    assert r"|_|\__\___/" not in captured
+
+
 def test_banner_shows_resources(queue: Queue, capsys: pytest.CaptureFixture[str]) -> None:
     """Resources section appears in the startup banner."""
 
