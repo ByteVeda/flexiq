@@ -311,6 +311,15 @@ fq dlq purge --task charge            # or --before <RFC3339>, --older-than-ms, 
 `purge` takes exactly one filter, so emptying the whole queue has to say
 `--all`.
 
+`fq dlq list`, `fq periodic list` and `fq overrides list` take `--queue` and
+`--task`, and `fq throughput` takes `--queue`. A token narrowed to some queues
+or tasks must name one it reaches:
+
+```bash
+fq dlq list --queue billing
+fq periodic list --queue billing
+```
+
 Periodic tasks, with arguments read the way `fq enqueue` reads them:
 
 ```bash
