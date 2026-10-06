@@ -73,7 +73,7 @@ impl Admin {
     fn scope<T>(&self, request: Request<T>) -> Result<(Scoped, T), Status> {
         let (scoped, message) = self.scope_narrowed(request)?;
         if !scoped.principal.reaches_everything() {
-            return Err(WireError::scope_denied(scoped.door().as_str()).into());
+            return Err(WireError::beyond_grant(scoped.door().as_str(), None, None).into());
         }
         Ok((scoped, message))
     }
