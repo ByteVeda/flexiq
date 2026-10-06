@@ -109,8 +109,7 @@ has the shape of that, and why revoking is the control rather than scoping.
 
 ## Narrowing a token to queues and tasks
 
-A `produce`, `read` or `execute` grant can be narrowed to some queues, some
-tasks, or both. This is how you give a webhook receiver or an untrusted edge
+Any grant can be narrowed to some queues, some tasks, or both. This is how you give a webhook receiver or an untrusted edge
 service a token that can enqueue exactly one task and nothing else:
 
 ```bash
@@ -130,12 +129,10 @@ flexiq-server token create --name billing-support \
   --scope 'produce:queue=billing,task=refund'
 ```
 
-The dashboard's token dialog has the same two fields, and they narrow the
-`produce`, `read` and `execute` switches. `inspect` and `admin` cannot be
-narrowed: none of their methods checks a queue or a task, so a narrowed grant
-there would be a restriction nothing enforces. The mint refuses it.
+The dashboard's token dialog has the same two fields, and they narrow every
+scope switch.
 
-What a narrowed token gets, call by call:
+What a narrowed producer token gets, call by call:
 
 | Call | A queue or task outside the grants |
 | --- | --- |
@@ -191,6 +188,37 @@ waits for an executor whose grants do, and fails back for a retry if none does.
 Grants bind only the gRPC door. An executor attached over the socket listener
 (`FLEXIQ_LISTEN`) presents the shared `FLEXIQ_ATTACH_TOKEN`, which carries no
 grants, and may run any task it declares.
+
+### Narrowing an operator
+
+An operator token can be held to one team's queues. This one can pause and
+resume `billing`, read and replay its dead letters, and manage the schedules
+that fire into it, and it can touch nothing else:
+
+```bash
+flexiq-server token create --name billing-ops \
+  --scope 'inspect:queue=billing' --scope 'admin:queue=billing'
+```
+
+Each operator method is checked against what it acts on:
+
+| Call | Checked against |
+| --- | --- |
+| `PauseQueue`, `ResumeQueue`, `SetQueueOverride`, `ClearQueueOverride` | The queue. A grant narrowed to a task is refused, because these act on every task in the queue. |
+| `SetTaskOverride`, `ClearTaskOverride` | The task, on every queue. A grant narrowed to a queue is refused. |
+| `PurgeDeadLetters` | With `task_name`, the task on every queue. The other forms purge the whole namespace and need a grant that is not narrowed. |
+| `GetDeadLetter`, `ReplayDeadLetter`, `DeleteDeadLetter` | The entry's queue and task. An entry outside the grants is `DEAD_LETTER_NOT_FOUND`, the answer an absent one gets. |
+| `GetPeriodicTask`, `DeletePeriodicTask`, `PausePeriodicTask`, `ResumePeriodicTask`, `TriggerPeriodicTask` | The queue and task the schedule fires. One outside the grants is `PERIODIC_TASK_NOT_FOUND`. |
+| `PutPeriodicTask` | The queue and task it would fire, an empty queue checked as `default`. A name already taken by a schedule outside the grants is refused `SCOPE_DENIED`, naming only the scope. |
+| `ListQueues`, `GetThroughput` | Must name a `queue` the grants reach. A grant narrowed to a task is refused, because the counts cover every task in the queue. |
+| `ListDeadLetters`, `ListPeriodicTasks` | Must name a `queue`, and a `task_name` too if the grant names a task. |
+| `ListOverrides` | Must name a `queue` or a `task_name`, each checked as its setter is. Each map then holds only the override named. |
+| `ListWorkers`, `DrainWorker`, the quota calls, `ListAuditRecords` | Refused. A worker serves several queues, and the quota and the audit trail belong to the whole namespace. |
+
+As on the producer door, a listing is filtered by the query, never after the
+page is cut. The filters are optional for an unnarrowed token. In `fq`, they
+are `--queue` and `--task` on `fq dlq list`, `fq periodic list` and
+`fq overrides list`, and `--queue` on `fq throughput`.
 
 ## One namespace, fixed at mint time
 

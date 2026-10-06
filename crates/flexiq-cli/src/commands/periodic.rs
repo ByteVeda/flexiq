@@ -6,7 +6,9 @@
 use anyhow::Result;
 
 use super::{emit, print_job, refused};
-use crate::cli::{PeriodicCommand, PeriodicNameArgs, PeriodicPutArgs, PeriodicShowArgs};
+use crate::cli::{
+    ListFilterArgs, PeriodicCommand, PeriodicNameArgs, PeriodicPutArgs, PeriodicShowArgs,
+};
 use crate::connect::AdminClient;
 use crate::output::admin::{
     empty_json, list_periodic_tasks_json, periodic_row, periodic_task_envelope_json,
@@ -19,7 +21,7 @@ use crate::{args, output};
 /// Dispatch the seven verbs.
 pub async fn run(client: &mut AdminClient, command: &PeriodicCommand, json: bool) -> Result<()> {
     match command {
-        PeriodicCommand::List => list(client, json).await,
+        PeriodicCommand::List(filter) => list(client, filter, json).await,
         PeriodicCommand::Show(args) => show(client, args, json).await,
         PeriodicCommand::Put(args) => put(client, args, json).await,
         PeriodicCommand::Delete(args) => delete(client, args, json).await,
@@ -30,9 +32,12 @@ pub async fn run(client: &mut AdminClient, command: &PeriodicCommand, json: bool
 }
 
 /// `fq periodic list`, by name.
-async fn list(client: &mut AdminClient, json: bool) -> Result<()> {
+async fn list(client: &mut AdminClient, filter: &ListFilterArgs, json: bool) -> Result<()> {
     let response = client
-        .list_periodic_tasks(pb::ListPeriodicTasksRequest {})
+        .list_periodic_tasks(pb::ListPeriodicTasksRequest {
+            queue: filter.queue.clone(),
+            task_name: filter.task.clone(),
+        })
         .await
         .map_err(refused)?
         .into_inner();

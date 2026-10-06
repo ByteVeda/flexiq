@@ -65,8 +65,22 @@ impl Admin {
             .max_encoding_message_size(PRODUCER_MAX_MESSAGE_BYTES)
     }
 
-    /// Split a request into the caller's scope and its message.
+    /// Split a request into the caller's scope and its message, for a method
+    /// that checks no queue and no task: the caller must reach every one.
+    ///
+    /// Closed by default (#989): a narrowed grant opens only the methods
+    /// taught to check what they touch, through [`Self::scope_narrowed`].
     fn scope<T>(&self, request: Request<T>) -> Result<(Scoped, T), Status> {
+        let (scoped, message) = self.scope_narrowed(request)?;
+        if !scoped.principal.reaches_everything() {
+            return Err(WireError::beyond_grant(scoped.door().as_str(), None, None).into());
+        }
+        Ok((scoped, message))
+    }
+
+    /// Split a request into the caller's scope and its message, for a method
+    /// that checks each queue and task it touches through [`Scoped::require`].
+    fn scope_narrowed<T>(&self, request: Request<T>) -> Result<(Scoped, T), Status> {
         let principal = request
             .extensions()
             .get::<Principal>()
@@ -79,18 +93,13 @@ impl Admin {
                      is registered without the auth layer"
                 );
                 Status::from(WireError::internal())
-            })?;
-        // No operator method checks a queue or a task against a grant, so a
-        // narrowed one opens none of them (#839). The layer refuses it first;
-        // this holds if the service is ever reached another way.
-        if !principal.reaches_everything() {
-            let scope = principal.door().unwrap_or(Scope::Admin);
-            return Err(WireError::scope_denied(scope.as_str()).into());
-        }
+            })?
+            .clone();
         let scoped = Scoped {
             storage: self.storage.clone(),
             events: self.events.clone(),
             namespace: Arc::clone(principal.namespace()),
+            principal,
             audit: AuditContext::of(request.extensions()),
         };
         Ok((scoped, request.into_inner()))
@@ -103,6 +112,8 @@ pub(crate) struct Scoped {
     storage: StorageBackend,
     events: Events,
     namespace: Arc<str>,
+    /// The caller, for what its grants reach behind this door.
+    principal: Principal,
     /// The audit slot, on a call the audit layer records.
     audit: Option<AuditContext>,
 }
@@ -111,6 +122,34 @@ impl Scoped {
     /// Name one thing this call acted on, for the audit trail.
     pub(crate) fn audit(&self, kind: TargetKind, id: impl Into<String>) {
         audit::target(self.audit.as_ref(), kind, id);
+    }
+
+    /// Whether the caller may touch `queue` and `task`; `None` asks about
+    /// every queue (or task) at once.
+    pub(crate) fn reaches(&self, queue: Option<&str>, task: Option<&str>) -> bool {
+        self.principal.reaches(queue, task)
+    }
+
+    /// Whether the caller reaches every queue and task — when it does, a
+    /// method keyed by id can skip loading the row to check it.
+    pub(crate) fn reaches_everything(&self) -> bool {
+        self.principal.reaches_everything()
+    }
+
+    /// Refuse a call on a queue or task the caller's grants do not reach.
+    pub(crate) fn require(&self, queue: Option<&str>, task: Option<&str>) -> Result<(), WireError> {
+        if self.reaches(queue, task) {
+            Ok(())
+        } else {
+            Err(WireError::beyond_grant(self.door().as_str(), queue, task))
+        }
+    }
+
+    /// The scope the layer let this caller through on.
+    pub(crate) fn door(&self) -> Scope {
+        // The layer fixes the door before any handler runs; without one the
+        // caller reaches nothing, and `admin` is the stricter of the two.
+        self.principal.door().unwrap_or(Scope::Admin)
     }
 
     /// The namespace every storage call is scoped to, owned for a closure that
@@ -146,15 +185,15 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ListQueuesRequest>,
     ) -> Result<Response<pb::ListQueuesResponse>, Status> {
-        let (scoped, _) = self.scope(request)?;
-        queues::list(&scoped).await
+        let (scoped, message) = self.scope_narrowed(request)?;
+        queues::list(&scoped, message).await
     }
 
     async fn pause_queue(
         &self,
         request: Request<pb::PauseQueueRequest>,
     ) -> Result<Response<pb::PauseQueueResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         queues::pause(&scoped, message).await
     }
 
@@ -162,7 +201,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ResumeQueueRequest>,
     ) -> Result<Response<pb::ResumeQueueResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         queues::resume(&scoped, message).await
     }
 
@@ -170,7 +209,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::GetThroughputRequest>,
     ) -> Result<Response<pb::GetThroughputResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         queues::throughput(&scoped, message).await
     }
 
@@ -178,7 +217,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ListDeadLettersRequest>,
     ) -> Result<Response<pb::ListDeadLettersResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         dead_letters::list(&scoped, message).await
     }
 
@@ -186,7 +225,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::GetDeadLetterRequest>,
     ) -> Result<Response<pb::GetDeadLetterResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         dead_letters::get(&scoped, message).await
     }
 
@@ -194,7 +233,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ReplayDeadLetterRequest>,
     ) -> Result<Response<pb::ReplayDeadLetterResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         dead_letters::replay(&scoped, message).await
     }
 
@@ -202,7 +241,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::DeleteDeadLetterRequest>,
     ) -> Result<Response<pb::DeleteDeadLetterResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         dead_letters::delete(&scoped, message).await
     }
 
@@ -210,7 +249,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::PurgeDeadLettersRequest>,
     ) -> Result<Response<pb::PurgeDeadLettersResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         dead_letters::purge(&scoped, message).await
     }
 
@@ -234,15 +273,15 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ListPeriodicTasksRequest>,
     ) -> Result<Response<pb::ListPeriodicTasksResponse>, Status> {
-        let (scoped, _) = self.scope(request)?;
-        periodic::list(&scoped).await
+        let (scoped, message) = self.scope_narrowed(request)?;
+        periodic::list(&scoped, message).await
     }
 
     async fn get_periodic_task(
         &self,
         request: Request<pb::GetPeriodicTaskRequest>,
     ) -> Result<Response<pb::GetPeriodicTaskResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         periodic::get(&scoped, message).await
     }
 
@@ -250,7 +289,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::PutPeriodicTaskRequest>,
     ) -> Result<Response<pb::PutPeriodicTaskResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         periodic::put(&scoped, message).await
     }
 
@@ -258,7 +297,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::DeletePeriodicTaskRequest>,
     ) -> Result<Response<pb::DeletePeriodicTaskResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         periodic::delete(&scoped, message).await
     }
 
@@ -266,7 +305,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::PausePeriodicTaskRequest>,
     ) -> Result<Response<pb::PausePeriodicTaskResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         let task = periodic::set_enabled(&scoped, message.name, false).await?;
         Ok(Response::new(pb::PausePeriodicTaskResponse {
             periodic_task: Some(task),
@@ -277,7 +316,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ResumePeriodicTaskRequest>,
     ) -> Result<Response<pb::ResumePeriodicTaskResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         let task = periodic::set_enabled(&scoped, message.name, true).await?;
         Ok(Response::new(pb::ResumePeriodicTaskResponse {
             periodic_task: Some(task),
@@ -288,7 +327,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::TriggerPeriodicTaskRequest>,
     ) -> Result<Response<pb::TriggerPeriodicTaskResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         periodic::trigger(&scoped, message).await
     }
 
@@ -296,15 +335,15 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ListOverridesRequest>,
     ) -> Result<Response<pb::ListOverridesResponse>, Status> {
-        let (scoped, _) = self.scope(request)?;
-        overrides::list(&scoped).await
+        let (scoped, message) = self.scope_narrowed(request)?;
+        overrides::list(&scoped, message).await
     }
 
     async fn set_task_override(
         &self,
         request: Request<pb::SetTaskOverrideRequest>,
     ) -> Result<Response<pb::SetTaskOverrideResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         overrides::set_task(&scoped, message).await
     }
 
@@ -312,7 +351,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ClearTaskOverrideRequest>,
     ) -> Result<Response<pb::ClearTaskOverrideResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         overrides::clear_task(&scoped, message).await
     }
 
@@ -320,7 +359,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::SetQueueOverrideRequest>,
     ) -> Result<Response<pb::SetQueueOverrideResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         overrides::set_queue(&scoped, message).await
     }
 
@@ -328,7 +367,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ClearQueueOverrideRequest>,
     ) -> Result<Response<pb::ClearQueueOverrideResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         overrides::clear_queue(&scoped, message).await
     }
 

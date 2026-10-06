@@ -3596,6 +3596,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_task_logs_after_cursor(s);
     test_keyset_pagination_jobs(s);
     test_keyset_pagination_dlq_and_archive(s);
+    test_keyset_pagination_dlq_filtered(s);
     test_debounce_key_round_trip(s);
     test_enqueue_debounced_collapses_a_burst(s);
     test_enqueue_debounced_caps_at_max_wait(s);
@@ -4786,6 +4787,62 @@ fn test_keyset_pagination_dlq_and_archive(s: &impl Storage) {
         arch_ids.len(),
         "archive keyset must not duplicate"
     );
+}
+
+/// `list_dead_filtered_after` filters before it cuts the page (#989): with
+/// the wanted rows interleaved among others, every page but the last is full
+/// and the walk yields each wanted row once.
+fn test_keyset_pagination_dlq_filtered(s: &impl Storage) {
+    let (queue, other_queue) = ("q-dlq-filter", "q-dlq-filter-other");
+    let (task, other_task) = ("dlq_filter_task", "dlq_filter_other");
+    let mut wanted = Vec::new();
+    for i in 0..21 {
+        // Every third row is the queue and task asked for; the rest differ in
+        // one of the two, so neither filter alone selects them.
+        let (q, t) = match i % 3 {
+            0 => (queue, task),
+            1 => (other_queue, task),
+            _ => (queue, other_task),
+        };
+        let job = s.enqueue(make_job(q, t)).unwrap();
+        s.dequeue(q, now_millis() + 1000, None).unwrap();
+        let running = s.get_job(&job.id, None).unwrap().unwrap();
+        s.move_to_dlq(&running, "boom", None).unwrap();
+        if i % 3 == 0 {
+            wanted.push(job.id);
+        }
+    }
+
+    let page_size = 3;
+    let mut seen = Vec::new();
+    let mut cursor: Option<(i64, String)> = None;
+    loop {
+        let after = cursor.as_ref().map(|(k, id)| (*k, id.as_str()));
+        let page = s
+            .list_dead_filtered_after(Some(queue), Some(task), page_size, after, None)
+            .unwrap();
+        assert!(
+            page.iter().all(|d| d.queue == queue && d.task_name == task),
+            "a filtered page must hold only the queue and task asked for"
+        );
+        let Some(last) = page.last() else { break };
+        cursor = Some((last.failed_at, last.id.clone()));
+        let full = page.len() == page_size as usize;
+        seen.extend(page.into_iter().map(|d| d.original_job_id));
+        if !full {
+            break;
+        }
+    }
+    seen.sort();
+    wanted.sort();
+    assert_eq!(seen, wanted, "every filtered row exactly once");
+
+    // One filter alone: the queue's rows of both tasks.
+    let by_queue = s
+        .list_dead_filtered_after(Some(queue), None, 100, None, None)
+        .unwrap();
+    assert_eq!(by_queue.len(), 14);
+    assert!(by_queue.iter().all(|d| d.queue == queue));
 }
 
 /// Page the whole DLQ via `list_dead_after`, returning every row seen.

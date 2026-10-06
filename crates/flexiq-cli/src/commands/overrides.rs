@@ -9,7 +9,8 @@ use anyhow::Result;
 
 use super::{emit, refused};
 use crate::cli::{
-    OverridesCommand, QueueNameArgs, SetQueueOverrideArgs, SetTaskOverrideArgs, TaskNameArgs,
+    ListFilterArgs, OverridesCommand, QueueNameArgs, SetQueueOverrideArgs, SetTaskOverrideArgs,
+    TaskNameArgs,
 };
 use crate::connect::AdminClient;
 use crate::output;
@@ -24,7 +25,7 @@ use crate::time::span;
 /// Dispatch the five verbs.
 pub async fn run(client: &mut AdminClient, command: &OverridesCommand, json: bool) -> Result<()> {
     match command {
-        OverridesCommand::List => list(client, json).await,
+        OverridesCommand::List(filter) => list(client, filter, json).await,
         OverridesCommand::SetTask(args) => set_task(client, args, json).await,
         OverridesCommand::ClearTask(args) => clear_task(client, args, json).await,
         OverridesCommand::SetQueue(args) => set_queue(client, args, json).await,
@@ -33,9 +34,12 @@ pub async fn run(client: &mut AdminClient, command: &OverridesCommand, json: boo
 }
 
 /// `fq overrides list`: tasks then queues, each by name.
-async fn list(client: &mut AdminClient, json: bool) -> Result<()> {
+async fn list(client: &mut AdminClient, filter: &ListFilterArgs, json: bool) -> Result<()> {
     let response = client
-        .list_overrides(pb::ListOverridesRequest {})
+        .list_overrides(pb::ListOverridesRequest {
+            queue: filter.queue.clone(),
+            task_name: filter.task.clone(),
+        })
         .await
         .map_err(refused)?
         .into_inner();

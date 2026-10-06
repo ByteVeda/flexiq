@@ -254,7 +254,10 @@ func (x *Queue) GetCancelled() int64 {
 }
 
 type ListQueuesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Unset lists every queue. A credential narrowed to some queues must name
+	// one of them.
+	Queue         *string `protobuf:"bytes,1,opt,name=queue,proto3,oneof" json:"queue,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -287,6 +290,13 @@ func (x *ListQueuesRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ListQueuesRequest.ProtoReflect.Descriptor instead.
 func (*ListQueuesRequest) Descriptor() ([]byte, []int) {
 	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ListQueuesRequest) GetQueue() string {
+	if x != nil && x.Queue != nil {
+		return *x.Queue
+	}
+	return ""
 }
 
 type ListQueuesResponse struct {
@@ -517,7 +527,10 @@ type GetThroughputRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// How far back to count. Unset is five minutes; above 24 hours, zero or
 	// negative is refused.
-	Window        *durationpb.Duration `protobuf:"bytes,1,opt,name=window,proto3" json:"window,omitempty"`
+	Window *durationpb.Duration `protobuf:"bytes,1,opt,name=window,proto3" json:"window,omitempty"`
+	// Unset counts every queue. A credential narrowed to some queues must name
+	// one of them.
+	Queue         *string `protobuf:"bytes,2,opt,name=queue,proto3,oneof" json:"queue,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -557,6 +570,13 @@ func (x *GetThroughputRequest) GetWindow() *durationpb.Duration {
 		return x.Window
 	}
 	return nil
+}
+
+func (x *GetThroughputRequest) GetQueue() string {
+	if x != nil && x.Queue != nil {
+		return *x.Queue
+	}
+	return ""
 }
 
 // Jobs of one queue that reached a terminal status inside the window.
@@ -849,7 +869,13 @@ type ListDeadLettersRequest struct {
 	// Rows per page. Zero takes the server's default; the server may cap it.
 	PageSize int32 `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
 	// The previous response's next_page_token. Opaque.
-	PageToken     string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	PageToken string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// Unset lists every queue. A credential narrowed to some queues must name
+	// one of them.
+	Queue *string `protobuf:"bytes,3,opt,name=queue,proto3,oneof" json:"queue,omitempty"`
+	// Unset lists every task. A credential narrowed to some tasks must name one
+	// of them.
+	TaskName      *string `protobuf:"bytes,4,opt,name=task_name,json=taskName,proto3,oneof" json:"task_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -894,6 +920,20 @@ func (x *ListDeadLettersRequest) GetPageSize() int32 {
 func (x *ListDeadLettersRequest) GetPageToken() string {
 	if x != nil {
 		return x.PageToken
+	}
+	return ""
+}
+
+func (x *ListDeadLettersRequest) GetQueue() string {
+	if x != nil && x.Queue != nil {
+		return *x.Queue
+	}
+	return ""
+}
+
+func (x *ListDeadLettersRequest) GetTaskName() string {
+	if x != nil && x.TaskName != nil {
+		return *x.TaskName
 	}
 	return ""
 }
@@ -1768,7 +1808,13 @@ func (x *PeriodicTask) GetPayload() []byte {
 }
 
 type ListPeriodicTasksRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Unset lists every queue's tasks. A credential narrowed to some queues must
+	// name one of them.
+	Queue *string `protobuf:"bytes,1,opt,name=queue,proto3,oneof" json:"queue,omitempty"`
+	// Unset lists every task's schedules. A credential narrowed to some tasks
+	// must name one of them.
+	TaskName      *string `protobuf:"bytes,2,opt,name=task_name,json=taskName,proto3,oneof" json:"task_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1801,6 +1847,20 @@ func (x *ListPeriodicTasksRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ListPeriodicTasksRequest.ProtoReflect.Descriptor instead.
 func (*ListPeriodicTasksRequest) Descriptor() ([]byte, []int) {
 	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ListPeriodicTasksRequest) GetQueue() string {
+	if x != nil && x.Queue != nil {
+		return *x.Queue
+	}
+	return ""
+}
+
+func (x *ListPeriodicTasksRequest) GetTaskName() string {
+	if x != nil && x.TaskName != nil {
+		return *x.TaskName
+	}
+	return ""
 }
 
 type ListPeriodicTasksResponse struct {
@@ -2651,7 +2711,13 @@ func (x *QueueOverride) GetUpdateTime() *timestamppb.Timestamp {
 }
 
 type ListOverridesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Set either to read one override: `queues` then holds only this queue's,
+	// `tasks` only `task_name`'s, and a map whose key is unset comes back
+	// empty. Both unset lists every override. A credential narrowed to some
+	// queues or tasks must name one it reaches.
+	Queue         *string `protobuf:"bytes,1,opt,name=queue,proto3,oneof" json:"queue,omitempty"`
+	TaskName      *string `protobuf:"bytes,2,opt,name=task_name,json=taskName,proto3,oneof" json:"task_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2684,6 +2750,20 @@ func (x *ListOverridesRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ListOverridesRequest.ProtoReflect.Descriptor instead.
 func (*ListOverridesRequest) Descriptor() ([]byte, []int) {
 	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *ListOverridesRequest) GetQueue() string {
+	if x != nil && x.Queue != nil {
+		return *x.Queue
+	}
+	return ""
+}
+
+func (x *ListOverridesRequest) GetTaskName() string {
+	if x != nil && x.TaskName != nil {
+		return *x.TaskName
+	}
+	return ""
 }
 
 type ListOverridesResponse struct {
@@ -3710,8 +3790,10 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\tcompleted\x18\x05 \x01(\x03R\tcompleted\x12\x16\n" +
 	"\x06failed\x18\x06 \x01(\x03R\x06failed\x12\x12\n" +
 	"\x04dead\x18\a \x01(\x03R\x04dead\x12\x1c\n" +
-	"\tcancelled\x18\b \x01(\x03R\tcancelled\"\x13\n" +
-	"\x11ListQueuesRequest\"D\n" +
+	"\tcancelled\x18\b \x01(\x03R\tcancelled\"8\n" +
+	"\x11ListQueuesRequest\x12\x19\n" +
+	"\x05queue\x18\x01 \x01(\tH\x00R\x05queue\x88\x01\x01B\b\n" +
+	"\x06_queue\"D\n" +
 	"\x12ListQueuesResponse\x12.\n" +
 	"\x06queues\x18\x01 \x03(\v2\x16.flexiq.admin.v1.QueueR\x06queues\")\n" +
 	"\x11PauseQueueRequest\x12\x14\n" +
@@ -3721,9 +3803,11 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\x12ResumeQueueRequest\x12\x14\n" +
 	"\x05queue\x18\x01 \x01(\tR\x05queue\"C\n" +
 	"\x13ResumeQueueResponse\x12,\n" +
-	"\x05queue\x18\x01 \x01(\v2\x16.flexiq.admin.v1.QueueR\x05queue\"I\n" +
+	"\x05queue\x18\x01 \x01(\v2\x16.flexiq.admin.v1.QueueR\x05queue\"n\n" +
 	"\x14GetThroughputRequest\x121\n" +
-	"\x06window\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x06window\"\x8f\x01\n" +
+	"\x06window\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x06window\x12\x19\n" +
+	"\x05queue\x18\x02 \x01(\tH\x00R\x05queue\x88\x01\x01B\b\n" +
+	"\x06_queue\"\x8f\x01\n" +
 	"\x0fQueueThroughput\x12\x14\n" +
 	"\x05queue\x18\x01 \x01(\tR\x05queue\x12\x1c\n" +
 	"\tcompleted\x18\x02 \x01(\x03R\tcompleted\x12\x16\n" +
@@ -3753,11 +3837,16 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\x06_errorB\v\n" +
 	"\t_metadataB\n" +
 	"\n" +
-	"\b_payload\"T\n" +
+	"\b_payload\"\xa9\x01\n" +
 	"\x16ListDeadLettersRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\x02 \x01(\tR\tpageToken\"\x81\x01\n" +
+	"page_token\x18\x02 \x01(\tR\tpageToken\x12\x19\n" +
+	"\x05queue\x18\x03 \x01(\tH\x00R\x05queue\x88\x01\x01\x12 \n" +
+	"\ttask_name\x18\x04 \x01(\tH\x01R\btaskName\x88\x01\x01B\b\n" +
+	"\x06_queueB\f\n" +
+	"\n" +
+	"_task_name\"\x81\x01\n" +
 	"\x17ListDeadLettersResponse\x12>\n" +
 	"\fdead_letters\x18\x01 \x03(\v2\x1b.flexiq.admin.v1.DeadLetterR\vdeadLetters\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"e\n" +
@@ -3819,8 +3908,13 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\apayload\x18\x11 \x01(\fH\x01R\apayload\x88\x01\x01B\v\n" +
 	"\t_timezoneB\n" +
 	"\n" +
-	"\b_payload\"\x1a\n" +
-	"\x18ListPeriodicTasksRequest\"a\n" +
+	"\b_payload\"o\n" +
+	"\x18ListPeriodicTasksRequest\x12\x19\n" +
+	"\x05queue\x18\x01 \x01(\tH\x00R\x05queue\x88\x01\x01\x12 \n" +
+	"\ttask_name\x18\x02 \x01(\tH\x01R\btaskName\x88\x01\x01B\b\n" +
+	"\x06_queueB\f\n" +
+	"\n" +
+	"_task_name\"a\n" +
 	"\x19ListPeriodicTasksResponse\x12D\n" +
 	"\x0eperiodic_tasks\x18\x01 \x03(\v2\x1d.flexiq.admin.v1.PeriodicTaskR\rperiodicTasks\"U\n" +
 	"\x16GetPeriodicTaskRequest\x12\x12\n" +
@@ -3882,8 +3976,13 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\vupdate_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"updateTimeB\r\n" +
 	"\v_rate_limitB\x11\n" +
-	"\x0f_max_concurrent\"\x16\n" +
-	"\x14ListOverridesRequest\"\xe0\x02\n" +
+	"\x0f_max_concurrent\"k\n" +
+	"\x14ListOverridesRequest\x12\x19\n" +
+	"\x05queue\x18\x01 \x01(\tH\x00R\x05queue\x88\x01\x01\x12 \n" +
+	"\ttask_name\x18\x02 \x01(\tH\x01R\btaskName\x88\x01\x01B\b\n" +
+	"\x06_queueB\f\n" +
+	"\n" +
+	"_task_name\"\xe0\x02\n" +
 	"\x15ListOverridesResponse\x12G\n" +
 	"\x05tasks\x18\x01 \x03(\v21.flexiq.admin.v1.ListOverridesResponse.TasksEntryR\x05tasks\x12J\n" +
 	"\x06queues\x18\x02 \x03(\v22.flexiq.admin.v1.ListOverridesResponse.QueuesEntryR\x06queues\x1aW\n" +
@@ -4196,19 +4295,24 @@ func file_flexiq_admin_v1_admin_service_proto_init() {
 	if File_flexiq_admin_v1_admin_service_proto != nil {
 		return
 	}
+	file_flexiq_admin_v1_admin_service_proto_msgTypes[1].OneofWrappers = []any{}
+	file_flexiq_admin_v1_admin_service_proto_msgTypes[7].OneofWrappers = []any{}
 	file_flexiq_admin_v1_admin_service_proto_msgTypes[10].OneofWrappers = []any{}
+	file_flexiq_admin_v1_admin_service_proto_msgTypes[11].OneofWrappers = []any{}
 	file_flexiq_admin_v1_admin_service_proto_msgTypes[19].OneofWrappers = []any{
 		(*PurgeDeadLettersRequest_FailedBefore)(nil),
 		(*PurgeDeadLettersRequest_TaskName)(nil),
 	}
 	file_flexiq_admin_v1_admin_service_proto_msgTypes[21].OneofWrappers = []any{}
 	file_flexiq_admin_v1_admin_service_proto_msgTypes[26].OneofWrappers = []any{}
+	file_flexiq_admin_v1_admin_service_proto_msgTypes[27].OneofWrappers = []any{}
 	file_flexiq_admin_v1_admin_service_proto_msgTypes[31].OneofWrappers = []any{
 		(*PutPeriodicTaskRequest_Raw)(nil),
 		(*PutPeriodicTaskRequest_Structured)(nil),
 	}
 	file_flexiq_admin_v1_admin_service_proto_msgTypes[41].OneofWrappers = []any{}
 	file_flexiq_admin_v1_admin_service_proto_msgTypes[42].OneofWrappers = []any{}
+	file_flexiq_admin_v1_admin_service_proto_msgTypes[43].OneofWrappers = []any{}
 	file_flexiq_admin_v1_admin_service_proto_msgTypes[53].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

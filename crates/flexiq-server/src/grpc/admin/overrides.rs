@@ -28,8 +28,25 @@ const QUEUE_KEEPS: [&str; 1] = ["paused"];
 
 const NANOS_PER_SEC: f64 = 1_000_000_000.0;
 
-/// Every task and queue override in the namespace.
-pub(crate) async fn list(scoped: &Scoped) -> Result<Response<pb::ListOverridesResponse>, Status> {
+/// Every task and queue override in the namespace — or, when the request names
+/// a queue or a task, only that one's.
+pub(crate) async fn list(
+    scoped: &Scoped,
+    request: pb::ListOverridesRequest,
+) -> Result<Response<pb::ListOverridesResponse>, Status> {
+    let (queue, task) = (request.queue, request.task_name);
+    if queue.is_none() && task.is_none() {
+        scoped.require(None, None)?;
+    }
+    // Checked as the setters check them: a queue's override by the queue, a
+    // task's by the task on every queue.
+    if let Some(queue) = &queue {
+        scoped.require(Some(queue), None)?;
+    }
+    if let Some(task) = &task {
+        scoped.require(None, Some(task))?;
+    }
+    let filtered = queue.is_some() || task.is_some();
     let namespace = scoped.namespace_owned();
     let (tasks, queues) = on_storage(scoped.storage(), move |storage| {
         Ok((
@@ -39,13 +56,18 @@ pub(crate) async fn list(scoped: &Scoped) -> Result<Response<pb::ListOverridesRe
     })
     .await?;
 
+    // With a filter, a map keeps only the key it names; a map no filter names
+    // comes back empty.
+    let wanted = |name: &str, only: &Option<String>| !filtered || only.as_deref() == Some(name);
     Ok(Response::new(pb::ListOverridesResponse {
         tasks: tasks
             .into_iter()
+            .filter(|(name, _)| wanted(name, &task))
             .map(|(name, stored)| (name, task_from_stored(&stored)))
             .collect::<HashMap<_, _>>(),
         queues: queues
             .into_iter()
+            .filter(|(name, _)| wanted(name, &queue))
             .map(|(name, stored)| (name, queue_from_stored(&stored)))
             .collect::<HashMap<_, _>>(),
     }))
@@ -58,6 +80,9 @@ pub(crate) async fn set_task(
 ) -> Result<Response<pb::SetTaskOverrideResponse>, Status> {
     let name = require("task_name", request.task_name)?;
     scoped.audit(TargetKind::Task, name.clone());
+    // A task override applies on every queue, so a queue-narrowed grant
+    // reaches none.
+    scoped.require(None, Some(&name))?;
     let fields = task_to_stored(request.task_override.unwrap_or_default())?;
     let stored = replace(scoped, Scope::Task, name, fields, &[]).await?;
     Ok(Response::new(pb::SetTaskOverrideResponse {
@@ -73,6 +98,7 @@ pub(crate) async fn clear_task(
 ) -> Result<Response<pb::ClearTaskOverrideResponse>, Status> {
     let name = require("task_name", request.task_name)?;
     scoped.audit(TargetKind::Task, name.clone());
+    scoped.require(None, Some(&name))?;
     clear(scoped, Scope::Task, name).await?;
     Ok(Response::new(pb::ClearTaskOverrideResponse {}))
 }
@@ -84,6 +110,7 @@ pub(crate) async fn set_queue(
 ) -> Result<Response<pb::SetQueueOverrideResponse>, Status> {
     let name = require("queue", request.queue)?;
     scoped.audit(TargetKind::Queue, name.clone());
+    scoped.require(Some(&name), None)?;
     let fields = queue_to_stored(request.queue_override.unwrap_or_default())?;
     let stored = replace(scoped, Scope::Queue, name, fields, &QUEUE_KEEPS).await?;
     Ok(Response::new(pb::SetQueueOverrideResponse {
@@ -98,6 +125,7 @@ pub(crate) async fn clear_queue(
 ) -> Result<Response<pb::ClearQueueOverrideResponse>, Status> {
     let name = require("queue", request.queue)?;
     scoped.audit(TargetKind::Queue, name.clone());
+    scoped.require(Some(&name), None)?;
     clear(scoped, Scope::Queue, name).await?;
     Ok(Response::new(pb::ClearQueueOverrideResponse {}))
 }

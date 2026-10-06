@@ -20,6 +20,7 @@ use crate::{output, pb};
 pub fn request(args: &ThroughputArgs) -> Result<pb::admin::GetThroughputRequest> {
     Ok(pb::admin::GetThroughputRequest {
         window: span(args.window_ms, "--window-ms")?,
+        queue: args.queue.clone(),
     })
 }
 
@@ -49,16 +50,19 @@ mod tests {
 
     #[test]
     fn an_omitted_window_is_the_servers_default() {
-        assert!(request(&ThroughputArgs { window_ms: None })
-            .expect("builds")
-            .window
-            .is_none());
+        let request = request(&ThroughputArgs {
+            window_ms: None,
+            queue: None,
+        })
+        .expect("builds");
+        assert!(request.window.is_none() && request.queue.is_none());
     }
 
     #[test]
     fn a_window_reaches_the_wire_as_a_duration() {
         let window = request(&ThroughputArgs {
             window_ms: Some(90_500),
+            queue: None,
         })
         .expect("builds")
         .window
@@ -73,6 +77,7 @@ mod tests {
     fn a_window_no_duration_holds_is_refused_by_flag_name() {
         let error = request(&ThroughputArgs {
             window_ms: Some(i64::MAX),
+            queue: None,
         })
         .expect_err("too long");
         assert!(error.to_string().contains("--window-ms"), "{error}");

@@ -49,7 +49,7 @@ pub async fn run(client: &mut Client, args: &QueuesArgs, json: bool) -> Result<(
 /// `fq queues --list`: every queue, by name, with whether it is paused.
 pub async fn list(client: &mut AdminClient, json: bool) -> Result<()> {
     let response = client
-        .list_queues(pb::admin::ListQueuesRequest {})
+        .list_queues(pb::admin::ListQueuesRequest { queue: None })
         .await
         .map_err(refused)?
         .into_inner();

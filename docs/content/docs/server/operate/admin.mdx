@@ -32,6 +32,11 @@ A `produce` token reaches none of it, and an `inspect` token asked to change
 something is refused `PERMISSION_DENIED` with the reason `SCOPE_DENIED` and
 `scope: admin` in the metadata. See [API tokens](/server/operate/tokens).
 
+Both scopes can be narrowed to some queues or tasks, for an operator who runs
+one team's queues. The listings then take a `queue` or `task_name` filter the
+token must name. [Narrowing an operator](/server/operate/tokens#narrowing-an-operator)
+lists what each method checks.
+
 ## One namespace, as everywhere on this listener
 
 Every call acts on the namespace the token was minted for, and on nothing else.
@@ -193,4 +198,4 @@ the producer door uses, plus three of this door's own:
 | `PERIODIC_TASK_NOT_FOUND` | `NOT_FOUND` | No such periodic task in this namespace |
 | `WORKER_NOT_FOUND` | `NOT_FOUND` | No such registered worker in this namespace |
 | `INVALID_REQUEST` | `INVALID_ARGUMENT` | An empty name, a bad cron expression, timezone, rate or window |
-| `SCOPE_DENIED` | `PERMISSION_DENIED` | The token lacks `inspect` or `admin`; the metadata says which |
+| `SCOPE_DENIED` | `PERMISSION_DENIED` | The token lacks `inspect` or `admin`, or its grants do not reach the queue or task named; the metadata says which |

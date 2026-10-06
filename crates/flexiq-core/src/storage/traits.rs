@@ -447,6 +447,20 @@ pub trait Storage: Send + Sync + Clone {
         limit: i64,
         after: Option<(i64, &str)>,
         namespace: Option<&str>,
+    ) -> Result<Vec<DeadJob>> {
+        self.list_dead_filtered_after(None, None, limit, after, namespace)
+    }
+    /// [`Self::list_dead_after`] over the entries of one queue and/or one task.
+    /// The filter is applied before the page is cut, so a filtered page is as
+    /// full as an unfiltered one — a caller narrowed to one queue (#989) never
+    /// learns anything from a short page.
+    fn list_dead_filtered_after(
+        &self,
+        queue_name: Option<&str>,
+        task_name: Option<&str>,
+        limit: i64,
+        after: Option<(i64, &str)>,
+        namespace: Option<&str>,
     ) -> Result<Vec<DeadJob>>;
     /// Dead-letter entries for one task, newest first, paginated.
     fn list_dead_by_task(

@@ -21,12 +21,20 @@ const DEFAULT_WINDOW: Duration = Duration::from_secs(5 * 60);
 /// in the window, so the bound is on the scan, not on the answer.
 const MAX_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Every queue the namespace has a job, a pause or an override for.
+/// Every queue the namespace has a job, a pause or an override for — or only
+/// the one the request names.
 ///
 /// No single storage method knows every queue, so the listing is the union of
 /// the three places one can appear — every one of them scoped to the caller's
 /// namespace, so no other tenant's queue name leaks in.
-pub(crate) async fn list(scoped: &Scoped) -> Result<Response<pb::ListQueuesResponse>, Status> {
+pub(crate) async fn list(
+    scoped: &Scoped,
+    request: pb::ListQueuesRequest,
+) -> Result<Response<pb::ListQueuesResponse>, Status> {
+    // A queue's counts cover every task on it, so a task-narrowed grant reaches
+    // none; with no queue named, only a whole grant does.
+    let only = request.queue;
+    scoped.require(only.as_deref(), None)?;
     let namespace = scoped.namespace_owned();
     let (stats, paused, overridden) = on_storage(scoped.storage(), move |storage| {
         Ok((
@@ -40,6 +48,9 @@ pub(crate) async fn list(scoped: &Scoped) -> Result<Response<pb::ListQueuesRespo
     let mut names: BTreeSet<String> = stats.keys().cloned().collect();
     names.extend(paused.iter().cloned());
     names.extend(overridden.into_iter().map(|(name, _)| name));
+    if let Some(only) = &only {
+        names.retain(|name| name == only);
+    }
 
     let queues = names
         .into_iter()
@@ -77,6 +88,8 @@ pub(crate) async fn resume(
 async fn set_paused(scoped: &Scoped, queue: String, paused: bool) -> Result<pb::Queue, Status> {
     let queue = require("queue", queue)?;
     scoped.audit(TargetKind::Queue, queue.clone());
+    // A pause stops every task on the queue.
+    scoped.require(Some(&queue), None)?;
     let namespace = scoped.namespace_owned();
     on_storage(scoped.storage(), move |storage| {
         if paused {
@@ -98,6 +111,8 @@ pub(crate) async fn throughput(
     scoped: &Scoped,
     request: pb::GetThroughputRequest,
 ) -> Result<Response<pb::GetThroughputResponse>, Status> {
+    let only = request.queue;
+    scoped.require(only.as_deref(), None)?;
     let window = window(request.window.as_ref())?;
     let window_ms = i64::try_from(window.as_millis()).unwrap_or(i64::MAX);
     let since = now_millis().saturating_sub(window_ms);
@@ -110,6 +125,7 @@ pub(crate) async fn throughput(
 
     let mut queues: Vec<pb::QueueThroughput> = counts
         .into_iter()
+        .filter(|(queue, _)| only.as_ref().is_none_or(|only| queue == only))
         .map(|(queue, stats)| convert::throughput(queue, &stats))
         .collect();
     queues.sort_by(|a, b| a.queue.cmp(&b.queue));

@@ -67,9 +67,10 @@ where
 // ── Queues ───────────────────────────────────────────────────────────
 
 pub(super) async fn list_queues(State(admin): State<Admin>, parts: Parts) -> Response {
+    let message = query::<read::ListQueues>(&parts).map(read::ListQueues::into_message);
     answer(
         &parts,
-        Ok(pb::ListQueuesRequest {}),
+        message,
         |request| admin.list_queues(request),
         write::list_queues,
     )
@@ -218,9 +219,11 @@ pub(super) async fn drain_worker(admin: &Admin, parts: &Parts, worker_id: String
 // ── Periodic tasks ───────────────────────────────────────────────────
 
 pub(super) async fn list_periodic_tasks(State(admin): State<Admin>, parts: Parts) -> Response {
+    let message =
+        query::<read::ListPeriodicTasks>(&parts).map(read::ListPeriodicTasks::into_message);
     answer(
         &parts,
-        Ok(pb::ListPeriodicTasksRequest {}),
+        message,
         |request| admin.list_periodic_tasks(request),
         write::list_periodic_tasks,
     )
@@ -302,9 +305,10 @@ pub(super) async fn trigger_periodic_task(admin: &Admin, parts: &Parts, name: St
 // ── Overrides ────────────────────────────────────────────────────────
 
 pub(super) async fn list_overrides(State(admin): State<Admin>, parts: Parts) -> Response {
+    let message = query::<read::ListOverrides>(&parts).map(read::ListOverrides::into_message);
     answer(
         &parts,
-        Ok(pb::ListOverridesRequest {}),
+        message,
         |request| admin.list_overrides(request),
         write::list_overrides,
     )

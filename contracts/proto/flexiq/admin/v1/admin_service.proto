@@ -261,7 +261,11 @@ message Queue {
   int64 cancelled = 8;
 }
 
-message ListQueuesRequest {}
+message ListQueuesRequest {
+  // Unset lists every queue. A credential narrowed to some queues must name
+  // one of them.
+  optional string queue = 1;
+}
 
 message ListQueuesResponse {
   // By name. Not paginated: bounded by the number of queues, not of jobs.
@@ -291,6 +295,9 @@ message GetThroughputRequest {
   // How far back to count. Unset is five minutes; above 24 hours, zero or
   // negative is refused.
   google.protobuf.Duration window = 1;
+  // Unset counts every queue. A credential narrowed to some queues must name
+  // one of them.
+  optional string queue = 2;
 }
 
 // Jobs of one queue that reached a terminal status inside the window.
@@ -347,6 +354,12 @@ message ListDeadLettersRequest {
   int32 page_size = 1;
   // The previous response's next_page_token. Opaque.
   string page_token = 2;
+  // Unset lists every queue. A credential narrowed to some queues must name
+  // one of them.
+  optional string queue = 3;
+  // Unset lists every task. A credential narrowed to some tasks must name one
+  // of them.
+  optional string task_name = 4;
 }
 
 message ListDeadLettersResponse {
@@ -469,7 +482,14 @@ message PeriodicTask {
   optional bytes payload = 17;
 }
 
-message ListPeriodicTasksRequest {}
+message ListPeriodicTasksRequest {
+  // Unset lists every queue's tasks. A credential narrowed to some queues must
+  // name one of them.
+  optional string queue = 1;
+  // Unset lists every task's schedules. A credential narrowed to some tasks
+  // must name one of them.
+  optional string task_name = 2;
+}
 
 message ListPeriodicTasksResponse {
   // By name, never carrying a payload.
@@ -579,7 +599,14 @@ message QueueOverride {
   google.protobuf.Timestamp update_time = 3;
 }
 
-message ListOverridesRequest {}
+message ListOverridesRequest {
+  // Set either to read one override: `queues` then holds only this queue's,
+  // `tasks` only `task_name`'s, and a map whose key is unset comes back
+  // empty. Both unset lists every override. A credential narrowed to some
+  // queues or tasks must name one it reaches.
+  optional string queue = 1;
+  optional string task_name = 2;
+}
 
 message ListOverridesResponse {
   // By task name.

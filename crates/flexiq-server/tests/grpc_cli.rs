@@ -18,10 +18,10 @@ mod support;
 
 use flexiq_cli::cli::{
     AuditListArgs, DeadLetterIdArgs, DlqCommand, DlqListArgs, DlqPurgeArgs, DlqShowArgs,
-    EnqueueArgs, JobsCancelArgs, JobsCommand, JobsGetArgs, JobsListArgs, OverridesCommand,
-    PeriodicCommand, PeriodicNameArgs, PeriodicPutArgs, PeriodicShowArgs, QueueNameArgs,
-    QueuesArgs, SetQueueOverrideArgs, SetQuotaArgs, SetTaskOverrideArgs, TaskNameArgs,
-    ThroughputArgs, WorkerIdArgs,
+    EnqueueArgs, JobsCancelArgs, JobsCommand, JobsGetArgs, JobsListArgs, ListFilterArgs,
+    OverridesCommand, PeriodicCommand, PeriodicNameArgs, PeriodicPutArgs, PeriodicShowArgs,
+    QueueNameArgs, QueuesArgs, SetQueueOverrideArgs, SetQuotaArgs, SetTaskOverrideArgs,
+    TaskNameArgs, ThroughputArgs, WorkerIdArgs,
 };
 use flexiq_cli::commands;
 use flexiq_cli::connect::ClientTls;
@@ -579,7 +579,7 @@ async fn pause_and_resume_through_the_cli() {
 
     let listed = harness
         .admin
-        .list_queues(cli_pb::ListQueuesRequest {})
+        .list_queues(cli_pb::ListQueuesRequest::default())
         .await
         .expect("list")
         .into_inner()
@@ -703,6 +703,7 @@ async fn dead_letters_are_paged_replayed_and_purged_through_the_cli() {
             page_size: Some(1),
             page_token: None,
             all: false,
+            filter: ListFilterArgs::default(),
         }))
         .await
         .expect("list")
@@ -824,7 +825,7 @@ async fn a_task_override_set_through_the_cli_is_listed_and_replaced() {
 
     let listed = harness
         .admin
-        .list_overrides(cli_pb::ListOverridesRequest {})
+        .list_overrides(cli_pb::ListOverridesRequest::default())
         .await
         .expect("list")
         .into_inner();
@@ -851,7 +852,7 @@ async fn a_produce_only_token_is_told_it_lacks_inspect() {
     let harness = Harness::start("admin-scope").await;
     let mut admin = harness.admin_with(ScopeSet::of(&[Scope::Produce])).await;
     let status = admin
-        .list_queues(cli_pb::ListQueuesRequest {})
+        .list_queues(cli_pb::ListQueuesRequest::default())
         .await
         .expect_err("no inspect scope");
     let text = flexiq_cli::error::describe(&status);
@@ -892,7 +893,7 @@ async fn the_admin_json_render_matches_the_facade() {
     let admin = &mut harness.admin;
 
     let queues = admin
-        .list_queues(cli_pb::ListQueuesRequest {})
+        .list_queues(cli_pb::ListQueuesRequest::default())
         .await
         .expect("list")
         .into_inner();
@@ -927,6 +928,7 @@ async fn the_admin_json_render_matches_the_facade() {
         .get_throughput(
             commands::throughput::request(&ThroughputArgs {
                 window_ms: Some(600_000),
+                queue: None,
             })
             .expect("builds"),
         )
@@ -1078,7 +1080,7 @@ async fn the_admin_json_render_matches_the_facade() {
         server_render::resume_periodic_task,
     );
     let listed = admin
-        .list_periodic_tasks(cli_pb::ListPeriodicTasksRequest {})
+        .list_periodic_tasks(cli_pb::ListPeriodicTasksRequest::default())
         .await
         .expect("list")
         .into_inner();
@@ -1141,7 +1143,7 @@ async fn the_admin_json_render_matches_the_facade() {
         server_render::set_queue_override,
     );
     let overrides = admin
-        .list_overrides(cli_pb::ListOverridesRequest {})
+        .list_overrides(cli_pb::ListOverridesRequest::default())
         .await
         .expect("list")
         .into_inner();
@@ -1344,7 +1346,11 @@ async fn every_admin_command_runs_against_a_real_door() {
         commands::queues::resume(admin, &queue_name("emails"), json)
             .await
             .expect("resume");
-        commands::throughput::run(admin, &ThroughputArgs { window_ms: None }, json)
+        let throughput = ThroughputArgs {
+            window_ms: None,
+            queue: None,
+        };
+        commands::throughput::run(admin, &throughput, json)
             .await
             .expect("throughput");
         commands::workers::run(admin, json).await.expect("workers");
@@ -1358,6 +1364,7 @@ async fn every_admin_command_runs_against_a_real_door() {
                 page_size: None,
                 page_token: None,
                 all: true,
+                filter: ListFilterArgs::default(),
             }),
             json,
         )
@@ -1381,7 +1388,7 @@ async fn every_admin_command_runs_against_a_real_door() {
         .await
         .expect("periodic put");
         for command in [
-            PeriodicCommand::List,
+            PeriodicCommand::List(ListFilterArgs::default()),
             PeriodicCommand::Show(PeriodicShowArgs {
                 name: "nightly".to_string(),
                 payload: true,
@@ -1394,7 +1401,11 @@ async fn every_admin_command_runs_against_a_real_door() {
                 .await
                 .expect("periodic");
         }
-        for command in [set_task(), set_queue(), OverridesCommand::List] {
+        for command in [
+            set_task(),
+            set_queue(),
+            OverridesCommand::List(ListFilterArgs::default()),
+        ] {
             commands::overrides::run(admin, &command, json)
                 .await
                 .expect("overrides");

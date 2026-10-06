@@ -131,9 +131,9 @@ impl Grant {
     /// Parse the spelled form: `scope` or `scope:queue=<pattern>,task=<pattern>`,
     /// either qualifier optional, neither repeated.
     ///
-    /// Only [`NARROWABLE`] scopes take qualifiers. The operator doors have no
-    /// method that checks a queue or a task against a grant, so a narrowed
-    /// grant on one of them would be a restriction nothing enforces.
+    /// Only [`NARROWABLE`] scopes take qualifiers: a narrowed grant on a door
+    /// whose methods check no queue or task would be a restriction nothing
+    /// enforces.
     pub fn parse(spelled: &str) -> Result<Self, String> {
         let (name, qualifiers) = match spelled.split_once(':') {
             Some((name, qualifiers)) => (name, Some(qualifiers)),
@@ -203,8 +203,15 @@ impl fmt::Display for Grant {
 }
 
 /// The scopes a grant may narrow. `execute` is checked at attach, against the
-/// tasks an executor declares, and again on every dispatch (#988).
-pub const NARROWABLE: [Scope; 3] = [Scope::Produce, Scope::Read, Scope::Execute];
+/// tasks an executor declares, and again on every dispatch (#988); `inspect`
+/// and `admin` by each operator method that names a queue or a task (#989).
+pub const NARROWABLE: [Scope; 5] = [
+    Scope::Produce,
+    Scope::Read,
+    Scope::Execute,
+    Scope::Inspect,
+    Scope::Admin,
+];
 
 /// Whether `scope` may carry a queue or task qualifier.
 fn narrowable(scope: Scope) -> bool {
@@ -467,22 +474,29 @@ mod tests {
             "produce:colour=red",
             "produce:queue=a,queue=b",
             "produce:queue=a*b",
-            "inspect:queue=emails",
-            "admin:queue=emails",
+            "admin:colour=red",
         ] {
             assert!(Grant::parse(spelled).is_err(), "{spelled:?}");
         }
     }
 
-    /// Only the doors whose handlers check a queue and a task can be narrowed;
-    /// anywhere else the qualifier would be a restriction nothing enforces.
+    /// The operator doors narrow like the data doors (#989): `admin:queue=billing`
+    /// is one team's operator, and `inspect` and `admin` stay separate doors.
     #[test]
-    fn narrowing_a_door_that_cannot_enforce_it_says_which_can() {
-        let error = Grant::parse("inspect:task=x").expect_err("refused");
-        assert!(
-            error.contains("produce") && error.contains("read") && error.contains("execute"),
-            "{error}"
+    fn an_operator_grant_narrows_to_queues_and_tasks() {
+        let grants = Grants::parse_all(["admin:queue=billing", "inspect:task=charge"])
+            .expect("operator grants narrow");
+        assert_eq!(
+            grants.spelled(),
+            ["admin:queue=billing", "inspect:task=charge"]
         );
+        let admin = grants.access(Scope::Admin);
+        assert!(admin.reaches(Some("billing"), None));
+        assert!(!admin.reaches(Some("emails"), None));
+        assert!(!admin.reaches(None, Some("charge")));
+        let inspect = grants.access(Scope::Inspect);
+        assert!(inspect.reaches(None, Some("charge")));
+        assert!(!inspect.reaches(Some("billing"), None));
     }
 
     #[test]
@@ -560,7 +574,7 @@ mod tests {
     #[test]
     fn an_unreadable_grant_narrows_rather_than_failing() {
         let decoded: Grants =
-            serde_json::from_str(r#"["read","teleport","produce:queue=a*b","admin:task=x"]"#)
+            serde_json::from_str(r#"["read","teleport","produce:queue=a*b","admin:colour=x"]"#)
                 .expect("unreadable grants are ignored");
         assert_eq!(decoded, Grants::from(ScopeSet::of(&[Scope::Read])));
     }
