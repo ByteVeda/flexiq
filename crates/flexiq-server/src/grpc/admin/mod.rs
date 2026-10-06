@@ -80,9 +80,8 @@ impl Admin {
                 );
                 Status::from(WireError::internal())
             })?;
-        // No operator method checks a queue or a task against a grant, so a
-        // narrowed one opens none of them (#839). The layer refuses it first;
-        // this holds if the service is ever reached another way.
+        // Closed by default (#989): a narrowed grant opens only the methods
+        // that check what they touch.
         if !principal.reaches_everything() {
             let scope = principal.door().unwrap_or(Scope::Admin);
             return Err(WireError::scope_denied(scope.as_str()).into());
