@@ -273,15 +273,15 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ListPeriodicTasksRequest>,
     ) -> Result<Response<pb::ListPeriodicTasksResponse>, Status> {
-        let (scoped, _) = self.scope(request)?;
-        periodic::list(&scoped).await
+        let (scoped, message) = self.scope_narrowed(request)?;
+        periodic::list(&scoped, message).await
     }
 
     async fn get_periodic_task(
         &self,
         request: Request<pb::GetPeriodicTaskRequest>,
     ) -> Result<Response<pb::GetPeriodicTaskResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         periodic::get(&scoped, message).await
     }
 
@@ -289,7 +289,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::PutPeriodicTaskRequest>,
     ) -> Result<Response<pb::PutPeriodicTaskResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         periodic::put(&scoped, message).await
     }
 
@@ -297,7 +297,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::DeletePeriodicTaskRequest>,
     ) -> Result<Response<pb::DeletePeriodicTaskResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         periodic::delete(&scoped, message).await
     }
 
@@ -305,7 +305,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::PausePeriodicTaskRequest>,
     ) -> Result<Response<pb::PausePeriodicTaskResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         let task = periodic::set_enabled(&scoped, message.name, false).await?;
         Ok(Response::new(pb::PausePeriodicTaskResponse {
             periodic_task: Some(task),
@@ -316,7 +316,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ResumePeriodicTaskRequest>,
     ) -> Result<Response<pb::ResumePeriodicTaskResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         let task = periodic::set_enabled(&scoped, message.name, true).await?;
         Ok(Response::new(pb::ResumePeriodicTaskResponse {
             periodic_task: Some(task),
@@ -327,7 +327,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::TriggerPeriodicTaskRequest>,
     ) -> Result<Response<pb::TriggerPeriodicTaskResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         periodic::trigger(&scoped, message).await
     }
 

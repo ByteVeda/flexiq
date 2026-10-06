@@ -278,6 +278,25 @@ impl WireError {
         }
     }
 
+    /// A periodic task name already taken by a task the caller's narrowed
+    /// `scope` grants do not reach (#989): replacing it would rewrite a
+    /// schedule outside them.
+    ///
+    /// Carries only `scope`, for the reason
+    /// [`Self::deduplicated_beyond_grant`] does.
+    pub fn periodic_name_beyond_grant(scope: &'static str) -> Self {
+        Self {
+            code: Code::PermissionDenied,
+            reason: reason::SCOPE_DENIED,
+            message: format!(
+                "this name already belongs to a periodic task this credential's \
+                 `{scope}` grants do not reach; nothing was written"
+            ),
+            metadata: HashMap::from([(reason::KEY_SCOPE.to_string(), scope.to_string())]),
+            retry_after: None,
+        }
+    }
+
     /// A fault of the server's own, with nothing useful to say to the caller.
     ///
     /// The cause is logged by whoever raises this; the response carries only

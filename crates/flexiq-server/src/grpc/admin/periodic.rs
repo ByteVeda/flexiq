@@ -19,15 +19,25 @@ use crate::grpc::status::{reason, WireError};
 /// The queue a task fires into when the request names none.
 const DEFAULT_QUEUE: &str = "default";
 
-/// Every periodic task in the namespace, by name, with no payloads.
+/// Every periodic task in the namespace, by name, with no payloads — only
+/// those firing into the queue and/or task the request names, when it does.
 pub(crate) async fn list(
     scoped: &Scoped,
+    request: pb::admin::ListPeriodicTasksRequest,
 ) -> Result<Response<pb::admin::ListPeriodicTasksResponse>, Status> {
+    let (queue, task) = (request.queue, request.task_name);
+    scoped.require(queue.as_deref(), task.as_deref())?;
     let namespace = scoped.namespace_owned();
     let mut tasks = on_storage(scoped.storage(), move |storage| {
         storage.list_periodic(Some(&namespace))
     })
     .await?;
+    // Unpaginated, so selecting here is the query's filter, not a page cut
+    // short after the fact.
+    tasks.retain(|periodic| {
+        queue.as_ref().is_none_or(|queue| &periodic.queue == queue)
+            && task.as_ref().is_none_or(|task| &periodic.task_name == task)
+    });
     tasks.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(Response::new(pb::admin::ListPeriodicTasksResponse {
@@ -66,6 +76,17 @@ pub(crate) async fn put(
     } else {
         request.queue
     };
+    scoped.require(Some(&queue), Some(&task_name))?;
+    // A put replaces a task by name, so the task it would replace must be in
+    // reach too. A whole admin may replace it between this read and the write;
+    // that race is between two operators of one namespace, and the narrowed
+    // one's write is still inside its own grants.
+    if !scoped.reaches_everything() {
+        let existing = find(scoped, name.clone()).await?;
+        if existing.is_some_and(|task| !reachable(scoped, &task)) {
+            return Err(WireError::periodic_name_beyond_grant(scoped.door().as_str()).into());
+        }
+    }
     let timezone = request.timezone;
     // Computing the first run is what validates both the expression and the
     // timezone, before anything is written.
@@ -111,6 +132,7 @@ pub(crate) async fn delete(
 ) -> Result<Response<pb::admin::DeletePeriodicTaskResponse>, Status> {
     let name = require("name", request.name)?;
     scoped.audit(TargetKind::Periodic, name.clone());
+    require_reachable(scoped, &name).await?;
     let namespace = scoped.namespace_owned();
     let lookup = name.clone();
     let deleted = on_storage(scoped.storage(), move |storage| {
@@ -131,6 +153,7 @@ pub(crate) async fn set_enabled(
 ) -> Result<pb::admin::PeriodicTask, Status> {
     let name = require("name", name)?;
     scoped.audit(TargetKind::Periodic, name.clone());
+    require_reachable(scoped, &name).await?;
     let namespace = scoped.namespace_owned();
     let lookup = name.clone();
     let found = on_storage(scoped.storage(), move |storage| {
@@ -169,22 +192,46 @@ pub(crate) async fn trigger(
     }))
 }
 
-/// The caller's task named `name`, or `NOT_FOUND`.
+/// The caller's task named `name`, or `NOT_FOUND` — also for a task outside
+/// its grants, the answer `GetJob` gives, so a narrowed token cannot probe
+/// names.
+async fn read(scoped: &Scoped, name: String) -> Result<PeriodicTask, Status> {
+    find(scoped, name.clone())
+        .await?
+        .filter(|task| reachable(scoped, task))
+        .ok_or_else(|| not_found(&name))
+}
+
+/// The namespace's task named `name`, whatever the caller's grants.
 ///
 /// `Storage` has no point read for a periodic task; a namespace's schedules are
 /// few enough that reading them to find one costs nothing a point read would
 /// save.
-async fn read(scoped: &Scoped, name: String) -> Result<PeriodicTask, Status> {
+async fn find(scoped: &Scoped, name: String) -> Result<Option<PeriodicTask>, Status> {
     let namespace = scoped.namespace_owned();
-    let lookup = name.clone();
     on_storage(scoped.storage(), move |storage: &StorageBackend| {
         Ok(storage
             .list_periodic(Some(&namespace))?
             .into_iter()
-            .find(|task| task.name == lookup))
+            .find(|task| task.name == name))
     })
-    .await?
-    .ok_or_else(|| not_found(&name))
+    .await
+}
+
+/// Whether the caller's grants reach the queue and task `task` fires.
+fn reachable(scoped: &Scoped, task: &PeriodicTask) -> bool {
+    scoped.reaches(Some(&task.queue), Some(&task.task_name))
+}
+
+/// Refuse a write on a task outside the caller's grants as if it were absent.
+/// A whole grant reaches every task, so it skips the read. A whole admin
+/// redefining the task between this read and the write is the race `put`
+/// describes.
+async fn require_reachable(scoped: &Scoped, name: &str) -> Result<(), Status> {
+    if scoped.reaches_everything() {
+        return Ok(());
+    }
+    read(scoped, name.to_string()).await.map(drop)
 }
 
 fn not_found(name: &str) -> Status {

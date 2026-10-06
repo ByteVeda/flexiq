@@ -17,11 +17,12 @@ use flexiq_server::config::listen::ListenAddress;
 use flexiq_server::grpc::pb::admin::admin_service_client::AdminServiceClient;
 use flexiq_server::grpc::pb::admin::{
     purge_dead_letters_request, ClearQueueOverrideRequest, ClearTaskOverrideRequest,
-    DeleteDeadLetterRequest, DrainWorkerRequest, GetDeadLetterRequest, GetNamespaceQuotaRequest,
-    GetThroughputRequest, ListDeadLettersRequest, ListOverridesRequest, ListQueuesRequest,
-    ListWorkersRequest, PauseQueueRequest, PurgeDeadLettersRequest, QueueOverride,
-    ReplayDeadLetterRequest, ResumeQueueRequest, SetQueueOverrideRequest, SetTaskOverrideRequest,
-    TaskOverride,
+    DeleteDeadLetterRequest, DeletePeriodicTaskRequest, DrainWorkerRequest, GetDeadLetterRequest,
+    GetNamespaceQuotaRequest, GetPeriodicTaskRequest, GetThroughputRequest, ListDeadLettersRequest,
+    ListOverridesRequest, ListPeriodicTasksRequest, ListQueuesRequest, ListWorkersRequest,
+    PausePeriodicTaskRequest, PauseQueueRequest, PurgeDeadLettersRequest, PutPeriodicTaskRequest,
+    QueueOverride, ReplayDeadLetterRequest, ResumePeriodicTaskRequest, ResumeQueueRequest,
+    SetQueueOverrideRequest, SetTaskOverrideRequest, TaskOverride, TriggerPeriodicTaskRequest,
 };
 use flexiq_server::grpc::status::reason;
 use flexiq_server::grpc::Listener;
@@ -528,6 +529,156 @@ async fn a_dead_letter_listing_names_every_qualifier_the_grant_has() {
         .into_inner();
     let ids: Vec<_> = listed.dead_letters.iter().map(|d| d.id.as_str()).collect();
     assert_eq!(ids, [ours.as_str()]);
+    harness.stop().await;
+}
+
+fn schedule(name: &str, queue: &str, task: &str) -> PutPeriodicTaskRequest {
+    PutPeriodicTaskRequest {
+        name: name.into(),
+        task_name: task.into(),
+        cron: "0 0 3 * * *".into(),
+        queue: queue.into(),
+        ..Default::default()
+    }
+}
+
+/// A periodic task is reached through the queue and task it fires; one outside
+/// the grants reads as absent, and its name cannot be taken over by a put.
+#[tokio::test]
+async fn a_queue_grant_manages_its_own_schedules_only() {
+    let harness = Harness::start("admin-grants-periodic").await;
+    let mut whole = harness.whole();
+    for (name, queue, task) in [
+        ("nightly-billing", "billing", "charge"),
+        ("nightly-emails", "emails", "send"),
+    ] {
+        whole
+            .put_periodic_task(schedule(name, queue, task))
+            .await
+            .expect("seed");
+    }
+    let mut client = harness.client(&["admin:queue=billing", "inspect:queue=billing"]);
+
+    let status = client
+        .list_periodic_tasks(ListPeriodicTasksRequest::default())
+        .await
+        .expect_err("names no queue");
+    assert_beyond(&status, "inspect", None, None);
+    let listed = client
+        .list_periodic_tasks(ListPeriodicTasksRequest {
+            queue: Some("billing".into()),
+            task_name: None,
+        })
+        .await
+        .expect("its own queue")
+        .into_inner();
+    let names: Vec<_> = listed
+        .periodic_tasks
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect();
+    assert_eq!(names, ["nightly-billing"]);
+
+    // Every call keyed by name answers a hidden task as absent.
+    let theirs = "nightly-emails".to_string();
+    let hidden = [
+        client
+            .get_periodic_task(GetPeriodicTaskRequest {
+                name: theirs.clone(),
+                include_payload: false,
+            })
+            .await
+            .map(drop),
+        client
+            .pause_periodic_task(PausePeriodicTaskRequest {
+                name: theirs.clone(),
+            })
+            .await
+            .map(drop),
+        client
+            .resume_periodic_task(ResumePeriodicTaskRequest {
+                name: theirs.clone(),
+            })
+            .await
+            .map(drop),
+        client
+            .trigger_periodic_task(TriggerPeriodicTaskRequest {
+                name: theirs.clone(),
+            })
+            .await
+            .map(drop),
+        client
+            .delete_periodic_task(DeletePeriodicTaskRequest {
+                name: theirs.clone(),
+            })
+            .await
+            .map(drop),
+    ];
+    for answer in hidden {
+        assert_not_found(
+            &answer.expect_err("another queue's task"),
+            reason::PERIODIC_TASK_NOT_FOUND,
+        );
+    }
+
+    // Taking the hidden task's name would rewrite it: refused, naming nothing
+    // about it, and the stored task is untouched.
+    let status = client
+        .put_periodic_task(schedule(&theirs, "billing", "charge"))
+        .await
+        .expect_err("the name is another queue's");
+    assert_beyond(&status, "admin", None, None);
+    let stored = whole
+        .get_periodic_task(GetPeriodicTaskRequest {
+            name: theirs,
+            include_payload: false,
+        })
+        .await
+        .expect("still there")
+        .into_inner()
+        .periodic_task
+        .expect("the task");
+    assert_eq!(stored.queue, "emails");
+    assert!(stored.enabled, "a refused pause must not land");
+
+    let status = client
+        .put_periodic_task(schedule("new", "emails", "send"))
+        .await
+        .expect_err("fires into another queue");
+    assert_beyond(&status, "admin", Some("emails"), Some("send"));
+    // An unnamed queue is `default`, checked like any other.
+    let status = client
+        .put_periodic_task(schedule("new", "", "charge"))
+        .await
+        .expect_err("the default queue");
+    assert_beyond(&status, "admin", Some("default"), Some("charge"));
+
+    client
+        .put_periodic_task(schedule("hourly-billing", "billing", "charge"))
+        .await
+        .expect("its own queue");
+    client
+        .pause_periodic_task(PausePeriodicTaskRequest {
+            name: "nightly-billing".into(),
+        })
+        .await
+        .expect("its own task");
+    let job = client
+        .trigger_periodic_task(TriggerPeriodicTaskRequest {
+            name: "nightly-billing".into(),
+        })
+        .await
+        .expect("its own task")
+        .into_inner()
+        .job
+        .expect("a job");
+    assert_eq!(job.queue, "billing");
+    client
+        .delete_periodic_task(DeletePeriodicTaskRequest {
+            name: "nightly-billing".into(),
+        })
+        .await
+        .expect("its own task");
     harness.stop().await;
 }
 
