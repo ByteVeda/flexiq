@@ -179,7 +179,9 @@ fn compile_graph(graph: pb::WorkflowGraph) -> Result<CompiledGraph, WireError> {
             node.name.clone(),
             StepMetadata {
                 task_name: node.task_name,
-                queue: node.queue,
+                // The wire's "empty means default"; left as `Some("")`, the job
+                // would land in a queue named `""` instead.
+                queue: node.queue.filter(|queue| !queue.is_empty()),
                 args_template: None,
                 kwargs_template: None,
                 max_retries: node.max_retries,

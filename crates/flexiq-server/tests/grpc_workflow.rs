@@ -224,6 +224,44 @@ async fn a_static_graph_pre_enqueues_jobs_an_unmodified_worker_advances() {
     harness.stop().await;
 }
 
+/// The wire says an empty `queue` means `default`, the same as `Enqueue`.
+#[tokio::test]
+async fn an_empty_node_queue_lands_in_default() {
+    let harness = Harness::start("empty-queue").await;
+
+    let mut graph = linear_graph();
+    graph.node_configs[0].queue = Some(String::new());
+    graph.node_configs[1].queue = Some("emails".to_string());
+    let run_id = harness
+        .client
+        .clone()
+        .submit_workflow(SubmitWorkflowRequest {
+            name: "queues".to_string(),
+            graph: Some(graph),
+            params_json: None,
+        })
+        .await
+        .expect("submit_workflow")
+        .into_inner()
+        .run_id;
+
+    let nodes = harness
+        .workflows
+        .get_workflow_nodes(&run_id)
+        .expect("nodes");
+    for (name, queue) in [("a", "default"), ("b", "emails")] {
+        let node = nodes.iter().find(|n| n.node_name == name).expect("node");
+        let job = harness
+            .storage
+            .get_job(node.job_id.as_deref().expect("enqueued"), Some(NAMESPACE))
+            .expect("read")
+            .expect("the job exists");
+        assert_eq!(job.queue, queue, "node {name}");
+    }
+
+    harness.stop().await;
+}
+
 #[tokio::test]
 async fn a_dynamic_construct_is_refused_before_anything_is_written() {
     let harness = Harness::start("dynamic-refusal").await;
