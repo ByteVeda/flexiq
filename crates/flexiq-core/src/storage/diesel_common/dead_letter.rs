@@ -210,10 +210,23 @@ macro_rules! impl_diesel_dead_letter_ops {
                 Ok(rows.into_iter().map(DeadJob::from_narrow).collect())
             }
 
-            /// Keyset-paginated `list_dead`, ordered by `(failed_at, id)`
-            /// descending with a `(failed_at, id) < cursor` bound.
+            /// Keyset-paginated `list_dead` over every queue and task.
             pub fn list_dead_after(
                 &self,
+                limit: i64,
+                after: Option<(i64, &str)>,
+                namespace: Option<&str>,
+            ) -> Result<Vec<DeadJob>> {
+                self.list_dead_filtered_after(None, None, limit, after, namespace)
+            }
+
+            /// Keyset-paginated `list_dead`, ordered by `(failed_at, id)`
+            /// descending with a `(failed_at, id) < cursor` bound, over the
+            /// entries of one queue and/or one task when named.
+            pub fn list_dead_filtered_after(
+                &self,
+                queue_name: Option<&str>,
+                task_name: Option<&str>,
                 limit: i64,
                 after: Option<(i64, &str)>,
                 namespace: Option<&str>,
@@ -239,6 +252,12 @@ macro_rules! impl_diesel_dead_letter_ops {
                 }
                 if let Some(ns) = namespace {
                     query = query.filter(dead_letter::namespace.eq(ns));
+                }
+                if let Some(queue) = queue_name {
+                    query = query.filter(dead_letter::queue.eq(queue));
+                }
+                if let Some(task) = task_name {
+                    query = query.filter(dead_letter::task_name.eq(task));
                 }
 
                 let rows: Vec<NarrowDeadLetterRow> = query

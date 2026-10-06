@@ -813,13 +813,15 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Vec<$crate::storage::DeadJob>> {
                 self.list_dead(limit, offset, namespace)
             }
-            fn list_dead_after(
+            fn list_dead_filtered_after(
                 &self,
+                queue_name: Option<&str>,
+                task_name: Option<&str>,
                 limit: i64,
                 after: Option<(i64, &str)>,
                 namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::storage::DeadJob>> {
-                self.list_dead_after(limit, after, namespace)
+                self.list_dead_filtered_after(queue_name, task_name, limit, after, namespace)
             }
             fn list_dead_by_task(
                 &self,
@@ -2068,13 +2070,23 @@ impl Storage for StorageBackend {
     fn list_dead(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<DeadJob>> {
         delegate!(self, list_dead, limit, offset, namespace)
     }
-    fn list_dead_after(
+    fn list_dead_filtered_after(
         &self,
+        queue_name: Option<&str>,
+        task_name: Option<&str>,
         limit: i64,
         after: Option<(i64, &str)>,
         namespace: Option<&str>,
     ) -> Result<Vec<DeadJob>> {
-        delegate!(self, list_dead_after, limit, after, namespace)
+        delegate!(
+            self,
+            list_dead_filtered_after,
+            queue_name,
+            task_name,
+            limit,
+            after,
+            namespace
+        )
     }
     fn list_dead_by_task(
         &self,

@@ -381,15 +381,27 @@ impl RedisStorage {
         Ok(results)
     }
 
+    /// Keyset-paginated `list_dead` over every queue and task.
+    pub fn list_dead_after(
+        &self,
+        limit: i64,
+        after: Option<(i64, &str)>,
+        namespace: Option<&str>,
+    ) -> Result<Vec<DeadJob>> {
+        self.list_dead_filtered_after(None, None, limit, after, namespace)
+    }
+
     /// Keyset-paginated `list_dead`, ordered by `(failed_at, id)` descending.
     /// `dlq:all` is scored by `failed_at`, so the cursor maps straight onto the
     /// ZSET keyset.
     ///
-    /// A namespace filter is not indexed, so the scoped form keeps advancing the
-    /// cursor until the page is full — the caller still gets `limit` rows rather
-    /// than a page thinned by rows it may not see.
-    pub fn list_dead_after(
+    /// Neither namespace, queue nor task is indexed, so a filtered walk keeps
+    /// advancing the cursor until the page is full — the caller still gets
+    /// `limit` rows rather than a page thinned by rows it may not see.
+    pub fn list_dead_filtered_after(
         &self,
+        queue_name: Option<&str>,
+        task_name: Option<&str>,
         limit: i64,
         after: Option<(i64, &str)>,
         namespace: Option<&str>,
@@ -397,6 +409,12 @@ impl RedisStorage {
         if limit <= 0 {
             return Ok(Vec::new());
         }
+        let filtered = namespace.is_some() || queue_name.is_some() || task_name.is_some();
+        let matches = |entry: &DeadJobEntry| {
+            namespace.is_none_or(|scope| entry.namespace.as_deref() == Some(scope))
+                && queue_name.is_none_or(|queue| entry.queue == queue)
+                && task_name.is_none_or(|task| entry.task_name == task)
+        };
         let mut conn = self.conn()?;
         let dlq_all = self.key(&["dlq", "all"]);
 
@@ -421,7 +439,7 @@ impl RedisStorage {
                 let Some(d) = data else { continue };
                 let entry: DeadJobEntry = serde_json::from_str(&d)?;
                 examined = Some((entry.failed_at, entry.id.clone()));
-                if namespace.is_some_and(|scope| entry.namespace.as_deref() != Some(scope)) {
+                if !matches(&entry) {
                     continue;
                 }
                 let mut dead = DeadJob::from(entry);
@@ -446,7 +464,7 @@ impl RedisStorage {
 
             // Unscoped pages are already exactly the answer; only a filtered
             // walk needs to look past this page.
-            if namespace.is_none() || (ids.len() as i64) < limit || examined.is_none() {
+            if !filtered || (ids.len() as i64) < limit || examined.is_none() {
                 break;
             }
             cursor = examined;
