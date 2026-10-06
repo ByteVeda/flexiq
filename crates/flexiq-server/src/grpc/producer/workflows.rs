@@ -211,9 +211,20 @@ fn admit_graph(scoped: &Scoped<'_>, graph: &pb::WorkflowGraph) -> Result<(), Wir
             .unwrap_or(DEFAULT_QUEUE);
         scoped
             .require(Some(queue), Some(&node.task_name))
+            .and_then(|()| admit_compensation(scoped, node))
             .map_err(|error| error.at_node(&node.name))?;
     }
     Ok(())
+}
+
+/// A rollback task is enqueued later, by whichever worker runs the saga, on a
+/// queue that worker picks rather than the graph. With no queue to check, the
+/// grants must reach the task on every queue.
+fn admit_compensation(scoped: &Scoped<'_>, node: &pb::WorkflowNodeConfig) -> Result<(), WireError> {
+    match node.compensate.as_deref() {
+        Some(task) => scoped.require(None, Some(task)),
+        None => Ok(()),
+    }
 }
 
 /// A compiled graph: the bare DAG's JSON bytes, a name-keyed `StepMetadata`

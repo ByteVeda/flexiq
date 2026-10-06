@@ -571,6 +571,34 @@ async fn a_task_grant_submits_its_task_only() {
     harness.stop().await;
 }
 
+/// A rollback task lands on a queue the saga's worker picks, so a grant must
+/// reach it on every queue, not just the node's.
+#[tokio::test]
+async fn a_compensation_task_needs_every_queue() {
+    let harness = Harness::start("grants-workflow-compensate").await;
+    let compensated = || {
+        let mut request = workflow(&[("charge", "billing", "charge")]);
+        let graph = request.graph.as_mut().expect("graph");
+        graph.node_configs[0].compensate = Some("refund".into());
+        request
+    };
+
+    let mut billing = harness.client(&["produce:queue=billing"]);
+    let status = billing
+        .submit_workflow(compensated())
+        .await
+        .expect_err("refund is granted on billing only");
+    assert_beyond(&status, "produce", None, Some("refund"));
+    assert_at_node(&status, "charge");
+    assert_nothing_written(&harness);
+
+    let mut both = harness.client(&["produce:queue=billing", "produce:task=refund"]);
+    both.submit_workflow(compensated())
+        .await
+        .expect("refund is granted on every queue");
+    harness.stop().await;
+}
+
 async fn submit(client: &mut Client, request: SubmitWorkflowRequest) -> String {
     client
         .submit_workflow(request)

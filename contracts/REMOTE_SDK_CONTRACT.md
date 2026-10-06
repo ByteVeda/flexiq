@@ -728,8 +728,10 @@ from a genuinely absent job:
 `SubmitWorkflow` checks every node as an `Enqueue` would, an empty queue as
 `default`, before anything is written. The first node outside the grants refuses
 the whole graph, and the refusal carries `node` beside `scope`, `queue` and
-`task`. A debounced `Enqueue` checks no queue, and it refuses a narrowed
-credential outright.
+`task`. A node's `compensate` task is enqueued later, on a queue the worker
+running the saga picks, so the grants must reach that task on every queue; such
+a refusal carries no `queue`. A debounced `Enqueue` checks no queue, and it
+refuses a narrowed credential outright.
 
 On the executor door, a narrowed `execute` credential is checked twice:
 
