@@ -141,7 +141,9 @@ What a narrowed producer token gets, call by call:
 | `ListJobs` | Must name a `queue` the grants reach, and a `task_name` too if the grant names a task. A listing is never filtered after the fact, so a page's size says nothing about rows the token cannot see. |
 | `QueueStats` | Must name a reachable queue. A task-narrowed grant is refused, because the counts include every task in the queue. |
 | `WatchJobs` | A queue watch must name a queue the grants reach, and a task-narrowed grant is refused. On an id watch, a job outside the grants reads as not found. |
-| `SubmitWorkflow`, `GetWorkflowRun`, a debounced `Enqueue` | Refused, whatever the queue. |
+| `SubmitWorkflow` | Every node is checked like an `Enqueue`, before anything is written. One node outside the grants refuses the whole graph `SCOPE_DENIED`, carrying `node` as well as `scope`, `queue` and `task`. |
+| `GetWorkflowRun` | Not found, the same answer as a run that does not exist, unless the grants reach the job of every node in the run. A node with no job yet, or whose job retention removed, has no queue to check, so a narrowed token cannot read that run. |
+| A debounced `Enqueue` | Refused, whatever the queue. |
 | `Attach` | Every task the executor declares must be granted on some queue. One that is not refuses the whole stream, carrying `scope` and `task`; it is never trimmed to the granted tasks. A queue grant is held at dispatch: a job on another queue is never sent to that executor. |
 | `Settle`, `ExtendLease`, `ReportProgress`, `WriteTaskLog` | Refused, whatever the job. These name a lease, not a task. |
 

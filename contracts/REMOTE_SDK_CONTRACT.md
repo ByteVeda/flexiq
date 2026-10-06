@@ -569,6 +569,7 @@ width and signedness are per key.
 | `pending`, `cap` | `QUEUE_FULL` | `int64`, jobs |
 | `scope` | `SCOPE_DENIED` | one of `produce`, `read`, `execute`, `inspect`, `admin` |
 | `queue`, `task` | `SCOPE_DENIED` | the queue / task name a narrowed grant does not reach, verbatim; either may be absent |
+| `node` | `SCOPE_DENIED`, from `SubmitWorkflow` | the first node whose queue or task the grants do not reach |
 | `speaks`, `required` | `CONTRACT_TOO_OLD` | `uint32`, contract level |
 | `limit` | `STEP_LIMIT_EXCEEDED` | one of `step bytes`, `total bytes`, `step count` |
 | `actual`, `allowed` | `STEP_LIMIT_EXCEEDED` | `uint64`, in `limit`'s unit |
@@ -719,10 +720,16 @@ from a genuinely absent job:
   `CancelJob`, `not_found_job_id` on a `WatchJobs` id watch;
 - a listing is never filtered: `ListJobs`, `QueueStats` and a queue watch must
   name a queue (and, for a task-narrowed grant, a task) the grants reach, or
-  they are refused.
+  they are refused;
+- a workflow run reads as missing from `GetWorkflowRun` unless the grants reach
+  the job of every node in it. A node with no job has no queue to check, so it
+  hides the run too.
 
-RPCs that check no queue — `SubmitWorkflow`, `GetWorkflowRun`, and a debounced
-`Enqueue` — refuse a narrowed credential outright.
+`SubmitWorkflow` checks every node as an `Enqueue` would, an empty queue as
+`default`, before anything is written. The first node outside the grants refuses
+the whole graph, and the refusal carries `node` beside `scope`, `queue` and
+`task`. A debounced `Enqueue` checks no queue, and it refuses a narrowed
+credential outright.
 
 On the executor door, a narrowed `execute` credential is checked twice:
 
