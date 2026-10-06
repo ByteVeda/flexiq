@@ -103,6 +103,10 @@ impl Producer {
     /// queues is refused by every method that has not been taught to check
     /// them, so a new RPC is closed to it until someone opens it deliberately
     /// through [`Self::scope_narrowed`].
+    #[expect(
+        dead_code,
+        reason = "every RPC checks its own queues today (#990); the next one starts here"
+    )]
     fn scope<T>(&self, request: Request<T>) -> Result<(Scoped<'_>, T), Status> {
         let (scoped, message) = self.scope_narrowed(request)?;
         if !scoped.principal.reaches_everything() {
@@ -293,7 +297,7 @@ impl ProducerService for Producer {
         &self,
         request: Request<pb::GetWorkflowRunRequest>,
     ) -> Result<Response<pb::GetWorkflowRunResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         workflows::get_workflow_run(&scoped, message).await
     }
 

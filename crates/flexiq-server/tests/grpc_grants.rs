@@ -3,8 +3,8 @@
 //!
 //! The unit tests pin the grammar and the union rule. What only a running door
 //! can show is that every producer RPC honours a narrowed grant, that the JSON
-//! facade gives the same answers, and that the RPCs never taught to check a
-//! queue refuse a narrowed token rather than serve it everything.
+//! facade gives the same answers, and that a call checking no queue (a
+//! debounced enqueue) refuses a narrowed token rather than serve it everything.
 #![cfg(feature = "grpc")]
 
 mod support;
@@ -469,25 +469,15 @@ async fn a_narrowed_caller_cannot_debounce() {
     harness.stop().await;
 }
 
-/// The RPCs no one has taught to check a queue refuse a narrowed token, rather
-/// than serve it the whole namespace.
-#[tokio::test]
-async fn an_rpc_that_checks_no_queue_refuses_a_narrowed_token() {
-    let harness = Harness::start("grants-closed").await;
-    let mut emails = harness.client(&["read:queue=emails"]);
-
-    let status = emails
-        .get_workflow_run(GetWorkflowRunRequest::default())
-        .await
-        .expect_err("workflows check no queue");
-    assert_beyond(&status, "read", None, None);
-    harness.stop().await;
-}
-
-/// A graph of unchained nodes, one per `(name, queue, task)`.
+/// A graph of unchained nodes, one per `(name, queue, task)`, named after its
+/// nodes so two different graphs never share a definition.
 fn workflow(nodes: &[(&str, &str, &str)]) -> SubmitWorkflowRequest {
     SubmitWorkflowRequest {
-        name: "grants".into(),
+        name: nodes
+            .iter()
+            .map(|(name, _, _)| *name)
+            .collect::<Vec<_>>()
+            .join("-"),
         graph: Some(WorkflowGraph {
             nodes: nodes
                 .iter()
@@ -578,6 +568,75 @@ async fn a_task_grant_submits_its_task_only() {
     assert_beyond(&status, "produce", Some("emails"), Some("delete_account"));
     assert_at_node(&status, "purge");
     assert_nothing_written(&harness);
+    harness.stop().await;
+}
+
+async fn submit(client: &mut Client, request: SubmitWorkflowRequest) -> String {
+    client
+        .submit_workflow(request)
+        .await
+        .expect("submit_workflow")
+        .into_inner()
+        .run_id
+}
+
+async fn read_run(client: &mut Client, run_id: &str) -> Result<(), Status> {
+    client
+        .get_workflow_run(GetWorkflowRunRequest {
+            run_id: run_id.into(),
+        })
+        .await
+        .map(drop)
+}
+
+/// A run with any node outside the grants reads exactly as a run that does not
+/// exist: a partial view, or "you may not see it", would confirm the id.
+#[tokio::test]
+async fn a_workflow_run_beyond_the_grants_reads_as_missing() {
+    let harness = Harness::start("grants-workflow-read").await;
+    let own = submit(
+        &mut harness.client(&["produce:queue=emails"]),
+        workflow(&[
+            ("render", "emails", "render"),
+            ("send", "emails", "send_receipt"),
+        ]),
+    )
+    .await;
+    let mixed = submit(
+        &mut harness.whole(),
+        workflow(&[
+            ("render", "emails", "render"),
+            ("charge", "billing", "charge"),
+        ]),
+    )
+    .await;
+
+    for grants in [&["produce:queue=emails"][..], &["read:queue=emails"]] {
+        let mut emails = harness.client(grants);
+        read_run(&mut emails, &own)
+            .await
+            .expect("its own run reads");
+        let hidden = read_run(&mut emails, &mixed)
+            .await
+            .expect_err("billing is not granted");
+        let absent = read_run(&mut emails, "no-such-run")
+            .await
+            .expect_err("no such run");
+        assert_eq!(hidden.code(), Code::NotFound, "{hidden:?}");
+        assert_eq!(hidden.code(), absent.code());
+        assert_eq!(
+            hidden.message().replace(&mixed, "<id>"),
+            absent.message().replace("no-such-run", "<id>")
+        );
+        assert!(!hidden.message().contains("billing"), "{hidden:?}");
+    }
+
+    // One reachable task does not open a run that also runs another.
+    let mut render = harness.client(&["read:queue=emails,task=render"]);
+    let status = read_run(&mut render, &own)
+        .await
+        .expect_err("send_receipt is not granted");
+    assert_eq!(status.code(), Code::NotFound);
     harness.stop().await;
 }
 
