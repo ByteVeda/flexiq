@@ -5,7 +5,7 @@
 //! door and a cross-tenant one.
 
 use flexiq_core::error::QueueError;
-use flexiq_core::Storage;
+use flexiq_core::{DeadJob, Storage};
 use tonic::{Response, Status};
 
 use super::{convert, require, Scoped};
@@ -18,14 +18,19 @@ use crate::grpc::producer::cursor::Cursor;
 use crate::grpc::producer::reads::page_size;
 use crate::grpc::status::{reason, WireError};
 
-/// A page of the dead-letter queue, newest first.
+/// A page of the dead-letter queue, newest first, of one queue and/or one task
+/// when the request names them.
 ///
 /// The page token is the producer door's opaque cursor, carrying the last
-/// row's `(failed_at, id)` — the keyset `list_dead_after` resumes from.
+/// row's `(failed_at, id)` — the keyset `list_dead_filtered_after` resumes
+/// from. The filter is the storage query's, never applied to a cut page, so a
+/// narrowed caller's page is as full as anyone's (#989).
 pub(crate) async fn list(
     scoped: &Scoped,
     request: pb::ListDeadLettersRequest,
 ) -> Result<Response<pb::ListDeadLettersResponse>, Status> {
+    let (queue, task) = (request.queue, request.task_name);
+    scoped.require(queue.as_deref(), task.as_deref())?;
     let limit = page_size(request.page_size)?;
     let cursor = match request.page_token.as_str() {
         "" => None,
@@ -34,7 +39,9 @@ pub(crate) async fn list(
 
     let namespace = scoped.namespace_owned();
     let entries = on_storage(scoped.storage(), move |storage| {
-        storage.list_dead_after(
+        storage.list_dead_filtered_after(
+            queue.as_deref(),
+            task.as_deref(),
             i64::from(limit),
             cursor
                 .as_ref()
@@ -72,14 +79,7 @@ pub(crate) async fn get(
     request: pb::GetDeadLetterRequest,
 ) -> Result<Response<pb::GetDeadLetterResponse>, Status> {
     let id = require("dead_letter_id", request.dead_letter_id)?;
-    let namespace = scoped.namespace_owned();
-    let lookup = id.clone();
-    let entry = on_storage(scoped.storage(), move |storage| {
-        storage.get_dead(&lookup, Some(&namespace))
-    })
-    .await?
-    .ok_or_else(|| not_found(&id))?;
-
+    let entry = read(scoped, &id).await?;
     Ok(Response::new(pb::GetDeadLetterResponse {
         dead_letter: Some(convert::dead_letter(entry, request.include_payload)),
     }))
@@ -92,6 +92,7 @@ pub(crate) async fn replay(
 ) -> Result<Response<pb::ReplayDeadLetterResponse>, Status> {
     let id = require("dead_letter_id", request.dead_letter_id)?;
     scoped.audit(TargetKind::DeadLetter, id.clone());
+    require_reachable(scoped, &id).await?;
     let namespace = scoped.namespace_owned();
     let lookup = id.clone();
     let events = scoped.events();
@@ -128,6 +129,7 @@ pub(crate) async fn delete(
 ) -> Result<Response<pb::DeleteDeadLetterResponse>, Status> {
     let id = require("dead_letter_id", request.dead_letter_id)?;
     scoped.audit(TargetKind::DeadLetter, id.clone());
+    require_reachable(scoped, &id).await?;
     let namespace = scoped.namespace_owned();
     let lookup = id.clone();
     let deleted = on_storage(scoped.storage(), move |storage| {
@@ -150,12 +152,15 @@ pub(crate) async fn purge(
         Some(Filter::TaskName(task)) => {
             let task = require("task_name", task)?;
             scoped.audit(TargetKind::Task, task.clone());
+            // The task's entries on every queue go.
+            scoped.require(None, Some(&task))?;
             on_storage(scoped.storage(), move |storage| {
                 storage.purge_dead_by_task(&task, Some(&namespace))
             })
             .await?
         }
         Some(Filter::FailedBefore(before)) => {
+            scoped.require(None, None)?;
             let cutoff = millis_from_timestamp(&before);
             on_storage(scoped.storage(), move |storage| {
                 storage.purge_dead(cutoff, Some(&namespace))
@@ -165,6 +170,7 @@ pub(crate) async fn purge(
         // Every entry: a cutoff past any `failed_at`, including one stamped by
         // a clock ahead of this one.
         None => {
+            scoped.require(None, None)?;
             on_storage(scoped.storage(), move |storage| {
                 storage.purge_dead(i64::MAX, Some(&namespace))
             })
@@ -175,6 +181,31 @@ pub(crate) async fn purge(
     Ok(Response::new(pb::PurgeDeadLettersResponse {
         purged: i64::try_from(purged).unwrap_or(i64::MAX),
     }))
+}
+
+/// The caller's entry `id`, or `NOT_FOUND` — also for an entry outside its
+/// grants, the answer `GetJob` gives, so a narrowed token cannot probe ids.
+async fn read(scoped: &Scoped, id: &str) -> Result<DeadJob, Status> {
+    let namespace = scoped.namespace_owned();
+    let lookup = id.to_string();
+    on_storage(scoped.storage(), move |storage| {
+        storage.get_dead(&lookup, Some(&namespace))
+    })
+    .await?
+    .filter(|entry| scoped.reaches(Some(&entry.queue), Some(&entry.task_name)))
+    .ok_or_else(|| not_found(id))
+}
+
+/// Refuse a write on an entry outside the caller's grants as if it were
+/// absent. A whole grant reaches every entry, so it skips the read.
+///
+/// Entries are never rewritten in place, so the row checked is the row the
+/// write then acts on.
+async fn require_reachable(scoped: &Scoped, id: &str) -> Result<(), Status> {
+    if scoped.reaches_everything() {
+        return Ok(());
+    }
+    read(scoped, id).await.map(drop)
 }
 
 fn not_found(id: &str) -> Status {

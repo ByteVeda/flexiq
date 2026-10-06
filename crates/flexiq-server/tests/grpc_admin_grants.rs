@@ -16,10 +16,12 @@ use flexiq_server::config::grpc::GrpcConfig;
 use flexiq_server::config::listen::ListenAddress;
 use flexiq_server::grpc::pb::admin::admin_service_client::AdminServiceClient;
 use flexiq_server::grpc::pb::admin::{
-    ClearQueueOverrideRequest, ClearTaskOverrideRequest, DrainWorkerRequest,
-    GetNamespaceQuotaRequest, GetThroughputRequest, ListOverridesRequest, ListQueuesRequest,
-    ListWorkersRequest, PauseQueueRequest, QueueOverride, ResumeQueueRequest,
-    SetQueueOverrideRequest, SetTaskOverrideRequest, TaskOverride,
+    purge_dead_letters_request, ClearQueueOverrideRequest, ClearTaskOverrideRequest,
+    DeleteDeadLetterRequest, DrainWorkerRequest, GetDeadLetterRequest, GetNamespaceQuotaRequest,
+    GetThroughputRequest, ListDeadLettersRequest, ListOverridesRequest, ListQueuesRequest,
+    ListWorkersRequest, PauseQueueRequest, PurgeDeadLettersRequest, QueueOverride,
+    ReplayDeadLetterRequest, ResumeQueueRequest, SetQueueOverrideRequest, SetTaskOverrideRequest,
+    TaskOverride,
 };
 use flexiq_server::grpc::status::reason;
 use flexiq_server::grpc::Listener;
@@ -136,6 +138,33 @@ fn job_in(queue: &str, task: &str) -> NewJob {
         namespace: Some(NAMESPACE.to_string()),
         debounce_key: None,
     }
+}
+
+/// Dead-letter one job of `task` on `queue`, returning the entry's id.
+fn dead_letter(storage: &TempStorage, queue: &str, task: &str) -> String {
+    let job = storage.enqueue(job_in(queue, task)).expect("enqueue");
+    storage
+        .dequeue(queue, now_millis() + 1_000, Some(NAMESPACE))
+        .expect("dequeue");
+    let running = storage
+        .get_job(&job.id, None)
+        .expect("read")
+        .expect("present");
+    storage
+        .move_to_dlq(&running, "boom", None)
+        .expect("dead-letter");
+    storage
+        .list_dead(100, 0, Some(NAMESPACE))
+        .expect("list")
+        .into_iter()
+        .find(|entry| entry.original_job_id == job.id)
+        .expect("the entry")
+        .id
+}
+
+fn assert_not_found(status: &Status, reason: &str) {
+    assert_eq!(status.code(), Code::NotFound, "{status:?}");
+    assert_eq!(refusal(status).0, reason);
 }
 
 /// The refusal's reason and metadata, which is what a client branches on.
@@ -363,6 +392,142 @@ async fn overrides_are_checked_by_what_they_apply_to() {
         })
         .await
         .expect("its own task");
+    harness.stop().await;
+}
+
+/// The issue's own example: `admin:queue=billing` finds and replays its dead
+/// letters, and every other entry reads as absent.
+#[tokio::test]
+async fn a_queue_grant_works_its_own_dead_letters_only() {
+    let harness = Harness::start("admin-grants-dlq").await;
+    let ours = dead_letter(&harness.storage, "billing", "charge");
+    let theirs = dead_letter(&harness.storage, "emails", "send");
+    let mut client = harness.client(&["admin:queue=billing", "inspect:queue=billing"]);
+
+    let status = client
+        .list_dead_letters(ListDeadLettersRequest::default())
+        .await
+        .expect_err("names no queue");
+    assert_beyond(&status, "inspect", None, None);
+    let status = client
+        .list_dead_letters(ListDeadLettersRequest {
+            queue: Some("emails".into()),
+            ..Default::default()
+        })
+        .await
+        .expect_err("another queue");
+    assert_beyond(&status, "inspect", Some("emails"), None);
+    let listed = client
+        .list_dead_letters(ListDeadLettersRequest {
+            queue: Some("billing".into()),
+            ..Default::default()
+        })
+        .await
+        .expect("its own queue")
+        .into_inner();
+    let ids: Vec<_> = listed.dead_letters.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(ids, [ours.as_str()]);
+
+    client
+        .get_dead_letter(GetDeadLetterRequest {
+            dead_letter_id: ours.clone(),
+            include_payload: false,
+        })
+        .await
+        .expect("its own entry");
+    let status = client
+        .get_dead_letter(GetDeadLetterRequest {
+            dead_letter_id: theirs.clone(),
+            include_payload: false,
+        })
+        .await
+        .expect_err("another queue's entry");
+    assert_not_found(&status, reason::DEAD_LETTER_NOT_FOUND);
+    let status = client
+        .replay_dead_letter(ReplayDeadLetterRequest {
+            dead_letter_id: theirs.clone(),
+        })
+        .await
+        .expect_err("another queue's entry");
+    assert_not_found(&status, reason::DEAD_LETTER_NOT_FOUND);
+    let status = client
+        .delete_dead_letter(DeleteDeadLetterRequest {
+            dead_letter_id: theirs.clone(),
+        })
+        .await
+        .expect_err("another queue's entry");
+    assert_not_found(&status, reason::DEAD_LETTER_NOT_FOUND);
+    assert!(
+        harness
+            .storage
+            .get_dead(&theirs, Some(NAMESPACE))
+            .expect("read")
+            .is_some(),
+        "a refused replay or delete must leave the entry"
+    );
+
+    let replayed = client
+        .replay_dead_letter(ReplayDeadLetterRequest {
+            dead_letter_id: ours,
+        })
+        .await
+        .expect("its own entry")
+        .into_inner();
+    assert_eq!(replayed.job.expect("the job").queue, "billing");
+
+    // A purge by task reaches the task on every queue; the other arms reach
+    // the whole namespace.
+    let status = client
+        .purge_dead_letters(PurgeDeadLettersRequest {
+            filter: Some(purge_dead_letters_request::Filter::TaskName("send".into())),
+        })
+        .await
+        .expect_err("a task on every queue");
+    assert_beyond(&status, "admin", None, Some("send"));
+    let status = client
+        .purge_dead_letters(PurgeDeadLettersRequest { filter: None })
+        .await
+        .expect_err("every entry");
+    assert_beyond(&status, "admin", None, None);
+    let purged = harness
+        .client(&["admin:task=send"])
+        .purge_dead_letters(PurgeDeadLettersRequest {
+            filter: Some(purge_dead_letters_request::Filter::TaskName("send".into())),
+        })
+        .await
+        .expect("its own task")
+        .into_inner();
+    assert_eq!(purged.purged, 1);
+    harness.stop().await;
+}
+
+/// A token narrowed to one task on one queue must name both.
+#[tokio::test]
+async fn a_dead_letter_listing_names_every_qualifier_the_grant_has() {
+    let harness = Harness::start("admin-grants-dlq-both").await;
+    let ours = dead_letter(&harness.storage, "billing", "charge");
+    dead_letter(&harness.storage, "billing", "refund");
+    let mut client = harness.client(&["inspect:queue=billing,task=charge"]);
+
+    let status = client
+        .list_dead_letters(ListDeadLettersRequest {
+            queue: Some("billing".into()),
+            ..Default::default()
+        })
+        .await
+        .expect_err("the queue's other tasks are beyond it");
+    assert_beyond(&status, "inspect", Some("billing"), None);
+    let listed = client
+        .list_dead_letters(ListDeadLettersRequest {
+            queue: Some("billing".into()),
+            task_name: Some("charge".into()),
+            ..Default::default()
+        })
+        .await
+        .expect("both named")
+        .into_inner();
+    let ids: Vec<_> = listed.dead_letters.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(ids, [ours.as_str()]);
     harness.stop().await;
 }
 

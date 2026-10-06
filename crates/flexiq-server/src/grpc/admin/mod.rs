@@ -130,6 +130,12 @@ impl Scoped {
         self.principal.reaches(queue, task)
     }
 
+    /// Whether the caller reaches every queue and task — when it does, a
+    /// method keyed by id can skip loading the row to check it.
+    pub(crate) fn reaches_everything(&self) -> bool {
+        self.principal.reaches_everything()
+    }
+
     /// Refuse a call on a queue or task the caller's grants do not reach.
     pub(crate) fn require(&self, queue: Option<&str>, task: Option<&str>) -> Result<(), WireError> {
         if self.reaches(queue, task) {
@@ -211,7 +217,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ListDeadLettersRequest>,
     ) -> Result<Response<pb::ListDeadLettersResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         dead_letters::list(&scoped, message).await
     }
 
@@ -219,7 +225,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::GetDeadLetterRequest>,
     ) -> Result<Response<pb::GetDeadLetterResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         dead_letters::get(&scoped, message).await
     }
 
@@ -227,7 +233,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::ReplayDeadLetterRequest>,
     ) -> Result<Response<pb::ReplayDeadLetterResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         dead_letters::replay(&scoped, message).await
     }
 
@@ -235,7 +241,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::DeleteDeadLetterRequest>,
     ) -> Result<Response<pb::DeleteDeadLetterResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         dead_letters::delete(&scoped, message).await
     }
 
@@ -243,7 +249,7 @@ impl AdminService for Admin {
         &self,
         request: Request<pb::PurgeDeadLettersRequest>,
     ) -> Result<Response<pb::PurgeDeadLettersResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         dead_letters::purge(&scoped, message).await
     }
 
