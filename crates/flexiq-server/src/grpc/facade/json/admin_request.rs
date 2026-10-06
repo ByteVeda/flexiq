@@ -17,7 +17,24 @@ use crate::grpc::pb::admin as pb;
 use crate::grpc::pb::admin::purge_dead_letters_request::Filter;
 use crate::grpc::pb::admin::put_periodic_task_request::Body;
 
-/// `GET /v1/admin/throughput` — the window, as a query parameter.
+/// `GET /v1/admin/queues` — the queue filter, as a query parameter.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ListQueues {
+    /// Only this queue; omitting it lists every queue.
+    #[serde(default)]
+    pub queue: Option<String>,
+}
+
+impl ListQueues {
+    /// The request message.
+    pub fn into_message(self) -> pb::ListQueuesRequest {
+        pb::ListQueuesRequest { queue: self.queue }
+    }
+}
+
+/// `GET /v1/admin/throughput` — the window and the queue filter, as query
+/// parameters.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GetThroughput {
@@ -25,6 +42,9 @@ pub struct GetThroughput {
     /// server's default.
     #[serde(default)]
     pub window: Option<JsonDuration>,
+    /// Only this queue; omitting it counts every queue.
+    #[serde(default)]
+    pub queue: Option<String>,
 }
 
 impl GetThroughput {
@@ -32,11 +52,13 @@ impl GetThroughput {
     pub fn into_message(self) -> pb::GetThroughputRequest {
         pb::GetThroughputRequest {
             window: self.window.map(|value| value.0),
+            queue: self.queue,
         }
     }
 }
 
-/// `GET /v1/admin/deadLetters` — the page cursor, as query parameters.
+/// `GET /v1/admin/deadLetters` — the filters and the page cursor, as query
+/// parameters.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ListDeadLetters {
@@ -46,6 +68,12 @@ pub struct ListDeadLetters {
     /// The previous response's `nextPageToken`, `pageToken=`. Opaque.
     #[serde(default, alias = "page_token")]
     pub page_token: Option<String>,
+    /// Only entries from this queue; omitting it lists every queue.
+    #[serde(default)]
+    pub queue: Option<String>,
+    /// Only entries of this task, `taskName=`; omitting it lists every task.
+    #[serde(default, alias = "task_name")]
+    pub task_name: Option<String>,
 }
 
 impl ListDeadLetters {
@@ -54,6 +82,52 @@ impl ListDeadLetters {
         pb::ListDeadLettersRequest {
             page_size: self.page_size.unwrap_or_default(),
             page_token: self.page_token.unwrap_or_default(),
+            queue: self.queue,
+            task_name: self.task_name,
+        }
+    }
+}
+
+/// `GET /v1/admin/periodicTasks` — the filters, as query parameters.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ListPeriodicTasks {
+    /// Only tasks firing into this queue; omitting it lists every queue's.
+    #[serde(default)]
+    pub queue: Option<String>,
+    /// Only schedules of this task, `taskName=`; omitting it lists every task's.
+    #[serde(default, alias = "task_name")]
+    pub task_name: Option<String>,
+}
+
+impl ListPeriodicTasks {
+    /// The request message.
+    pub fn into_message(self) -> pb::ListPeriodicTasksRequest {
+        pb::ListPeriodicTasksRequest {
+            queue: self.queue,
+            task_name: self.task_name,
+        }
+    }
+}
+
+/// `GET /v1/admin/overrides` — the override to read, as query parameters.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ListOverrides {
+    /// Only this queue's override.
+    #[serde(default)]
+    pub queue: Option<String>,
+    /// Only this task's override, `taskName=`.
+    #[serde(default, alias = "task_name")]
+    pub task_name: Option<String>,
+}
+
+impl ListOverrides {
+    /// The request message.
+    pub fn into_message(self) -> pb::ListOverridesRequest {
+        pb::ListOverridesRequest {
+            queue: self.queue,
+            task_name: self.task_name,
         }
     }
 }

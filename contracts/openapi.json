@@ -1731,6 +1731,24 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Unset lists every queue. A credential narrowed to some queues must name\none of them.",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unset lists every task. A credential narrowed to some tasks must name one\nof them.",
+            "in": "query",
+            "name": "taskName",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1938,6 +1956,25 @@
     "/v1/admin/overrides": {
       "get": {
         "operationId": "AdminService_ListOverrides",
+        "parameters": [
+          {
+            "description": "Set either to read one override: `queues` then holds only this queue's,\n`tasks` only `task_name`'s, and a map whose key is unset comes back\nempty. Both unset lists every override. A credential narrowed to some\nqueues or tasks must name one it reaches.",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "taskName",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1969,6 +2006,26 @@
     "/v1/admin/periodicTasks": {
       "get": {
         "operationId": "AdminService_ListPeriodicTasks",
+        "parameters": [
+          {
+            "description": "Unset lists every queue's tasks. A credential narrowed to some queues must\nname one of them.",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unset lists every task's schedules. A credential narrowed to some tasks\nmust name one of them.",
+            "in": "query",
+            "name": "taskName",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -2255,6 +2312,17 @@
     "/v1/admin/queues": {
       "get": {
         "operationId": "AdminService_ListQueues",
+        "parameters": [
+          {
+            "description": "Unset lists every queue. A credential narrowed to some queues must name\none of them.",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -2666,6 +2734,15 @@
             "schema": {
               "description": "A span of time, seconds with up to nine fractional digits and a trailing `s`.",
               "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unset counts every queue. A credential narrowed to some queues must name\none of them.",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
               "type": "string"
             }
           }

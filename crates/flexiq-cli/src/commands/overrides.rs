@@ -35,7 +35,7 @@ pub async fn run(client: &mut AdminClient, command: &OverridesCommand, json: boo
 /// `fq overrides list`: tasks then queues, each by name.
 async fn list(client: &mut AdminClient, json: bool) -> Result<()> {
     let response = client
-        .list_overrides(pb::ListOverridesRequest {})
+        .list_overrides(pb::ListOverridesRequest::default())
         .await
         .map_err(refused)?
         .into_inner();

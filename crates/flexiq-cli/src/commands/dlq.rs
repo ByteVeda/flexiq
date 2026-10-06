@@ -37,6 +37,8 @@ pub fn list_request(args: &DlqListArgs) -> pb::ListDeadLettersRequest {
         // Zero is the server's default page size, as an omitted flag means.
         page_size: args.page_size.unwrap_or_default(),
         page_token: args.page_token.clone().unwrap_or_default(),
+        queue: None,
+        task_name: None,
     }
 }
 

@@ -579,7 +579,7 @@ async fn pause_and_resume_through_the_cli() {
 
     let listed = harness
         .admin
-        .list_queues(cli_pb::ListQueuesRequest {})
+        .list_queues(cli_pb::ListQueuesRequest::default())
         .await
         .expect("list")
         .into_inner()
@@ -824,7 +824,7 @@ async fn a_task_override_set_through_the_cli_is_listed_and_replaced() {
 
     let listed = harness
         .admin
-        .list_overrides(cli_pb::ListOverridesRequest {})
+        .list_overrides(cli_pb::ListOverridesRequest::default())
         .await
         .expect("list")
         .into_inner();
@@ -851,7 +851,7 @@ async fn a_produce_only_token_is_told_it_lacks_inspect() {
     let harness = Harness::start("admin-scope").await;
     let mut admin = harness.admin_with(ScopeSet::of(&[Scope::Produce])).await;
     let status = admin
-        .list_queues(cli_pb::ListQueuesRequest {})
+        .list_queues(cli_pb::ListQueuesRequest::default())
         .await
         .expect_err("no inspect scope");
     let text = flexiq_cli::error::describe(&status);
@@ -892,7 +892,7 @@ async fn the_admin_json_render_matches_the_facade() {
     let admin = &mut harness.admin;
 
     let queues = admin
-        .list_queues(cli_pb::ListQueuesRequest {})
+        .list_queues(cli_pb::ListQueuesRequest::default())
         .await
         .expect("list")
         .into_inner();
@@ -1078,7 +1078,7 @@ async fn the_admin_json_render_matches_the_facade() {
         server_render::resume_periodic_task,
     );
     let listed = admin
-        .list_periodic_tasks(cli_pb::ListPeriodicTasksRequest {})
+        .list_periodic_tasks(cli_pb::ListPeriodicTasksRequest::default())
         .await
         .expect("list")
         .into_inner();
@@ -1141,7 +1141,7 @@ async fn the_admin_json_render_matches_the_facade() {
         server_render::set_queue_override,
     );
     let overrides = admin
-        .list_overrides(cli_pb::ListOverridesRequest {})
+        .list_overrides(cli_pb::ListOverridesRequest::default())
         .await
         .expect("list")
         .into_inner();

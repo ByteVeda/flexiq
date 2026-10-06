@@ -20,6 +20,7 @@ use crate::{output, pb};
 pub fn request(args: &ThroughputArgs) -> Result<pb::admin::GetThroughputRequest> {
     Ok(pb::admin::GetThroughputRequest {
         window: span(args.window_ms, "--window-ms")?,
+        queue: None,
     })
 }
 

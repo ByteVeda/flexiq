@@ -187,7 +187,7 @@ async fn a_pause_is_the_namespaces_and_shows_in_the_listing() {
 
     let listed = harness
         .client
-        .list_queues(ListQueuesRequest {})
+        .list_queues(ListQueuesRequest::default())
         .await
         .expect("list")
         .into_inner()
@@ -245,7 +245,7 @@ async fn throughput_counts_this_namespaces_finished_jobs() {
 
     let response = harness
         .client
-        .get_throughput(GetThroughputRequest { window: None })
+        .get_throughput(GetThroughputRequest::default())
         .await
         .expect("throughput")
         .into_inner();
@@ -264,6 +264,7 @@ async fn throughput_counts_this_namespaces_finished_jobs() {
                 seconds: 0,
                 nanos: 0,
             }),
+            queue: None,
         })
         .await
         .expect_err("a zero window");
@@ -588,7 +589,7 @@ async fn a_periodic_task_is_declared_paused_triggered_and_deleted() {
 
     let listed = harness
         .client
-        .list_periodic_tasks(ListPeriodicTasksRequest {})
+        .list_periodic_tasks(ListPeriodicTasksRequest::default())
         .await
         .expect("list")
         .into_inner()
@@ -751,7 +752,7 @@ async fn overrides_are_replaced_under_the_namespaced_key() {
 
     let listed = harness
         .client
-        .list_overrides(ListOverridesRequest {})
+        .list_overrides(ListOverridesRequest::default())
         .await
         .expect("list")
         .into_inner();
@@ -804,7 +805,7 @@ async fn each_scope_reaches_its_half_of_the_service_and_no_more() {
     denied(
         produce
             .client
-            .list_queues(ListQueuesRequest {})
+            .list_queues(ListQueuesRequest::default())
             .await
             .expect_err("read"),
         "inspect",
@@ -823,7 +824,7 @@ async fn each_scope_reaches_its_half_of_the_service_and_no_more() {
         Harness::with_scopes("admin-scope-inspect", ScopeSet::of(&[Scope::Inspect])).await;
     inspect
         .client
-        .list_queues(ListQueuesRequest {})
+        .list_queues(ListQueuesRequest::default())
         .await
         .expect("inspect reads");
     denied(

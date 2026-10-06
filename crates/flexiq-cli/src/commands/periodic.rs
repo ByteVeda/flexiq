@@ -32,7 +32,7 @@ pub async fn run(client: &mut AdminClient, command: &PeriodicCommand, json: bool
 /// `fq periodic list`, by name.
 async fn list(client: &mut AdminClient, json: bool) -> Result<()> {
     let response = client
-        .list_periodic_tasks(pb::ListPeriodicTasksRequest {})
+        .list_periodic_tasks(pb::ListPeriodicTasksRequest::default())
         .await
         .map_err(refused)?
         .into_inner();
