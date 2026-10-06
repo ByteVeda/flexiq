@@ -15,9 +15,10 @@ use flexiq_server::config::listen::ListenAddress;
 use flexiq_server::grpc::pb::producer_service_client::ProducerServiceClient;
 use flexiq_server::grpc::pb::{
     enqueue_batch_item_result, enqueue_request, watch_jobs_request, watch_jobs_response,
-    CancelJobRequest, Debounce, EnqueueBatchRequest, EnqueueOptions, EnqueueRequest, GetJobRequest,
-    GetWorkflowRunRequest, ListJobsRequest, QueueStatsRequest, SubmitWorkflowRequest, WatchJobIds,
-    WatchJobsRequest,
+    workflow_node_config, CancelJobRequest, Debounce, EnqueueBatchRequest, EnqueueOptions,
+    EnqueueRequest, GetJobRequest, GetWorkflowRunRequest, ListJobsRequest, QueueStatsRequest,
+    SubmitWorkflowRequest, WatchJobIds, WatchJobsRequest, WorkflowGraph, WorkflowGraphNode,
+    WorkflowNodeConfig,
 };
 use flexiq_server::grpc::status::reason;
 use flexiq_server::grpc::Listener;
@@ -473,18 +474,110 @@ async fn a_narrowed_caller_cannot_debounce() {
 #[tokio::test]
 async fn an_rpc_that_checks_no_queue_refuses_a_narrowed_token() {
     let harness = Harness::start("grants-closed").await;
-    let mut emails = harness.client(&["produce:queue=emails", "read:queue=emails"]);
+    let mut emails = harness.client(&["read:queue=emails"]);
 
-    let status = emails
-        .submit_workflow(SubmitWorkflowRequest::default())
-        .await
-        .expect_err("workflows check no queue");
-    assert_beyond(&status, "produce", None, None);
     let status = emails
         .get_workflow_run(GetWorkflowRunRequest::default())
         .await
         .expect_err("workflows check no queue");
     assert_beyond(&status, "read", None, None);
+    harness.stop().await;
+}
+
+/// A graph of unchained nodes, one per `(name, queue, task)`.
+fn workflow(nodes: &[(&str, &str, &str)]) -> SubmitWorkflowRequest {
+    SubmitWorkflowRequest {
+        name: "grants".into(),
+        graph: Some(WorkflowGraph {
+            nodes: nodes
+                .iter()
+                .map(|(name, _, _)| WorkflowGraphNode {
+                    name: (*name).into(),
+                })
+                .collect(),
+            edges: Vec::new(),
+            node_configs: nodes
+                .iter()
+                .map(|(name, queue, task)| WorkflowNodeConfig {
+                    name: (*name).into(),
+                    task_name: (*task).into(),
+                    queue: Some((*queue).into()),
+                    body: Some(workflow_node_config::Body::Raw(Vec::new())),
+                    ..Default::default()
+                })
+                .collect(),
+        }),
+        params_json: None,
+    }
+}
+
+fn assert_at_node(status: &Status, node: &str) {
+    assert_eq!(
+        refusal(status).1.get(reason::KEY_NODE).map(String::as_str),
+        Some(node)
+    );
+}
+
+fn assert_nothing_written(harness: &Harness) {
+    let written = harness
+        .storage
+        .list_jobs_after(None, None, None, 10, None, Some(NAMESPACE))
+        .expect("list");
+    assert!(written.is_empty(), "nothing may land: {written:?}");
+}
+
+/// A workflow is a batch of enqueues: every node must be reachable, or the
+/// graph is refused whole before anything is written (#990).
+#[tokio::test]
+async fn a_workflow_submits_only_when_every_node_is_granted() {
+    let harness = Harness::start("grants-workflow-submit").await;
+    let mut emails = harness.client(&["produce:queue=emails"]);
+
+    let status = emails
+        .submit_workflow(workflow(&[
+            ("render", "emails", "render"),
+            ("charge", "billing", "charge"),
+        ]))
+        .await
+        .expect_err("billing is not granted");
+    assert_beyond(&status, "produce", Some("billing"), Some("charge"));
+    assert_at_node(&status, "charge");
+    assert_nothing_written(&harness);
+
+    // An empty queue is checked as the `default` it lands in.
+    let status = emails
+        .submit_workflow(workflow(&[("render", "", "render")]))
+        .await
+        .expect_err("the default queue is not granted");
+    assert_beyond(&status, "produce", Some("default"), Some("render"));
+    assert_at_node(&status, "render");
+    assert_nothing_written(&harness);
+
+    emails
+        .submit_workflow(workflow(&[
+            ("render", "emails", "render"),
+            ("send", "emails", "send_receipt"),
+        ]))
+        .await
+        .expect("every node is granted");
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_task_grant_submits_its_task_only() {
+    let harness = Harness::start("grants-workflow-task").await;
+    let mut edge = harness.client(&["produce:queue=emails,task=send_receipt"]);
+
+    let status = edge
+        .submit_workflow(workflow(&[
+            ("send", "emails", "send_receipt"),
+            ("purge", "emails", "delete_account"),
+        ]))
+        .await
+        .expect_err("another task is not granted");
+    assert_beyond(&status, "produce", Some("emails"), Some("delete_account"));
+    assert_at_node(&status, "purge");
+    assert_nothing_written(&harness);
     harness.stop().await;
 }
 

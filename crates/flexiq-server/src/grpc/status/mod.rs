@@ -398,6 +398,15 @@ impl WireError {
         self
     }
 
+    /// Name the workflow node this error belongs to, beside whatever reason
+    /// the node raised — the graph's [`Self::at_index`].
+    #[must_use]
+    pub fn at_node(mut self, node: &str) -> Self {
+        self.metadata
+            .insert(reason::KEY_NODE.to_string(), node.to_string());
+        self
+    }
+
     /// The reason a client branches on. Exposed for tests and for the batch
     /// paths that inspect an error before rendering it.
     pub fn reason(&self) -> &'static str {

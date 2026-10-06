@@ -285,7 +285,7 @@ impl ProducerService for Producer {
         &self,
         request: Request<pb::SubmitWorkflowRequest>,
     ) -> Result<Response<pb::SubmitWorkflowResponse>, Status> {
-        let (scoped, message) = self.scope(request)?;
+        let (scoped, message) = self.scope_narrowed(request)?;
         workflows::submit_workflow(&scoped, message).await
     }
 

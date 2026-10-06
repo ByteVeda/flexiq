@@ -15,7 +15,7 @@ use flexiq_workflows::lifecycle::{self, SubmitStaticWorkflowRequest, SubmitWorkf
 use flexiq_workflows::{StepMetadata, WorkflowStorage};
 use tonic::{Response, Status};
 
-use super::convert::{self, DEFAULT_TIMEOUT_MS};
+use super::convert::{self, DEFAULT_QUEUE, DEFAULT_TIMEOUT_MS};
 use super::structured;
 use super::Scoped;
 use crate::grpc::audit::TargetKind;
@@ -50,6 +50,7 @@ pub(crate) async fn submit_workflow(
         .graph
         .ok_or_else(|| WireError::invalid_request("graph is required"))?;
     refuse_dynamic_constructs(&graph)?;
+    admit_graph(scoped, &graph)?;
     let (dag_bytes, step_metadata, node_payloads) = compile_graph(graph)?;
 
     let namespace = scoped.namespace().to_string();
@@ -59,7 +60,7 @@ pub(crate) async fn submit_workflow(
         dag_bytes,
         step_metadata,
         node_payloads,
-        queue_default: "default".to_string(),
+        queue_default: DEFAULT_QUEUE.to_string(),
         params_json: request.params_json,
         deferred_node_names: Default::default(),
         cache_hit_nodes: Default::default(),
@@ -133,6 +134,25 @@ fn refuse_dynamic_constructs(graph: &pb::WorkflowGraph) -> Result<(), Status> {
             continue;
         };
         return Err(WireError::workflow_construct_unsupported(&node.name, field).into());
+    }
+    Ok(())
+}
+
+/// Refuse the whole graph if any node would enqueue onto a queue or task the
+/// caller's grants do not reach, naming the first such node (#990).
+///
+/// Checked before anything is written, on the queue the node's job lands in:
+/// an empty or absent queue is `default` by then, as it is for `Enqueue`.
+fn admit_graph(scoped: &Scoped<'_>, graph: &pb::WorkflowGraph) -> Result<(), WireError> {
+    for node in &graph.node_configs {
+        let queue = node
+            .queue
+            .as_deref()
+            .filter(|queue| !queue.is_empty())
+            .unwrap_or(DEFAULT_QUEUE);
+        scoped
+            .require(Some(queue), Some(&node.task_name))
+            .map_err(|error| error.at_node(&node.name))?;
     }
     Ok(())
 }
