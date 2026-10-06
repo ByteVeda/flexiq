@@ -37,8 +37,8 @@ pub fn list_request(args: &DlqListArgs) -> pb::ListDeadLettersRequest {
         // Zero is the server's default page size, as an omitted flag means.
         page_size: args.page_size.unwrap_or_default(),
         page_token: args.page_token.clone().unwrap_or_default(),
-        queue: None,
-        task_name: None,
+        queue: args.filter.queue.clone(),
+        task_name: args.filter.task.clone(),
     }
 }
 
@@ -219,6 +219,7 @@ async fn purge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::ListFilterArgs;
 
     const NOW: i64 = 1_757_500_000_000;
 
@@ -237,9 +238,11 @@ mod tests {
             page_size: None,
             page_token: None,
             all: false,
+            filter: ListFilterArgs::default(),
         });
         assert_eq!(request.page_size, 0);
         assert_eq!(request.page_token, "");
+        assert_eq!((request.queue, request.task_name), (None, None));
     }
 
     #[test]
@@ -248,9 +251,15 @@ mod tests {
             page_size: Some(10),
             page_token: Some("t".into()),
             all: false,
+            filter: ListFilterArgs {
+                queue: Some("billing".into()),
+                task: Some("charge".into()),
+            },
         });
         assert_eq!(request.page_size, 10);
         assert_eq!(request.page_token, "t");
+        assert_eq!(request.queue.as_deref(), Some("billing"));
+        assert_eq!(request.task_name.as_deref(), Some("charge"));
     }
 
     #[test]

@@ -331,6 +331,21 @@ pub struct ThroughputArgs {
     /// hours is refused.
     #[arg(long)]
     pub window_ms: Option<i64>,
+    /// Only this queue. A token narrowed to some queues must name one.
+    #[arg(short, long)]
+    pub queue: Option<String>,
+}
+
+/// The queue and task an admin listing is narrowed to. A token narrowed to
+/// some queues or tasks must name what it lists.
+#[derive(Debug, Default, Args)]
+pub struct ListFilterArgs {
+    /// Only this queue.
+    #[arg(short, long)]
+    pub queue: Option<String>,
+    /// Only this task name.
+    #[arg(short, long)]
+    pub task: Option<String>,
 }
 
 /// `fq drain`.
@@ -372,6 +387,9 @@ pub struct DlqListArgs {
     /// Follow every page and print them as one listing.
     #[arg(long)]
     pub all: bool,
+    /// Only one queue's or task's entries.
+    #[command(flatten)]
+    pub filter: ListFilterArgs,
 }
 
 /// `fq dlq show`.
@@ -416,8 +434,8 @@ pub struct DlqPurgeArgs {
 /// `fq periodic`.
 #[derive(Debug, Subcommand)]
 pub enum PeriodicCommand {
-    /// List every periodic task.
-    List,
+    /// List every periodic task, or those firing into a queue or task.
+    List(ListFilterArgs),
     /// Read one periodic task.
     Show(PeriodicShowArgs),
     /// Create a periodic task, or replace an existing one's definition. A
@@ -484,8 +502,8 @@ pub struct PeriodicPutArgs {
 /// next worker start and no running worker.
 #[derive(Debug, Subcommand)]
 pub enum OverridesCommand {
-    /// List every task and queue override.
-    List,
+    /// List every task and queue override, or only one queue's or task's.
+    List(ListFilterArgs),
     /// Replace a task's override. Not a merge: a flag left out is cleared,
     /// not kept. Workers pick the change up when they next start.
     SetTask(SetTaskOverrideArgs),
@@ -604,6 +622,42 @@ mod tests {
         };
         assert!(args.list && args.queue.is_none());
         assert!(parse(&["queues", "mail", "--list"]).is_err());
+    }
+
+    /// An admin listing names the queue and task a narrowed token reaches.
+    #[test]
+    fn admin_listings_take_a_queue_and_a_task() {
+        let Command::Dlq(DlqCommand::List(args)) =
+            parse(&["dlq", "list", "-q", "billing", "--task", "charge"])
+                .expect("parses")
+                .command
+        else {
+            panic!("a dlq list");
+        };
+        assert_eq!(args.filter.queue.as_deref(), Some("billing"));
+        assert_eq!(args.filter.task.as_deref(), Some("charge"));
+        let Command::Periodic(PeriodicCommand::List(filter)) =
+            parse(&["periodic", "list", "--queue", "billing"])
+                .expect("parses")
+                .command
+        else {
+            panic!("a periodic list");
+        };
+        assert_eq!(filter.queue.as_deref(), Some("billing"));
+        assert!(filter.task.is_none());
+        let Command::Overrides(OverridesCommand::List(filter)) =
+            parse(&["overrides", "list"]).expect("parses").command
+        else {
+            panic!("an overrides list");
+        };
+        assert!(filter.queue.is_none() && filter.task.is_none());
+        let Command::Throughput(args) = parse(&["throughput", "-q", "billing"])
+            .expect("parses")
+            .command
+        else {
+            panic!("a throughput");
+        };
+        assert_eq!(args.queue.as_deref(), Some("billing"));
     }
 
     /// `fq workers` stays a bare listing; draining is its own verb.
