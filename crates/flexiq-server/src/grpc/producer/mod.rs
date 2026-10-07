@@ -178,6 +178,11 @@ impl Scoped<'_> {
         audit::target(self.audit.as_ref(), kind, id);
     }
 
+    /// Name a listing's queue and task filters, for the audit trail.
+    pub(crate) fn audit_filter(&self, queue: Option<&str>, task: Option<&str>) {
+        audit::filter(self.audit.as_ref(), queue, task);
+    }
+
     /// Whether the caller may touch `queue` and `task`; `None` asks about
     /// every queue (or task) at once.
     pub(crate) fn reaches(&self, queue: Option<&str>, task: Option<&str>) -> bool {
@@ -316,6 +321,8 @@ impl ProducerService for Producer {
         // The credential as well as the namespace: the stream cap counts per
         // credential, and a narrowed one's grants are checked per target.
         let principal = principal(&request)?.clone();
-        self.watches.watch(&principal, request.into_inner())
+        let audit = AuditContext::of(request.extensions());
+        self.watches
+            .watch(&principal, audit.as_ref(), request.into_inner())
     }
 }

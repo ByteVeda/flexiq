@@ -30,6 +30,7 @@ pub(crate) async fn list(
     request: pb::ListDeadLettersRequest,
 ) -> Result<Response<pb::ListDeadLettersResponse>, Status> {
     let (queue, task) = (request.queue, request.task_name);
+    scoped.audit_filter(queue.as_deref(), task.as_deref());
     scoped.require(queue.as_deref(), task.as_deref())?;
     let limit = page_size(request.page_size)?;
     let cursor = match request.page_token.as_str() {
@@ -79,6 +80,7 @@ pub(crate) async fn get(
     request: pb::GetDeadLetterRequest,
 ) -> Result<Response<pb::GetDeadLetterResponse>, Status> {
     let id = require("dead_letter_id", request.dead_letter_id)?;
+    scoped.audit(TargetKind::DeadLetter, id.clone());
     let entry = read(scoped, &id).await?;
     Ok(Response::new(pb::GetDeadLetterResponse {
         dead_letter: Some(convert::dead_letter(entry, request.include_payload)),

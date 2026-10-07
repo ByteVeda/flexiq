@@ -124,6 +124,11 @@ impl Scoped {
         audit::target(self.audit.as_ref(), kind, id);
     }
 
+    /// Name a listing's queue and task filters, for the audit trail.
+    pub(crate) fn audit_filter(&self, queue: Option<&str>, task: Option<&str>) {
+        audit::filter(self.audit.as_ref(), queue, task);
+    }
+
     /// Whether the caller may touch `queue` and `task`; `None` asks about
     /// every queue (or task) at once.
     pub(crate) fn reaches(&self, queue: Option<&str>, task: Option<&str>) -> bool {

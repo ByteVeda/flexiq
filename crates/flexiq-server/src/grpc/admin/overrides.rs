@@ -35,6 +35,7 @@ pub(crate) async fn list(
     request: pb::ListOverridesRequest,
 ) -> Result<Response<pb::ListOverridesResponse>, Status> {
     let (queue, task) = (request.queue, request.task_name);
+    scoped.audit_filter(queue.as_deref(), task.as_deref());
     if queue.is_none() && task.is_none() {
         scoped.require(None, None)?;
     }

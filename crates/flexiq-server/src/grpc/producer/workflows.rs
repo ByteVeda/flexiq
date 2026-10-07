@@ -97,6 +97,7 @@ pub(crate) async fn get_workflow_run(
     request: pb::GetWorkflowRunRequest,
 ) -> Result<Response<pb::GetWorkflowRunResponse>, Status> {
     let run_id = request.run_id.clone();
+    scoped.audit(TargetKind::WorkflowRun, run_id.clone());
     let namespace = scoped.namespace().to_string();
     // Only a narrowed caller pays for reading the nodes' jobs back.
     let narrowed = !scoped.reaches(None, None);

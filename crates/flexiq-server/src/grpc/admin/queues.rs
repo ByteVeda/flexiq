@@ -34,6 +34,7 @@ pub(crate) async fn list(
     // A queue's counts cover every task on it, so a task-narrowed grant reaches
     // none; with no queue named, only a whole grant does.
     let only = request.queue;
+    scoped.audit_filter(only.as_deref(), None);
     scoped.require(only.as_deref(), None)?;
     let namespace = scoped.namespace_owned();
     let (stats, paused, overridden) = on_storage(scoped.storage(), move |storage| {
@@ -112,6 +113,7 @@ pub(crate) async fn throughput(
     request: pb::GetThroughputRequest,
 ) -> Result<Response<pb::GetThroughputResponse>, Status> {
     let only = request.queue;
+    scoped.audit_filter(only.as_deref(), None);
     scoped.require(only.as_deref(), None)?;
     let window = window(request.window.as_ref())?;
     let window_ms = i64::try_from(window.as_millis()).unwrap_or(i64::MAX);
