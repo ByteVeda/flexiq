@@ -1,4 +1,5 @@
-import { MoreHorizontal, ShieldOff } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { History, MoreHorizontal, ShieldOff } from "lucide-react";
 import { useState } from "react";
 import {
   Button,
@@ -18,10 +19,9 @@ interface Props {
 export function GrpcTokenRowActions({ token }: Props) {
   const revoke = useRevokeGrpcToken();
   const [confirm, setConfirm] = useState(false);
-
-  // A revoked token has nothing left to do to it. The row stays, because it is
-  // the record that the credential existed and who used it.
-  if (token.revoked_at !== null) return null;
+  // A revoked token cannot be revoked again, but what it did while valid is
+  // the question a revocation usually raises — so the trail stays one click away.
+  const revoked = token.revoked_at !== null;
 
   return (
     <>
@@ -32,27 +32,40 @@ export function GrpcTokenRowActions({ token }: Props) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">
-          <DropdownMenuItem
-            onClick={() => setConfirm(true)}
-            className="text-danger focus:text-danger"
-          >
-            <ShieldOff aria-hidden /> Revoke
+          <DropdownMenuItem asChild>
+            <Link
+              to="/audit"
+              search={{ principalKind: "token", tokenId: token.id }}
+              className="flex w-full cursor-default items-center gap-2"
+            >
+              <History aria-hidden /> What this token did
+            </Link>
           </DropdownMenuItem>
+          {revoked ? null : (
+            <DropdownMenuItem
+              onClick={() => setConfirm(true)}
+              className="text-danger focus:text-danger"
+            >
+              <ShieldOff aria-hidden /> Revoke
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <DestructiveConfirmDialog
-        open={confirm}
-        onOpenChange={setConfirm}
-        title={`Revoke "${token.name}"?`}
-        description="Any client presenting this token starts failing on its next call. This cannot be undone — issue a new token instead."
-        confirmLabel="Revoke"
-        confirmPhrase="revoke"
-        pending={revoke.isPending}
-        onConfirm={async () => {
-          await revoke.mutateAsync(token.id);
-        }}
-      />
+      {revoked ? null : (
+        <DestructiveConfirmDialog
+          open={confirm}
+          onOpenChange={setConfirm}
+          title={`Revoke "${token.name}"?`}
+          description="Any client presenting this token starts failing on its next call. This cannot be undone — issue a new token instead."
+          confirmLabel="Revoke"
+          confirmPhrase="revoke"
+          pending={revoke.isPending}
+          onConfirm={async () => {
+            await revoke.mutateAsync(token.id);
+          }}
+        />
+      )}
     </>
   );
 }
