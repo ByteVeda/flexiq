@@ -47,14 +47,7 @@ pub const THROUGHPUT_COLUMNS: [&str; 7] = [
 ];
 
 /// The columns of an audit listing.
-pub const AUDIT_COLUMNS: [&str; 6] = [
-    "time",
-    "token",
-    "principal",
-    "operation",
-    "target",
-    "outcome",
-];
+pub const AUDIT_COLUMNS: [&str; 6] = ["time", "by", "principal", "operation", "target", "outcome"];
 
 /// The columns of a dead-letter listing.
 pub const DEAD_LETTER_COLUMNS: [&str; 7] =
@@ -172,7 +165,8 @@ pub fn dead_letter_row(entry: &pb::DeadLetter) -> Vec<String> {
 }
 
 /// One audit record as a row of [`AUDIT_COLUMNS`]. The target reads
-/// `kind:id`, the spelling `fq audit list --target` takes back.
+/// `kind:id`, the spelling `fq audit list --target` takes back; who made the
+/// call reads the same way — `token:3fa9…`, `user:alice`.
 pub fn audit_row(record: &pb::AuditRecord) -> Vec<String> {
     let target = if record.target_kind.is_empty() {
         UNSET.to_string()
@@ -181,12 +175,22 @@ pub fn audit_row(record: &pb::AuditRecord) -> Vec<String> {
     };
     vec![
         instant_cell(record.time.as_ref()),
-        record.token_id.clone(),
+        format!("{}:{}", principal_kind(record), record.token_id),
         record.principal.clone(),
         record.operation.clone(),
         target,
         record.outcome.clone(),
     ]
+}
+
+/// The record's principal kind. A server older than the field sends none, and
+/// only tokens were recorded then.
+fn principal_kind(record: &pb::AuditRecord) -> &str {
+    if record.principal_kind.is_empty() {
+        "token"
+    } else {
+        &record.principal_kind
+    }
 }
 
 /// One worker as a row of [`WORKER_COLUMNS`].
@@ -434,6 +438,10 @@ pub fn audit_record_json(record: &pb::AuditRecord) -> Value {
     let mut object = Map::new();
     object.insert("id".to_string(), record.id.clone().into());
     insert_timestamp(&mut object, "time", record.time.as_ref());
+    object.insert(
+        "principalKind".to_string(),
+        record.principal_kind.clone().into(),
+    );
     object.insert("tokenId".to_string(), record.token_id.clone().into());
     object.insert("principal".to_string(), record.principal.clone().into());
     object.insert("operation".to_string(), record.operation.clone().into());

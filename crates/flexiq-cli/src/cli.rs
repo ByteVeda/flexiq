@@ -163,6 +163,11 @@ pub struct AuditListArgs {
     /// `FLEXIQ_TOKEN`.
     #[arg(long, value_name = "ID")]
     pub token_id: Option<String>,
+    /// Only records made by this kind of principal: `token` (the gRPC door),
+    /// `user` (a dashboard session), `cli` (`flexiq-server token`) or
+    /// `anonymous` (a dashboard with auth off).
+    #[arg(long, value_name = "KIND")]
+    pub principal_kind: Option<String>,
     /// Only records naming this job: who enqueued it, who cancelled it.
     #[arg(long, value_name = "JOB_ID", conflicts_with_all = ["target", "kind"])]
     pub job: Option<String>,

@@ -621,6 +621,7 @@ async fn the_audit_trail_reads_back_through_the_cli() {
 
     let request = commands::audit::list_request(&AuditListArgs {
         token_id: None,
+        principal_kind: None,
         job: None,
         target: Some("queue:emails".into()),
         kind: None,
@@ -650,6 +651,12 @@ async fn the_audit_trail_reads_back_through_the_cli() {
     let record = &listed.records[0];
     assert_eq!(record.operation, "flexiq.admin.v1.AdminService/PauseQueue");
     assert_eq!(record.outcome, "OK");
+    assert_eq!(record.principal_kind, "token");
+    assert_eq!(
+        cli_render::audit_row(record)[1],
+        format!("token:{}", record.token_id),
+        "the caller reads kind:id, like the target"
+    );
     assert_eq!(
         cli_render::audit_row(record)[4],
         "queue:emails",

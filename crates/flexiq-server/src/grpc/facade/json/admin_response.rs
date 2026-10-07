@@ -167,6 +167,10 @@ fn audit_record(record: &pb::AuditRecord) -> Value {
     let mut object = Map::new();
     object.insert("id".to_string(), record.id.clone().into());
     insert_timestamp(&mut object, "time", record.time.as_ref());
+    object.insert(
+        "principalKind".to_string(),
+        record.principal_kind.clone().into(),
+    );
     object.insert("tokenId".to_string(), record.token_id.clone().into());
     object.insert("principal".to_string(), record.principal.clone().into());
     object.insert("operation".to_string(), record.operation.clone().into());

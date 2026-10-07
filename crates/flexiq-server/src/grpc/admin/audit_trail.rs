@@ -68,7 +68,7 @@ fn filter(request: &pb::ListAuditRecordsRequest) -> AuditFilter {
     let set = |value: &str| (!value.is_empty()).then(|| value.to_string());
     AuditFilter {
         token_id: set(&request.token_id),
-        principal_kind: None,
+        principal_kind: set(&request.principal_kind),
         target_kind: set(&request.target_kind),
         target: set(&request.target),
         since_ms: request.since.as_ref().map(bound_millis),
@@ -102,6 +102,7 @@ fn to_wire(record: AuditRecord) -> pb::AuditRecord {
         target_kind: record.target_kind.unwrap_or_default(),
         target: record.target.unwrap_or_default(),
         outcome: record.outcome,
+        principal_kind: record.principal_kind,
     }
 }
 
@@ -113,6 +114,7 @@ mod tests {
     fn empty_strings_are_unset_filters() {
         let request = pb::ListAuditRecordsRequest {
             token_id: "tok".into(),
+            principal_kind: "user".into(),
             since: Some(timestamp(1_000)),
             ..Default::default()
         };
@@ -120,6 +122,7 @@ mod tests {
             filter(&request),
             AuditFilter {
                 token_id: Some("tok".into()),
+                principal_kind: Some("user".into()),
                 since_ms: Some(1_000),
                 ..Default::default()
             }
@@ -149,6 +152,7 @@ mod tests {
             target: None,
             outcome: "PERMISSION_DENIED".into(),
         });
+        assert_eq!(wire.principal_kind, "token");
         assert_eq!(wire.target_kind, "");
         assert_eq!(wire.target, "");
         assert_eq!(wire.time, Some(timestamp(1_500)));

@@ -3512,17 +3512,20 @@ func (*ClearNamespaceQuotaResponse) Descriptor() ([]byte, []int) {
 	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{59}
 }
 
-// One token-authorised write. Names the token by its public id only — never
-// the token, never its digest.
+// One token-authorised write, or one action a dashboard user or the token
+// command line took. Names a token by its public id only — never the token,
+// never its digest.
 type AuditRecord struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Opaque; orders records answered in the same millisecond.
 	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// When the call was answered.
 	Time *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=time,proto3" json:"time,omitempty"`
-	// The public id of the token that made the call.
+	// The public id of the credential that made the call, in principal_kind's
+	// terms: the token id for `token`, the username for `user`.
 	TokenId string `protobuf:"bytes,3,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
-	// The token's name when the call was made. A label: two tokens may share it.
+	// The token's name when the call was made, or the username. A label: two
+	// tokens may share it.
 	Principal string `protobuf:"bytes,4,opt,name=principal,proto3" json:"principal,omitempty"`
 	// The RPC, as `package.Service/Method`, however it was reached.
 	Operation string `protobuf:"bytes,5,opt,name=operation,proto3" json:"operation,omitempty"`
@@ -3533,7 +3536,11 @@ type AuditRecord struct {
 	// The target's id or name, in `target_kind`'s terms.
 	Target string `protobuf:"bytes,7,opt,name=target,proto3" json:"target,omitempty"`
 	// The google.rpc.Code name the call ended with: `OK`, `PERMISSION_DENIED`, …
-	Outcome       string `protobuf:"bytes,8,opt,name=outcome,proto3" json:"outcome,omitempty"`
+	Outcome string `protobuf:"bytes,8,opt,name=outcome,proto3" json:"outcome,omitempty"`
+	// Who token_id names: `token` (the gRPC door), `user` (a dashboard
+	// session), `cli` (`flexiq-server token`) or `anonymous` (a dashboard with
+	// auth off).
+	PrincipalKind string `protobuf:"bytes,9,opt,name=principal_kind,json=principalKind,proto3" json:"principal_kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3624,6 +3631,13 @@ func (x *AuditRecord) GetOutcome() string {
 	return ""
 }
 
+func (x *AuditRecord) GetPrincipalKind() string {
+	if x != nil {
+		return x.PrincipalKind
+	}
+	return ""
+}
+
 type ListAuditRecordsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Rows per page. Zero takes the server's default; the server may cap it.
@@ -3639,7 +3653,10 @@ type ListAuditRecordsRequest struct {
 	// Only records at or after this instant.
 	Since *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=since,proto3" json:"since,omitempty"`
 	// Only records before this instant.
-	Until         *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=until,proto3" json:"until,omitempty"`
+	Until *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=until,proto3" json:"until,omitempty"`
+	// Only records whose principal is of this kind: `token`, `user`, `cli` or
+	// `anonymous`.
+	PrincipalKind string `protobuf:"bytes,8,opt,name=principal_kind,json=principalKind,proto3" json:"principal_kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3721,6 +3738,13 @@ func (x *ListAuditRecordsRequest) GetUntil() *timestamppb.Timestamp {
 		return x.Until
 	}
 	return nil
+}
+
+func (x *ListAuditRecordsRequest) GetPrincipalKind() string {
+	if x != nil {
+		return x.PrincipalKind
+	}
+	return ""
 }
 
 type ListAuditRecordsResponse struct {
@@ -4031,7 +4055,7 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\x19SetNamespaceQuotaResponse\x125\n" +
 	"\x05quota\x18\x01 \x01(\v2\x1f.flexiq.admin.v1.NamespaceQuotaR\x05quota\"\x1c\n" +
 	"\x1aClearNamespaceQuotaRequest\"\x1d\n" +
-	"\x1bClearNamespaceQuotaResponse\"\xf7\x01\n" +
+	"\x1bClearNamespaceQuotaResponse\"\x9e\x02\n" +
 	"\vAuditRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12.\n" +
 	"\x04time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x04time\x12\x19\n" +
@@ -4041,7 +4065,8 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\vtarget_kind\x18\x06 \x01(\tR\n" +
 	"targetKind\x12\x16\n" +
 	"\x06target\x18\a \x01(\tR\x06target\x12\x18\n" +
-	"\aoutcome\x18\b \x01(\tR\aoutcome\"\x8d\x02\n" +
+	"\aoutcome\x18\b \x01(\tR\aoutcome\x12%\n" +
+	"\x0eprincipal_kind\x18\t \x01(\tR\rprincipalKind\"\xb4\x02\n" +
 	"\x17ListAuditRecordsRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
@@ -4051,7 +4076,8 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"targetKind\x12\x16\n" +
 	"\x06target\x18\x05 \x01(\tR\x06target\x120\n" +
 	"\x05since\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\x05since\x120\n" +
-	"\x05until\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x05until\"z\n" +
+	"\x05until\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x05until\x12%\n" +
+	"\x0eprincipal_kind\x18\b \x01(\tR\rprincipalKind\"z\n" +
 	"\x18ListAuditRecordsResponse\x126\n" +
 	"\arecords\x18\x01 \x03(\v2\x1c.flexiq.admin.v1.AuditRecordR\arecords\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken*c\n" +
