@@ -28,3 +28,6 @@ require_relative "flexiq/enqueue_request"
 require_relative "flexiq/enqueue_result"
 require_relative "flexiq/batch_item_result"
 require_relative "flexiq/queue_stats"
+
+require_relative "flexiq/transport"
+require_relative "flexiq/client"
