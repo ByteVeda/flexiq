@@ -244,6 +244,8 @@ jobs:
                   "FLEXIQ_GRPC_REQUEST_TIMEOUT",
                   "FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS",
                   "FLEXIQ_GRPC_AUDIT_RETENTION_DAYS",
+                  "FLEXIQ_GRPC_AUDIT_READS",
+                  "FLEXIQ_GRPC_AUDIT_READS_WINDOW",
                   "FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN",
                   "FLEXIQ_GRPC_WATCH_RECONCILE",
                   "FLEXIQ_GRPC_WATCH_BUFFER",
