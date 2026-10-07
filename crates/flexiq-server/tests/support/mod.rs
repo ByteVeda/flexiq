@@ -141,6 +141,15 @@ pub fn mint_token(
         .1
 }
 
+/// The public id a minted token is known by: `<id>` of `fqt_<id>.<secret>`.
+pub fn token_id(token: &str) -> String {
+    token
+        .strip_prefix("fqt_")
+        .and_then(|rest| rest.split_once('.'))
+        .map(|(id, _)| id.to_string())
+        .expect("a token is fqt_<id>.<secret>")
+}
+
 /// Build dashboard state over `storage`, in the given auth mode.
 ///
 /// Cookies are marked insecure so a test client does not have to speak TLS,

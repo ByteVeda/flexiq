@@ -76,6 +76,7 @@ pub(crate) async fn submit_workflow(
         default_max_retries: DEFAULT_MAX_RETRIES,
         result_ttl_ms: None,
         namespace: Some(namespace),
+        enqueued_by: Some(scoped.token_id().to_string()),
     };
 
     let handle = on_storage_and_workflows(

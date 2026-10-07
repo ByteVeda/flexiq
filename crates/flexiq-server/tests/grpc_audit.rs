@@ -18,8 +18,8 @@ use flexiq_server::grpc::pb::admin::admin_service_client::AdminServiceClient;
 use flexiq_server::grpc::pb::admin::{ListAuditRecordsRequest, PauseQueueRequest};
 use flexiq_server::grpc::pb::producer_service_client::ProducerServiceClient;
 use flexiq_server::grpc::pb::{
-    enqueue_request, CancelJobRequest, EnqueueBatchRequest, EnqueueOptions, EnqueueRequest,
-    GetJobRequest,
+    enqueue_batch_item_result, enqueue_request, CancelJobRequest, EnqueueBatchRequest,
+    EnqueueOptions, EnqueueRequest, GetJobRequest,
 };
 use flexiq_server::grpc::Listener;
 use flexiq_server::runtime::shutdown::Shutdown;
@@ -159,6 +159,64 @@ fn assert_no_secret(records: &[AuditRecord], token: &Minted) {
         !dump.contains(&token.plaintext),
         "a record carried the token: {dump}"
     );
+}
+
+/// #992: the job itself names the token that submitted it — each caller its
+/// own, on a single enqueue and on every item of a batch — so "who sent this"
+/// needs no trip to the trail and outlives its retention.
+#[tokio::test]
+async fn a_job_names_the_token_that_submitted_it() {
+    let harness = Harness::start("audit-enqueued-by").await;
+    let alice = harness.mint("alice", produce());
+    let bob = harness.mint("bob", produce());
+
+    let single = harness
+        .producer(&alice)
+        .enqueue(job("emails", "send_receipt"))
+        .await
+        .expect("enqueue")
+        .into_inner()
+        .job
+        .expect("a job")
+        .id;
+    let batch: Vec<String> = harness
+        .producer(&bob)
+        .enqueue_batch(EnqueueBatchRequest {
+            items: vec![job("emails", "a"), job("emails", "b")],
+        })
+        .await
+        .expect("enqueue_batch")
+        .into_inner()
+        .results
+        .into_iter()
+        .map(|result| match result.outcome {
+            Some(enqueue_batch_item_result::Outcome::Enqueued(enqueued)) => {
+                enqueued.job.expect("a job").id
+            }
+            other => panic!("every item lands: {other:?}"),
+        })
+        .collect();
+    assert_eq!(batch.len(), 2);
+
+    let submitter = |id: &str| {
+        harness
+            .storage
+            .get_job(id, Some(NAMESPACE))
+            .expect("read")
+            .expect("the job exists")
+            .enqueued_by
+    };
+    assert_eq!(submitter(&single), Some(alice.id.clone()));
+    for id in &batch {
+        assert_eq!(submitter(id), Some(bob.id.clone()));
+    }
+    // The public id, never the credential presented.
+    assert_ne!(
+        submitter(&single).as_deref(),
+        Some(alice.plaintext.as_str())
+    );
+
+    harness.stop().await;
 }
 
 #[tokio::test]

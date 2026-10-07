@@ -39,6 +39,7 @@ pub fn job(job: &Job) -> Value {
         // and the client parses it itself.
         "notes": job.notes,
         "namespace": job.namespace,
+        "enqueued_by": job.enqueued_by,
     })
 }
 
