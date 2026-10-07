@@ -47,6 +47,13 @@ class ClientTest < Minitest::Test
     refute_predicate results[2], :failed?
   end
 
+  def test_a_batch_answer_that_does_not_pair_with_the_request_is_refused
+    [{ "results" => [] }, { "results" => [{}, {}] }, {}].each do |body|
+      @response = [200, body]
+      assert_raises(FlexiQ::TransportError, body.inspect) { @client.enqueue_batch([{ task_name: "a" }]) }
+    end
+  end
+
   def test_get_job_escapes_the_id_and_sends_blob_switches
     @response = [200, { "job" => JOB }]
     @client.get_job("a/b", include_result: true)

@@ -32,7 +32,7 @@ module FlexiQ
     def enqueue_batch(requests)
       items = requests.map { |request| coerce_request(request).to_wire }
       response = @transport.post("/v1/jobs:batchEnqueue", { "items" => items })
-      Array(response["results"]).each_with_index.map { |result, index| BatchItemResult.from_json(result, index) }
+      batch_results(response["results"], items.length)
     end
 
     # Reads one job. The payload and result are left out unless asked for: they are the largest
@@ -64,6 +64,17 @@ module FlexiQ
       when Hash then EnqueueRequest.new(**request)
       else raise ArgumentError, "a batch item must be an EnqueueRequest or a Hash, got #{request.class}"
       end
+    end
+
+    # A short or long answer cannot be paired with its requests; guessing would attribute an
+    # outcome to the wrong job, or report an item that never landed as handled.
+    def batch_results(results, expected)
+      unless results.is_a?(Array) && results.length == expected
+        got = results.is_a?(Array) ? results.length : "no"
+        raise TransportError, "the batch answered #{got} result(s) for #{expected} item(s)"
+      end
+
+      results.each_with_index.map { |result, index| BatchItemResult.from_json(result, index) }
     end
 
     def job_from(response)
