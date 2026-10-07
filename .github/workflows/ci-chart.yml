@@ -111,6 +111,11 @@ jobs:
           # (unlimited), a leading zero as octal.
           refuses "a watch cap past int64" "${grpc_on[@]}" --set grpc.watch.maxPerToken=99999999999999999999
           refuses "a leading-zero watch buffer" "${grpc_on[@]}" --set-string grpc.watch.buffer=0010
+          # Mirrors config/grpc.rs: a strict read-audit switch, and a window
+          # int64 would otherwise read as 0 (record every read).
+          refuses "a non-boolean audit reads switch" "${grpc_on[@]}" --set-string grpc.auditReads=tru
+          refuses "a non-numeric audit reads window" "${grpc_on[@]}" --set grpc.auditReads=true --set grpc.auditReadsWindow=60s
+          refuses "a negative audit reads window" "${grpc_on[@]}" --set grpc.auditReadsWindow=-1
           # Mirrors config/trigger.rs: one namespace, and exactly one source of
           # definitions — a listener with none would answer every request 404.
           refuses "triggers with no namespace" \
@@ -244,6 +249,8 @@ jobs:
                   "FLEXIQ_GRPC_REQUEST_TIMEOUT",
                   "FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS",
                   "FLEXIQ_GRPC_AUDIT_RETENTION_DAYS",
+                  "FLEXIQ_GRPC_AUDIT_READS",
+                  "FLEXIQ_GRPC_AUDIT_READS_WINDOW",
                   "FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN",
                   "FLEXIQ_GRPC_WATCH_RECONCILE",
                   "FLEXIQ_GRPC_WATCH_BUFFER",

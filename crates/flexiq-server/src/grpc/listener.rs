@@ -276,11 +276,12 @@ impl Listener {
         // for want of a credential would never reach it — and a refusal missing
         // from the metrics is the one an operator most needs to see.
         // The audit layer sits between the two: outside auth so a scope
-        // refusal is still answered through it and recorded.
+        // refusal is still answered through it and recorded. Reads join the
+        // trail only when the operator turned them on.
         let (audit_sink, audit_writer) = AuditSink::start(storage.clone(), shutdown.clone());
         let mut server = builder
             .layer(metrics::MetricsLayer::new(rpc_metrics))
-            .layer(AuditLayer::new(audit_sink))
+            .layer(AuditLayer::new(audit_sink, self.config.audit_reads))
             .layer(AuthLayer::new(Arc::new(auth::TokenStore::new(
                 storage.clone(),
                 self.config.namespace.as_str(),

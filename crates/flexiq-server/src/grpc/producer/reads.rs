@@ -11,6 +11,7 @@ use tonic::{Response, Status};
 use super::convert::{self, Blobs};
 use super::cursor::Cursor;
 use super::Scoped;
+use crate::grpc::audit::TargetKind;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::pb;
 use crate::grpc::status::WireError;
@@ -29,6 +30,8 @@ pub(crate) async fn get_job(
     request: pb::GetJobRequest,
 ) -> Result<Response<pb::GetJobResponse>, Status> {
     let id = require_job_id(&request.job_id)?;
+    // Named before the lookup, so a miss still says which id was tried.
+    scoped.audit(TargetKind::Job, id.clone());
     let namespace = scoped.namespace().to_string();
     let blobs = Blobs {
         payload: request.include_payload,
@@ -92,6 +95,7 @@ pub(crate) async fn list_jobs(
     // A narrowed caller names what it lists rather than having the page
     // filtered after the scan: filtering would make short pages that are not
     // the end, and a page's size would tell it how many rows it cannot see.
+    scoped.audit_filter(request.queue.as_deref(), request.task_name.as_deref());
     scoped.require(request.queue.as_deref(), request.task_name.as_deref())?;
 
     let namespace = scoped.namespace().to_string();
@@ -145,6 +149,7 @@ pub(crate) async fn queue_stats(
 ) -> Result<Response<pb::QueueStatsResponse>, Status> {
     // Counts span every task in the queue, so a task-narrowed caller is
     // refused: `None` for the task asks whether it reaches all of them.
+    scoped.audit_filter(request.queue.as_deref(), None);
     scoped.require(request.queue.as_deref(), None)?;
 
     let namespace = scoped.namespace().to_string();

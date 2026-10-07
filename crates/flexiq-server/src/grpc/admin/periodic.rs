@@ -26,6 +26,7 @@ pub(crate) async fn list(
     request: pb::admin::ListPeriodicTasksRequest,
 ) -> Result<Response<pb::admin::ListPeriodicTasksResponse>, Status> {
     let (queue, task) = (request.queue, request.task_name);
+    scoped.audit_filter(queue.as_deref(), task.as_deref());
     scoped.require(queue.as_deref(), task.as_deref())?;
     let namespace = scoped.namespace_owned();
     let mut tasks = on_storage(scoped.storage(), move |storage| {
@@ -54,6 +55,7 @@ pub(crate) async fn get(
     request: pb::admin::GetPeriodicTaskRequest,
 ) -> Result<Response<pb::admin::GetPeriodicTaskResponse>, Status> {
     let name = require("name", request.name)?;
+    scoped.audit(TargetKind::Periodic, name.clone());
     let task = read(scoped, name).await?;
     Ok(Response::new(pb::admin::GetPeriodicTaskResponse {
         periodic_task: Some(convert::periodic_task(task, request.include_payload)),

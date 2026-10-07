@@ -28,6 +28,7 @@ use flexiq_core::{EventHub, StorageBackend};
 use tonic::{Response, Status};
 
 use crate::config::watch::WatchConfig;
+use crate::grpc::audit::{self, AuditContext, TargetKind};
 use crate::grpc::auth::{Principal, Scope};
 use crate::grpc::pb::{self, watch_jobs_request::Target};
 use crate::grpc::producer::convert::DEFAULT_QUEUE;
@@ -100,13 +101,22 @@ impl Watches {
     }
 
     /// Validate `request`, take a slot for `principal`'s credential, and start
-    /// the stream.
+    /// the stream. What it watches is named on `audit` before any refusal.
     pub fn watch(
         &self,
         principal: &Principal,
+        audit: Option<&AuditContext>,
         request: pb::WatchJobsRequest,
     ) -> Result<Response<Outlet>, Status> {
         let target = self.target(request)?;
+        match &target {
+            Want::Ids(ids) => {
+                for id in ids {
+                    audit::target(audit, TargetKind::Job, id.clone());
+                }
+            }
+            Want::Queue { queue, .. } => audit::target(audit, TargetKind::Queue, queue.clone()),
+        }
         // A queue watch reports every task in the queue, so a narrowed caller
         // needs a grant reaching the queue and all its tasks. An id watch is
         // checked per job, once the rows are read.

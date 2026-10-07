@@ -210,7 +210,7 @@ pub fn flag(env: &Env, key: &str, default: bool) -> bool {
 
 /// A tri-state boolean: unset leaves the choice to the code's default. Unlike
 /// [`flag`], an unrecognised value is refused rather than read as unset.
-fn optional_flag(env: &Env, key: &str) -> Result<Option<bool>> {
+pub(crate) fn optional_flag(env: &Env, key: &str) -> Result<Option<bool>> {
     match value(env, key) {
         None => Ok(None),
         Some(raw) => match parse_bool(&raw) {

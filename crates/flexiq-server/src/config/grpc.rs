@@ -32,7 +32,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::config::listen::{parse, ListenAddress};
 use crate::config::watch::{self, WatchConfig};
-use crate::config::{value, Env};
+use crate::config::{optional_flag, value, Env};
 use crate::tls::{self, TlsFiles};
 
 /// The variable that turns the role on, named once.
@@ -56,6 +56,16 @@ pub const AUDIT_RETENTION_DAYS_VAR: &str = "FLEXIQ_GRPC_AUDIT_RETENTION_DAYS";
 /// Ninety days: long enough to answer "what did this token do" about a
 /// credential revoked last quarter, short enough that the table stays small.
 const DEFAULT_AUDIT_RETENTION_DAYS: u64 = 90;
+
+/// Whether reads are recorded too (#993). Off by default.
+pub const AUDIT_READS_VAR: &str = "FLEXIQ_GRPC_AUDIT_READS";
+
+/// How long a repeated read is folded into the record of the first, in seconds.
+pub const AUDIT_READS_WINDOW_VAR: &str = "FLEXIQ_GRPC_AUDIT_READS_WINDOW";
+
+/// One minute: a poller every few seconds leaves one record a minute per thing
+/// it looks at, which still answers "what did this token see".
+const DEFAULT_AUDIT_READS_WINDOW: Duration = Duration::from_secs(60);
 
 /// One minute.
 ///
@@ -144,6 +154,9 @@ pub struct GrpcConfig {
     pub tls: Option<TlsFiles>,
     /// How long an audit record is kept before the listener prunes it.
     pub audit_retention: Duration,
+    /// The window repeated reads are folded within when reads are audited;
+    /// `None` audits writes only. A zero window records every read.
+    pub audit_reads: Option<Duration>,
 }
 
 impl GrpcConfig {
@@ -165,6 +178,7 @@ impl GrpcConfig {
             watch: WatchConfig::default(),
             tls: None,
             audit_retention: days(DEFAULT_AUDIT_RETENTION_DAYS),
+            audit_reads: None,
         }
     }
 
@@ -213,6 +227,18 @@ fn audit_retention(env: &Env) -> Result<Duration> {
             "{AUDIT_RETENTION_DAYS_VAR} must be a whole number of days, at least 1, got '{raw}'"
         ),
     }
+}
+
+/// Read whether reads are audited, and their folding window.
+///
+/// The switch is strict: a value no boolean spelling matches is refused, since
+/// reading a mistyped `tru` as off would leave an operator believing reads are
+/// recorded when they are not.
+fn audit_reads(env: &Env) -> Result<Option<Duration>> {
+    if optional_flag(env, AUDIT_READS_VAR)? != Some(true) {
+        return Ok(None);
+    }
+    seconds(env, AUDIT_READS_WINDOW_VAR, DEFAULT_AUDIT_READS_WINDOW).map(Some)
 }
 
 /// Parse the gRPC block, or `None` when the role is disabled.
@@ -276,6 +302,7 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<GrpcConfig>
         watch: watch::from_env(env)?,
         tls,
         audit_retention: audit_retention(env)?,
+        audit_reads: audit_reads(env)?,
         ..GrpcConfig::new(listen, namespace)
     }))
 }
@@ -354,6 +381,45 @@ mod tests {
                 .to_string();
             assert!(error.contains(AUDIT_RETENTION_DAYS_VAR), "{error}");
         }
+    }
+
+    #[cfg(feature = "grpc")]
+    #[test]
+    fn reads_are_audited_only_when_switched_on() {
+        let parse = |pairs: &[(&str, &str)]| {
+            let mut all = vec![(LISTEN_VAR, ":50051")];
+            all.extend_from_slice(pairs);
+            from_env(&env(&all), Some("prod")).map(|config| config.expect("configured"))
+        };
+        assert_eq!(parse(&[]).expect("valid").audit_reads, None);
+        assert_eq!(
+            parse(&[(AUDIT_READS_VAR, "off"), (AUDIT_READS_WINDOW_VAR, "5")])
+                .expect("valid")
+                .audit_reads,
+            None,
+            "a window alone turns nothing on"
+        );
+        assert_eq!(
+            parse(&[(AUDIT_READS_VAR, "on")])
+                .expect("valid")
+                .audit_reads,
+            Some(DEFAULT_AUDIT_READS_WINDOW)
+        );
+        assert_eq!(
+            parse(&[(AUDIT_READS_VAR, "true"), (AUDIT_READS_WINDOW_VAR, "0")])
+                .expect("valid")
+                .audit_reads,
+            Some(Duration::ZERO)
+        );
+
+        let error = parse(&[(AUDIT_READS_VAR, "tru")])
+            .expect_err("a mistyped switch is refused")
+            .to_string();
+        assert!(error.contains(AUDIT_READS_VAR), "{error}");
+        let error = parse(&[(AUDIT_READS_VAR, "on"), (AUDIT_READS_WINDOW_VAR, "1m")])
+            .expect_err("a window that is not seconds is refused")
+            .to_string();
+        assert!(error.contains(AUDIT_READS_WINDOW_VAR), "{error}");
     }
 
     #[cfg(feature = "grpc")]

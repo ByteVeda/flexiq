@@ -138,6 +138,13 @@ grpc:
   # Days an audit record of a token-authorised write is kept before the
   # listener prunes it. At least 1: the trail is not optional.
   auditRetentionDays: 90
+  # Record reads (read and inspect calls) in the audit trail too. Off by
+  # default: polling dominates read volume. Watch flexiq_audit_records_total
+  # for overflow after turning it on.
+  auditReads: false
+  # Seconds a repeated read — same token, RPC, target and outcome — is folded
+  # into its first record. 0 records every read.
+  auditReadsWindow: 60
   # Bounds on WatchJobs streams. Each must be a whole number; the chart refuses
   # at render what the server would refuse at boot.
   watch:

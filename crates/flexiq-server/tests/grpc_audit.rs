@@ -18,8 +18,9 @@ use flexiq_server::grpc::pb::admin::admin_service_client::AdminServiceClient;
 use flexiq_server::grpc::pb::admin::{ListAuditRecordsRequest, PauseQueueRequest};
 use flexiq_server::grpc::pb::producer_service_client::ProducerServiceClient;
 use flexiq_server::grpc::pb::{
-    enqueue_batch_item_result, enqueue_request, CancelJobRequest, EnqueueBatchRequest,
-    EnqueueOptions, EnqueueRequest, GetJobRequest,
+    enqueue_batch_item_result, enqueue_request, watch_jobs_request, CancelJobRequest,
+    EnqueueBatchRequest, EnqueueOptions, EnqueueRequest, GetJobRequest, ListJobsRequest,
+    WatchJobIds, WatchJobsRequest,
 };
 use flexiq_server::grpc::Listener;
 use flexiq_server::runtime::shutdown::Shutdown;
@@ -51,14 +52,25 @@ struct Minted {
 
 impl Harness {
     async fn start(label: &str) -> Self {
+        Self::start_with(label, None).await
+    }
+
+    /// A door that also audits reads, folding repeats within `window` (#993).
+    async fn start_auditing_reads(label: &str, window: Duration) -> Self {
+        Self::start_with(label, Some(window)).await
+    }
+
+    async fn start_with(label: &str, audit_reads: Option<Duration>) -> Self {
         let storage = temp_storage(label);
         let shutdown = Shutdown::default();
-        let listener = Listener::bind(&GrpcConfig::new(
-            ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
-            NAMESPACE,
-        ))
-        .await
-        .expect("bind");
+        let config = GrpcConfig {
+            audit_reads,
+            ..GrpcConfig::new(
+                ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
+                NAMESPACE,
+            )
+        };
+        let listener = Listener::bind(&config).await.expect("bind");
         let addr = listener
             .local_addr()
             .expect("a TCP listener knows its port");
@@ -394,6 +406,119 @@ async fn an_admin_write_names_its_queue() {
     assert_eq!(records[0].target_kind.as_deref(), Some("queue"));
     assert_eq!(records[0].target.as_deref(), Some("emails"));
     assert_eq!(records[0].principal, "operator");
+    harness.stop().await;
+}
+
+/// #993: with reads on, each read names what it asked for — over gRPC, the
+/// facade and a watch's open — and a poll repeating one inside the window
+/// leaves no second record.
+#[tokio::test]
+async fn audited_reads_name_what_they_looked_at_once_per_window() {
+    let harness = Harness::start_auditing_reads("audit-reads-on", Duration::from_secs(60)).await;
+    let token = harness.mint("poller", produce());
+    let mut client = harness.producer(&token);
+
+    for _ in 0..3 {
+        let status = client
+            .get_job(GetJobRequest {
+                job_id: "polled".into(),
+                ..Default::default()
+            })
+            .await
+            .expect_err("absent");
+        assert_eq!(status.code(), Code::NotFound);
+    }
+    client
+        .list_jobs(ListJobsRequest {
+            queue: Some("emails".into()),
+            ..Default::default()
+        })
+        .await
+        .expect("list");
+    // Held open across the check: its open is the record, not its frames.
+    let stream = client
+        .watch_jobs(WatchJobsRequest {
+            target: Some(watch_jobs_request::Target::JobIds(WatchJobIds {
+                job_ids: vec!["w1".into(), "w2".into()],
+            })),
+            resume_cursor: String::new(),
+        })
+        .await
+        .expect("a watch opens")
+        .into_inner();
+    let response = reqwest::Client::new()
+        .get(format!("{}/v1/jobs/via-facade", harness.base))
+        .bearer_auth(&token.plaintext)
+        .send()
+        .await
+        .expect("the listener answers");
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // FIFO fence: once the enqueue is in, every read above is too.
+    client
+        .enqueue(job("emails", "send_receipt"))
+        .await
+        .expect("enqueue");
+    let records = harness.trail(6).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let records_after = harness.trail(6).await;
+    assert_eq!(records, records_after);
+    drop(stream);
+
+    let seen: Vec<(&str, Option<&str>, Option<&str>, &str)> = records
+        .iter()
+        .map(|r| {
+            (
+                r.operation.as_str(),
+                r.target_kind.as_deref(),
+                r.target.as_deref(),
+                r.outcome.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (
+                "flexiq.v1.ProducerService/GetJob",
+                Some("job"),
+                Some("polled"),
+                "NOT_FOUND"
+            ),
+            (
+                "flexiq.v1.ProducerService/ListJobs",
+                Some("queue"),
+                Some("emails"),
+                "OK"
+            ),
+            (
+                "flexiq.v1.ProducerService/WatchJobs",
+                Some("job"),
+                Some("w1"),
+                "OK"
+            ),
+            (
+                "flexiq.v1.ProducerService/WatchJobs",
+                Some("job"),
+                Some("w2"),
+                "OK"
+            ),
+            (
+                "flexiq.v1.ProducerService/GetJob",
+                Some("job"),
+                Some("via-facade"),
+                "NOT_FOUND"
+            ),
+            (
+                "flexiq.v1.ProducerService/Enqueue",
+                Some("job"),
+                Some(records[5].target.as_deref().expect("a job id")),
+                "OK"
+            ),
+        ]
+    );
+    assert!(records.iter().all(|r| r.token_id == token.id));
+    assert_no_secret(&records, &token);
     harness.stop().await;
 }
 
