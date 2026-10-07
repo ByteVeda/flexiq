@@ -38,6 +38,12 @@ fn make_job(queue: &str, task_name: &str) -> NewJob {
     }
 }
 
+/// A dequeue time read after the enqueues it must see: `make_job` stamps
+/// `scheduled_at` at enqueue, so a `now` captured earlier goes stale on a slow backend.
+fn due() -> i64 {
+    now_millis() + 1_000
+}
+
 // ── Generic test functions ───────────────────────────────────────────
 
 fn test_enqueue_and_get(s: &impl Storage) {
@@ -109,7 +115,7 @@ fn test_dequeue_batch_archives_expired_jobs(s: &impl Storage) {
     let expired = s.enqueue(expiring).unwrap();
     let live = s.enqueue(make_job(q, "batch_live")).unwrap();
 
-    let claimed = s.dequeue_batch(q, now + 1_000, None, 10).unwrap();
+    let claimed = s.dequeue_batch(q, due(), None, 10).unwrap();
     assert_eq!(claimed.len(), 1, "the expired job is not claimable");
     assert_eq!(claimed[0].id, live.id);
 
@@ -188,7 +194,7 @@ fn test_dequeue_reports_expired_jobs(s: &impl Storage) {
         .unwrap();
     let live = s.enqueue(namespaced("report_live", None)).unwrap();
     let batch = s
-        .dequeue_batch_from_reporting(&queues, now + 1_000, ns, 10, &orders)
+        .dequeue_batch_from_reporting(&queues, due(), ns, 10, &orders)
         .unwrap();
     assert_eq!(batch.claimed.len(), 1);
     assert_eq!(batch.claimed[0].id, live.id);
@@ -200,7 +206,7 @@ fn test_dequeue_reports_expired_jobs(s: &impl Storage) {
         .unwrap();
     let live = s.enqueue(namespaced("report_live", None)).unwrap();
     let single = s
-        .dequeue_from_reporting(&queues, now + 1_000, ns, &orders)
+        .dequeue_from_reporting(&queues, due(), ns, &orders)
         .unwrap();
     assert_eq!(single.claimed.map(|job| job.id), Some(live.id));
     assert_eq!(single.expired.len(), 1);
@@ -209,7 +215,7 @@ fn test_dequeue_reports_expired_jobs(s: &impl Storage) {
     // The common path: nothing expired, nothing reported.
     let plain = s.enqueue(namespaced("report_live", None)).unwrap();
     let batch = s
-        .dequeue_batch_from_reporting(&queues, now + 1_000, ns, 10, &orders)
+        .dequeue_batch_from_reporting(&queues, due(), ns, 10, &orders)
         .unwrap();
     assert_eq!(batch.claimed.len(), 1);
     assert_eq!(batch.claimed[0].id, plain.id);
@@ -881,12 +887,8 @@ fn test_purge_retention_keeps_job_errors(s: &impl Storage) {
 /// archived jobs, 1 no-TTL + 1 per-entry-expired dead entries, 3 task logs,
 /// 2 metrics, 1 job error.
 fn seed_purgeable_rows(s: &impl Storage, q: &str) -> String {
-    // Each dequeue reads the clock itself rather than reusing the caller's `now`:
-    // `make_job` stamps `scheduled_at` at enqueue time, so a caller whose `now` is
-    // even a second stale (one `count_expired_rows` against a remote backend is
-    // enough) would leave every job below its own scheduled time and dequeue
-    // nothing, failing the `complete` that follows with `JobNotFound`.
-    let due = || now_millis() + 1000;
+    // Each dequeue calls `due()` rather than reusing the caller's `now`: one
+    // `count_expired_rows` against a remote backend is enough to make it stale.
 
     // archived_jobs: two with no per-entry TTL.
     for i in 0..2u8 {
