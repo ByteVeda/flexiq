@@ -207,6 +207,7 @@ fn records(context: &AuditContext, operation: &str, code: Code) -> Vec<AuditReco
             id: uuid::Uuid::now_v7().to_string(),
             namespace: principal.namespace().to_string(),
             at_ms,
+            principal_kind: "token".to_string(),
             token_id: principal.credential().to_string(),
             principal: principal.name().to_string(),
             operation: operation.to_string(),

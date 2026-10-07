@@ -175,6 +175,7 @@ mod tests {
             id: id.to_string(),
             namespace: "prod".to_string(),
             at_ms: 1,
+            principal_kind: "token".to_string(),
             token_id: "tok".to_string(),
             principal: "ci".to_string(),
             operation: "flexiq.v1.ProducerService/Enqueue".to_string(),

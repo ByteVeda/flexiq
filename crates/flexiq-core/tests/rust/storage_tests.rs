@@ -3186,6 +3186,7 @@ fn audit(
         id: format!("{ns}/{id}"),
         namespace: ns.to_string(),
         at_ms,
+        principal_kind: "token".to_string(),
         token_id: token_id.to_string(),
         principal: format!("{token_id}-name"),
         operation: "flexiq.producer.v1.Producer/Enqueue".to_string(),
@@ -3273,6 +3274,30 @@ fn test_audit_list_filters(s: &impl Storage) {
         ..Default::default()
     });
     assert_eq!(audit_ids(&window), ["a4", "a3", "a2"]);
+}
+
+/// A user and a token may share a credential id; the kind tells them apart,
+/// and round-trips on every backend.
+fn test_audit_principal_kind_round_trips_and_filters(s: &impl Storage) {
+    let ns = "audit-kind";
+    let mut user = audit(ns, "k2", 2_000, "deadbeef", Some(("queue", "emails")));
+    user.principal_kind = "user".to_string();
+    s.append_audit(&[audit(ns, "k1", 1_000, "deadbeef", None), user.clone()])
+        .unwrap();
+    let list = |filter: AuditFilter| s.list_audit_after(ns, &filter, 100, None).unwrap();
+
+    let users = list(AuditFilter {
+        principal_kind: Some("user".into()),
+        ..Default::default()
+    });
+    assert_eq!(users, [user]);
+
+    let token = list(AuditFilter {
+        principal_kind: Some("token".into()),
+        token_id: Some("deadbeef".into()),
+        ..Default::default()
+    });
+    assert_eq!(audit_ids(&token), ["k1"]);
 }
 
 fn test_audit_keyset_pages_walk_every_record_once(s: &impl Storage) {
@@ -3615,6 +3640,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_progress_tracking(s);
     test_audit_list_orders_and_scopes_by_namespace(s);
     test_audit_list_filters(s);
+    test_audit_principal_kind_round_trips_and_filters(s);
     test_audit_keyset_pages_walk_every_record_once(s);
     test_audit_append_never_overwrites(s);
     test_audit_purge_is_namespace_scoped(s);

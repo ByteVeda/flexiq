@@ -68,6 +68,7 @@ fn filter(request: &pb::ListAuditRecordsRequest) -> AuditFilter {
     let set = |value: &str| (!value.is_empty()).then(|| value.to_string());
     AuditFilter {
         token_id: set(&request.token_id),
+        principal_kind: None,
         target_kind: set(&request.target_kind),
         target: set(&request.target),
         since_ms: request.since.as_ref().map(bound_millis),
@@ -140,6 +141,7 @@ mod tests {
             id: "r1".into(),
             namespace: "prod".into(),
             at_ms: 1_500,
+            principal_kind: "token".into(),
             token_id: "tok".into(),
             principal: "ci".into(),
             operation: "flexiq.v1.ProducerService/Enqueue".into(),

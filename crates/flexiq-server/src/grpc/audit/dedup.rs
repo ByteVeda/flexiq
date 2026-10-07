@@ -128,6 +128,7 @@ mod tests {
             id: uuid::Uuid::now_v7().to_string(),
             namespace: "prod".to_string(),
             at_ms: 1,
+            principal_kind: "token".to_string(),
             token_id: token.to_string(),
             principal: "ci".to_string(),
             operation: "flexiq.v1.ProducerService/GetJob".to_string(),

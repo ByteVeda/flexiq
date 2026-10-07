@@ -56,6 +56,9 @@ macro_rules! impl_diesel_audit_ops {
                 if let Some(token_id) = &filter.token_id {
                     query = query.filter(audit_log::token_id.eq(token_id.clone()));
                 }
+                if let Some(kind) = &filter.principal_kind {
+                    query = query.filter(audit_log::principal_kind.eq(kind.clone()));
+                }
                 if let Some(kind) = &filter.target_kind {
                     query = query.filter(audit_log::target_kind.eq(kind.clone()));
                 }
