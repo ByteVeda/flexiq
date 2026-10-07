@@ -34,6 +34,7 @@ export function JobOverviewTab({ job }: JobOverviewTabProps) {
             <Row label="Queue">{job.queue}</Row>
             <Row label="Priority">{job.priority}</Row>
             {job.unique_key ? <Row label="Unique key">{job.unique_key}</Row> : null}
+            {job.enqueued_by ? <Row label="Enqueued by">{job.enqueued_by}</Row> : null}
           </Dl>
         </CardContent>
       </Card>
