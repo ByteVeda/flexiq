@@ -23,6 +23,7 @@ export {
 export { ConfirmDialog } from "./confirm-dialog";
 export { DataTable } from "./data-table";
 export type { DataTableColumn } from "./data-table-features";
+export { DateTimeInput } from "./date-time-input";
 export { DestructiveConfirmDialog } from "./destructive-confirm-dialog";
 export {
   Dialog,
