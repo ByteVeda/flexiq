@@ -78,6 +78,15 @@ repos:
         files: ^sdks/go/(.*\.go|go\.mod|go\.sum)$
         pass_filenames: false
 
+      # Needs only Ruby and the gem's bundle, which anyone touching sdks/ruby
+      # already has. Lints the e2e suite too: it needs a server to run, not to lint.
+      - id: ruby-rubocop
+        name: ruby lint (rubocop)
+        entry: bash -c 'cd sdks/ruby && bundle exec rubocop'
+        language: system
+        files: ^sdks/ruby/(.*\.rb|.*\.gemspec|Gemfile|Gemfile\.lock|Rakefile|\.rubocop\.yml|bin/.*)$
+        pass_filenames: false
+
       - id: node-lint
         name: node lint (biome)
         entry: bash -c 'cd sdks/node && pnpm exec biome ci src test'
