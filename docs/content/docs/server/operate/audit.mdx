@@ -138,6 +138,28 @@ curl -H "authorization: Bearer $FLEXIQ_TOKEN" \
 It needs `inspect`. A `produce` token is refused `SCOPE_DENIED`: the trail names
 every token in the namespace, and a producer has no business listing them.
 
+### From the dashboard
+
+The `flexiq-server` dashboard lists the trail under **Configuration → Audit
+trail**, newest first, with the same filters: principal kind, token id or
+username, target kind, target, and a since/until range. A row's principal
+narrows the list to that principal; its target links to the page that shows it —
+the job, the workflow run, the topic, the webhook's deliveries, the queue's jobs,
+or the workers and gRPC tokens lists. On **gRPC tokens**, a token's **What this
+token did** opens the trail filtered to it, revoked tokens included.
+
+The page is for admins. With `FLEXIQ_DASHBOARD_AUTH=session`, a viewer is
+refused `403` — the trail names every user and token and what each did, the same
+reason a viewer cannot list the tokens — and the nav hides the entry. With auth
+off there are no roles, so anyone who reaches the dashboard can read it. The
+dashboard reads its own namespace, as it records into it.
+
+Its JSON is `GET /api/audit-records` on the dashboard port, with `token_id`,
+`principal_kind`, `target_kind`, `target`, `since` and `until` (Unix
+milliseconds), `limit` (default 50, at most 500) and `after` (the previous
+page's `next_cursor`). A dashboard an SDK serves has no such route and shows no
+page.
+
 ## On the job itself
 
 The submitting token is also stamped on the job, as `enqueuedBy` — the same
