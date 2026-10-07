@@ -1,0 +1,65 @@
+name: CI Ruby
+
+# Reusable Ruby client workflow. The Ruby client speaks the JSON door over the
+# standard library: it links no native binding, compiles nothing from crates/
+# and has no runtime gem dependency, so this suite needs no Rust toolchain and
+# the version matrix is the whole job. Called by ci.yml when Ruby-relevant
+# paths change.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: sdks/ruby
+
+jobs:
+  test:
+    name: Test (ruby ${{ matrix.ruby }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor from the gemspec, and the releases after it. The floor is
+        # the one that matters: it is what a consumer's interpreter may be.
+        ruby: ["3.3", "3.4", "4.0"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1.327.0
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          working-directory: sdks/ruby
+          bundler-cache: true
+
+      # The unit suite includes the wire-vector conformance test, which reads
+      # contracts/wire-vectors.json straight out of the tree.
+      - name: Test
+        run: bundle exec rake test
+
+  lint:
+    name: RuboCop
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1.327.0
+        with:
+          ruby-version: "3.4"
+          working-directory: sdks/ruby
+          bundler-cache: true
+
+      - name: Lint
+        run: bundle exec rake lint
+
+      # The gem a release would publish must build from the tree as committed.
+      - name: Build the gem
+        run: gem build flexiq.gemspec
