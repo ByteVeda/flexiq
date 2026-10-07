@@ -317,6 +317,7 @@ class JobResult(AsyncJobResultMixin):
             # serializing that dict here would break the typed client contract.
             "notes": self._py_job.notes,
             "namespace": self._py_job.namespace,
+            "enqueued_by": self._py_job.enqueued_by,
         }
 
     def __repr__(self) -> str:

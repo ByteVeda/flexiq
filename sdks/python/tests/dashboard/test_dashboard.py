@@ -146,10 +146,13 @@ def test_to_dict_fields(queue: Queue) -> None:
         "metadata",
         "notes",
         "namespace",
+        "enqueued_by",
     }
     assert set(d.keys()) == expected_keys
     assert d["status"] == "pending"
     assert d["id"] == job.id
+    # In-process enqueues hold no token, so nothing claims a submitter.
+    assert d["enqueued_by"] is None
 
 
 def test_to_dict_is_json_serializable(queue: Queue) -> None:
