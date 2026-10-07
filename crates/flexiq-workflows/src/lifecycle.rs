@@ -376,6 +376,7 @@ fn submit_nodes(
             result_ttl_ms: request.result_ttl_ms,
             namespace: request.namespace.clone(),
             debounce_key: None,
+            enqueued_by: None,
         };
 
         let job = storage.enqueue(new_job)?;

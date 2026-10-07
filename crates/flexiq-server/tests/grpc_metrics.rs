@@ -127,6 +127,7 @@ async fn a_grpc_only_listener_serves_a_scrapeable_exposition() {
             result_ttl_ms: None,
             namespace: Some(NAMESPACE.to_string()),
             debounce_key: None,
+            enqueued_by: None,
         })
         .expect("enqueue");
 

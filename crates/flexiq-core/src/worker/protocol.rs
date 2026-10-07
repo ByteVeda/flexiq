@@ -881,6 +881,7 @@ impl SchedulerMessage {
                     // Not on the wire: the frame carries only what an executor
                     // runs with, and debouncing is settled before dispatch.
                     debounce_key: None,
+                    enqueued_by: None,
                 },
                 disabled_middleware,
                 lease,
@@ -1367,6 +1368,7 @@ mod tests {
             namespace: Some("tenant-a".into()),
             has_deps: false,
             debounce_key: None,
+            enqueued_by: None,
         }
     }
 

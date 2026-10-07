@@ -89,6 +89,7 @@ macro_rules! impl_diesel_job_ops {
                     expires_at: row.expires_at,
                     result_ttl_ms: row.result_ttl_ms,
                     namespace: row.namespace.as_deref(),
+                    enqueued_by: row.enqueued_by.as_deref(),
                 };
 
                 diesel::insert_into(archived_jobs::table)

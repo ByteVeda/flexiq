@@ -43,6 +43,7 @@ fn main() -> flexiq_core::Result<()> {
         result_ttl_ms: None,
         namespace: None,
         debounce_key: None,
+        enqueued_by: None,
     })?;
 
     std::thread::sleep(std::time::Duration::from_millis(500));

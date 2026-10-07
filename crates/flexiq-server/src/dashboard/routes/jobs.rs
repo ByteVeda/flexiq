@@ -203,6 +203,7 @@ fn replay_job(
         result_ttl_ms: original.result_ttl_ms,
         namespace: original.namespace,
         debounce_key: None,
+        enqueued_by: None,
     };
     let enqueued = storage.enqueue(replay)?;
     crate::events::enqueued(events, &enqueued);

@@ -430,6 +430,7 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_replayJob<'
             result_ttl_ms: original.result_ttl_ms,
             namespace: original.namespace.clone(),
             debounce_key: None,
+            enqueued_by: None,
         };
         let job = queue.storage.enqueue(new_job)?;
         // Best-effort audit row — a history write must not fail the replay.

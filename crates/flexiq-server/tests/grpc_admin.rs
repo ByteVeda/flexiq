@@ -117,6 +117,7 @@ fn job_in(namespace: Option<&str>, queue: &str, task: &str) -> NewJob {
         result_ttl_ms: None,
         namespace: namespace.map(str::to_owned),
         debounce_key: None,
+        enqueued_by: None,
     }
 }
 

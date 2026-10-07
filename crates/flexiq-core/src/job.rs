@@ -132,6 +132,11 @@ pub struct Job {
     /// decode from the Redis backend's JSON documents.
     #[serde(default)]
     pub debounce_key: Option<String>,
+    /// Public id of the token that submitted the job through an authenticated
+    /// door — the same bare hex id the audit trail records. Server-set only;
+    /// `None` when no token was involved (in-process SDK, trigger, scheduler).
+    #[serde(default)]
+    pub enqueued_by: Option<String>,
 }
 
 impl From<JobRow> for Job {
@@ -162,6 +167,7 @@ impl From<JobRow> for Job {
             namespace: row.namespace,
             has_deps: row.has_deps,
             debounce_key: row.debounce_key,
+            enqueued_by: row.enqueued_by,
         }
     }
 }
@@ -197,6 +203,7 @@ impl From<ArchivedJobRow> for Job {
             // `archived_jobs` carries no debounce key: a terminal job has left
             // its debounce window, so nothing would ever read one back.
             debounce_key: None,
+            enqueued_by: row.enqueued_by,
         }
     }
 }
@@ -232,6 +239,7 @@ impl Job {
             namespace: narrow.namespace,
             has_deps: narrow.has_deps,
             debounce_key: narrow.debounce_key,
+            enqueued_by: narrow.enqueued_by,
         }
     }
 
@@ -267,6 +275,7 @@ impl Job {
             has_deps: false,
             // See `From<ArchivedJobRow>`: the archive has no such column.
             debounce_key: None,
+            enqueued_by: narrow.enqueued_by,
         }
     }
 }
@@ -319,6 +328,9 @@ pub struct NewJob {
     pub namespace: Option<String>,
     /// Key a debounced enqueue coalesces on. See [`Job::debounce_key`].
     pub debounce_key: Option<String>,
+    /// Public id of the submitting token. See [`Job::enqueued_by`]; only the
+    /// server's token doors set it, from the authenticated principal.
+    pub enqueued_by: Option<String>,
 }
 
 impl NewJob {
@@ -353,6 +365,7 @@ impl NewJob {
             namespace: self.namespace,
             has_deps,
             debounce_key: self.debounce_key,
+            enqueued_by: self.enqueued_by,
         }
     }
 }
@@ -411,8 +424,29 @@ mod tests {
             result_ttl_ms: None,
             namespace: None,
             debounce_key: Some("report:user-7".to_string()),
+            enqueued_by: Some("8a7fbf03e21cfa60".to_string()),
         }
         .into_job()
+    }
+
+    /// Redis keeps no column for the submitter either, so it rides the JSON.
+    #[test]
+    fn enqueued_by_round_trips_through_json() {
+        let json = serde_json::to_string(&sample_job()).expect("serialize Job");
+        let decoded: Job = serde_json::from_str(&json).expect("deserialize Job");
+        assert_eq!(decoded.enqueued_by.as_deref(), Some("8a7fbf03e21cfa60"));
+    }
+
+    /// Jobs written before the field existed decode with no submitter.
+    #[test]
+    fn a_job_written_without_enqueued_by_still_decodes() {
+        let mut value = serde_json::to_value(sample_job()).expect("serialize Job");
+        value
+            .as_object_mut()
+            .expect("job encodes as an object")
+            .remove("enqueued_by");
+        let decoded: Job = serde_json::from_value(value).expect("deserialize Job");
+        assert_eq!(decoded.enqueued_by, None);
     }
 
     /// The Redis backend stores jobs as `serde_json` of `Job`, so the debounce

@@ -526,6 +526,7 @@ mod tests {
             namespace: None,
             has_deps: false,
             debounce_key: None,
+            enqueued_by: None,
         }
     }
 

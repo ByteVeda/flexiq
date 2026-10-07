@@ -44,6 +44,7 @@ fn make_job(task_name: &str) -> flexiq_core::job::Job {
         result_ttl_ms: None,
         namespace: None,
         debounce_key: None,
+        enqueued_by: None,
     }
     .into_job()
 }

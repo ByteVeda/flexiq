@@ -519,6 +519,7 @@ impl PyQueue {
             result_ttl_ms,
             namespace: self.namespace.clone(),
             debounce_key,
+            enqueued_by: None,
         };
 
         let job = match debounce {
@@ -626,6 +627,7 @@ impl PyQueue {
                 result_ttl_ms,
                 namespace: self.namespace.clone(),
                 debounce_key: None,
+                enqueued_by: None,
             });
         }
 

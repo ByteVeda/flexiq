@@ -375,6 +375,7 @@ fn submit(
             result_ttl_ms: None,
             namespace: queue.namespace.clone(),
             debounce_key: None,
+            enqueued_by: None,
         })?;
         job_ids.insert(topo.name.clone(), job.id.clone());
         wf.create_workflow_node(&new_node(&run_id, &topo.name, Some(job.id)))?;
@@ -809,6 +810,7 @@ fn expand_fan_out(
             result_ttl_ms: None,
             namespace: queue.namespace.clone(),
             debounce_key: None,
+            enqueued_by: None,
         })?;
         child_job_ids.push(job.id.clone());
         nodes.push(new_node(run_id, child_name, Some(job.id)));
@@ -925,6 +927,7 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorkflows_createD
             result_ttl_ms: None,
             namespace: q.namespace.clone(),
             debounce_key: None,
+            enqueued_by: None,
         })?;
         // Cancel the job if binding fails, so it can't run untracked.
         if let Err(err) = wf.set_workflow_node_job(&run_id, &node_name, &job.id) {

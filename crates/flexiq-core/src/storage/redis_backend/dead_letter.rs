@@ -50,6 +50,10 @@ struct DeadJobEntry {
     /// `m0015_dead_letter_job_metadata`.
     #[serde(default)]
     pub job_metadata: Option<String>,
+    /// The dead job's submitting token, carried so `retry_dead` keeps it.
+    /// Counterpart of `m0025_job_enqueued_by`.
+    #[serde(default)]
+    pub enqueued_by: Option<String>,
 }
 
 impl DeadJobEntry {
@@ -90,6 +94,7 @@ impl DeadJobEntry {
             // replacement, `metadata` already is the job's own and copying an
             // unbounded blob twice buys nothing.
             job_metadata: metadata.and(job.metadata.as_deref()).map(str::to_string),
+            enqueued_by: job.enqueued_by.clone(),
         }
     }
 }
@@ -653,6 +658,8 @@ impl RedisStorage {
             // Cleared for the same reason as `unique_key`: an operator retry
             // must run, not be coalesced into someone's window.
             debounce_key: None,
+            // The original submitter, not the operator; see the Diesel twin.
+            enqueued_by: entry.enqueued_by,
         };
 
         // `enqueue` checks out its own connection; release ours so it reuses it.

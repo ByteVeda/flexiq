@@ -147,6 +147,7 @@ pub fn build_new_job(
             .namespace
             .or_else(|| default_namespace.map(str::to_string)),
         debounce_key: options.debounce_key,
+        enqueued_by: None,
     }
 }
 

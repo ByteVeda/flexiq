@@ -65,6 +65,7 @@ pub(crate) fn new_job_row<'a>(job: &'a Job, attribution: &'a JobAttribution) -> 
         topic: attribution.topic.as_deref(),
         subscription_name: attribution.subscription_name.as_deref(),
         debounce_key: job.debounce_key.as_deref(),
+        enqueued_by: job.enqueued_by.as_deref(),
     }
 }
 

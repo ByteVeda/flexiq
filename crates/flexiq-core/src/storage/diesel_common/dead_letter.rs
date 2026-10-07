@@ -158,6 +158,7 @@ macro_rules! impl_diesel_dead_letter_ops {
                     // job's own and copying an unbounded blob twice buys
                     // nothing. See `m0015_dead_letter_job_metadata`.
                     job_metadata: metadata.and(job.metadata.as_deref()),
+                    enqueued_by: job.enqueued_by.as_deref(),
                 };
 
                 diesel::insert_into(dead_letter::table)
@@ -424,6 +425,9 @@ macro_rules! impl_diesel_dead_letter_ops {
                     // Cleared for the same reason as `unique_key`: an operator
                     // retry must run, not be coalesced into someone's window.
                     debounce_key: None,
+                    // The original submitter, not the operator: the replay is
+                    // the same work, and the audit trail records who replayed it.
+                    enqueued_by: dead_row.enqueued_by,
                 };
 
                 let job = new_job.into_job();

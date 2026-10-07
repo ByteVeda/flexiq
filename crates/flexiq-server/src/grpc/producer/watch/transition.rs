@@ -167,6 +167,7 @@ mod tests {
             namespace: Some("ns".into()),
             has_deps: false,
             debounce_key: None,
+            enqueued_by: None,
         }
     }
 

@@ -295,6 +295,7 @@ async fn a_job_in_another_namespace_is_indistinguishable_from_a_missing_one() {
             result_ttl_ms: None,
             namespace: Some("some-other-tenant".to_string()),
             debounce_key: None,
+            enqueued_by: None,
         })
         .expect("enqueue elsewhere");
 

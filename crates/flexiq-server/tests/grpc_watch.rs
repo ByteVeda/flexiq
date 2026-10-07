@@ -236,6 +236,7 @@ async fn a_missing_id_and_another_namespaces_read_the_same() {
             result_ttl_ms: None,
             namespace: Some("someone-else".into()),
             debounce_key: None,
+            enqueued_by: None,
         })
         .expect("seed")
         .id;

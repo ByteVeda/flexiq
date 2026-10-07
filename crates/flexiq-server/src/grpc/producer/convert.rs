@@ -283,6 +283,7 @@ pub fn new_job(
         result_ttl_ms: options.result_ttl.as_ref().map(millis_from_duration),
         namespace: Some(namespace.to_string()),
         debounce_key,
+        enqueued_by: None,
     })
 }
 
@@ -424,6 +425,7 @@ mod tests {
             result_ttl_ms: None,
             namespace: Some("ns".into()),
             debounce_key: None,
+            enqueued_by: None,
         }
         .into_job();
         job.result = Some(Vec::new());

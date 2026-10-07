@@ -35,6 +35,7 @@ fn make_job(task_name: &str, payload: &[u8], max_retries: i32) -> NewJob {
         result_ttl_ms: None,
         namespace: None,
         debounce_key: None,
+        enqueued_by: None,
     }
 }
 

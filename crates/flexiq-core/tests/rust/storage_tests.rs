@@ -34,6 +34,7 @@ fn make_job(queue: &str, task_name: &str) -> NewJob {
         result_ttl_ms: None,
         namespace: None,
         debounce_key: None,
+        enqueued_by: None,
     }
 }
 
@@ -730,6 +731,71 @@ fn test_enqueue_batch(s: &impl Storage) {
 
     let result = s.enqueue_batch(jobs).unwrap();
     assert_eq!(result.len(), 5);
+}
+
+const SUBMITTER: &str = "8a7fbf03e21cfa60";
+
+fn submitted_job(queue: &str, task_name: &str) -> NewJob {
+    let mut job = make_job(queue, task_name);
+    job.enqueued_by = Some(SUBMITTER.to_string());
+    job
+}
+
+/// #992: the submitting token stays on the job through every place it lives —
+/// live, archived (detail and blob-free listing), and a dead-letter replay,
+/// which keeps the original submitter rather than dropping it.
+fn test_enqueued_by_survives_every_hop(s: &impl Storage) {
+    let q = "q-enqueued-by";
+
+    let job = s.enqueue(submitted_job(q, "submitted_task")).unwrap();
+    assert_eq!(job.enqueued_by.as_deref(), Some(SUBMITTER));
+    let live = s.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(live.enqueued_by.as_deref(), Some(SUBMITTER), "live read");
+    let listed = s
+        .list_jobs(Some(JobStatus::Pending as i32), Some(q), None, 50, 0, None)
+        .unwrap();
+    let row = listed.iter().find(|j| j.id == job.id).unwrap();
+    assert_eq!(row.enqueued_by.as_deref(), Some(SUBMITTER), "live listing");
+
+    s.dequeue(q, now_millis() + 1000, None).unwrap();
+    s.complete(&job.id, None, None).unwrap();
+    let archived = s.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(archived.status, JobStatus::Complete);
+    assert_eq!(archived.enqueued_by.as_deref(), Some(SUBMITTER), "archive");
+    let listed = s
+        .list_jobs(Some(JobStatus::Complete as i32), Some(q), None, 50, 0, None)
+        .unwrap();
+    let row = listed.iter().find(|j| j.id == job.id).unwrap();
+    assert_eq!(
+        row.enqueued_by.as_deref(),
+        Some(SUBMITTER),
+        "archive listing"
+    );
+
+    let batch = s
+        .enqueue_batch(vec![submitted_job(q, "batched_task")])
+        .unwrap();
+    let batched = s.get_job(&batch[0].id, None).unwrap().unwrap();
+    assert_eq!(batched.enqueued_by.as_deref(), Some(SUBMITTER), "batch");
+
+    let doomed = s.enqueue(submitted_job(q, "doomed_task")).unwrap();
+    s.move_to_dlq(&doomed, "boom", None).unwrap();
+    let dead = s
+        .list_dead(100, 0, None)
+        .unwrap()
+        .into_iter()
+        .find(|d| d.original_job_id == doomed.id)
+        .unwrap();
+    let dead_job = s.get_job(&doomed.id, None).unwrap().unwrap();
+    assert_eq!(dead_job.enqueued_by.as_deref(), Some(SUBMITTER), "dead job");
+    let replayed = s.retry_dead(&dead.id, None).unwrap();
+    let replayed = s.get_job(&replayed, None).unwrap().unwrap();
+    assert_eq!(replayed.enqueued_by.as_deref(), Some(SUBMITTER), "replay");
+
+    // No token, no submitter: nothing fills it in on the way.
+    let anonymous = s.enqueue(make_job(q, "anonymous_task")).unwrap();
+    let anonymous = s.get_job(&anonymous.id, None).unwrap().unwrap();
+    assert_eq!(anonymous.enqueued_by, None);
 }
 
 fn test_dead_letter_queue(s: &impl Storage) {
@@ -3534,6 +3600,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_enqueue_batch_dedup(s);
     test_enqueue_batch_dedup_validates_deps(s);
     test_every_enqueue_path_writes_dependency_rows(s);
+    test_enqueued_by_survives_every_hop(s);
     test_dead_letter_queue(s);
     test_dead_letter_by_task(s);
     test_dead_letter_purge_and_get_are_namespace_scoped(s);

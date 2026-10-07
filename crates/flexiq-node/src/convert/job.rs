@@ -55,6 +55,7 @@ pub fn build_new_job(
             .namespace
             .or_else(|| queue_namespace.map(str::to_string)),
         debounce_key: opts.debounce_key,
+        enqueued_by: None,
     })
 }
 

@@ -97,6 +97,7 @@ pub(crate) fn enqueue_test_job(storage: &StorageBackend, task_name: &str) -> Str
             result_ttl_ms: None,
             namespace: None,
             debounce_key: None,
+            enqueued_by: None,
         })
         .unwrap()
         .id
@@ -131,6 +132,7 @@ pub(crate) fn enqueue_workflow_job(
             result_ttl_ms: None,
             namespace: None,
             debounce_key: None,
+            enqueued_by: None,
         })
         .unwrap()
         .id
