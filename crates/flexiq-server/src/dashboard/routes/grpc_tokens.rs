@@ -16,6 +16,8 @@ use serde_json::{json, Map, Value};
 
 use flexiq_core::now_millis;
 
+use crate::audit::TargetKind;
+use crate::dashboard::audit::Targets;
 use crate::dashboard::auth::context::RequestContext;
 use crate::dashboard::blocking::on_storage;
 use crate::dashboard::error::{ApiError, ApiResult};
@@ -61,6 +63,7 @@ pub async fn scopes() -> Json<Value> {
 pub async fn create(
     State(state): State<SharedState>,
     Extension(context): Extension<RequestContext>,
+    audit: Option<Extension<Targets>>,
     Json(body): Json<Value>,
 ) -> ApiResult<Json<Value>> {
     let body = object(&body)?;
@@ -84,6 +87,11 @@ pub async fn create(
 
     let (row, plaintext) =
         on_storage(&state, move |storage| store::create(storage, request)).await?;
+    // The route has no id in its path; the new credential is only known now,
+    // and it is the one thing a reader of the trail asks about a mint.
+    if let Some(Extension(targets)) = audit {
+        targets.add(TargetKind::Token, row.id.clone());
+    }
 
     let now = now_millis();
     let mut rendered = row.to_api_json(now);

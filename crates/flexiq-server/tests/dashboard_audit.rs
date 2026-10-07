@@ -236,6 +236,45 @@ async fn with_auth_off_the_change_is_recorded_anonymously() {
     assert_eq!(record.target.as_deref(), Some("ui/theme"), "the whole key");
 }
 
+/// The most security-relevant pair the dashboard serves: both name the token,
+/// though only the revoke carries it in its path.
+#[tokio::test]
+async fn minting_and_revoking_a_token_name_it() {
+    let storage = temp_storage("audit-dash-token");
+    let state = dashboard_state_in_namespace(&storage, AuthMode::Session, "prod");
+    let ops = admin(&state).await;
+
+    let (status, _, minted) = call(
+        &state,
+        ops.send(
+            "POST",
+            "/api/grpc-tokens",
+            json!({ "name": "ci", "scopes": ["produce"] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{minted}");
+    let id = minted["id"].as_str().expect("an id").to_string();
+    let (status, _, _) = call(
+        &state,
+        ops.send("DELETE", &format!("/api/grpc-tokens/{id}"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let records = trail(&storage, "prod", 2).await;
+    assert_eq!(records.len(), 2, "{records:?}");
+    let (revoke, mint) = (&records[0], &records[1]);
+    assert_eq!(mint.operation, "dashboard POST /api/grpc-tokens");
+    assert_eq!(revoke.operation, "dashboard DELETE /api/grpc-tokens/{id}");
+    for record in [mint, revoke] {
+        assert_eq!(record.token_id, "ops");
+        assert_eq!(record.target_kind.as_deref(), Some("token"));
+        assert_eq!(record.target.as_deref(), Some(id.as_str()));
+        assert_eq!(record.outcome, "OK");
+    }
+}
+
 #[tokio::test]
 async fn a_namespaced_dashboard_records_into_its_namespace() {
     let storage = temp_storage("audit-dash-ns");
