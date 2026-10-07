@@ -154,6 +154,27 @@ buffer or stall of 0 is refused. A null is refused too — rendered, it would be
 {{- end -}}
 {{- end -}}
 
+{{/*
+Mirrors config/grpc.rs: the read-audit switch is a boolean — a string such as
+"tru" would render as on — and its window is whole seconds, 0 included. The
+int64 cast reads a malformed window as 0, which would record every read.
+*/}}
+{{- if .Values.grpc.enabled -}}
+{{- if not (kindIs "bool" .Values.grpc.auditReads) -}}
+{{- fail (printf "flexiq-server: grpc.auditReads must be true or false, got '%v'." .Values.grpc.auditReads) -}}
+{{- end -}}
+{{- $v := .Values.grpc.auditReadsWindow -}}
+{{- $whole := false -}}
+{{- if kindIs "string" $v -}}
+{{- $whole = and (regexMatch "^(0|[1-9][0-9]*)$" $v) (eq (toString (int64 $v)) $v) -}}
+{{- else if or (kindIs "int" $v) (kindIs "int64" $v) (kindIs "float64" $v) -}}
+{{- $whole = and (eq (float64 $v) (float64 (int64 $v))) (ge (int64 $v) 0) -}}
+{{- end -}}
+{{- if not $whole -}}
+{{- fail (printf "flexiq-server: grpc.auditReadsWindow must be a whole number of seconds, got '%v'." $v) -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Mirrors config/trigger.rs: one namespace, and a definitions file. */}}
 {{- if .Values.triggers.enabled -}}
 {{- if not .Values.namespace -}}
