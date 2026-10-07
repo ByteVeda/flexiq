@@ -197,7 +197,7 @@ restarted it.
 | `FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS` | `256` | Calls in flight per connection. `0` is unlimited |
 | `FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE` | `1800` | Executor stream rotation, seconds. `0` never rotates |
 | `FLEXIQ_GRPC_AUDIT_RETENTION_DAYS` | `90` | Days an [audit record](/server/operate/audit) is kept. At least `1` |
-| `FLEXIQ_GRPC_AUDIT_READS` | `off` | [Record reads](/server/operate/audit#recording-reads) too. `on` or `off` |
+| `FLEXIQ_GRPC_AUDIT_READS` | `off` | [Record reads](/server/operate/audit#recording-reads) too. `on`/`true`/`yes`/`1` or `off`/`false`/`no`/`0`; anything else refuses to start |
 | `FLEXIQ_GRPC_AUDIT_READS_WINDOW` | `60` | Seconds a repeated read is folded into its first record. `0` records every read |
 | `FLEXIQ_GRPC_TLS_CERT` / `_TLS_KEY` | Unset | PEM certificate and key. Together they terminate TLS on this door |
 | `FLEXIQ_GRPC_TLS_CLIENT_CA` | Unset | PEM CA bundle. Turns on mTLS beside the cert and key |

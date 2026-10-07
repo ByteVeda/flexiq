@@ -231,7 +231,7 @@ fn audit_retention(env: &Env) -> Result<Duration> {
 
 /// Read whether reads are audited, and their folding window.
 ///
-/// The switch is strict: a value that is neither on nor off is refused, since
+/// The switch is strict: a value no boolean spelling matches is refused, since
 /// reading a mistyped `tru` as off would leave an operator believing reads are
 /// recorded when they are not.
 fn audit_reads(env: &Env) -> Result<Option<Duration>> {
