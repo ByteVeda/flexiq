@@ -35,7 +35,7 @@ use tower_service::Service;
 
 use super::context::AuditContext;
 use super::dedup::ReadDedup;
-use super::sink::AuditSink;
+use crate::audit::AuditSink;
 use crate::grpc::auth::gate::{self, Requirement};
 use crate::grpc::auth::Scope;
 use crate::grpc::facade::error::code_name;

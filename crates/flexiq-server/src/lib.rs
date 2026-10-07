@@ -8,6 +8,7 @@
 //! process does.
 #![deny(missing_docs)]
 
+pub mod audit;
 pub mod config;
 pub mod dashboard;
 pub mod events;
