@@ -17,8 +17,9 @@ use std::time::{Duration, Instant};
 
 use flexiq_core::AuditRecord;
 
-/// Distinct reads remembered at once. Past this the expired ones are swept,
-/// and if the table is still full a read is recorded rather than suppressed:
+/// Distinct reads remembered at once. Past this the expired ones are swept, at
+/// most once a window, and while the table is full a read is recorded rather
+/// than suppressed:
 /// a trail that runs long is better than one with a hole in it.
 pub const CAPACITY: usize = 65_536;
 
@@ -51,7 +52,16 @@ impl Key {
 pub struct ReadDedup {
     window: Duration,
     capacity: usize,
-    seen: Mutex<HashMap<Key, Instant>>,
+    table: Mutex<Table>,
+}
+
+#[derive(Debug, Default)]
+struct Table {
+    seen: HashMap<Key, Instant>,
+    /// When a full table was last swept. A sweep walks every entry under the
+    /// lock, so one runs at most once a window: under sustained overflow every
+    /// new read would otherwise pay it.
+    swept: Option<Instant>,
 }
 
 impl ReadDedup {
@@ -64,7 +74,7 @@ impl ReadDedup {
         Self {
             window,
             capacity,
-            seen: Mutex::new(HashMap::new()),
+            table: Mutex::new(Table::default()),
         }
     }
 
@@ -80,21 +90,29 @@ impl ReadDedup {
         }
         // A poisoned table only lost a timestamp mid-write; stepping over it
         // at worst records a read twice.
-        let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
+        let window = self.window;
         let key = Key::of(record);
-        if let Some(at) = seen.get(&key) {
-            if now.saturating_duration_since(*at) < self.window {
+        if let Some(at) = table.seen.get(&key) {
+            if now.saturating_duration_since(*at) < window {
                 return false;
             }
         }
-        if seen.len() >= self.capacity && !seen.contains_key(&key) {
-            let window = self.window;
-            seen.retain(|_, at| now.saturating_duration_since(*at) < window);
-            if seen.len() >= self.capacity {
+        if table.seen.len() >= self.capacity && !table.seen.contains_key(&key) {
+            let due = table
+                .swept
+                .is_none_or(|at| now.saturating_duration_since(at) >= window);
+            if due {
+                table
+                    .seen
+                    .retain(|_, at| now.saturating_duration_since(*at) < window);
+                table.swept = Some(now);
+            }
+            if table.seen.len() >= self.capacity {
                 return true;
             }
         }
-        seen.insert(key, now);
+        table.seen.insert(key, now);
         true
     }
 }
@@ -164,6 +182,30 @@ mod tests {
         assert!(
             !dedup.admit_at(&read("tok", "j3", "OK"), later),
             "the swept table remembers the read it made room for"
+        );
+    }
+
+    /// Sustained overflow must not walk the table on every new read.
+    #[test]
+    fn a_full_table_is_swept_at_most_once_a_window() {
+        let dedup = ReadDedup::with_capacity(MINUTE, 1);
+        let start = Instant::now();
+        assert!(dedup.admit_at(&read("tok", "j1", "OK"), start));
+        // Full: sweeps j1 out and tracks j2.
+        assert!(dedup.admit_at(&read("tok", "j2", "OK"), start + MINUTE));
+
+        // Half a window later j2 is still live and no sweep is due, so j3 is
+        // recorded untracked, every time.
+        let soon = start + MINUTE + MINUTE / 2;
+        assert!(dedup.admit_at(&read("tok", "j3", "OK"), soon));
+        assert!(dedup.admit_at(&read("tok", "j3", "OK"), soon));
+
+        // A window after the last sweep one is due again; j2 has expired.
+        let due = start + 2 * MINUTE;
+        assert!(dedup.admit_at(&read("tok", "j3", "OK"), due));
+        assert!(
+            !dedup.admit_at(&read("tok", "j3", "OK"), due),
+            "tracked once the sweep made room"
         );
     }
 
