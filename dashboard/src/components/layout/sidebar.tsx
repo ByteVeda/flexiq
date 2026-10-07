@@ -1,6 +1,7 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { ExternalLink as ExternalLinkIcon } from "lucide-react";
 import { LiveDot } from "@/components/ui";
+import { useAuditSupported } from "@/features/audit";
 import { useExecutorsSupported } from "@/features/executors";
 import { useGrpcTokensSupported } from "@/features/grpc-tokens";
 import { useStats } from "@/features/overview/hooks";
@@ -20,6 +21,7 @@ export function Sidebar() {
   const nav = visibleNav({
     "/executors": useExecutorsSupported(),
     "/grpc-tokens": useGrpcTokensSupported(),
+    "/audit": useAuditSupported(),
   });
 
   const coreTone = isError ? "danger" : isPending && !stats ? "warning" : "success";

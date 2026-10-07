@@ -14,6 +14,7 @@ import {
   ScrollText,
   Server,
   Settings2,
+  ShieldCheck,
   Skull,
   Webhook as WebhookIcon,
 } from "lucide-react";
@@ -24,8 +25,8 @@ export interface NavItem {
   icon: LucideIcon;
   /**
    * Route only some servers serve. Hidden until the server confirms it: the
-   * standalone scheduler exposes executors and gRPC tokens, an SDK dashboard
-   * does not.
+   * standalone scheduler exposes executors, gRPC tokens and the audit trail,
+   * an SDK dashboard does not.
    */
   optional?: boolean;
 }
@@ -74,6 +75,7 @@ export const NAV: NavGroup[] = [
       { to: "/tasks", label: "Tasks", icon: ListTree },
       { to: "/webhooks", label: "Webhooks", icon: WebhookIcon },
       { to: "/grpc-tokens", label: "gRPC tokens", icon: KeyRound, optional: true },
+      { to: "/audit", label: "Audit trail", icon: ShieldCheck, optional: true },
       { to: "/settings", label: "Settings", icon: Cog },
     ],
   },

@@ -23,6 +23,14 @@ describe("visibleNav", () => {
     expect(labels(visibleNav({ "/grpc-tokens": true }))).toContain("gRPC tokens");
   });
 
+  it("hides the audit trail until the server confirms this session may read it", () => {
+    // An SDK dashboard answers 404 and a viewer 403; neither confirms.
+    expect(labels(visibleNav({}))).not.toContain("Audit trail");
+    expect(labels(visibleNav({ "/audit": undefined }))).not.toContain("Audit trail");
+    expect(labels(visibleNav({ "/audit": false }))).not.toContain("Audit trail");
+    expect(labels(visibleNav({ "/audit": true }))).toContain("Audit trail");
+  });
+
   it("leaves every unconditional route alone", () => {
     const always = NAV.flatMap((group) => group.items)
       .filter((item) => !item.optional)

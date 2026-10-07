@@ -12,6 +12,13 @@ their entries below keep that name.
 
 ### Added
 
+- **Audit trail page on the dashboard** (#995). The `flexiq-server` dashboard lists the trail
+  under Configuration → Audit trail, newest first, filtered by principal kind, token id or
+  username, target kind, target and a time range, paged by cursor; targets link to the job,
+  workflow run, topic, webhook, queue, worker or token page that shows them, and a gRPC token's
+  row menu opens what it did, revoked tokens included. Served as `GET /api/audit-records`,
+  admin-only like the token list; SDK-served dashboards have no such route and hide the page.
+
 - **Dashboard changes and token lifecycle in the audit trail** (#994). Every `POST`, `PUT`,
   `PATCH` or `DELETE` the `flexiq-server` dashboard answers is recorded, attributed to the
   signed-in user (or `anonymous` with auth off), refusals included, with the route as the

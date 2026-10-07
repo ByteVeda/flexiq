@@ -338,6 +338,11 @@ async fn a_viewer_can_read_but_not_mutate() {
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"], json!("forbidden"));
 
+    // Nor read the audit trail, which names every principal and what each did.
+    let (status, _, body) = call(&state, viewer.get("/api/audit-records")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], json!("forbidden"));
+
     let (status, _, body) = call(&state, viewer.post("/api/queues/default/pause", json!({}))).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"], json!("forbidden"));

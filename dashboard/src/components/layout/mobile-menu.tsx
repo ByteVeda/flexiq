@@ -9,6 +9,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui";
+import { useAuditSupported } from "@/features/audit";
 import { useExecutorsSupported } from "@/features/executors";
 import { useGrpcTokensSupported } from "@/features/grpc-tokens";
 import { useBranding, useExternalLinks } from "@/features/settings";
@@ -23,6 +24,7 @@ export function MobileMenu() {
   const nav = visibleNav({
     "/executors": useExecutorsSupported(),
     "/grpc-tokens": useGrpcTokensSupported(),
+    "/audit": useAuditSupported(),
   });
 
   const close = () => setOpen(false);
