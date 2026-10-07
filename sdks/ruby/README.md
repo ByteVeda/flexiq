@@ -22,7 +22,7 @@ gem "flexiq", git: "https://github.com/ByteVeda/flexiq", glob: "sdks/ruby/*.gems
 ```ruby
 require "flexiq"
 
-client = FlexiQ::Client.new("https://flexiq.internal:8443", token: ENV.fetch("FLEXIQ_TOKEN"))
+client = FlexiQ::Client.new("https://flexiq.internal:50051", token: ENV.fetch("FLEXIQ_TOKEN"))
 
 result = client.enqueue("orders.send_receipt",
                         args: [{ "order_id" => "ord-0001" }],
@@ -36,7 +36,8 @@ client.cancel_job(job.id)
 client.queue_stats("emails").pending
 ```
 
-The URL is the server's gRPC listener (`FLEXIQ_GRPC_LISTEN`); the JSON facade shares it.
+The URL is the address the server's `FLEXIQ_GRPC_LISTEN` binds (these examples use port `50051`);
+the JSON facade shares that listener.
 
 ## Surface
 
