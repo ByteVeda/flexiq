@@ -15,10 +15,17 @@ class ProducerE2ETest < Minitest::Test
         binary = LiveServer.binary
         raise "no flexiq-server; build one with:\n  #{LiveServer::BUILD_COMMAND}" unless binary
 
-        server = LiveServer.new(binary).start
+        server = LiveServer.new(binary)
+        begin
+          server.start
+          token = server.mint("ruby-e2e-producer", "produce")
+          server.await_ready(FlexiQ::Client.new(server.url, token: token, insecure: true))
+        rescue StandardError
+          # A server that never became usable still owns a process and a database file.
+          server.stop
+          raise
+        end
         Minitest.after_run { server.stop }
-        token = server.mint("ruby-e2e-producer", "produce")
-        server.await_ready(FlexiQ::Client.new(server.url, token: token, insecure: true))
         { server: server, token: token }
       end
     end

@@ -72,15 +72,19 @@ class LiveServer
     end
   end
 
+  # Idempotent: a failed start and the after-run hook may both call it.
   def stop
     return unless @wait
 
     Process.kill("TERM", @wait.pid)
-    @wait.join(STOP_GRACE) || Process.kill("KILL", @wait.pid)
+    return if @wait.join(STOP_GRACE)
+
+    Process.kill("KILL", @wait.pid)
+    @wait.join
   rescue Errno::ESRCH
     nil
   ensure
-    FileUtils.remove_entry(@dir)
+    FileUtils.rm_rf(@dir)
   end
 
   def log_tail = "--- flexiq-server ---\n#{Array.new(@log.size) { @log.pop }.last(40).join}"
