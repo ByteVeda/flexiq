@@ -1275,6 +1275,8 @@ public final class InMemoryQueueBackend implements QueueBackend {
         view.put("namespace", job.namespace);
         view.put("metadata", job.metadata);
         view.put("notes", job.notes);
+        // In-process enqueues hold no token, matching the native backend.
+        view.put("enqueuedBy", null);
         return view;
     }
 
