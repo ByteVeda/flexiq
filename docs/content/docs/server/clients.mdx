@@ -3,8 +3,8 @@ title: Clients without an SDK
 description: "Enqueue and read work from a language FlexiQ has no SDK for: get the contract, generate a client, and decode what comes back."
 ---
 
-FlexiQ ships SDKs for three languages. This page is for everything else — Ruby,
-C#, PHP, Elixir, anything with a gRPC library — talking to the
+FlexiQ ships SDKs for three languages. This page is for everything else — C#,
+PHP, Elixir, anything with a gRPC library or an HTTP one — talking to the
 [producer door](/server) of a running
 `flexiq-server`. You need no native binding, no database credential, and, if you
 use `structured` arguments, no CBOR library either.
@@ -16,6 +16,15 @@ use `structured` arguments, no CBOR library either.
   read a workflow — with the payload envelope, the reason-based errors and the
   bearer credential already handled.
   It is a producer client, not an SDK: it cannot execute tasks.
+</Callout>
+
+<Callout title="So does Ruby">
+  [`sdks/ruby`](https://github.com/ByteVeda/flexiq/tree/master/sdks/ruby)
+  implements the same producer verbs — enqueue, batch, read, cancel, count —
+  over the JSON facade, using nothing outside the Ruby standard library. It
+  writes the `raw` CBOR envelope itself, so its payloads, and the `auto:` keys
+  derived from them, match every other runtime's. Like the Go client, it cannot
+  execute tasks.
 </Callout>
 
 What you give up is worth naming up front. An SDK gives you task registration,
