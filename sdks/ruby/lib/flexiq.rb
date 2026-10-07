@@ -18,3 +18,13 @@ require_relative "flexiq/wire/timestamp"
 
 require_relative "flexiq/reason"
 require_relative "flexiq/rpc_error"
+
+require_relative "flexiq/job_status"
+require_relative "flexiq/task_error"
+require_relative "flexiq/job"
+require_relative "flexiq/debounce"
+require_relative "flexiq/enqueue_options"
+require_relative "flexiq/enqueue_request"
+require_relative "flexiq/enqueue_result"
+require_relative "flexiq/batch_item_result"
+require_relative "flexiq/queue_stats"
