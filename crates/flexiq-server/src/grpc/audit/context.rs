@@ -97,6 +97,17 @@ pub fn target(audit: Option<&AuditContext>, kind: TargetKind, id: impl Into<Stri
     }
 }
 
+/// Record a listing's queue and task filters on `audit`, whichever are set.
+/// A listing names what it was asked for, not each row it returned.
+pub fn filter(audit: Option<&AuditContext>, queue: Option<&str>, task: Option<&str>) {
+    if let Some(queue) = queue {
+        target(audit, TargetKind::Queue, queue);
+    }
+    if let Some(task) = task {
+        target(audit, TargetKind::Task, task);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +142,21 @@ mod tests {
         let audit = AuditContext::of(&extensions);
         assert!(audit.is_none());
         target(audit.as_ref(), TargetKind::Queue, "emails");
+        filter(audit.as_ref(), Some("emails"), Some("send"));
+    }
+
+    #[test]
+    fn a_filter_records_only_what_was_set() {
+        let context = AuditContext::default();
+        filter(Some(&context), Some("emails"), None);
+        filter(Some(&context), None, Some("send"));
+        filter(Some(&context), None, None);
+        assert_eq!(
+            context.take().1,
+            [
+                (TargetKind::Queue, "emails".into()),
+                (TargetKind::Task, "send".into())
+            ]
+        );
     }
 }
