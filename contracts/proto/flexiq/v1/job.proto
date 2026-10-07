@@ -115,6 +115,11 @@ message Job {
   // How long the result is kept after completion.
   google.protobuf.Duration result_ttl = 24;
   optional string debounce_key = 25;
+  // Output-only: the public id of the token that submitted the job — the id
+  // `flexiq-server token list` and the audit trail show, never a secret. The
+  // server sets it from the credential it authenticated; no request carries
+  // it. Absent when no token was involved, e.g. an in-process SDK enqueue.
+  optional string enqueued_by = 26;
 }
 
 // The producer-settable knobs on a job.

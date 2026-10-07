@@ -170,15 +170,17 @@ async fn a_job_names_the_token_that_submitted_it() {
     let alice = harness.mint("alice", produce());
     let bob = harness.mint("bob", produce());
 
-    let single = harness
+    let enqueued = harness
         .producer(&alice)
         .enqueue(job("emails", "send_receipt"))
         .await
         .expect("enqueue")
         .into_inner()
         .job
-        .expect("a job")
-        .id;
+        .expect("a job");
+    // The wire carries it too, so a client sees it without a second read.
+    assert_eq!(enqueued.enqueued_by.as_deref(), Some(alice.id.as_str()));
+    let single = enqueued.id;
     let batch: Vec<String> = harness
         .producer(&bob)
         .enqueue_batch(EnqueueBatchRequest {

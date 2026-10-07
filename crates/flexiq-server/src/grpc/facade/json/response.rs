@@ -286,6 +286,9 @@ pub fn job(job: &pb::Job) -> Value {
     if let Some(debounce_key) = job.debounce_key.as_ref() {
         object.insert("debounceKey".to_string(), debounce_key.clone().into());
     }
+    if let Some(enqueued_by) = job.enqueued_by.as_ref() {
+        object.insert("enqueuedBy".to_string(), enqueued_by.clone().into());
+    }
     Value::Object(object)
 }
 
@@ -352,6 +355,7 @@ pub(super) mod tests {
             expires_at: Some(crate::grpc::producer::convert::timestamp(1_756_900_004_000)),
             result_ttl: Some(crate::grpc::producer::convert::duration(3_600_000)),
             debounce_key: Some("burst".to_string()),
+            enqueued_by: Some("8a7fbf03e21cfa60".to_string()),
         }
     }
 

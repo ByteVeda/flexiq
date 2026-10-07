@@ -182,8 +182,13 @@ type Job struct {
 	// After this instant the job is cancelled instead of dispatched.
 	ExpiresAt *timestamppb.Timestamp `protobuf:"bytes,23,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	// How long the result is kept after completion.
-	ResultTtl     *durationpb.Duration `protobuf:"bytes,24,opt,name=result_ttl,json=resultTtl,proto3" json:"result_ttl,omitempty"`
-	DebounceKey   *string              `protobuf:"bytes,25,opt,name=debounce_key,json=debounceKey,proto3,oneof" json:"debounce_key,omitempty"`
+	ResultTtl   *durationpb.Duration `protobuf:"bytes,24,opt,name=result_ttl,json=resultTtl,proto3" json:"result_ttl,omitempty"`
+	DebounceKey *string              `protobuf:"bytes,25,opt,name=debounce_key,json=debounceKey,proto3,oneof" json:"debounce_key,omitempty"`
+	// Output-only: the public id of the token that submitted the job — the id
+	// `flexiq-server token list` and the audit trail show, never a secret. The
+	// server sets it from the credential it authenticated; no request carries
+	// it. Absent when no token was involved, e.g. an in-process SDK enqueue.
+	EnqueuedBy    *string `protobuf:"bytes,26,opt,name=enqueued_by,json=enqueuedBy,proto3,oneof" json:"enqueued_by,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -389,6 +394,13 @@ func (x *Job) GetResultTtl() *durationpb.Duration {
 func (x *Job) GetDebounceKey() string {
 	if x != nil && x.DebounceKey != nil {
 		return *x.DebounceKey
+	}
+	return ""
+}
+
+func (x *Job) GetEnqueuedBy() string {
+	if x != nil && x.EnqueuedBy != nil {
+		return *x.EnqueuedBy
 	}
 	return ""
 }
@@ -731,7 +743,7 @@ var File_flexiq_v1_job_proto protoreflect.FileDescriptor
 
 const file_flexiq_v1_job_proto_rawDesc = "" +
 	"\n" +
-	"\x13flexiq/v1/job.proto\x12\tflexiq.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbb\b\n" +
+	"\x13flexiq/v1/job.proto\x12\tflexiq.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf1\b\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05queue\x18\x02 \x01(\tR\x05queue\x12\x1b\n" +
@@ -765,7 +777,9 @@ const file_flexiq_v1_job_proto_rawDesc = "" +
 	"expires_at\x18\x17 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x128\n" +
 	"\n" +
 	"result_ttl\x18\x18 \x01(\v2\x19.google.protobuf.DurationR\tresultTtl\x12&\n" +
-	"\fdebounce_key\x18\x19 \x01(\tH\aR\vdebounceKey\x88\x01\x01B\n" +
+	"\fdebounce_key\x18\x19 \x01(\tH\aR\vdebounceKey\x88\x01\x01\x12$\n" +
+	"\venqueued_by\x18\x1a \x01(\tH\bR\n" +
+	"enqueuedBy\x88\x01\x01B\n" +
 	"\n" +
 	"\b_payloadB\t\n" +
 	"\a_resultB\b\n" +
@@ -774,7 +788,8 @@ const file_flexiq_v1_job_proto_rawDesc = "" +
 	"\t_metadataB\b\n" +
 	"\x06_notesB\r\n" +
 	"\v_unique_keyB\x0f\n" +
-	"\r_debounce_key\"\xa2\x04\n" +
+	"\r_debounce_keyB\x0e\n" +
+	"\f_enqueued_by\"\xa2\x04\n" +
 	"\x0eEnqueueOptions\x12\x14\n" +
 	"\x05queue\x18\x01 \x01(\tR\x05queue\x12\x1a\n" +
 	"\bpriority\x18\x02 \x01(\x05R\bpriority\x12\x1f\n" +

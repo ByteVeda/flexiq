@@ -279,6 +279,9 @@ pub fn job_json(job: &pb::Job) -> Value {
     if let Some(debounce_key) = job.debounce_key.as_ref() {
         object.insert("debounceKey".to_string(), debounce_key.clone().into());
     }
+    if let Some(enqueued_by) = job.enqueued_by.as_ref() {
+        object.insert("enqueuedBy".to_string(), enqueued_by.clone().into());
+    }
     Value::Object(object)
 }
 

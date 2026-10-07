@@ -1116,6 +1116,10 @@
           "debounceKey": {
             "type": "string"
           },
+          "enqueuedBy": {
+            "description": "Output-only: the public id of the token that submitted the job — the id\n`flexiq-server token list` and the audit trail show, never a secret. The\nserver sets it from the credential it authenticated; no request carries\nit. Absent when no token was involved, e.g. an in-process SDK enqueue.",
+            "type": "string"
+          },
           "error": {
             "description": "Canonical JSON `{errtype, message, traceback[]}` when whatever produced the\nerror wrote one, and free prose otherwise. Readers fall back on non-JSON.",
             "type": "string"

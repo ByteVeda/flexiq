@@ -153,6 +153,7 @@ pub fn job_to_wire(job: Job, blobs: Blobs) -> pb::Job {
         expires_at: job.expires_at.map(timestamp),
         result_ttl: job.result_ttl_ms.map(duration),
         debounce_key: job.debounce_key,
+        enqueued_by: job.enqueued_by,
     }
 }
 
@@ -428,11 +429,17 @@ mod tests {
             result_ttl_ms: None,
             namespace: Some("ns".into()),
             debounce_key: None,
-            enqueued_by: None,
+            enqueued_by: Some("8a7fbf03e21cfa60".into()),
         }
         .into_job();
         job.result = Some(Vec::new());
         job
+    }
+
+    #[test]
+    fn the_submitting_token_reaches_the_wire() {
+        let wire = job_to_wire(sample_job(), Blobs::NONE);
+        assert_eq!(wire.enqueued_by.as_deref(), Some("8a7fbf03e21cfa60"));
     }
 
     #[test]

@@ -143,6 +143,10 @@ type Job struct {
 	Notes       string
 	UniqueKey   string
 	DebounceKey string
+	// EnqueuedBy is the public id of the token that submitted the job, the
+	// same id the audit trail records. Output-only; empty when no token was
+	// involved.
+	EnqueuedBy string
 }
 
 // TaskError parses the failure the job recorded. The second return is false
@@ -206,6 +210,7 @@ func jobFromProto(msg *pb.Job) Job {
 		Notes:           msg.GetNotes(),
 		UniqueKey:       msg.GetUniqueKey(),
 		DebounceKey:     msg.GetDebounceKey(),
+		EnqueuedBy:      msg.GetEnqueuedBy(),
 	}
 }
 
