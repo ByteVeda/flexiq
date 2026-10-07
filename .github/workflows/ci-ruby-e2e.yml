@@ -28,6 +28,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       # Read-only restore of the dev-profile namespace ci-rust.yml writes on
       # master, as ci-go-e2e.yml does.
