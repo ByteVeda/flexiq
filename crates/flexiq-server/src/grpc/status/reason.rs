@@ -154,7 +154,8 @@ pub const KEY_SCOPE: &str = "scope";
 /// raised rather than getting a reason of its own, because a client that gets
 /// `QUEUE_FULL` on a batch needs both facts at once.
 pub const KEY_INDEX: &str = "index";
-/// The offending `WorkflowNodeConfig.name`. `WORKFLOW_CONSTRUCT_UNSUPPORTED`.
+/// The offending `WorkflowNodeConfig.name`. `WORKFLOW_CONSTRUCT_UNSUPPORTED`,
+/// and `SCOPE_DENIED` from `SubmitWorkflow`.
 pub const KEY_NODE: &str = "node";
 /// The unsupported field on that node — `gate`, `cache`, `fan_out`, `fan_in`
 /// or `sub_workflow`. `WORKFLOW_CONSTRUCT_UNSUPPORTED`.

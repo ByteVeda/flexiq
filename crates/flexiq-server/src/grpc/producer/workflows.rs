@@ -11,15 +11,20 @@
 
 use std::collections::HashMap;
 
+use flexiq_core::job::Job;
+use flexiq_core::storage::Storage;
+use flexiq_core::StorageBackend;
 use flexiq_workflows::lifecycle::{self, SubmitStaticWorkflowRequest, SubmitWorkflowError};
-use flexiq_workflows::{StepMetadata, WorkflowStorage};
+use flexiq_workflows::{
+    StepMetadata, WorkflowNode, WorkflowRun, WorkflowStorage, WorkflowStorageBackend,
+};
 use tonic::{Response, Status};
 
-use super::convert::{self, DEFAULT_TIMEOUT_MS};
+use super::convert::{self, DEFAULT_QUEUE, DEFAULT_TIMEOUT_MS};
 use super::structured;
 use super::Scoped;
 use crate::grpc::audit::TargetKind;
-use crate::grpc::blocking::{on_storage_and_workflows, on_workflows};
+use crate::grpc::blocking::on_storage_and_workflows;
 use crate::grpc::pb;
 use crate::grpc::status::WireError;
 
@@ -50,6 +55,7 @@ pub(crate) async fn submit_workflow(
         .graph
         .ok_or_else(|| WireError::invalid_request("graph is required"))?;
     refuse_dynamic_constructs(&graph)?;
+    admit_graph(scoped, &graph)?;
     let (dag_bytes, step_metadata, node_payloads) = compile_graph(graph)?;
 
     let namespace = scoped.namespace().to_string();
@@ -59,7 +65,7 @@ pub(crate) async fn submit_workflow(
         dag_bytes,
         step_metadata,
         node_payloads,
-        queue_default: "default".to_string(),
+        queue_default: DEFAULT_QUEUE.to_string(),
         params_json: request.params_json,
         deferred_node_names: Default::default(),
         cache_hit_nodes: Default::default(),
@@ -90,18 +96,24 @@ pub(crate) async fn get_workflow_run(
     request: pb::GetWorkflowRunRequest,
 ) -> Result<Response<pb::GetWorkflowRunResponse>, Status> {
     let run_id = request.run_id.clone();
-    let (run, nodes) = on_workflows(scoped.workflows(), move |workflows| {
-        let run = workflows.get_workflow_run(&run_id)?;
-        let nodes = match &run {
-            Some(_) => workflows.get_workflow_nodes(&run_id)?,
-            None => Vec::new(),
-        };
-        Ok((run, nodes))
-    })
+    let namespace = scoped.namespace().to_string();
+    // Only a narrowed caller pays for reading the nodes' jobs back.
+    let narrowed = !scoped.reaches(None, None);
+    let (run, nodes, jobs) = on_storage_and_workflows(
+        scoped.storage(),
+        scoped.workflows(),
+        move |storage, workflows| {
+            read_run(storage, workflows, &run_id, &namespace, narrowed)
+                .map_err(|error| WireError::from_queue_error(&error))
+        },
+    )
     .await?;
 
-    let run = run
-        .ok_or_else(|| Status::not_found(format!("workflow run '{}' not found", request.run_id)))?;
+    let not_found = || Status::not_found(format!("workflow run '{}' not found", request.run_id));
+    let run = run.ok_or_else(not_found)?;
+    if narrowed && !run_within_grants(scoped, &nodes, &jobs) {
+        return Err(not_found());
+    }
 
     Ok(Response::new(pb::GetWorkflowRunResponse {
         run: Some(convert::workflow_run_to_wire(run)),
@@ -110,6 +122,54 @@ pub(crate) async fn get_workflow_run(
             .map(convert::workflow_node_to_wire)
             .collect(),
     }))
+}
+
+/// A run, its nodes, and — when `with_jobs` — every job those nodes name.
+fn read_run(
+    storage: &StorageBackend,
+    workflows: &WorkflowStorageBackend,
+    run_id: &str,
+    namespace: &str,
+    with_jobs: bool,
+) -> flexiq_core::Result<(Option<WorkflowRun>, Vec<WorkflowNode>, Vec<Job>)> {
+    let Some(run) = workflows.get_workflow_run(run_id)? else {
+        return Ok((None, Vec::new(), Vec::new()));
+    };
+    let nodes = workflows.get_workflow_nodes(run_id)?;
+    let jobs = if with_jobs {
+        let ids: Vec<&str> = nodes.iter().flat_map(node_job_ids).collect();
+        storage.get_jobs_by_ids(&ids, Some(namespace))?
+    } else {
+        Vec::new()
+    };
+    Ok((Some(run), nodes, jobs))
+}
+
+/// Whether the caller's grants reach every job the run's nodes name (#990).
+///
+/// The node rows carry no queue or task, and the definition's metadata is
+/// shared by every run of that name and version, so the jobs are the only
+/// record of where the work landed. Fails closed: a node with no job (deferred,
+/// a cache hit) or whose job retention removed has no queue to check, and a run
+/// with no nodes has nothing to vouch for it.
+fn run_within_grants(scoped: &Scoped<'_>, nodes: &[WorkflowNode], jobs: &[Job]) -> bool {
+    let jobs: HashMap<&str, &Job> = jobs.iter().map(|job| (job.id.as_str(), job)).collect();
+    !nodes.is_empty()
+        && nodes.iter().all(|node| {
+            node.job_id.is_some()
+                && node_job_ids(node).all(|id| {
+                    jobs.get(id)
+                        .is_some_and(|job| scoped.reaches(Some(&job.queue), Some(&job.task_name)))
+                })
+        })
+}
+
+/// The forward job and, under a saga's rollback, the compensation job.
+fn node_job_ids(node: &WorkflowNode) -> impl Iterator<Item = &str> {
+    node.job_id
+        .iter()
+        .chain(node.compensation_job_id.iter())
+        .map(String::as_str)
 }
 
 /// Refuse the whole call if any node sets a construct nothing can advance yet.
@@ -135,6 +195,36 @@ fn refuse_dynamic_constructs(graph: &pb::WorkflowGraph) -> Result<(), Status> {
         return Err(WireError::workflow_construct_unsupported(&node.name, field).into());
     }
     Ok(())
+}
+
+/// Refuse the whole graph if any node would enqueue onto a queue or task the
+/// caller's grants do not reach, naming the first such node (#990).
+///
+/// Checked before anything is written, on the queue the node's job lands in:
+/// an empty or absent queue is `default` by then, as it is for `Enqueue`.
+fn admit_graph(scoped: &Scoped<'_>, graph: &pb::WorkflowGraph) -> Result<(), WireError> {
+    for node in &graph.node_configs {
+        let queue = node
+            .queue
+            .as_deref()
+            .filter(|queue| !queue.is_empty())
+            .unwrap_or(DEFAULT_QUEUE);
+        scoped
+            .require(Some(queue), Some(&node.task_name))
+            .and_then(|()| admit_compensation(scoped, node))
+            .map_err(|error| error.at_node(&node.name))?;
+    }
+    Ok(())
+}
+
+/// A rollback task is enqueued later, by whichever worker runs the saga, on a
+/// queue that worker picks rather than the graph. With no queue to check, the
+/// grants must reach the task on every queue.
+fn admit_compensation(scoped: &Scoped<'_>, node: &pb::WorkflowNodeConfig) -> Result<(), WireError> {
+    match node.compensate.as_deref() {
+        Some(task) => scoped.require(None, Some(task)),
+        None => Ok(()),
+    }
 }
 
 /// A compiled graph: the bare DAG's JSON bytes, a name-keyed `StepMetadata`
@@ -179,7 +269,9 @@ fn compile_graph(graph: pb::WorkflowGraph) -> Result<CompiledGraph, WireError> {
             node.name.clone(),
             StepMetadata {
                 task_name: node.task_name,
-                queue: node.queue,
+                // The wire's "empty means default"; left as `Some("")`, the job
+                // would land in a queue named `""` instead.
+                queue: node.queue.filter(|queue| !queue.is_empty()),
                 args_template: None,
                 kwargs_template: None,
                 max_retries: node.max_retries,
