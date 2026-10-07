@@ -25,7 +25,7 @@
   "allDeclaredFields":true,
   "queryAllDeclaredMethods":true,
   "queryAllDeclaredConstructors":true,
-  "methods":[{"name":"<init>","parameterTypes":["java.lang.String","java.lang.String","java.lang.String","org.byteveda.flexiq.model.JobStatus","int","long","long","java.lang.Long","java.lang.Long","int","int","long","java.lang.Integer","java.lang.String","java.lang.String","java.lang.String","java.lang.String","java.lang.String"] }]
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String","java.lang.String","java.lang.String","org.byteveda.flexiq.model.JobStatus","int","long","long","java.lang.Long","java.lang.Long","int","int","long","java.lang.Integer","java.lang.String","java.lang.String","java.lang.String","java.lang.String","java.lang.String","java.lang.String"] }]
 },
 {
   "name":"org.byteveda.flexiq.model.JobFilter",
