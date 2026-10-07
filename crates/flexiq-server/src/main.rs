@@ -90,6 +90,11 @@ Configuration (environment only):
   FLEXIQ_GRPC_AUDIT_RETENTION_DAYS  days an audit record of a token-authorised
                                  write is kept before the listener prunes it
                                  (default: 90; at least 1)
+  FLEXIQ_GRPC_AUDIT_READS       record reads (read and inspect calls) in the
+                                 audit trail too (default: off)
+  FLEXIQ_GRPC_AUDIT_READS_WINDOW  seconds a repeated read — same token, RPC,
+                                 target and outcome — is folded into the first
+                                 record (default: 60; 0 records every read)
   FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN  WatchJobs streams one API token may hold at
                                  once (default: 16; 0 is unlimited)
   FLEXIQ_GRPC_WATCH_RECONCILE   seconds between re-reads of every watched job
