@@ -22,6 +22,9 @@ class NativeMetadataTest {
 
     private static final String REFLECT_CONFIG = "/META-INF/native-image/org.byteveda/flexiq/reflect-config.json";
 
+    /** The JDK the Multi-Release overlay ({@code src/main/java22}) targets. */
+    private static final int FFM_FEATURE_VERSION = 22;
+
     private static final Map<String, Class<?>> PRIMITIVES = Map.of(
             "int", int.class,
             "long", long.class,
@@ -41,7 +44,15 @@ class NativeMetadataTest {
             if (!name.startsWith("org.byteveda.")) {
                 continue;
             }
-            Class<?> type = Class.forName(name);
+            Class<?> type;
+            try {
+                type = Class.forName(name);
+            } catch (ClassNotFoundException e) {
+                // The FFM transport ships in the jar's META-INF/versions/22 overlay, so an
+                // older JVM legitimately cannot load it; on 22+ a missing class is drift.
+                assertTrue(Runtime.version().feature() < FFM_FEATURE_VERSION, name + " is listed but does not exist");
+                continue;
+            }
             List<List<Class<?>>> listed = new ArrayList<>();
             for (JsonNode method : entry.path("methods")) {
                 if (!"<init>".equals(method.get("name").asText())) {
