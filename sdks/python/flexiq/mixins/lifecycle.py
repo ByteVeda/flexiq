@@ -64,11 +64,12 @@ class QueueLifecycleMixin:
     def _print_banner(self, queues: list[str]) -> None:
         """Print ASCII startup banner."""
         banner = rf"""
- _            _    _ _
-| |_ __ _ ___| | _(_) |_ ___
-| __/ _` / __| |/ / | __/ _ \
-| || (_| \__ \   <| | || (_) |
- \__\__,_|___/_|\_\_|\__\___/  v{flexiq.__version__}
+  __ _           _
+ / _| | _____  _(_) __ _
+| |_| |/ _ \ \/ / |/ _` |
+|  _| |  __/>  <| | (_| |
+|_| |_|\___/_/\_\_|\__, |  v{flexiq.__version__}
+                      |_|
 """
         lines = [banner]
         lines.append(f"> Backend:     {self._backend}")
