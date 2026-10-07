@@ -4,6 +4,7 @@
 //! SPA build is served by all of them, so a divergence here is a broken page,
 //! not a variation.
 
+pub mod audit;
 pub mod dead_letters;
 pub mod executors;
 pub mod grpc_tokens;
@@ -126,6 +127,8 @@ pub fn router() -> Router<SharedState> {
         )
         .route("/api/grpc-tokens/scopes", get(grpc_tokens::scopes))
         .route("/api/grpc-tokens/{id}", delete(grpc_tokens::revoke))
+        // ── Audit trail ─────────────────────────────────────────────
+        .route("/api/audit-records", get(audit::list))
         // ── Webhooks ────────────────────────────────────────────────
         .route("/api/event-types", get(webhooks::event_types))
         .route("/api/webhooks", get(webhooks::list).post(webhooks::create))

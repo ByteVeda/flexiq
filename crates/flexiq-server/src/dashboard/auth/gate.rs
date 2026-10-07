@@ -28,7 +28,10 @@ const SELF_SERVICE_PATHS: [&str; 2] = ["/api/auth/logout", "/api/auth/change-pas
 /// credentials — which ones exist, what each may call, whose they are, and when
 /// each lapses. That is a targeting map rather than operational data, and the
 /// dashboard's token CRUD is admin-gated by contract, read included.
-const ADMIN_READ_PREFIXES: [&str; 1] = ["/api/grpc-tokens"];
+///
+/// The audit trail is the same kind of map: every credential and user, and
+/// everything each one touched.
+const ADMIN_READ_PREFIXES: [&str; 2] = ["/api/grpc-tokens", "/api/audit-records"];
 
 /// Login and setup happen before a session exists, so they cannot carry a CSRF
 /// token. Every other mutation must.
@@ -114,6 +117,12 @@ mod tests {
         assert!(!requires_admin("/api/webhooks", "GET"));
         // A public path is never admin-gated, whatever else matches.
         assert!(!requires_admin("/health", "GET"));
+    }
+
+    /// The trail names who did what to which resource, so it is an admin read.
+    #[test]
+    fn reading_the_audit_trail_needs_admin() {
+        assert!(requires_admin("/api/audit-records", "GET"));
     }
 
     #[test]
