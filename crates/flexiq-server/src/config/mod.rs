@@ -5,6 +5,7 @@
 //! works over a plain map — `Config::from_env` collects the real environment,
 //! and tests build a map without touching global state.
 
+pub mod audit;
 pub mod backend;
 pub mod dashboard;
 pub mod events;
@@ -74,6 +75,9 @@ pub struct Config {
     /// deployment whose database credentials do not permit DDL at runtime; the
     /// schema must then be applied out of band before the server starts.
     pub auto_migrate: bool,
+    /// How long an audit record is kept. Not a role: whichever role records
+    /// into the trail prunes it.
+    pub audit_retention: std::time::Duration,
 }
 
 impl Config {
@@ -97,6 +101,7 @@ impl Config {
             maintenance: flag(env, "FLEXIQ_MAINTENANCE", true),
             push_dispatch: optional_flag(env, "FLEXIQ_PUSH_DISPATCH")?,
             auto_migrate: flag(env, "FLEXIQ_AUTO_MIGRATE", true),
+            audit_retention: audit::retention(env)?,
             attach: listen::from_env(env)?,
             dashboard: dashboard::from_env(env, allow_insecure)?,
             webhook: webhook::from_env(env)?,

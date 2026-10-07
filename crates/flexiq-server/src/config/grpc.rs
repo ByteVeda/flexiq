@@ -30,6 +30,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
+use crate::config::audit;
 use crate::config::listen::{parse, ListenAddress};
 use crate::config::watch::{self, WatchConfig};
 use crate::config::{optional_flag, value, Env};
@@ -49,13 +50,6 @@ pub const REQUEST_TIMEOUT_VAR: &str = "FLEXIQ_GRPC_REQUEST_TIMEOUT";
 
 /// How many calls one connection may have in flight at once.
 pub const MAX_CONCURRENT_REQUESTS_VAR: &str = "FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS";
-
-/// How many days an audit record is kept (#840).
-pub const AUDIT_RETENTION_DAYS_VAR: &str = "FLEXIQ_GRPC_AUDIT_RETENTION_DAYS";
-
-/// Ninety days: long enough to answer "what did this token do" about a
-/// credential revoked last quarter, short enough that the table stays small.
-const DEFAULT_AUDIT_RETENTION_DAYS: u64 = 90;
 
 /// Whether reads are recorded too (#993). Off by default.
 pub const AUDIT_READS_VAR: &str = "FLEXIQ_GRPC_AUDIT_READS";
@@ -177,7 +171,7 @@ impl GrpcConfig {
             max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
             watch: WatchConfig::default(),
             tls: None,
-            audit_retention: days(DEFAULT_AUDIT_RETENTION_DAYS),
+            audit_retention: audit::default_retention(),
             audit_reads: None,
         }
     }
@@ -205,27 +199,6 @@ fn seconds(env: &Env, key: &str, default: Duration) -> Result<Duration> {
         Some(raw) => Ok(Duration::from_secs(raw.parse().with_context(|| {
             format!("{key} must be a whole number of seconds, got '{raw}'")
         })?)),
-    }
-}
-
-fn days(count: u64) -> Duration {
-    Duration::from_secs(count.saturating_mul(86_400))
-}
-
-/// Read the audit window in whole days.
-///
-/// Zero is refused rather than read as "off" like the variables above: the
-/// trail is not optional, and "keep nothing" is not a window. Neither is
-/// "forever" — a table no one prunes is the growth the window exists to stop.
-fn audit_retention(env: &Env) -> Result<Duration> {
-    let Some(raw) = value(env, AUDIT_RETENTION_DAYS_VAR) else {
-        return Ok(days(DEFAULT_AUDIT_RETENTION_DAYS));
-    };
-    match raw.parse::<u64>() {
-        Ok(count) if count > 0 => Ok(days(count)),
-        _ => bail!(
-            "{AUDIT_RETENTION_DAYS_VAR} must be a whole number of days, at least 1, got '{raw}'"
-        ),
     }
 }
 
@@ -301,7 +274,7 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<GrpcConfig>
         max_concurrent_requests,
         watch: watch::from_env(env)?,
         tls,
-        audit_retention: audit_retention(env)?,
+        audit_retention: audit::retention(env)?,
         audit_reads: audit_reads(env)?,
         ..GrpcConfig::new(listen, namespace)
     }))
@@ -359,27 +332,18 @@ mod tests {
 
     #[cfg(feature = "grpc")]
     #[test]
-    fn the_audit_window_defaults_to_ninety_days_and_reads_whole_days() {
-        let parse = |pairs: &[(&str, &str)]| {
-            let mut all = vec![(LISTEN_VAR, ":50051")];
-            all.extend_from_slice(pairs);
-            from_env(&env(&all), Some("prod")).map(|config| config.expect("configured"))
-        };
-        assert_eq!(
-            parse(&[]).expect("valid").audit_retention,
-            Duration::from_secs(90 * 86_400)
-        );
-        assert_eq!(
-            parse(&[(AUDIT_RETENTION_DAYS_VAR, "7")])
+    fn the_listener_prunes_with_the_shared_audit_window() {
+        // Parsing is `config::audit`'s; this pins that the listener reads it,
+        // under either name.
+        for var in [audit::RETENTION_DAYS_VAR, audit::LEGACY_RETENTION_DAYS_VAR] {
+            let config = from_env(&env(&[(LISTEN_VAR, ":50051"), (var, "7")]), Some("prod"))
                 .expect("valid")
-                .audit_retention,
-            Duration::from_secs(7 * 86_400)
-        );
-        for refused in ["0", "-1", "7d"] {
-            let error = parse(&[(AUDIT_RETENTION_DAYS_VAR, refused)])
-                .expect_err(refused)
-                .to_string();
-            assert!(error.contains(AUDIT_RETENTION_DAYS_VAR), "{error}");
+                .expect("configured");
+            assert_eq!(
+                config.audit_retention,
+                Duration::from_secs(7 * 86_400),
+                "{var}"
+            );
         }
     }
 

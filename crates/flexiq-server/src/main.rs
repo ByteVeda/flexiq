@@ -87,9 +87,12 @@ Configuration (environment only):
                                  attach stream (default: 30; 0 is unbounded)
   FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS  calls one connection may have in flight
                                  (default: 256; 0 is unlimited)
-  FLEXIQ_GRPC_AUDIT_RETENTION_DAYS  days an audit record of a token-authorised
-                                 write is kept before the listener prunes it
-                                 (default: 90; at least 1)
+  FLEXIQ_AUDIT_RETENTION_DAYS   days an audit record — a token's call, a
+                                 dashboard change, a token minted or revoked
+                                 from the CLI — is kept before it is pruned
+                                 (default: 90; at least 1). The old name
+                                 FLEXIQ_GRPC_AUDIT_RETENTION_DAYS is still
+                                 read; set both only to the same value
   FLEXIQ_GRPC_AUDIT_READS       record reads (read and inspect calls) in the
                                  audit trail too (default: off)
   FLEXIQ_GRPC_AUDIT_READS_WINDOW  seconds a repeated read — same token, RPC,

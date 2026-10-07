@@ -2,9 +2,10 @@
 //!
 //! The window is the server's, not a queue's: the shells never write this
 //! table, so it has no place in the per-queue retention a shell configures.
-//! Each listener prunes its own namespace on a timer. The delete is
-//! idempotent, so replicas sharing a database need no election — two of them
-//! pruning the same window just find nothing left the second time.
+//! Each gRPC listener prunes its own namespace on a timer, and a dashboard
+//! with no listener beside it prunes its own. The delete is idempotent, so
+//! replicas sharing a database need no election — two of them pruning the
+//! same window just find nothing left the second time.
 
 use std::time::Duration;
 

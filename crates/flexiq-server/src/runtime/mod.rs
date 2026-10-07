@@ -11,6 +11,7 @@ pub mod upkeep;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use flexiq_core::scheduler::retention::DEFAULT_NAMESPACE;
 use flexiq_core::{EventHub, RemoteConfig, RemoteDispatcher, StorageSideChannel};
 #[cfg(feature = "http-target")]
 use flexiq_core::{HttpDispatchTarget, HttpTargetConfig, StorageBackend};
@@ -386,6 +387,19 @@ pub fn run(config: Config, events: Option<Arc<EventHub>>) -> Result<()> {
                 prepare_auth(&backend.storage, dashboard_config);
                 let (audit, writer) = AuditSink::start(backend.storage.clone(), shutdown.clone());
                 dashboard_audit = Some(writer);
+                // A gRPC listener prunes the same namespace on its own, so the
+                // dashboard prunes only when it is the trail's sole writer.
+                if config.grpc.is_none() {
+                    crate::audit::retention::start(
+                        backend.storage.clone(),
+                        config
+                            .namespace
+                            .clone()
+                            .unwrap_or_else(|| DEFAULT_NAMESPACE.to_string()),
+                        config.audit_retention,
+                        shutdown.clone(),
+                    );
+                }
                 let state = Arc::new(AppState {
                     storage: backend.storage.clone(),
                     workflows: backend.workflows.clone(),
