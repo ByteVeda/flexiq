@@ -150,6 +150,27 @@ async fn append(storage: &StorageBackend, records: Vec<AuditRecord>) {
     }
 }
 
+/// Append `records` now, on this thread, for a one-shot process that has no
+/// writer task to hand them to — `flexiq-server token`. Like the writer it
+/// never fails the caller: records the table refuses go to the log under
+/// [`LOG_TARGET`]. Returns whether the table took them, so the caller can say
+/// so where its operator is looking.
+pub fn record_now(storage: &impl Storage, records: &[AuditRecord]) -> bool {
+    match storage.append_audit(records) {
+        Ok(()) => true,
+        Err(error) => {
+            log::error!(
+                "audit: could not store {} record(s): {error}",
+                records.len()
+            );
+            for record in records {
+                to_log(record, "audit write failed");
+            }
+            false
+        }
+    }
+}
+
 /// One record as one JSON line under [`LOG_TARGET`]. A record names a token by
 /// its public id only, so it is safe to log whole.
 fn to_log(record: &AuditRecord, why: &str) {

@@ -15,11 +15,15 @@ use std::io::Write;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 
+use flexiq_core::scheduler::retention::DEFAULT_NAMESPACE;
 use flexiq_core::{now_millis, StorageBackend};
 
 use super::grant::{Grant, Grants};
 use super::model::{mint_namespace, NewToken};
 use super::store;
+use crate::audit::record;
+use crate::audit::sink::{record_now, LOG_TARGET};
+use crate::audit::{Actor, TargetKind};
 use crate::config::{flag, value, Env};
 
 /// Managing the credentials the gRPC door accepts.
@@ -133,6 +137,7 @@ fn create(
     .map_err(|error| anyhow::anyhow!(error))?;
 
     let (row, plaintext) = store::create(storage, request)?;
+    audit(storage, &row.namespace, "create", &row.id, "OK");
 
     // The summary goes first, and it carries the id. If the write below fails —
     // a closed pipe, a full disk — the token is already stored, and the id is
@@ -199,19 +204,47 @@ fn list(storage: &StorageBackend, namespace: Option<&str>) -> Result<()> {
 /// Scoped to the namespace this process serves, like the listing: a token
 /// belonging to another namespace reads as absent rather than as a refusal.
 fn revoke(storage: &StorageBackend, id: &str, namespace: Option<&str>) -> Result<()> {
-    if !store::revoke(storage, id, namespace)? {
+    // Read first: an unscoped revoke must be recorded in the namespace the
+    // token belonged to, which the delete does not report back.
+    let owner = store::get(storage, id)?.map(|token| token.namespace);
+    let revoked = store::revoke(storage, id, namespace)?;
+    let trail_namespace = owner.as_deref().or(namespace).unwrap_or(DEFAULT_NAMESPACE);
+    let outcome = if revoked { "OK" } else { "NOT_FOUND" };
+    audit(storage, trail_namespace, "revoke", id, outcome);
+    if !revoked {
         bail!("no token with id '{id}' — `flexiq-server token list` shows the ids");
     }
     eprintln!("Revoked '{id}'. It stops working on the next call; no restart is needed.");
     Ok(())
 }
 
+/// Record one `flexiq-server token <action>` on token `id` in the audit
+/// trail. The credential change has already happened, so a trail that cannot
+/// take the record is a warning, never a failure of the command.
+fn audit(storage: &StorageBackend, namespace: &str, action: &str, id: &str, outcome: &str) {
+    let records = record::records(
+        namespace,
+        &Actor::cli(),
+        &format!("cli token {action}"),
+        vec![(TargetKind::Token.as_str().to_string(), id.to_string())],
+        outcome,
+    );
+    if !record_now(storage, &records) {
+        eprintln!(
+            "warning: the audit trail did not take the record of this {action}; \
+             it was written to the log under '{LOG_TARGET}' instead."
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tokens::model::MAX_LIFETIME_DAYS;
-    use crate::tokens::scope::ScopeSet;
+    use crate::tokens::scope::{Scope, ScopeSet};
     use clap::Parser;
+    use flexiq_core::storage::sqlite::SqliteStorage;
+    use flexiq_core::{AuditRecord, Storage as _};
 
     /// The parser as `main` assembles it, so the tests exercise the real
     /// argument surface rather than a copy of it.
@@ -311,5 +344,57 @@ mod tests {
     fn revoke_takes_one_id() {
         assert!(parse(&["token", "revoke"]).is_err());
         assert!(parse(&["token", "revoke", "abc123"]).is_ok());
+    }
+
+    fn trail(storage: &StorageBackend, namespace: &str) -> Vec<AuditRecord> {
+        storage
+            .list_audit_after(namespace, &Default::default(), 100, None)
+            .expect("list")
+    }
+
+    /// A mint and a revoke from the shell are the credential lifecycle's most
+    /// sensitive events; each leaves one `cli` record naming the token.
+    #[test]
+    fn create_and_revoke_are_recorded() {
+        let storage = StorageBackend::Sqlite(SqliteStorage::in_memory().expect("sqlite"));
+        create(
+            &storage,
+            Some("prod"),
+            "ci",
+            &[Grant::whole(Scope::Produce)],
+            30,
+        )
+        .expect("mint");
+        let id = store::list(&storage, Some("prod")).expect("list")[0]
+            .id
+            .clone();
+        // Unscoped, as a shell with no FLEXIQ_NAMESPACE runs it: still
+        // recorded in the token's own namespace.
+        revoke(&storage, &id, None).expect("revoke");
+        let unknown = "ffffffffffffffff";
+        assert!(revoke(&storage, unknown, None).is_err(), "no such token");
+
+        let records = trail(&storage, "prod");
+        let summary: Vec<_> = records
+            .iter()
+            .rev()
+            .map(|r| (r.operation.as_str(), r.outcome.as_str()))
+            .collect();
+        assert_eq!(
+            summary,
+            [("cli token create", "OK"), ("cli token revoke", "OK"),],
+            "{records:?}"
+        );
+        for record in &records {
+            assert_eq!(record.principal_kind, "cli");
+            assert_eq!(record.target_kind.as_deref(), Some("token"));
+            assert_eq!(record.target.as_deref(), Some(id.as_str()));
+        }
+        // No token owns the unknown id, so its failed revoke is recorded where
+        // the process would put it: no namespace configured, the default one.
+        let missed = trail(&storage, DEFAULT_NAMESPACE);
+        assert_eq!(missed.len(), 1, "{missed:?}");
+        assert_eq!(missed[0].outcome, "NOT_FOUND");
+        assert_eq!(missed[0].target.as_deref(), Some(unknown));
     }
 }
