@@ -44,6 +44,7 @@ pub fn list_request(args: &AuditListArgs) -> Result<pb::ListAuditRecordsRequest>
         page_size: args.page_size.unwrap_or_default(),
         page_token: args.page_token.clone().unwrap_or_default(),
         token_id: args.token_id.clone().unwrap_or_default(),
+        principal_kind: args.principal_kind.clone().unwrap_or_default(),
         target_kind,
         target,
         since: instant_bound(args.since.as_deref(), "--since")?,
@@ -117,6 +118,7 @@ mod tests {
     fn args() -> AuditListArgs {
         AuditListArgs {
             token_id: None,
+            principal_kind: None,
             job: None,
             target: None,
             kind: None,
@@ -143,6 +145,16 @@ mod tests {
         assert_eq!(request.target_kind, "job");
         assert_eq!(request.target, "j-1");
         assert_eq!(request.token_id, "tok");
+    }
+
+    #[test]
+    fn principal_kind_is_its_own_filter_beside_the_target_kind() {
+        let mut args = args();
+        args.principal_kind = Some("user".into());
+        args.kind = Some("queue".into());
+        let request = list_request(&args).expect("builds");
+        assert_eq!(request.principal_kind, "user");
+        assert_eq!(request.target_kind, "queue");
     }
 
     #[test]

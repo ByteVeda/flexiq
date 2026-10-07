@@ -827,6 +827,19 @@ async fn metrics_carry_no_event_series_without_events() {
     assert!(!body.contains("flexiq_events_"), "{body}");
 }
 
+/// The dashboard records into the audit table, so its counters are scraped
+/// here even with no gRPC listener in the process.
+#[tokio::test]
+async fn metrics_carry_the_audit_counters() {
+    let storage = temp_storage("http-metrics-audit");
+    let state = dashboard_state(&storage, AuthMode::Open);
+    let body = scrape(&state).await;
+    assert!(
+        body.contains("flexiq_audit_records_total{outcome=\"write_failed\"}"),
+        "{body}"
+    );
+}
+
 #[cfg(feature = "events-http")]
 #[tokio::test]
 async fn metrics_carry_the_event_hub_series() {

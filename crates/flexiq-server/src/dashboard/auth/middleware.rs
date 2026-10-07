@@ -4,13 +4,16 @@
 //! guarantees a route added later cannot end up outside it. The resolved
 //! [`RequestContext`] is attached to the request so handlers that need the
 //! caller (whoami, logout, the probes) read it instead of parsing cookies
-//! again.
+//! again. It is also where a change is recorded in the audit trail — see
+//! [`crate::dashboard::audit`].
 
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
+use crate::audit::Actor;
 use crate::config::dashboard::AuthMode;
+use crate::dashboard::audit;
 use crate::dashboard::auth::context::{self, RequestContext};
 use crate::dashboard::auth::gate;
 use crate::dashboard::auth::store;
@@ -22,7 +25,7 @@ use crate::dashboard::state::SharedState;
 ///
 /// Takes the state as a plain argument rather than an extractor so it can be
 /// called directly from tests as well as from the middleware layer.
-pub async fn gate_request(state: SharedState, mut request: Request, next: Next) -> Response {
+pub async fn gate_request(state: SharedState, request: Request, next: Next) -> Response {
     let path = request.uri().path().to_string();
     let method = request.method().as_str().to_string();
 
@@ -32,8 +35,9 @@ pub async fn gate_request(state: SharedState, mut request: Request, next: Next) 
         if path.starts_with("/api/auth/") && path != "/api/auth/status" {
             return ApiError::AuthDisabled.into_response();
         }
+        let (mut request, pending) = audit::open(&state, request, Actor::anonymous()).await;
         request.extensions_mut().insert(RequestContext::default());
-        return next.run(request).await;
+        return answered(next.run(request).await, pending);
     }
 
     // Copy the headers out before awaiting: an in-flight `Request` holds a
@@ -45,12 +49,27 @@ pub async fn gate_request(state: SharedState, mut request: Request, next: Next) 
         Err(error) => return error.into_response(),
     };
 
+    // Opened before the checks below, so a refusal is recorded against the
+    // user it refused. No session, no one to name: nothing is recorded.
+    let (mut request, pending) = match &context.session {
+        Some(session) => audit::open(&state, request, Actor::user(&session.username)).await,
+        None => (request, None),
+    };
+
     if let Err(denial) = authorize(&state, &context, &path, &method).await {
-        return denial.into_response();
+        return answered(denial.into_response(), pending);
     }
 
     request.extensions_mut().insert(context);
-    next.run(request).await
+    answered(next.run(request).await, pending)
+}
+
+/// Settle a recorded request with its answer, and pass the answer on.
+fn answered(response: Response, pending: Option<audit::Pending>) -> Response {
+    if let Some(pending) = pending {
+        pending.settle(response.status());
+    }
+    response
 }
 
 /// Load the session named by the request's cookie, if it is still live.

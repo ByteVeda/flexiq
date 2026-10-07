@@ -40,7 +40,7 @@
         "type": "object"
       },
       "flexiq.admin.v1.AuditRecord": {
-        "description": "One token-authorised write. Names the token by its public id only — never\nthe token, never its digest.",
+        "description": "One token-authorised write, or one action a dashboard user or the token\ncommand line took. Names a token by its public id only — never the token,\nnever its digest.",
         "properties": {
           "id": {
             "description": "Opaque; orders records answered in the same millisecond.",
@@ -55,7 +55,11 @@
             "type": "string"
           },
           "principal": {
-            "description": "The token's name when the call was made. A label: two tokens may share it.",
+            "description": "The token's name when the call was made, or the username. A label: two\ntokens may share it.",
+            "type": "string"
+          },
+          "principalKind": {
+            "description": "Who token_id names: `token` (the gRPC door), `user` (a dashboard\nsession), `cli` (`flexiq-server token`) or `anonymous` (a dashboard with\nauth off).",
             "type": "string"
           },
           "target": {
@@ -63,7 +67,7 @@
             "type": "string"
           },
           "targetKind": {
-            "description": "What the call acted on: `job`, `workflow_run`, `queue`, `dead_letter`,\n`worker`, `periodic`, `task` or `namespace`. Empty when it was refused before naming\none. A call acting on several writes one record per target.",
+            "description": "What the call acted on: `job`, `workflow_run`, `queue`, `dead_letter`,\n`worker`, `periodic`, `task` or `namespace`; dashboard actions add\n`token`, `webhook`, `webhook_delivery`, `setting`, `topic`,\n`subscription` and `middleware`. Empty when it was refused before naming\none. A call acting on several writes one record per target.",
             "type": "string"
           },
           "time": {
@@ -72,7 +76,7 @@
             "type": "string"
           },
           "tokenId": {
-            "description": "The public id of the token that made the call.",
+            "description": "The public id of the credential that made the call, in principal_kind's\nterms: the token id for `token`, the username for `user`.",
             "type": "string"
           }
         },
@@ -1681,6 +1685,15 @@
             "schema": {
               "description": "An instant, RFC 3339 with a `Z` offset.",
               "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only records whose principal is of this kind: `token`, `user`, `cli` or\n`anonymous`.",
+            "in": "query",
+            "name": "principalKind",
+            "required": false,
+            "schema": {
               "type": "string"
             }
           }

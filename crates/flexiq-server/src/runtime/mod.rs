@@ -11,10 +11,12 @@ pub mod upkeep;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use flexiq_core::scheduler::retention::DEFAULT_NAMESPACE;
 use flexiq_core::{EventHub, RemoteConfig, RemoteDispatcher, StorageSideChannel};
 #[cfg(feature = "http-target")]
 use flexiq_core::{HttpDispatchTarget, HttpTargetConfig, StorageBackend};
 
+use crate::audit::AuditSink;
 use crate::config::dashboard::{AuthMode, DashboardConfig};
 use crate::config::events::EventsSettings;
 #[cfg(feature = "http-target")]
@@ -377,9 +379,27 @@ pub fn run(config: Config, events: Option<Arc<EventHub>>) -> Result<()> {
             })
         });
 
+        // Awaited once the roles are down, so what the dashboard recorded
+        // just before a stop still reaches the table.
+        let mut dashboard_audit = None;
         let dashboard = match (&config.dashboard, &backend) {
             (Some(dashboard_config), Some(backend)) => {
                 prepare_auth(&backend.storage, dashboard_config);
+                let (audit, writer) = AuditSink::start(backend.storage.clone(), shutdown.clone());
+                dashboard_audit = Some(writer);
+                // A gRPC listener prunes the same namespace on its own, so the
+                // dashboard prunes only when it is the trail's sole writer.
+                if config.grpc.is_none() {
+                    crate::audit::retention::start(
+                        backend.storage.clone(),
+                        config
+                            .namespace
+                            .clone()
+                            .unwrap_or_else(|| DEFAULT_NAMESPACE.to_string()),
+                        config.audit_retention,
+                        shutdown.clone(),
+                    );
+                }
                 let state = Arc::new(AppState {
                     storage: backend.storage.clone(),
                     workflows: backend.workflows.clone(),
@@ -396,6 +416,7 @@ pub fn run(config: Config, events: Option<Arc<EventHub>>) -> Result<()> {
                     maintenance: config.maintenance,
                     login_throttle: Default::default(),
                     events: events.clone(),
+                    audit,
                 });
                 Some(crate::dashboard::serve(state, shutdown.clone()))
             }
@@ -512,6 +533,12 @@ pub fn run(config: Config, events: Option<Arc<EventHub>>) -> Result<()> {
             // bind never waited for anything, and this is where that drain is
             // still owed.
             let _ = draining.await;
+        }
+        if let Some(writer) = dashboard_audit {
+            // The writer stops on shutdown; one that ended in error rather
+            // than on a signal has not seen it yet.
+            shutdown.trigger();
+            writer.finish().await;
         }
         result
     });

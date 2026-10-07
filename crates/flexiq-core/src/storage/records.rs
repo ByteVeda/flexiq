@@ -368,8 +368,9 @@ pub struct ReplayEntry {
     pub replay_error: Option<String>,
 }
 
-/// One authorised call a network door served (#840). Names the credential by
-/// its public id only — never the token, never its digest.
+/// One authorised call a network door served (#840), or one action a
+/// dashboard user or the token command line took (#994). Names the credential
+/// by its public id only — never the token, never its digest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditRecord {
     /// Unique id of the record (UUIDv7, the tie-breaker of the listing order).
@@ -378,9 +379,15 @@ pub struct AuditRecord {
     pub namespace: String,
     /// Unix-millisecond time the call was answered.
     pub at_ms: i64,
-    /// Public id of the token that authorised the call.
+    /// What `token_id` names: `token`, `user`, `cli` or `anonymous`. Records
+    /// written before the field existed read back `token`, the only kind there
+    /// was.
+    #[serde(default = "token_principal")]
+    pub principal_kind: String,
+    /// Public id of the credential that authorised the call: the token id for
+    /// a `token`, the username for a `user`.
     pub token_id: String,
-    /// The token's name when the call was made.
+    /// The token's name when the call was made, or the username.
     pub principal: String,
     /// Canonical RPC name, e.g. `flexiq.producer.v1.Producer/Enqueue`.
     pub operation: String,
@@ -393,12 +400,18 @@ pub struct AuditRecord {
     pub outcome: String,
 }
 
+fn token_principal() -> String {
+    "token".to_string()
+}
+
 /// Which audit records a listing returns. Every set field must match; an empty
 /// filter returns the namespace's whole trail.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuditFilter {
     /// Only records authorised by this token id.
     pub token_id: Option<String>,
+    /// Only records whose credential is of this kind (`token`, `user`, …).
+    pub principal_kind: Option<String>,
     /// Only records whose target is of this kind.
     pub target_kind: Option<String>,
     /// Only records naming this target.
@@ -417,6 +430,7 @@ impl AuditFilter {
             want.as_deref().is_none_or(|w| have == Some(w))
         }
         field(&self.token_id, Some(&record.token_id))
+            && field(&self.principal_kind, Some(&record.principal_kind))
             && field(&self.target_kind, record.target_kind.as_deref())
             && field(&self.target, record.target.as_deref())
             && self.since_ms.is_none_or(|since| record.at_ms >= since)
@@ -932,7 +946,17 @@ impl SleepOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{SubscriptionMode, WorkerStatus};
+    use super::{AuditRecord, SubscriptionMode, WorkerStatus};
+
+    /// A Redis record stored before #994 has no kind; only tokens wrote then.
+    #[test]
+    fn an_audit_record_without_a_kind_reads_back_as_a_token() {
+        let legacy = r#"{"id":"r1","namespace":"prod","at_ms":1,"token_id":"tok",
+            "principal":"ci","operation":"op","target_kind":null,"target":null,
+            "outcome":"OK"}"#;
+        let record: AuditRecord = serde_json::from_str(legacy).expect("legacy record");
+        assert_eq!(record.principal_kind, "token");
+    }
 
     #[test]
     fn subscription_mode_round_trips_its_stored_form() {

@@ -146,6 +146,9 @@ pub struct ListAuditRecords {
     /// Only records made with this token id, `tokenId=`.
     #[serde(default, alias = "token_id")]
     pub token_id: Option<String>,
+    /// Only records whose principal is of this kind, `principalKind=`.
+    #[serde(default, alias = "principal_kind")]
+    pub principal_kind: Option<String>,
     /// Only records whose target is of this kind, `targetKind=`.
     #[serde(default, alias = "target_kind")]
     pub target_kind: Option<String>,
@@ -171,6 +174,7 @@ impl ListAuditRecords {
             target: self.target.unwrap_or_default(),
             since: self.since.map(|since| since.0),
             until: self.until.map(|until| until.0),
+            principal_kind: self.principal_kind.unwrap_or_default(),
         }
     }
 }

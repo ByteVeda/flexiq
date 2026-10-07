@@ -704,27 +704,36 @@ message ClearNamespaceQuotaResponse {}
 
 // ── Audit trail ────────────────────────────────────────────────────────
 
-// One token-authorised write. Names the token by its public id only — never
-// the token, never its digest.
+// One token-authorised write, or one action a dashboard user or the token
+// command line took. Names a token by its public id only — never the token,
+// never its digest.
 message AuditRecord {
   // Opaque; orders records answered in the same millisecond.
   string id = 1;
   // When the call was answered.
   google.protobuf.Timestamp time = 2;
-  // The public id of the token that made the call.
+  // The public id of the credential that made the call, in principal_kind's
+  // terms: the token id for `token`, the username for `user`.
   string token_id = 3;
-  // The token's name when the call was made. A label: two tokens may share it.
+  // The token's name when the call was made, or the username. A label: two
+  // tokens may share it.
   string principal = 4;
   // The RPC, as `package.Service/Method`, however it was reached.
   string operation = 5;
   // What the call acted on: `job`, `workflow_run`, `queue`, `dead_letter`,
-  // `worker`, `periodic`, `task` or `namespace`. Empty when it was refused before naming
+  // `worker`, `periodic`, `task` or `namespace`; dashboard actions add
+  // `token`, `webhook`, `webhook_delivery`, `setting`, `topic`,
+  // `subscription` and `middleware`. Empty when it was refused before naming
   // one. A call acting on several writes one record per target.
   string target_kind = 6;
   // The target's id or name, in `target_kind`'s terms.
   string target = 7;
   // The google.rpc.Code name the call ended with: `OK`, `PERMISSION_DENIED`, …
   string outcome = 8;
+  // Who token_id names: `token` (the gRPC door), `user` (a dashboard
+  // session), `cli` (`flexiq-server token`) or `anonymous` (a dashboard with
+  // auth off).
+  string principal_kind = 9;
 }
 
 message ListAuditRecordsRequest {
@@ -742,6 +751,9 @@ message ListAuditRecordsRequest {
   google.protobuf.Timestamp since = 6;
   // Only records before this instant.
   google.protobuf.Timestamp until = 7;
+  // Only records whose principal is of this kind: `token`, `user`, `cli` or
+  // `anonymous`.
+  string principal_kind = 8;
 }
 
 message ListAuditRecordsResponse {

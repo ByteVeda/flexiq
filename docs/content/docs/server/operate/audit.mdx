@@ -1,16 +1,19 @@
 ---
 title: Audit trail
-description: "Which token enqueued a job, who cancelled it, and what a revoked token did while it was valid — a record for every thing a token-authorised write touched, kept in the database."
+description: "Which token enqueued a job, who paused a queue from the dashboard, who minted or revoked a token, and what a revoked token did while it was valid — a record for every thing a write touched, kept in the database."
 ---
 
 A token says who may call the gRPC door. The audit trail says who **did**: every
 write a token makes — an enqueue, a cancel, a queue pause, a dead-letter replay
 — leaves records in the database naming the token, what it did, to what, when,
-and how the call ended. It answers the questions a credential alone cannot:
+and how the call ended. So does every change made from
+[the dashboard](#dashboard-and-cli-actions), named by the user who made it, and
+every token minted or revoked with `flexiq-server token`. It answers the
+questions a credential alone cannot:
 
 - which token enqueued this job;
-- who cancelled it;
-- what did the token we just revoked do while it was valid.
+- who cancelled it, or paused its queue from the dashboard;
+- who minted the token we just revoked, and what it did while it was valid.
 
 A record never carries the token or its digest. It names the token by its
 public id — the `ID` column of `flexiq-server token list` — and by the name it
@@ -30,10 +33,11 @@ single untargeted record when it was refused before naming any.
 | Field | Is |
 | --- | --- |
 | `time` | When the call was answered |
-| `tokenId` | The token's public id |
-| `principal` | The token's name when the call was made — a label, since two tokens may share one |
-| `operation` | The RPC, e.g. `flexiq.v1.ProducerService/Enqueue` |
-| `targetKind`, `target` | What it acted on: `job`, `workflow_run`, `queue`, `dead_letter`, `worker`, `periodic`, `task` or `namespace`, and its id or name |
+| `principalKind` | Who `tokenId` names: `token` (the gRPC door), `user` (a dashboard session), `cli` (`flexiq-server token`) or `anonymous` (a dashboard with auth off) |
+| `tokenId` | The token's public id, or the dashboard user's username. Empty for `cli` and `anonymous` |
+| `principal` | The token's name when the call was made — a label, since two tokens may share one — or the username |
+| `operation` | The RPC, e.g. `flexiq.v1.ProducerService/Enqueue`, or the dashboard route, e.g. `dashboard POST /api/queues/{queue}/pause` |
+| `targetKind`, `target` | What it acted on: `job`, `workflow_run`, `queue`, `dead_letter`, `worker`, `periodic`, `task` or `namespace` — and, from the dashboard, `token`, `webhook`, `webhook_delivery`, `setting`, `topic`, `subscription` or `middleware` — and its id or name |
 | `outcome` | The `google.rpc.Code` the call ended with: `OK`, `PERMISSION_DENIED`, `NOT_FOUND`, … `CANCELLED` means the call never answered — a deadline or a client that hung up — so its write may or may not have landed |
 
 `EnqueueBatch`
@@ -57,7 +61,42 @@ What is **not** recorded, and why:
   effect is already in each job's history.
 - **Calls with no believable credential.** A missing, unknown or wrong token has
   no trustworthy id to record. The server logs those refusals instead.
-- **The dashboard.** Its users sign in with a session, not a token.
+
+## Dashboard and CLI actions
+
+The `flexiq-server` dashboard records every change made through it: any
+`POST`, `PUT`, `PATCH` or `DELETE` its API answers — pausing a queue, replaying
+or purging dead letters, editing overrides, middleware, settings or webhooks,
+minting or revoking a gRPC token. It is a rule, not a list, so a route added
+later is recorded too.
+
+- **Who.** The signed-in user, as `principalKind` `user` with their username.
+  With `FLEXIQ_DASHBOARD_AUTH=open` nobody signs in, so the change is recorded
+  as `anonymous`: what changed is still on the record, who is not.
+- **Refusals.** A viewer's attempted change, or a request whose CSRF token does
+  not match its session, is recorded `PERMISSION_DENIED` against that session's
+  user. A request with no session at all — a login, an expired cookie — is not
+  recorded.
+- **Operation and targets.** The operation is the route, not the URL —
+  `dashboard DELETE /api/grpc-tokens/{id}` — and each value in the path is a
+  target: the token id there, `queue:emails` for a pause. Minting a token names
+  the new token's id, though the route carries none.
+- **Outcome.** The HTTP answer as the matching `google.rpc.Code`: `OK`,
+  `INVALID_ARGUMENT`, `PERMISSION_DENIED`, `NOT_FOUND`, …
+- **Namespace.** The dashboard's `FLEXIQ_NAMESPACE`, or `default` when it serves
+  none.
+
+Reads — opening a page, listing jobs — are not recorded from the dashboard.
+
+`flexiq-server token create` and `token revoke` record too, as `principalKind`
+`cli`, operation `cli token create` or `cli token revoke`, targeting the token.
+The command has no identity of its own to record — whoever can run it can open
+the database — so the record says *that* it happened and to which token. A
+revoke naming no token is recorded `NOT_FOUND`. If the trail cannot take the
+record, the command still succeeds and says so on stderr.
+
+A dashboard an SDK serves in-process does not record; only `flexiq-server`
+owns the trail and its retention.
 
 ## Reading it back
 
@@ -67,24 +106,29 @@ With `fq`, on a token that carries `inspect`:
 fq audit list                              # newest first; --all follows every page
 fq audit list --job <JOB_ID>               # who enqueued it, who cancelled it
 fq audit list --token-id <TOKEN_ID>        # everything one token did
+fq audit list --principal-kind user        # every dashboard change
 fq audit list --target queue:emails        # or --kind queue for every queue
 fq audit list --since 2026-09-01T00:00:00Z --until 2026-09-02T00:00:00Z
 ```
 
 ```text
-time                      token             principal    operation                                target                                    outcome
-------------------------  ----------------  -----------  ---------------------------------------  ----------------------------------------  -----------------
-2026-09-29T09:51:33.524Z  10d08aa8296d8f38  ops          flexiq.admin.v1.AdminService/PauseQueue  queue:emails                              OK
-2026-09-29T09:51:33.515Z  665dbdce673017bc  dashboard    flexiq.v1.ProducerService/Enqueue        -                                         PERMISSION_DENIED
-2026-09-29T09:51:33.474Z  8a7fbf03e21cfa60  billing-api  flexiq.v1.ProducerService/Enqueue        job:01a0ec93-a261-75b4-806b-d6fb5c06c449  OK
+time                      by                      principal    operation                                  target                                    outcome
+------------------------  ----------------------  -----------  -----------------------------------------  ----------------------------------------  -----------------
+2026-09-29T09:52:10.118Z  user:alice              alice        dashboard POST /api/queues/{queue}/pause   queue:emails                              OK
+2026-09-29T09:51:33.524Z  token:10d08aa8296d8f38  ops          flexiq.admin.v1.AdminService/PauseQueue    queue:emails                              OK
+2026-09-29T09:51:33.515Z  token:665dbdce673017bc  dashboard    flexiq.v1.ProducerService/Enqueue          -                                         PERMISSION_DENIED
+2026-09-29T09:51:33.474Z  token:8a7fbf03e21cfa60  billing-api  flexiq.v1.ProducerService/Enqueue          job:01a0ec93-a261-75b4-806b-d6fb5c06c449  OK
 ```
 
-The filters combine: every one set must match. `--token-id` takes the public
-id, not a credential — `fq` still reads its own token from `FLEXIQ_TOKEN`.
+`by` reads `kind:id`, like the target; a `cli` or `anonymous` record shows the
+kind alone. The filters combine: every one set must match. `--token-id` takes
+the public id, not a credential — `fq` still reads its own token from
+`FLEXIQ_TOKEN` — or a username, alongside `--principal-kind user`.
 
 The same read is `AdminService.ListAuditRecords` over gRPC, and
-`GET /v1/admin/auditRecords` over JSON, with `tokenId`, `targetKind`, `target`,
-`since`, `until`, `pageSize` and `pageToken` as query parameters:
+`GET /v1/admin/auditRecords` over JSON, with `tokenId`, `principalKind`,
+`targetKind`, `target`, `since`, `until`, `pageSize` and `pageToken` as query
+parameters:
 
 ```bash
 curl -H "authorization: Bearer $FLEXIQ_TOKEN" \
@@ -168,13 +212,15 @@ turning this on.
 ## Retention
 
 Records are kept for **90 days**, then deleted. Set
-`FLEXIQ_GRPC_AUDIT_RETENTION_DAYS` (Helm: `grpc.auditRetentionDays`) to keep them
-longer or shorter; it must be at least `1`. There is no "forever": a table
-nobody prunes grows without bound.
+`FLEXIQ_AUDIT_RETENTION_DAYS` to keep them longer or shorter; it must be at
+least `1`. There is no "forever": a table nobody prunes grows without bound.
+The variable's earlier name, `FLEXIQ_GRPC_AUDIT_RETENTION_DAYS` (Helm:
+`grpc.auditRetentionDays`), is still read; setting both to different values
+stops the server at startup.
 
-Each gRPC listener prunes its own namespace once an hour. The delete is
-idempotent, so replicas sharing a database prune without electing a leader —
-the second one finds nothing left. The window is the server's alone; it is not
+Each gRPC listener prunes its own namespace once an hour, and so does a
+dashboard running without one. The delete is idempotent, so replicas sharing a
+database prune without electing a leader — the second one finds nothing left. The window is the server's alone; it is not
 part of the per-queue retention an SDK configures, because no SDK writes this
 table.
 
@@ -195,6 +241,7 @@ instead — one JSON line under the log target `flexiq::audit` — and counted o
 
 Alert on anything but `written` rising. A record is degraded to the log stream,
 never dropped silently — but the log stream is only an audit trail if something
-keeps it. On a clean shutdown the listener waits up to ten seconds for the
-writer to append what is already buffered before the process exits; what is
-still unwritten after that is logged as lost.
+keeps it. On a clean shutdown the listener and the dashboard each wait up to
+ten seconds for their writer to append what is already buffered before the
+process exits; what is still unwritten after that is logged as lost. The
+dashboard's `/metrics` carries the same series.

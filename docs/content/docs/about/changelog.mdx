@@ -19,6 +19,18 @@ their entries below keep that name.
 
 ### Added
 
+- **Dashboard changes and token lifecycle in the audit trail** (#994). Every `POST`, `PUT`,
+  `PATCH` or `DELETE` the `flexiq-server` dashboard answers is recorded, attributed to the
+  signed-in user (or `anonymous` with auth off), refusals included, with the route as the
+  operation and its path values as targets; minting a token names the new id.
+  `flexiq-server token create|revoke` record too, as `cli`. A new `principal_kind` column
+  (migration `0026_audit_principal_kind`; existing rows read `token`) says who a record's
+  `token_id` names, on the wire as `AuditRecord.principal_kind` and filterable with
+  `principalKind=` / `fq audit list --principal-kind`; `fq audit list` shows the caller as
+  `kind:id` in a `by` column, which replaces `token`. The window is now
+  `FLEXIQ_AUDIT_RETENTION_DAYS` (the `FLEXIQ_GRPC_` name is still read), and a dashboard with no
+  gRPC listener prunes it itself.
+
 - **Optional read auditing** (#993). `FLEXIQ_GRPC_AUDIT_READS=on` (Helm `grpc.auditReads`)
   records calls needing `read` or `inspect` in the audit trail too, each naming what it asked
   for — a job, run, dead letter or periodic task id, a listing's queue and task filters, the ids

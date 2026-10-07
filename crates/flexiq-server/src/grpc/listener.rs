@@ -24,11 +24,12 @@ use tokio_stream::wrappers::UnixListenerStream;
 use tonic::service::Routes;
 use tonic::transport::Server;
 
+use crate::audit::{self, AuditSink};
 use crate::config::grpc::GrpcConfig;
 use crate::config::listen::ListenAddress;
 use crate::events::Events;
 use crate::grpc::admin::Admin;
-use crate::grpc::audit::{self, AuditLayer, AuditSink};
+use crate::grpc::audit::AuditLayer;
 use crate::grpc::auth::{self, AuthLayer};
 use crate::grpc::executor::ExecutorDoor;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;

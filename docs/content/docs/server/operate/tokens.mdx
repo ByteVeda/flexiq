@@ -314,10 +314,13 @@ everywhere, because there is no cache to invalidate — a cached allow would be 
 revocation that never takes effect.
 
 What the token did while it was valid is in the
-[audit trail](/server/operate/audit), under the same id:
+[audit trail](/server/operate/audit), under the same id. So are its mint and
+its revoke — from the dashboard under the user who did it, from the shell as
+`cli` — as records targeting `token:<id>`:
 
 ```bash
-fq audit list --token-id 9f2c1ab74e05d366 --all
+fq audit list --token-id 9f2c1ab74e05d366 --all    # what it did
+fq audit list --target token:9f2c1ab74e05d366      # who minted and revoked it
 ```
 
 ## What a refusal tells a caller

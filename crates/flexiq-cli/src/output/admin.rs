@@ -47,14 +47,7 @@ pub const THROUGHPUT_COLUMNS: [&str; 7] = [
 ];
 
 /// The columns of an audit listing.
-pub const AUDIT_COLUMNS: [&str; 6] = [
-    "time",
-    "token",
-    "principal",
-    "operation",
-    "target",
-    "outcome",
-];
+pub const AUDIT_COLUMNS: [&str; 6] = ["time", "by", "principal", "operation", "target", "outcome"];
 
 /// The columns of a dead-letter listing.
 pub const DEAD_LETTER_COLUMNS: [&str; 7] =
@@ -172,7 +165,8 @@ pub fn dead_letter_row(entry: &pb::DeadLetter) -> Vec<String> {
 }
 
 /// One audit record as a row of [`AUDIT_COLUMNS`]. The target reads
-/// `kind:id`, the spelling `fq audit list --target` takes back.
+/// `kind:id`, the spelling `fq audit list --target` takes back; who made the
+/// call reads the same way — `token:3fa9…`, `user:alice`.
 pub fn audit_row(record: &pb::AuditRecord) -> Vec<String> {
     let target = if record.target_kind.is_empty() {
         UNSET.to_string()
@@ -181,12 +175,27 @@ pub fn audit_row(record: &pb::AuditRecord) -> Vec<String> {
     };
     vec![
         instant_cell(record.time.as_ref()),
-        record.token_id.clone(),
+        caller(record),
         record.principal.clone(),
         record.operation.clone(),
         target,
         record.outcome.clone(),
     ]
+}
+
+/// Who made the call, as `kind:id` — or the kind alone for one with no id,
+/// the token command line and a dashboard with auth off. A server older than
+/// the kind sends none, and only tokens were recorded then.
+fn caller(record: &pb::AuditRecord) -> String {
+    let kind = match record.principal_kind.as_str() {
+        "" => "token",
+        kind => kind,
+    };
+    if record.token_id.is_empty() {
+        kind.to_string()
+    } else {
+        format!("{kind}:{}", record.token_id)
+    }
 }
 
 /// One worker as a row of [`WORKER_COLUMNS`].
@@ -434,6 +443,10 @@ pub fn audit_record_json(record: &pb::AuditRecord) -> Value {
     let mut object = Map::new();
     object.insert("id".to_string(), record.id.clone().into());
     insert_timestamp(&mut object, "time", record.time.as_ref());
+    object.insert(
+        "principalKind".to_string(),
+        record.principal_kind.clone().into(),
+    );
     object.insert("tokenId".to_string(), record.token_id.clone().into());
     object.insert("principal".to_string(), record.principal.clone().into());
     object.insert("operation".to_string(), record.operation.clone().into());
@@ -705,6 +718,20 @@ mod tests {
     use prost_types::{Duration as ProtoDuration, Timestamp};
 
     use super::*;
+
+    #[test]
+    fn the_caller_reads_kind_colon_id_or_the_kind_alone() {
+        let caller_of = |kind: &str, id: &str| {
+            caller(&pb::AuditRecord {
+                principal_kind: kind.into(),
+                token_id: id.into(),
+                ..Default::default()
+            })
+        };
+        assert_eq!(caller_of("user", "alice"), "user:alice");
+        assert_eq!(caller_of("cli", ""), "cli");
+        assert_eq!(caller_of("", "3fa9"), "token:3fa9", "an older server");
+    }
 
     fn minutes(count: i64) -> ProtoDuration {
         ProtoDuration {
