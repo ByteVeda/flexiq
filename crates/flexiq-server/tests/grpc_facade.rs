@@ -579,6 +579,7 @@ fn seed_job(storage: &TempStorage, queue: &str, task: &str) -> String {
             result_ttl_ms: None,
             namespace: Some(NAMESPACE.to_string()),
             debounce_key: None,
+            enqueued_by: None,
         })
         .expect("enqueue")
         .id

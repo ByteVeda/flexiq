@@ -27,6 +27,7 @@ diesel::table! {
         topic -> Nullable<Text>,
         subscription_name -> Nullable<Text>,
         debounce_key -> Nullable<Text>,
+        enqueued_by -> Nullable<Text>,
     }
 }
 
@@ -53,6 +54,7 @@ diesel::table! {
         shed -> Bool,
         origin_job_id -> Nullable<Text>,
         job_metadata -> Nullable<Text>,
+        enqueued_by -> Nullable<Text>,
     }
 }
 
@@ -213,6 +215,7 @@ diesel::table! {
         expires_at -> Nullable<BigInt>,
         result_ttl_ms -> Nullable<BigInt>,
         namespace -> Nullable<Text>,
+        enqueued_by -> Nullable<Text>,
     }
 }
 

@@ -71,6 +71,7 @@ class PyJob:
     metadata: str | None
     notes: str | None
     namespace: str | None
+    enqueued_by: str | None
 
     @property
     def status(self) -> str: ...

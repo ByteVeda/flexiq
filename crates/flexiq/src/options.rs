@@ -237,6 +237,7 @@ impl EnqueueOptions {
             result_ttl_ms: self.result_ttl_ms,
             namespace: self.namespace,
             debounce_key: self.debounce.as_ref().map(|d| d.key.clone()),
+            enqueued_by: None,
         }
     }
 }

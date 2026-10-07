@@ -92,6 +92,7 @@ func TestJobMapsEveryField(t *testing.T) {
 				Notes:           strPtr("by hand"),
 				UniqueKey:       strPtr("charge:ord-1"),
 				DebounceKey:     strPtr("tenant:acme"),
+				EnqueuedBy:      strPtr("8a7fbf03e21cfa60"),
 				ExpiresAt:       timestamppb.New(created.Add(time.Hour)),
 				ResultTtl:       durationpb.New(time.Hour),
 			}}, nil
@@ -125,6 +126,9 @@ func TestJobMapsEveryField(t *testing.T) {
 	if job.Metadata == "" || job.Notes == "" || job.UniqueKey == "" || job.DebounceKey == "" {
 		t.Errorf("optional strings dropped: %q/%q/%q/%q",
 			job.Metadata, job.Notes, job.UniqueKey, job.DebounceKey)
+	}
+	if job.EnqueuedBy != "8a7fbf03e21cfa60" {
+		t.Errorf("enqueued_by is %q", job.EnqueuedBy)
 	}
 
 	taskErr, ok := job.TaskError()

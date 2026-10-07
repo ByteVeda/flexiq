@@ -319,9 +319,17 @@ async fn the_json_render_matches_the_facade() {
     let server_job =
         flexiq_server::grpc::pb::Job::decode(cli_job.encode_to_vec().as_slice()).expect("decode");
 
+    let rendered = flexiq_cli::output::job_json(&cli_job);
     assert_eq!(
-        flexiq_cli::output::job_json(&cli_job),
+        rendered,
         flexiq_server::grpc::facade::json::response::job(&server_job),
+    );
+    // `fq jobs get --json | jq .enqueuedBy` names the token's 16-hex public id.
+    assert!(
+        rendered["enqueuedBy"]
+            .as_str()
+            .is_some_and(|id| id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit())),
+        "{rendered}"
     );
 
     harness.stop().await;
@@ -474,6 +482,7 @@ fn stored_job(queue: &str, task: &str) -> NewJob {
         result_ttl_ms: None,
         namespace: Some(NAMESPACE.to_string()),
         debounce_key: None,
+        enqueued_by: None,
     }
 }
 

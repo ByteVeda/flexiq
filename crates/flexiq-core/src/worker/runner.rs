@@ -545,6 +545,7 @@ mod tests {
                 result_ttl_ms: None,
                 namespace: None,
                 debounce_key: None,
+                enqueued_by: None,
             })
             .unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(10);

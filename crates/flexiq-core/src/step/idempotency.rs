@@ -156,6 +156,7 @@ mod tests {
             result_ttl_ms: None,
             namespace: None,
             debounce_key: None,
+            enqueued_by: None,
         }
         .into_job();
         job.id = id.to_string();

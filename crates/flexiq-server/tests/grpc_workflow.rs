@@ -31,7 +31,7 @@ use tonic::transport::Channel;
 use tonic::Code;
 use tonic_types::StatusExt;
 
-use support::{mint_token, temp_storage, temp_workflows, Bearer, TempStorage};
+use support::{mint_token, temp_storage, temp_workflows, token_id, Bearer, TempStorage};
 
 const NAMESPACE: &str = "grpc-workflow-tests";
 
@@ -39,6 +39,8 @@ struct Harness {
     client: ProducerServiceClient<tonic::service::interceptor::InterceptedService<Channel, Bearer>>,
     storage: TempStorage,
     workflows: flexiq_workflows::WorkflowStorageBackend,
+    /// The public id of the token the client presents.
+    token_id: String,
     shutdown: Shutdown,
     served: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
@@ -75,6 +77,7 @@ impl Harness {
             client: ProducerServiceClient::with_interceptor(channel, Bearer::new(&token)),
             storage,
             workflows,
+            token_id: token_id(&token),
             shutdown,
             served,
         }
@@ -257,6 +260,12 @@ async fn an_empty_node_queue_lands_in_default() {
             .expect("read")
             .expect("the job exists");
         assert_eq!(job.queue, queue, "node {name}");
+        // #992: every step job names the token that submitted the run.
+        assert_eq!(
+            job.enqueued_by.as_deref(),
+            Some(harness.token_id.as_str()),
+            "node {name}"
+        );
     }
 
     harness.stop().await;

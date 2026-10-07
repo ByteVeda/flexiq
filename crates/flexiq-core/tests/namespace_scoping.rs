@@ -33,6 +33,7 @@ fn job_in(namespace: Option<&str>, task_name: &str) -> NewJob {
         result_ttl_ms: None,
         namespace: namespace.map(str::to_string),
         debounce_key: None,
+        enqueued_by: None,
     }
 }
 

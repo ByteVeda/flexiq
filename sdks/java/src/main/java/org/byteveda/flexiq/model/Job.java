@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Map;
 import java.util.Optional;
 import org.byteveda.flexiq.errors.SerializationException;
+import org.jspecify.annotations.Nullable;
 
 /** Immutable view of a job. Timestamps are Unix milliseconds. */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -69,6 +70,75 @@ public final class Job {
     public final String notes;
 
     /**
+     * Public id of the token that submitted it through an authenticated server door, or {@code null} when no token
+     * was involved (an in-process enqueue).
+     */
+    public final @Nullable String enqueuedBy;
+
+    /**
+     * A job view with no submitting token.
+     *
+     * @param id the job's id, minted at enqueue
+     * @param queue the queue it was enqueued to
+     * @param taskName the task's registered name
+     * @param status where the job stands right now
+     * @param priority dispatch priority; higher runs first within a queue
+     * @param createdAt when it was enqueued, in Unix milliseconds
+     * @param scheduledAt when it becomes runnable, in Unix milliseconds
+     * @param startedAt when the current attempt was claimed, or {@code null} before the first
+     * @param completedAt when it reached a terminal state, or {@code null} while it is still live
+     * @param retryCount how many attempts have been spent
+     * @param maxRetries the retry ceiling before it dead-letters
+     * @param timeoutMs how long one attempt may run before it is failed as timed out
+     * @param progress the percentage the handler last reported, or {@code null} if it reported none
+     * @param error the last attempt's stored error, or {@code null}; decode with {@code TaskErrors}
+     * @param uniqueKey the idempotency key it was admitted under, or {@code null}
+     * @param namespace the deployment namespace it belongs to
+     * @param metadata the opaque metadata blob attached at enqueue, or {@code null}
+     * @param notes structured notes as canonical JSON, or {@code null}
+     */
+    public Job(
+            String id,
+            String queue,
+            String taskName,
+            JobStatus status,
+            int priority,
+            long createdAt,
+            long scheduledAt,
+            Long startedAt,
+            Long completedAt,
+            int retryCount,
+            int maxRetries,
+            long timeoutMs,
+            Integer progress,
+            String error,
+            String uniqueKey,
+            String namespace,
+            String metadata,
+            String notes) {
+        this(
+                id,
+                queue,
+                taskName,
+                status,
+                priority,
+                createdAt,
+                scheduledAt,
+                startedAt,
+                completedAt,
+                retryCount,
+                maxRetries,
+                timeoutMs,
+                progress,
+                error,
+                uniqueKey,
+                namespace,
+                metadata,
+                notes,
+                null);
+    }
+
+    /**
      * Decoded from the core's JSON job view.
      *
      * @param id the job's id, minted at enqueue
@@ -90,6 +160,7 @@ public final class Job {
      * @param namespace the deployment namespace it belongs to
      * @param metadata the opaque metadata blob attached at enqueue, or {@code null}
      * @param notes structured notes as canonical JSON, or {@code null}. Use {@link #notesMap()} for a parsed view
+     * @param enqueuedBy public id of the submitting token, or {@code null} when no token was involved
      */
     @JsonCreator
     public Job(
@@ -110,7 +181,8 @@ public final class Job {
             @JsonProperty("uniqueKey") String uniqueKey,
             @JsonProperty("namespace") String namespace,
             @JsonProperty("metadata") String metadata,
-            @JsonProperty("notes") String notes) {
+            @JsonProperty("notes") String notes,
+            @JsonProperty("enqueuedBy") @Nullable String enqueuedBy) {
         this.id = id;
         this.queue = queue;
         this.taskName = taskName;
@@ -129,6 +201,7 @@ public final class Job {
         this.namespace = namespace;
         this.metadata = metadata;
         this.notes = notes;
+        this.enqueuedBy = enqueuedBy;
     }
 
     /**

@@ -42,6 +42,10 @@ pub struct PyJob {
     pub notes: Option<String>,
     #[pyo3(get)]
     pub namespace: Option<String>,
+    /// Public id of the token that submitted the job through a server door;
+    /// `None` for an in-process enqueue.
+    #[pyo3(get)]
+    pub enqueued_by: Option<String>,
 
     status_val: i32,
     payload_bytes: Vec<u8>,
@@ -100,6 +104,7 @@ impl From<Job> for PyJob {
             metadata: job.metadata,
             notes: job.notes,
             namespace: job.namespace,
+            enqueued_by: job.enqueued_by,
             status_val: job.status as i32,
             payload_bytes: job.payload,
             result_bytes: job.result,

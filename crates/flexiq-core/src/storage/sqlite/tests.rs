@@ -24,6 +24,7 @@ fn make_job(task_name: &str) -> NewJob {
         result_ttl_ms: None,
         namespace: None,
         debounce_key: None,
+        enqueued_by: None,
     }
 }
 
@@ -54,6 +55,34 @@ fn test_notes_round_trip() {
     let plain = storage.enqueue(make_job("plain_task")).unwrap();
     let plain_fetched = storage.get_job(&plain.id, None).unwrap().unwrap();
     assert!(plain_fetched.notes.is_none());
+}
+
+/// `archive_old_jobs` copies rows with a hand-written column list, apart from
+/// the Diesel row the other archive paths share; the submitter must be on it.
+#[test]
+fn enqueued_by_survives_the_bulk_archive_sweep() {
+    use diesel::connection::SimpleConnection;
+
+    let storage = test_storage();
+    let mut new_job = make_job("swept_task");
+    new_job.enqueued_by = Some("8a7fbf03e21cfa60".to_string());
+    let job = storage.enqueue(new_job).unwrap();
+
+    // Every live transition archives on its own, so leave a terminal row in
+    // `jobs` by hand — the shape the sweep exists for.
+    let mut conn = storage.conn().unwrap();
+    conn.batch_execute(&format!(
+        "UPDATE jobs SET status = {}, completed_at = 1 WHERE id = '{}'",
+        JobStatus::Complete as i32,
+        job.id
+    ))
+    .unwrap();
+    drop(conn);
+
+    assert_eq!(storage.archive_old_jobs(i64::MAX).unwrap(), 1);
+    let archived = storage.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(archived.status, JobStatus::Complete);
+    assert_eq!(archived.enqueued_by.as_deref(), Some("8a7fbf03e21cfa60"));
 }
 
 #[test]

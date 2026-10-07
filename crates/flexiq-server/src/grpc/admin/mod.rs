@@ -145,6 +145,11 @@ impl Scoped {
         }
     }
 
+    /// The public id of the caller's token, for a job this door enqueues.
+    pub(crate) fn token_id(&self) -> &str {
+        self.principal.credential()
+    }
+
     /// The scope the layer let this caller through on.
     pub(crate) fn door(&self) -> Scope {
         // The layer fixes the door before any handler runs; without one the

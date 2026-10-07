@@ -24,7 +24,7 @@ pub(crate) async fn one(
     scoped: &Scoped<'_>,
     request: pb::EnqueueRequest,
 ) -> Result<Response<pb::EnqueueResponse>, Status> {
-    let prepared = prepare(request, scoped.namespace())?;
+    let prepared = prepare(request, scoped)?;
     admit(scoped, &prepared)?;
     let events = scoped.events();
     let (job, deduplicated) = on_storage(scoped.storage(), move |storage| {
@@ -71,7 +71,7 @@ pub(crate) async fn batch(
     // and they are refused before anything is written, whatever the backend.
     let mut prepared = Vec::with_capacity(request.items.len());
     for (index, item) in request.items.into_iter().enumerate() {
-        let item = prepare(item, scoped.namespace()).map_err(|error| error.at_index(index))?;
+        let item = prepare(item, scoped).map_err(|error| error.at_index(index))?;
         admit(scoped, &item).map_err(|error| error.at_index(index))?;
         // Storage has no batched debounce, so honouring one here would mean
         // leaving the batch to submit the rest — which silently costs the
@@ -293,7 +293,7 @@ impl Prepared {
 }
 
 /// Validate one request and decide where it goes.
-fn prepare(request: pb::EnqueueRequest, namespace: &str) -> Result<Prepared, WireError> {
+fn prepare(request: pb::EnqueueRequest, scoped: &Scoped<'_>) -> Result<Prepared, WireError> {
     // An absent body is not an empty one: `raw = ""` is a zero-length payload,
     // and no arm at all is a request that forgot to say what to run.
     //
@@ -324,7 +324,8 @@ fn prepare(request: pb::EnqueueRequest, namespace: &str) -> Result<Prepared, Wir
         request.task_name,
         payload,
         Some(options),
-        namespace,
+        scoped.namespace(),
+        scoped.token_id(),
         now_millis(),
     )?;
 

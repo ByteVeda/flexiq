@@ -37,7 +37,7 @@ use tonic::transport::Channel;
 use tonic::{Code, Status};
 use tonic_types::StatusExt;
 
-use support::{mint_token, temp_storage, temp_workflows, Bearer, TempStorage};
+use support::{mint_token, temp_storage, temp_workflows, token_id, Bearer, TempStorage};
 
 /// The namespace this door serves.
 const NAMESPACE: &str = "grpc-admin-tests";
@@ -50,6 +50,8 @@ type Client = AdminServiceClient<InterceptedService<Channel, Bearer>>;
 struct Harness {
     client: Client,
     storage: TempStorage,
+    /// The public id of the token the client presents.
+    token_id: String,
     shutdown: Shutdown,
     served: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
@@ -86,6 +88,7 @@ impl Harness {
         Self {
             client: AdminServiceClient::with_interceptor(channel, Bearer::new(&token)),
             storage,
+            token_id: token_id(&token),
             shutdown,
             served,
         }
@@ -117,6 +120,7 @@ fn job_in(namespace: Option<&str>, queue: &str, task: &str) -> NewJob {
         result_ttl_ms: None,
         namespace: namespace.map(str::to_owned),
         debounce_key: None,
+        enqueued_by: None,
     }
 }
 
@@ -583,6 +587,11 @@ async fn a_periodic_task_is_declared_paused_triggered_and_deleted() {
         .unwrap()
         .expect("enqueued");
     assert_eq!(stored.payload, envelope);
+    // An operator asked for this run, so it names the operator's token (#992).
+    assert_eq!(
+        stored.enqueued_by.as_deref(),
+        Some(harness.token_id.as_str())
+    );
     // A trigger leaves the schedule alone.
     let after = harness.storage.list_periodic(Some(NAMESPACE)).unwrap();
     assert_eq!(after[0].last_run, None);

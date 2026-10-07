@@ -111,6 +111,9 @@ pub struct SubmitStaticWorkflowRequest {
     /// Tenant the step jobs are enqueued into. The workflow rows are already
     /// scoped by the storage handle, so this only reaches `NewJob`.
     pub namespace: Option<String>,
+    /// Public id of the token that submitted the run, stamped on every step
+    /// job. `None` for an in-process submission.
+    pub enqueued_by: Option<String>,
 }
 
 /// What a successful submission produced.
@@ -376,6 +379,7 @@ fn submit_nodes(
             result_ttl_ms: request.result_ttl_ms,
             namespace: request.namespace.clone(),
             debounce_key: None,
+            enqueued_by: request.enqueued_by.clone(),
         };
 
         let job = storage.enqueue(new_job)?;
@@ -521,6 +525,7 @@ mod tests {
             default_max_retries: 0,
             result_ttl_ms: None,
             namespace: None,
+            enqueued_by: None,
         }
     }
 

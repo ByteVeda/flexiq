@@ -100,6 +100,7 @@ impl PyQueue {
                     result_ttl_ms: self.result_ttl_ms,
                     namespace: self.namespace.clone(),
                     debounce_key: None,
+                    enqueued_by: None,
                 };
                 let job = self.storage.enqueue(new_job)?;
                 child_job_ids.push(job.id.clone());
@@ -173,6 +174,7 @@ impl PyQueue {
                 result_ttl_ms: self.result_ttl_ms,
                 namespace: self.namespace.clone(),
                 debounce_key: None,
+                enqueued_by: None,
             };
             let job = self.storage.enqueue(new_job)?;
             wf_storage.set_workflow_node_job(&run_id_owned, &node_name_owned, &job.id)?;

@@ -71,6 +71,7 @@ export function jobToContract(job: Job) {
     metadata: job.metadata ?? null,
     notes: job.notes ?? null,
     namespace: job.namespace ?? null,
+    enqueued_by: job.enqueuedBy ?? null,
   };
 }
 

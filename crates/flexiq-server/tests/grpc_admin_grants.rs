@@ -138,6 +138,7 @@ fn job_in(queue: &str, task: &str) -> NewJob {
         result_ttl_ms: None,
         namespace: Some(NAMESPACE.to_string()),
         debounce_key: None,
+        enqueued_by: None,
     }
 }
 

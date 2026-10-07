@@ -377,6 +377,7 @@ fn make_job(id: &str, task_name: &str, payload: &[u8]) -> Job {
         namespace: None,
         has_deps: false,
         debounce_key: None,
+        enqueued_by: None,
     }
 }
 
@@ -782,6 +783,7 @@ fn a_dropped_executor_leaves_its_job_for_the_scheduler_to_recover() {
             result_ttl_ms: None,
             namespace: None,
             debounce_key: None,
+            enqueued_by: None,
         })
         .expect("enqueue");
 
@@ -1579,6 +1581,7 @@ fn claimed_job(storage: &SqliteStorage, task_name: &str, owner: &str) -> Job {
             result_ttl_ms: None,
             namespace: None,
             debounce_key: None,
+            enqueued_by: None,
         })
         .expect("enqueue");
     storage

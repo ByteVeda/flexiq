@@ -62,6 +62,11 @@ export interface Job {
    * `null` when no notes were attached at enqueue time.
    */
   notes: string | null;
+  /**
+   * Public id of the token that submitted the job (the id `fq audit list
+   * --token` takes). `null` for in-process enqueues and older servers.
+   */
+  enqueued_by?: string | null;
 }
 
 /**

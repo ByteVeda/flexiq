@@ -372,6 +372,7 @@ mod tests {
             result_ttl_ms: None,
             namespace: None,
             debounce_key: None,
+            enqueued_by: None,
         };
         let job = storage.enqueue(new_job).unwrap();
         storage

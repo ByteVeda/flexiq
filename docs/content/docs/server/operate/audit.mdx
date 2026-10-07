@@ -93,6 +93,32 @@ curl -H "authorization: Bearer $FLEXIQ_TOKEN" \
 It needs `inspect`. A `produce` token is refused `SCOPE_DENIED`: the trail names
 every token in the namespace, and a producer has no business listing them.
 
+## On the job itself
+
+The submitting token is also stamped on the job, as `enqueuedBy` — the same
+public id as a record's `tokenId`. `GetJob`, `ListJobs`, `WatchJobs`,
+`fq jobs get --json` and the dashboard show it without a second query, and it stays on the job after
+the job finishes, dies or is archived, so a job outlives its audit records'
+retention without losing who sent it.
+
+```bash
+fq jobs get <JOB_ID> --json | jq -r .enqueuedBy   # 8a7fbf03e21cfa60
+fq audit list --token-id 8a7fbf03e21cfa60         # and what else that token did
+```
+
+The server sets it from the token it authenticated; no request field, option or
+metadata key can. Which jobs carry it:
+
+| Job | `enqueuedBy` |
+| --- | --- |
+| `Enqueue`, `EnqueueBatch`, and every node of a `SubmitWorkflow` | The calling token |
+| An admin `TriggerPeriodic` | The calling token |
+| A dead-letter replay | The **original** job's — the replay rebuilds the same job; the trail records who replayed it |
+| A duplicate or debounced enqueue | Whatever the job it collapsed into already holds |
+| An SDK enqueue in-process, a periodic firing, an HTTP trigger, a fan-out child, a dashboard job replay | Unset — no token was involved. A job replay's `replayed_from` metadata leads back to the original, which keeps its own |
+
+Jobs enqueued before the server recorded it read back unset.
+
 ## Retention
 
 Records are kept for **90 days**, then deleted. Set

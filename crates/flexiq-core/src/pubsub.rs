@@ -181,6 +181,7 @@ fn delivery_job(request: &PublishRequest, sub: &Subscription) -> NewJob {
         result_ttl_ms: request.result_ttl_ms,
         namespace: request.namespace.clone(),
         debounce_key: None,
+        enqueued_by: None,
     }
 }
 

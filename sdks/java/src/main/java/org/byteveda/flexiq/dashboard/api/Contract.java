@@ -57,6 +57,7 @@ final class Contract {
         m.put("unique_key", j.uniqueKey);
         m.put("namespace", j.namespace);
         m.put("notes", j.notes);
+        m.put("enqueued_by", j.enqueuedBy);
         return m;
     }
 

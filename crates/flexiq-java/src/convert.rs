@@ -147,6 +147,7 @@ pub fn build_new_job(
             .namespace
             .or_else(|| default_namespace.map(str::to_string)),
         debounce_key: options.debounce_key,
+        enqueued_by: None,
     }
 }
 
@@ -250,6 +251,8 @@ pub struct JobView<'a> {
     pub metadata: Option<&'a str>,
     /// Structured notes as canonical JSON; the SDK parses it back into a map.
     pub notes: Option<&'a str>,
+    /// Public id of the token that submitted the job through a server door.
+    pub enqueued_by: Option<&'a str>,
 }
 
 impl<'a> From<&'a Job> for JobView<'a> {
@@ -273,6 +276,7 @@ impl<'a> From<&'a Job> for JobView<'a> {
             namespace: j.namespace.as_deref(),
             metadata: j.metadata.as_deref(),
             notes: j.notes.as_deref(),
+            enqueued_by: j.enqueued_by.as_deref(),
         }
     }
 }

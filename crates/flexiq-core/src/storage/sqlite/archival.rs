@@ -29,11 +29,11 @@ impl SqliteStorage {
                  (id, queue, task_name, payload, status, priority, created_at, scheduled_at, \
                   started_at, completed_at, retry_count, max_retries, result, error, timeout_ms, \
                   unique_key, progress, metadata, notes, cancel_requested, expires_at, \
-                  result_ttl_ms, namespace) \
+                  result_ttl_ms, namespace, enqueued_by) \
                  SELECT id, queue, task_name, payload, status, priority, created_at, scheduled_at, \
                   started_at, completed_at, retry_count, max_retries, result, error, timeout_ms, \
                   unique_key, progress, metadata, notes, cancel_requested, expires_at, \
-                  result_ttl_ms, namespace FROM jobs \
+                  result_ttl_ms, namespace, enqueued_by FROM jobs \
                  WHERE status IN ({archivable_statuses}) AND completed_at IS NOT NULL AND completed_at < ?1",
             ))
             .bind::<diesel::sql_types::BigInt, _>(cutoff_ms)

@@ -153,6 +153,7 @@ pub fn job_to_wire(job: Job, blobs: Blobs) -> pb::Job {
         expires_at: job.expires_at.map(timestamp),
         result_ttl: job.result_ttl_ms.map(duration),
         debounce_key: job.debounce_key,
+        enqueued_by: job.enqueued_by,
     }
 }
 
@@ -240,12 +241,15 @@ pub(crate) const DEFAULT_TIMEOUT_MS: i64 = 300_000;
 /// Build a `NewJob` from one request.
 ///
 /// `namespace` is the server's own and is never read from the request: nothing
-/// a client sends can change which namespace it writes into.
+/// a client sends can change which namespace it writes into. `enqueued_by`
+/// likewise: the public id of the token the call authenticated with, so no
+/// request can name another submitter.
 pub fn new_job(
     task_name: String,
     payload: Vec<u8>,
     options: Option<pb::EnqueueOptions>,
     namespace: &str,
+    enqueued_by: &str,
     now_millis: i64,
 ) -> Result<NewJob, WireError> {
     let options = options.unwrap_or_default();
@@ -283,6 +287,7 @@ pub fn new_job(
         result_ttl_ms: options.result_ttl.as_ref().map(millis_from_duration),
         namespace: Some(namespace.to_string()),
         debounce_key,
+        enqueued_by: Some(enqueued_by.to_string()),
     })
 }
 
@@ -424,10 +429,17 @@ mod tests {
             result_ttl_ms: None,
             namespace: Some("ns".into()),
             debounce_key: None,
+            enqueued_by: Some("8a7fbf03e21cfa60".into()),
         }
         .into_job();
         job.result = Some(Vec::new());
         job
+    }
+
+    #[test]
+    fn the_submitting_token_reaches_the_wire() {
+        let wire = job_to_wire(sample_job(), Blobs::NONE);
+        assert_eq!(wire.enqueued_by.as_deref(), Some("8a7fbf03e21cfa60"));
     }
 
     #[test]
@@ -451,17 +463,18 @@ mod tests {
 
     #[test]
     fn an_empty_queue_becomes_the_default_one() {
-        let job = new_job("t".into(), vec![], None, "ns", 42).expect("valid");
+        let job = new_job("t".into(), vec![], None, "ns", "tok", 42).expect("valid");
         assert_eq!(job.queue, DEFAULT_QUEUE);
         assert_eq!(job.scheduled_at, 42);
         assert_eq!(job.timeout_ms, DEFAULT_TIMEOUT_MS);
         assert_eq!(job.namespace.as_deref(), Some("ns"));
+        assert_eq!(job.enqueued_by.as_deref(), Some("tok"));
     }
 
     #[test]
     fn an_empty_task_name_is_refused() {
         // `NewJob` is not Debug, so unwrap the error side by hand.
-        let Err(error) = new_job(String::new(), vec![], None, "ns", 0) else {
+        let Err(error) = new_job(String::new(), vec![], None, "ns", "tok", 0) else {
             panic!("an empty task_name must be refused");
         };
         assert_eq!(error.code(), tonic::Code::InvalidArgument);

@@ -317,5 +317,6 @@ fn make_job(id: &str) -> Job {
         namespace: None,
         has_deps: false,
         debounce_key: None,
+        enqueued_by: None,
     }
 }

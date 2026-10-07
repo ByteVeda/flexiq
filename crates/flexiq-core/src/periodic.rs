@@ -37,6 +37,8 @@ pub fn periodic_job(task: &PeriodicTask, now: i64, unique_key: Option<String>) -
         result_ttl_ms: None,
         namespace: task.namespace.clone(),
         debounce_key: None,
+        // The scheduler holds no token; an operator's trigger stamps its own.
+        enqueued_by: None,
     }
 }
 

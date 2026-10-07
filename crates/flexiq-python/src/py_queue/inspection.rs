@@ -379,6 +379,7 @@ impl PyQueue {
             result_ttl_ms: original.result_ttl_ms,
             namespace: original.namespace,
             debounce_key: None,
+            enqueued_by: None,
         };
 
         let job = self

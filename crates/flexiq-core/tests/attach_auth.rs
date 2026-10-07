@@ -287,5 +287,6 @@ fn make_job(id: &str, task_name: &str) -> Job {
         namespace: None,
         has_deps: false,
         debounce_key: None,
+        enqueued_by: None,
     }
 }

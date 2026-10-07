@@ -180,8 +180,12 @@ pub(crate) async fn trigger(
     scoped.audit(TargetKind::Periodic, name.clone());
     let task = read(scoped, name).await?;
     let events = scoped.events();
+    let enqueued_by = scoped.token_id().to_string();
     let job = on_storage(scoped.storage(), move |storage| {
-        let job = storage.enqueue(periodic_job(&task, now_millis(), None))?;
+        // Unlike a scheduled firing, this run was asked for by a token.
+        let mut new_job = periodic_job(&task, now_millis(), None);
+        new_job.enqueued_by = Some(enqueued_by);
+        let job = storage.enqueue(new_job)?;
         crate::events::enqueued(events.as_deref(), &job);
         Ok(job)
     })

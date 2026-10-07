@@ -42,6 +42,7 @@ pub struct JobRow {
     pub namespace: Option<String>,
     pub has_deps: bool,
     pub debounce_key: Option<String>,
+    pub enqueued_by: Option<String>,
 }
 
 /// A row in the `jobs` table with every column EXCEPT the `payload`/`result`
@@ -76,6 +77,7 @@ pub struct NarrowJobRow {
     pub namespace: Option<String>,
     pub has_deps: bool,
     pub debounce_key: Option<String>,
+    pub enqueued_by: Option<String>,
 }
 
 /// Insertable struct for creating new jobs.
@@ -108,6 +110,8 @@ pub struct NewJobRow<'a> {
     /// Key a debounced enqueue coalesces on. Kept separate from `unique_key`,
     /// which already carries idempotency auto-keys and the pub/sub salt.
     pub debounce_key: Option<&'a str>,
+    /// Public id of the submitting token; server-set. See [`crate::Job::enqueued_by`].
+    pub enqueued_by: Option<&'a str>,
 }
 
 /// A row in the `dead_letter` table.
@@ -141,6 +145,9 @@ pub struct DeadLetterRow {
     /// `metadata` *is* the job's own — the common no-replacement case, and
     /// every row written before `0015_dead_letter_job_metadata`.
     pub job_metadata: Option<String>,
+    /// The dead job's submitting token, carried so `retry_dead` keeps it on
+    /// the replacement job. `None` on rows written before `0025_job_enqueued_by`.
+    pub enqueued_by: Option<String>,
 }
 
 /// A `dead_letter` row without the `payload` blob. Listing paths select this so
@@ -210,6 +217,8 @@ pub struct NewDeadLetterRow<'a> {
     /// `metadata` *is* the job's own — the common no-replacement case, and
     /// every row written before `0015_dead_letter_job_metadata`.
     pub job_metadata: Option<&'a str>,
+    /// The dead job's submitting token. See [`DeadLetterRow::enqueued_by`].
+    pub enqueued_by: Option<&'a str>,
 }
 
 /// A row in the `rate_limits` table.
@@ -749,6 +758,7 @@ pub struct ArchivedJobRow {
     pub expires_at: Option<i64>,
     pub result_ttl_ms: Option<i64>,
     pub namespace: Option<String>,
+    pub enqueued_by: Option<String>,
 }
 
 /// An `archived_jobs` row without the `payload`/`result` blobs. Terminal-status
@@ -779,6 +789,7 @@ pub struct NarrowArchivedJobRow {
     pub expires_at: Option<i64>,
     pub result_ttl_ms: Option<i64>,
     pub namespace: Option<String>,
+    pub enqueued_by: Option<String>,
 }
 
 /// Insertable struct for archived job entries.
@@ -812,6 +823,7 @@ pub struct NewArchivedJobRow<'a> {
     pub expires_at: Option<i64>,
     pub result_ttl_ms: Option<i64>,
     pub namespace: Option<&'a str>,
+    pub enqueued_by: Option<&'a str>,
 }
 
 // ── Row → record conversions ─────────────────────────────────────

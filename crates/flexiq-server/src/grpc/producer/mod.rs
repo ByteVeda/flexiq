@@ -218,6 +218,12 @@ impl Scoped<'_> {
         &self.namespace
     }
 
+    /// The public id of the caller's token, stamped on every job it submits
+    /// as `enqueued_by` — the same id its audit records carry.
+    pub(crate) fn token_id(&self) -> &str {
+        self.principal.credential()
+    }
+
     pub(crate) fn storage(&self) -> &StorageBackend {
         self.storage
     }

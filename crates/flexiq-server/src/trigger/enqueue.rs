@@ -56,6 +56,7 @@ pub fn new_job(trigger: &Trigger, namespace: &str, planned: Planned) -> NewJob {
         result_ttl_ms: None,
         namespace: Some(namespace.to_string()),
         debounce_key: None,
+        enqueued_by: None,
     }
 }
 
