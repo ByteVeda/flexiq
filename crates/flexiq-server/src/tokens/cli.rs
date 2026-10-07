@@ -204,13 +204,19 @@ fn list(storage: &StorageBackend, namespace: Option<&str>) -> Result<()> {
 /// Scoped to the namespace this process serves, like the listing: a token
 /// belonging to another namespace reads as absent rather than as a refusal.
 fn revoke(storage: &StorageBackend, id: &str, namespace: Option<&str>) -> Result<()> {
-    // Read first: an unscoped revoke must be recorded in the namespace the
-    // token belonged to, which the delete does not report back.
-    let owner = store::get(storage, id)?.map(|token| token.namespace);
+    // A scoped revoke is this namespace's action whoever owns the id: filed in
+    // the owner's trail, a miss would tell another tenant about the probe and
+    // hide it from this one. An unscoped revoke is filed where the token
+    // lived, read first because the revoke does not report it back.
+    let trail_namespace = match namespace {
+        Some(namespace) => namespace.to_string(),
+        None => store::get(storage, id)?
+            .map(|token| token.namespace)
+            .unwrap_or_else(|| DEFAULT_NAMESPACE.to_string()),
+    };
     let revoked = store::revoke(storage, id, namespace)?;
-    let trail_namespace = owner.as_deref().or(namespace).unwrap_or(DEFAULT_NAMESPACE);
     let outcome = if revoked { "OK" } else { "NOT_FOUND" };
-    audit(storage, trail_namespace, "revoke", id, outcome);
+    audit(storage, &trail_namespace, "revoke", id, outcome);
     if !revoked {
         bail!("no token with id '{id}' — `flexiq-server token list` shows the ids");
     }
@@ -396,5 +402,35 @@ mod tests {
         assert_eq!(missed.len(), 1, "{missed:?}");
         assert_eq!(missed[0].outcome, "NOT_FOUND");
         assert_eq!(missed[0].target.as_deref(), Some(unknown));
+    }
+
+    /// A revoke scoped to one namespace that names another's token is that
+    /// namespace's miss: recorded in its own trail, never the owner's.
+    #[test]
+    fn a_scoped_revoke_of_another_namespaces_token_stays_in_its_own_trail() {
+        let storage = StorageBackend::Sqlite(SqliteStorage::in_memory().expect("sqlite"));
+        create(
+            &storage,
+            Some("prod"),
+            "ci",
+            &[Grant::whole(Scope::Produce)],
+            30,
+        )
+        .expect("mint");
+        let id = store::list(&storage, Some("prod")).expect("list")[0]
+            .id
+            .clone();
+
+        assert!(
+            revoke(&storage, &id, Some("staging")).is_err(),
+            "not theirs"
+        );
+
+        let theirs = trail(&storage, "staging");
+        assert_eq!(theirs.len(), 1, "{theirs:?}");
+        assert_eq!(theirs[0].outcome, "NOT_FOUND");
+        let owners = trail(&storage, "prod");
+        assert_eq!(owners.len(), 1, "only the mint: {owners:?}");
+        assert_eq!(owners[0].operation, "cli token create");
     }
 }
