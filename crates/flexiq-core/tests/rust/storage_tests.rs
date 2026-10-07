@@ -939,13 +939,15 @@ fn test_count_expired_rows_matches_seeded_rows(s: &impl Storage) {
     // store. A per-entry row counted twice (global + per-entry) would break the
     // exact deltas, so this also guards the double-count boundary on every
     // backend.
+    // An hour out, so seeding against a slow backend still lands before it.
     let now = now_millis();
+    let far = now + 3_600_000;
     let cutoffs = RetentionCutoffs {
-        archived_jobs: Some(now + 10_000),
-        dead_letter: Some(now + 10_000),
-        task_logs: Some(now + 10_000),
-        task_metrics: Some(now + 10_000),
-        job_errors: Some(now + 10_000),
+        archived_jobs: Some(far),
+        dead_letter: Some(far),
+        task_logs: Some(far),
+        task_metrics: Some(far),
+        job_errors: Some(far),
     };
 
     let before = s.count_expired_rows(&cutoffs, now).unwrap();
