@@ -1,5 +1,6 @@
 //! The dashboard HTTP server: SPA delivery plus the JSON API the SPA calls.
 
+pub mod audit;
 pub mod auth;
 pub mod blocking;
 pub mod dto;

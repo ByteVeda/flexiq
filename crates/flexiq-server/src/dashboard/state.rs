@@ -5,6 +5,7 @@ use std::sync::Arc;
 use flexiq_core::{RemoteDispatcher, StorageBackend};
 use flexiq_workflows::WorkflowStorageBackend;
 
+use crate::audit::AuditSink;
 use crate::config::dashboard::DashboardConfig;
 use crate::dashboard::auth::oauth::providers::OAuthRuntime;
 use crate::dashboard::auth::throttle::LoginThrottle;
@@ -37,6 +38,8 @@ pub struct AppState {
     /// Where the jobs this dashboard enqueues or cancels are announced.
     /// `None` when no events are configured.
     pub events: Events,
+    /// Where the gate records what this dashboard changes, and who did.
+    pub audit: AuditSink,
 }
 
 /// The state handle axum clones per request.

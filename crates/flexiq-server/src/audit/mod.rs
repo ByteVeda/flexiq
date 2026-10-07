@@ -8,9 +8,11 @@
 //! dashboard-only build keeps a trail too.
 
 pub mod metrics;
+pub mod record;
 pub mod retention;
 pub mod sink;
 pub mod target;
 
+pub use record::{Actor, PrincipalKind};
 pub use sink::AuditSink;
 pub use target::TargetKind;

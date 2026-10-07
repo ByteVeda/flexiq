@@ -17,12 +17,14 @@ use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
 use flexiq_core::{SqliteStorage, StorageBackend};
+use flexiq_server::audit::AuditSink;
 use flexiq_server::config::dashboard::{AuthMode, DashboardConfig};
 use flexiq_server::dashboard::auth::oauth::config::OAuthConfig;
 use flexiq_server::dashboard::auth::oauth::providers::OAuthRuntime;
 use flexiq_server::dashboard::router;
 use flexiq_server::dashboard::state::{AppState, SharedState};
 use flexiq_server::dashboard::static_assets::StaticAssets;
+use flexiq_server::runtime::shutdown::Shutdown;
 use flexiq_workflows::{WorkflowSqliteStorage, WorkflowStorageBackend};
 use serde_json::Value;
 use tower::ServiceExt;
@@ -204,7 +206,11 @@ pub fn dashboard_state_for(
     auth: AuthMode,
     assets: StaticAssets,
 ) -> SharedState {
+    // The writer runs until every sink is dropped; a test that reads the trail
+    // polls for it, as the gRPC audit tests do.
+    let (audit, _writer) = AuditSink::start(storage.clone(), Shutdown::default());
     Arc::new(AppState {
+        audit,
         storage,
         workflows,
         dispatcher: None,

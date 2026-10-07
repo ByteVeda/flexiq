@@ -133,6 +133,9 @@ pub async fn metrics(
     // here when the role runs in this process.
     body.push_str(&crate::trigger::metrics::render());
     body.push_str(&crate::events::render_metrics(state.events.as_deref()));
+    // The dashboard records into the audit table too; a record it could not
+    // store must be alertable without the gRPC listener running.
+    body.push_str(&crate::audit::metrics::render());
 
     Ok((
         [("content-type", crate::metrics::EXPOSITION_CONTENT_TYPE)],

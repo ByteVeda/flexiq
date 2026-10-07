@@ -721,7 +721,9 @@ message AuditRecord {
   // The RPC, as `package.Service/Method`, however it was reached.
   string operation = 5;
   // What the call acted on: `job`, `workflow_run`, `queue`, `dead_letter`,
-  // `worker`, `periodic`, `task` or `namespace`. Empty when it was refused before naming
+  // `worker`, `periodic`, `task` or `namespace`; dashboard actions add
+  // `token`, `webhook`, `webhook_delivery`, `setting`, `topic`,
+  // `subscription` and `middleware`. Empty when it was refused before naming
   // one. A call acting on several writes one record per target.
   string target_kind = 6;
   // The target's id or name, in `target_kind`'s terms.

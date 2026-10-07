@@ -175,7 +175,7 @@ pub fn audit_row(record: &pb::AuditRecord) -> Vec<String> {
     };
     vec![
         instant_cell(record.time.as_ref()),
-        format!("{}:{}", principal_kind(record), record.token_id),
+        caller(record),
         record.principal.clone(),
         record.operation.clone(),
         target,
@@ -183,13 +183,18 @@ pub fn audit_row(record: &pb::AuditRecord) -> Vec<String> {
     ]
 }
 
-/// The record's principal kind. A server older than the field sends none, and
-/// only tokens were recorded then.
-fn principal_kind(record: &pb::AuditRecord) -> &str {
-    if record.principal_kind.is_empty() {
-        "token"
+/// Who made the call, as `kind:id` — or the kind alone for one with no id,
+/// the token command line and a dashboard with auth off. A server older than
+/// the kind sends none, and only tokens were recorded then.
+fn caller(record: &pb::AuditRecord) -> String {
+    let kind = match record.principal_kind.as_str() {
+        "" => "token",
+        kind => kind,
+    };
+    if record.token_id.is_empty() {
+        kind.to_string()
     } else {
-        &record.principal_kind
+        format!("{kind}:{}", record.token_id)
     }
 }
 
@@ -713,6 +718,20 @@ mod tests {
     use prost_types::{Duration as ProtoDuration, Timestamp};
 
     use super::*;
+
+    #[test]
+    fn the_caller_reads_kind_colon_id_or_the_kind_alone() {
+        let caller_of = |kind: &str, id: &str| {
+            caller(&pb::AuditRecord {
+                principal_kind: kind.into(),
+                token_id: id.into(),
+                ..Default::default()
+            })
+        };
+        assert_eq!(caller_of("user", "alice"), "user:alice");
+        assert_eq!(caller_of("cli", ""), "cli");
+        assert_eq!(caller_of("", "3fa9"), "token:3fa9", "an older server");
+    }
 
     fn minutes(count: i64) -> ProtoDuration {
         ProtoDuration {

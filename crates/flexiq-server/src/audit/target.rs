@@ -20,6 +20,20 @@ pub enum TargetKind {
     Task,
     /// A namespace, for what acts on the tenant as a whole — its quota.
     Namespace,
+    /// A gRPC token's public id.
+    Token,
+    /// A webhook subscription id.
+    Webhook,
+    /// One delivery of a webhook.
+    WebhookDelivery,
+    /// A dashboard setting's key.
+    Setting,
+    /// A pub/sub topic name.
+    Topic,
+    /// A pub/sub subscription name, within its topic.
+    Subscription,
+    /// A task middleware's name.
+    Middleware,
 }
 
 impl TargetKind {
@@ -34,6 +48,13 @@ impl TargetKind {
             Self::Periodic => "periodic",
             Self::Task => "task",
             Self::Namespace => "namespace",
+            Self::Token => "token",
+            Self::Webhook => "webhook",
+            Self::WebhookDelivery => "webhook_delivery",
+            Self::Setting => "setting",
+            Self::Topic => "topic",
+            Self::Subscription => "subscription",
+            Self::Middleware => "middleware",
         }
     }
 }

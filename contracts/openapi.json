@@ -67,7 +67,7 @@
             "type": "string"
           },
           "targetKind": {
-            "description": "What the call acted on: `job`, `workflow_run`, `queue`, `dead_letter`,\n`worker`, `periodic`, `task` or `namespace`. Empty when it was refused before naming\none. A call acting on several writes one record per target.",
+            "description": "What the call acted on: `job`, `workflow_run`, `queue`, `dead_letter`,\n`worker`, `periodic`, `task` or `namespace`; dashboard actions add\n`token`, `webhook`, `webhook_delivery`, `setting`, `topic`,\n`subscription` and `middleware`. Empty when it was refused before naming\none. A call acting on several writes one record per target.",
             "type": "string"
           },
           "time": {

@@ -27,7 +27,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use flexiq_core::job::now_millis;
 use flexiq_core::AuditRecord;
 use tonic::Code;
 use tower_layer::Layer;
@@ -35,7 +34,7 @@ use tower_service::Service;
 
 use super::context::AuditContext;
 use super::dedup::ReadDedup;
-use crate::audit::AuditSink;
+use crate::audit::{record, Actor, AuditSink};
 use crate::grpc::auth::gate::{self, Requirement};
 use crate::grpc::auth::Scope;
 use crate::grpc::facade::error::code_name;
@@ -200,29 +199,19 @@ fn records(context: &AuditContext, operation: &str, code: Code) -> Vec<AuditReco
     let (Some(principal), targets) = context.take() else {
         return Vec::new();
     };
-    let at_ms = now_millis();
-    let record = |target: Option<(&'static str, String)>| {
-        let (target_kind, target) = target.unzip();
-        AuditRecord {
-            id: uuid::Uuid::now_v7().to_string(),
-            namespace: principal.namespace().to_string(),
-            at_ms,
-            principal_kind: "token".to_string(),
-            token_id: principal.credential().to_string(),
-            principal: principal.name().to_string(),
-            operation: operation.to_string(),
-            target_kind: target_kind.map(str::to_string),
-            target,
-            outcome: code_name(code).to_string(),
-        }
-    };
-    if targets.is_empty() {
-        return vec![record(None)];
-    }
-    targets
-        .into_iter()
-        .map(|(kind, id)| record(Some((kind.as_str(), id))))
-        .collect()
+    record::records(
+        principal.namespace(),
+        &Actor::token(
+            principal.credential().to_string(),
+            principal.name().to_string(),
+        ),
+        operation,
+        targets
+            .into_iter()
+            .map(|(kind, id)| (kind.as_str().to_string(), id))
+            .collect(),
+        code_name(code),
+    )
 }
 
 #[cfg(test)]
