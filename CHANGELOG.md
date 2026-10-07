@@ -12,6 +12,14 @@ their entries below keep that name.
 
 ### Added
 
+- **Optional read auditing** (#993). `FLEXIQ_GRPC_AUDIT_READS=on` (Helm `grpc.auditReads`)
+  records calls needing `read` or `inspect` in the audit trail too, each naming what it asked
+  for — a job, run, dead letter or periodic task id, a listing's queue and task filters, the ids
+  or queue a `WatchJobs` stream opened on (recorded once, at open). A read repeating one recorded
+  within `FLEXIQ_GRPC_AUDIT_READS_WINDOW` seconds (default 60; `0` records every read; Helm
+  `grpc.auditReadsWindow`) by the same token, RPC, target and outcome is folded into it. Off by
+  default; an unrecognised value refuses to start.
+
 - **An audit trail of token-authorised writes** (#840). Every call on the gRPC door or its JSON
   facade that needs `produce` or `admin` is recorded in a new `audit_log` table (migration
   `0022_audit_log`, on all three backends), one record per thing the call acted on — a job,

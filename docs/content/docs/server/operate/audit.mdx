@@ -49,9 +49,10 @@ investigation is looking for.
 
 What is **not** recorded, and why:
 
-- **Reads.** `GetJob`, `ListJobs`, `WatchJobs` and every `inspect` method are
-  dominated by polling, and a record per poll would bury every write under
-  noise. The trail answers "what did it change", not "what did it see".
+- **Reads, unless you turn them on.** `GetJob`, `ListJobs`, `WatchJobs` and
+  every `inspect` method are dominated by polling, so by default the trail
+  answers "what did it change", not "what did it see". See
+  [Recording reads](#recording-reads).
 - **The executor door.** Claims and results are workers' own traffic, and their
   effect is already in each job's history.
 - **Calls with no believable credential.** A missing, unknown or wrong token has
@@ -118,6 +119,50 @@ metadata key can. Which jobs carry it:
 | An SDK enqueue in-process, a periodic firing, an HTTP trigger, a fan-out child, a dashboard job replay | Unset — no token was involved. A job replay's `replayed_from` metadata leads back to the original, which keeps its own |
 
 Jobs enqueued before the server recorded it read back unset.
+
+## Recording reads
+
+For a revoked third-party credential, "what did it see" is sometimes the
+question. Set `FLEXIQ_GRPC_AUDIT_READS=on` (Helm: `grpc.auditReads`) and every
+call that needs `read` or `inspect` is recorded too, in the same table, with the
+same fields. The variable takes `on` or `off`; anything else stops the server
+at startup instead of quietly leaving reads unrecorded.
+
+A read names what it **asked for**, not each row it got back:
+
+| Read | Target |
+| --- | --- |
+| `GetJob` | The job id |
+| `ListJobs`, `ListDeadLetters`, `ListPeriodicTasks`, `ListOverrides` | The `queue` and `task` filters, when set |
+| `QueueStats`, `ListQueues`, `GetThroughput` | The `queue` filter, when set |
+| `GetWorkflowRun` | The workflow run id |
+| `WatchJobs` | Each watched job id, or the queue |
+| `GetDeadLetter` | The dead-letter id |
+| `GetPeriodicTask` | The periodic task name |
+| `ListWorkers`, `GetNamespaceQuota`, `ListAuditRecords` | None — one untargeted record |
+
+The target is named before the lookup, so a miss still says which id was tried
+— its outcome is `NOT_FOUND`. A `WatchJobs` stream, over gRPC or
+[server-sent events](/server/operate/grpc#without-grpc), is recorded once, when
+it opens; the transitions it then delivers are not.
+
+**Repeats are folded.** A read that repeats one already recorded — same token,
+same RPC, same target, same outcome — within
+`FLEXIQ_GRPC_AUDIT_READS_WINDOW` seconds (default `60`; Helm:
+`grpc.auditReadsWindow`) leaves no second record. A client polling one job
+every two seconds leaves one record a minute, not thirty. `0` records every
+read. Writes are never folded.
+
+The window is kept in each server's memory, so behind several replicas the same
+read can be recorded once per replica — the trail can over-count, never skip a
+read one replica served. If more distinct reads arrive inside one window than
+the server can track, the extra ones are recorded every time rather than
+dropped.
+
+Reads share the trail's [retention](#retention) and its
+[overflow path](#when-a-record-cannot-be-stored). Read volume is far higher
+than write volume: watch `flexiq_audit_records_total{outcome="overflow"}` after
+turning this on.
 
 ## Retention
 
