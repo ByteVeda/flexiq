@@ -161,6 +161,9 @@ pub struct JsJob {
     pub metadata: Option<String>,
     pub notes: Option<String>,
     pub namespace: Option<String>,
+    /// Public id of the token that submitted the job through a server door;
+    /// `null` for an in-process enqueue.
+    pub enqueued_by: Option<String>,
 }
 
 /// Convert a core [`Job`] into its JS-facing shape.
@@ -185,6 +188,7 @@ pub fn job_to_js(job: Job) -> JsJob {
         metadata: job.metadata,
         notes: job.notes,
         namespace: job.namespace,
+        enqueued_by: job.enqueued_by,
     }
 }
 
