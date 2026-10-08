@@ -5,7 +5,7 @@ use redis::Commands;
 use crate::error::Result;
 use crate::job::{Job, JobStatus};
 use crate::storage::redis_backend::{map_err, strip_list_blobs, RedisConnection, RedisStorage};
-use crate::storage::QueueStats;
+use crate::storage::{LiveCounts, QueueStats};
 
 /// Ids per `get_jobs_by_ids` `MGET`; two keys each.
 const GET_BY_IDS_CHUNK: usize = 256;
@@ -337,6 +337,35 @@ impl RedisStorage {
         let mut conn = self.conn()?;
         let by_queue_key = self.key(&["jobs", "by_queue", queue_name]);
         self.count_in_status(&mut conn, &by_queue_key, JobStatus::Pending)
+    }
+
+    /// Pending and running jobs (the autoscaler's read): one `SINTERCARD` per
+    /// status over the status set and whichever of `jobs:by_queue` /
+    /// `jobs:by_ns` the filter names — server-side, no job loaded, no archive.
+    /// `None` namespace is every namespace, like `stats`.
+    pub fn live_counts(&self, queue: Option<&str>, namespace: Option<&str>) -> Result<LiveCounts> {
+        let mut conn = self.conn()?;
+        let mut keys = Vec::with_capacity(3);
+        if let Some(queue) = queue {
+            keys.push(self.key(&["jobs", "by_queue", queue]));
+        }
+        if let Some(ns) = namespace {
+            keys.push(self.by_namespace_key(Some(ns)));
+        }
+        let mut count = |status: JobStatus| -> Result<i64> {
+            let status_key = self.key(&["jobs", "status", &(status as i32).to_string()]);
+            redis::cmd("SINTERCARD")
+                .arg(keys.len() + 1)
+                .arg(&status_key)
+                .arg(&keys)
+                .query::<i64>(&mut conn)
+                .map_err(map_err)
+        };
+        // Pending first, as on the Diesel backends: a claim between the two
+        // reads over-counts once rather than vanishing.
+        let pending = count(JobStatus::Pending)?;
+        let running = count(JobStatus::Running)?;
+        Ok(LiveCounts { pending, running })
     }
 
     /// Statistics for one queue: live counts plus archived terminal counts.
