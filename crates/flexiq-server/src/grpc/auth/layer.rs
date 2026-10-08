@@ -47,7 +47,7 @@ use tower_service::Service;
 
 use super::authenticator::Authenticator;
 use super::gate::{self, Requirement};
-use super::principal::Principal;
+use super::principal::{Principal, Scope};
 use crate::grpc::audit::AuditContext;
 use crate::grpc::facade;
 use crate::grpc::status::WireError;
@@ -169,10 +169,14 @@ async fn authorize(
     audit: Option<&AuditContext>,
 ) -> Result<Option<Principal>, Status> {
     let requirement = gate::requirement(method, path);
-    if requirement == Requirement::Public {
+    match requirement {
         // Not merely allowed through: not even *asked*. A public path must not
         // reach storage, or an unauthenticated caller could keep the pool busy.
-        return Ok(None);
+        Requirement::Public => return Ok(None),
+        // The service asks instead, through `admit`, once it has the message
+        // the credential rides in.
+        Requirement::InService(_) => return Ok(None),
+        Requirement::Authenticated | Requirement::Scoped(_) => {}
     }
 
     let principal = authenticator.authenticate(metadata).await?;
@@ -182,6 +186,12 @@ async fn authorize(
     let Requirement::Scoped(scope) = requirement else {
         return Ok(Some(principal));
     };
+    admit(principal, scope).map(Some)
+}
+
+/// Hold a believed caller to `scope` and fix what it reaches behind that door.
+/// The layer's check, shared with a service that authenticates in-band.
+pub(crate) fn admit(principal: Principal, scope: Scope) -> Result<Principal, Status> {
     if !principal.grants(scope) {
         return Err(WireError::scope_denied(scope.as_str()).into());
     }
@@ -195,7 +205,7 @@ async fn authorize(
     if !NARROWABLE.contains(&scope) && !principal.reaches_everything() {
         return Err(WireError::scope_denied(scope.as_str()).into());
     }
-    Ok(Some(principal))
+    Ok(principal)
 }
 
 #[cfg(test)]
@@ -246,6 +256,22 @@ mod tests {
         .await
         .expect("health must not need a credential");
         assert!(outcome.is_none(), "health needs no principal either");
+    }
+
+    /// The scaler carries its token in the message, so the layer passes it on
+    /// unasked and the service checks it.
+    #[tokio::test]
+    async fn the_scaler_is_left_to_check_its_own_credential() {
+        let outcome = authorize(
+            &Refuses,
+            &POST,
+            "/externalscaler.ExternalScaler/IsActive",
+            &MetadataMap::new(),
+            None,
+        )
+        .await
+        .expect("the layer must not refuse a scaler call");
+        assert!(outcome.is_none());
     }
 
     #[tokio::test]

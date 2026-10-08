@@ -25,6 +25,17 @@ const HEALTH: [&str; 2] = [
     "/grpc.health.v1.Health/Check",
     "/grpc.health.v1.Health/Watch",
 ];
+/// KEDA's external scaler service (#850), vendored rather than ours.
+const SCALER_SERVICE: &str = "/externalscaler.ExternalScaler/";
+/// Its methods, named exactly for the reason `HEALTH` is: an unknown one
+/// stays behind the header check. A test holds the list to the descriptor.
+pub const SCALER_METHODS: [&str; 5] = [
+    "IsActive",
+    "StreamIsActive",
+    "GetMetricSpec",
+    "GetMetrics",
+    "StreamMetricSpec",
+];
 /// The producer package, split between two scopes by method.
 const PRODUCER: &str = "/flexiq.v1.";
 /// The producer package's service path.
@@ -85,6 +96,16 @@ pub enum Requirement {
     Authenticated,
     /// A credential carrying this scope.
     Scoped(Scope),
+    /// A credential carrying this scope, checked by the service rather than
+    /// the layer. KEDA's scaler sends no `authorization` header; its token
+    /// rides in the request message (`grpc::scaler::auth`).
+    InService(Scope),
+}
+
+/// Whether `path` is one of the scaler's methods.
+fn is_scaler(path: &str) -> bool {
+    path.strip_prefix(SCALER_SERVICE)
+        .is_some_and(|method| SCALER_METHODS.contains(&method))
 }
 
 /// Whether a path belongs to the JSON facade's namespace.
@@ -139,6 +160,9 @@ pub fn requirement(method: &http::Method, path: &str) -> Requirement {
         // bit — whether storage answers — to something that already reached
         // the port.
         Requirement::Public
+    } else if is_scaler(path) {
+        // Every method reads queue depth, which is what `inspect` opens.
+        Requirement::InService(Scope::Inspect)
     } else if path.starts_with(ADMIN) {
         Requirement::Scoped(admin_method(path))
     } else if under(path, FACADE_ADMIN) {
@@ -303,6 +327,37 @@ mod tests {
             requirement(&http::Method::POST, "/v1/administer"),
             Requirement::Scoped(Scope::Produce)
         );
+    }
+
+    /// The scaler's methods are exactly the descriptor's, and each one is left
+    /// to the service to check against `inspect`.
+    #[test]
+    fn the_scaler_methods_are_checked_in_service() {
+        let rpcs = descriptor::rpcs(descriptor::SCALER_PACKAGE);
+        assert_eq!(rpcs.len(), SCALER_METHODS.len(), "{rpcs:?}");
+        for rpc in &rpcs {
+            let path = format!("/externalscaler.{}/{}", rpc.service, rpc.method);
+            assert_eq!(
+                grpc(&path),
+                Requirement::InService(Scope::Inspect),
+                "{path}"
+            );
+        }
+    }
+
+    /// The exemption is per method: anything else under the service, or a
+    /// lookalike package, still needs a header credential.
+    #[test]
+    fn an_unknown_scaler_path_is_not_exempt() {
+        for path in [
+            "/externalscaler.ExternalScaler/Anything",
+            "/externalscaler.ExternalScaler/",
+            "/externalscaler.ExternalScaler/IsActiveX",
+            "/externalscaler.Other/IsActive",
+            "/externalscalerx.ExternalScaler/IsActive",
+        ] {
+            assert_eq!(grpc(path), Requirement::Authenticated, "{path}");
+        }
     }
 
     #[test]

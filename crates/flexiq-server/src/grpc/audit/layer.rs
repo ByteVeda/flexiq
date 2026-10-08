@@ -86,12 +86,15 @@ pub struct Audited<S> {
 pub fn access(method: &http::Method, path: &str) -> Option<Access> {
     // Every scope named, so a new one is a compile error here, not a silent
     // gap in the trail.
-    match gate::requirement(method, path) {
-        Requirement::Scoped(Scope::Produce | Scope::Admin) => Some(Access::Write),
-        Requirement::Scoped(Scope::Read | Scope::Inspect) => Some(Access::Read),
-        Requirement::Scoped(Scope::Execute) | Requirement::Authenticated | Requirement::Public => {
-            None
-        }
+    // Where the scope is checked does not change what the call is.
+    let scope = match gate::requirement(method, path) {
+        Requirement::Scoped(scope) | Requirement::InService(scope) => scope,
+        Requirement::Authenticated | Requirement::Public => return None,
+    };
+    match scope {
+        Scope::Produce | Scope::Admin => Some(Access::Write),
+        Scope::Read | Scope::Inspect => Some(Access::Read),
+        Scope::Execute => None,
     }
 }
 
