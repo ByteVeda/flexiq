@@ -81,7 +81,7 @@ door it came through.
 Two things the producer surface deliberately does not offer. It has **no admin
 methods** — pausing queues, dead-letter operations, workers, periodic tasks and
 overrides are [the admin door](/server/operate/admin), a separate package behind
-the `inspect` and `admin` scopes, because an operator surface and a producer
+the `inspect`, `admin` and `tokens` scopes, because an operator surface and a producer
 surface should not share a credential. And there is **no way to name a
 namespace**; it comes from the credential, as above.
 

@@ -27,7 +27,7 @@ The calls themselves are elsewhere:
 | | `flexiq.v1` | `flexiq.executor.v1` | `flexiq.admin.v1` |
 | --- | --- | --- | --- |
 | **Service** | `ProducerService` | `ExecutorService` | `AdminService` |
-| **Does** | Submit, read, cancel, count | Claim work, report on it | Operate queues, dead letters, workers, periodic tasks, overrides |
+| **Does** | Submit, read, cancel, count | Claim work, report on it | Operate queues, dead letters, workers, periodic tasks, overrides; manage API tokens |
 | **Transports** | gRPC, and the same calls as HTTP with JSON bodies on the same listener | gRPC only — no HTTP binding, ever | gRPC, and HTTP with JSON bodies under `/v1/admin/` |
 | **Scope** | `produce` | `execute` | `inspect` for read-only methods, `tokens` for the token methods, `admin` for the rest |
 

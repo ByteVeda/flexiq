@@ -50,7 +50,7 @@ three names:
 | | Producer door | Executor door | Admin door |
 |---|---|---|---|
 | **Package** | `flexiq.v1` | `flexiq.executor.v1` | `flexiq.admin.v1` |
-| **Does** | Enqueue, read, cancel work | Claim work, report on it | Pause queues, work the dead-letter queue, list workers, manage periodic tasks and overrides |
+| **Does** | Enqueue, read, cancel work | Claim work, report on it | Pause queues, work the dead-letter queue, list workers, manage periodic tasks and overrides, mint and revoke API tokens |
 | **Reachable over** | gRPC, and plain HTTP with JSON bodies on the same listener | gRPC only — no HTTP binding | gRPC, and plain HTTP with JSON bodies under `/v1/admin/` |
 | **Scope** | `produce` | `execute` | `inspect` to read, `admin` to change, `tokens` to manage tokens |
 

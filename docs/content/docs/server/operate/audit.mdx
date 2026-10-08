@@ -8,7 +8,8 @@ write a token makes — an enqueue, a cancel, a queue pause, a dead-letter repla
 — leaves records in the database naming the token, what it did, to what, when,
 and how the call ended. So does every change made from
 [the dashboard](#dashboard-and-cli-actions), named by the user who made it, and
-every token minted or revoked with `flexiq-server token`. It answers the
+every token minted or revoked from the dashboard, with `flexiq-server token`
+or through the admin door's token RPCs. It answers the
 questions a credential alone cannot:
 
 - which token enqueued this job;
@@ -37,7 +38,7 @@ single untargeted record when it was refused before naming any.
 | `tokenId` | The token's public id, or the dashboard user's username. Empty for `cli` and `anonymous` |
 | `principal` | The token's name when the call was made — a label, since two tokens may share one — or the username |
 | `operation` | The RPC, e.g. `flexiq.v1.ProducerService/Enqueue`, or the dashboard route, e.g. `dashboard POST /api/queues/{queue}/pause` |
-| `targetKind`, `target` | What it acted on: `job`, `workflow_run`, `queue`, `dead_letter`, `worker`, `periodic`, `task` or `namespace` — and, from the dashboard, `token`, `webhook`, `webhook_delivery`, `setting`, `topic`, `subscription` or `middleware` — and its id or name |
+| `targetKind`, `target` | What it acted on: `job`, `workflow_run`, `queue`, `dead_letter`, `worker`, `periodic`, `task`, `namespace` or `token` (the admin door's token RPCs) — and, from the dashboard, `token`, `webhook`, `webhook_delivery`, `setting`, `topic`, `subscription` or `middleware` — and its id or name |
 | `outcome` | The `google.rpc.Code` the call ended with: `OK`, `PERMISSION_DENIED`, `NOT_FOUND`, … `CANCELLED` means the call never answered — a deadline or a client that hung up — so its write may or may not have landed |
 
 `EnqueueBatch`
@@ -218,7 +219,8 @@ A read names what it **asked for**, not each row it got back:
 | `WatchJobs` | Each watched job id, or the queue |
 | `GetDeadLetter` | The dead-letter id |
 | `GetPeriodicTask` | The periodic task name |
-| `ListWorkers`, `GetNamespaceQuota`, `ListAuditRecords` | None — one untargeted record |
+| `GetToken` | The token's public id |
+| `ListWorkers`, `ListTokens`, `GetNamespaceQuota`, `ListAuditRecords` | None — one untargeted record |
 
 The target is named before the lookup, so a miss still says which id was tried
 — its outcome is `NOT_FOUND`. A `WatchJobs` stream, over gRPC or

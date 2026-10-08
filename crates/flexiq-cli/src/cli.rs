@@ -13,7 +13,7 @@
 //! Two doors behind one binary. `enqueue`, `jobs`, `tail` and `queues [NAME]` speak
 //! `flexiq.v1.ProducerService` and need a `produce` token; everything else
 //! speaks `flexiq.admin.v1.AdminService` and needs `inspect` to read and
-//! `admin` to change anything.
+//! `admin` to change anything; `tokens` commands need a `tokens` token.
 
 use std::path::PathBuf;
 

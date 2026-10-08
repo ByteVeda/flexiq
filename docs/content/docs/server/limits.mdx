@@ -67,7 +67,8 @@ and it is also the source of every limit below.
 
 `produce` opens `flexiq.v1`, and `read` opens only its read-only methods.
 `execute` opens `flexiq.executor.v1`. `inspect` and `admin` split
-`flexiq.admin.v1` between its read-only methods and the rest. `produce` covering
+`flexiq.admin.v1` between its read-only methods and the rest, and `tokens`
+opens its token-management methods. `produce` covering
 `read` is the one overlap. A token that can poll for work cannot enqueue it. A
 token that can read the dead-letter queue cannot replay it. The refusal is
 `PERMISSION_DENIED` with the reason `SCOPE_DENIED`, carrying the scope it
