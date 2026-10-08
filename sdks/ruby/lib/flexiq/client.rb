@@ -43,8 +43,9 @@ module FlexiQ
     end
 
     # Reads one page of jobs, newest first. Every filter is optional; `status` is a
-    # FlexiQ::JobStatus symbol. A grant narrowed to queues or tasks must name one it reaches, or
-    # the call raises RPCError SCOPE_DENIED: a listing is refused, never filtered silently.
+    # FlexiQ::JobStatus symbol. A grant narrowed to queues needs a `queue:` it reaches, one
+    # narrowed to tasks a `task_name:`, or the call raises RPCError SCOPE_DENIED: a listing is
+    # refused, never filtered silently.
     def list_jobs(status: nil, queue: nil, task_name: nil, page_size: nil, page_token: nil)
       query = {
         "status" => status.nil? ? nil : JobStatus.dump(status), "queue" => queue, "taskName" => task_name,

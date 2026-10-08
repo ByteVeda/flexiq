@@ -77,9 +77,10 @@ client.each_job(queue: "emails", status: :failed).first(500) # follows the curso
 server did not issue is refused with `RPCError` reason `INVALID_REQUEST`. `page_size` defaults to
 the server's choice (50) and is capped (500), so trust `last_page?`, not the row count.
 
-A credential whose `produce` or `read` grant is narrowed to queues or tasks must name one it
-reaches: `list_jobs` with no `queue:` is refused with `SCOPE_DENIED`. A listing is never filtered
-down to the rows the credential can see.
+A credential whose `produce` or `read` grant is narrowed must name what the grant narrows: a
+`queue:` it reaches for a queue-narrowed grant, a `task_name:` it reaches for a task-narrowed one,
+and both when the grant narrows both. Otherwise `list_jobs` is refused with `SCOPE_DENIED`. A
+listing is never filtered down to the rows the credential can see.
 
 ## Credentials and TLS
 
