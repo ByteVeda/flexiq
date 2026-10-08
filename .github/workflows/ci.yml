@@ -125,13 +125,19 @@ jobs:
             # Deliberately not `*shared`, for the same reason as `go`: the Ruby
             # client speaks the JSON door and links nothing from crates/. It
             # depends on the wire contract and the vectors its suite reads.
+            # The executor gem's stubs are generated from the executor proto,
+            # so an edit there can leave them stale.
             ruby:
               - 'sdks/ruby/**'
+              - 'sdks/ruby-executor/**'
               - 'contracts/wire-vectors.json'
+              - 'contracts/proto/flexiq/executor/**'
+              - 'contracts/BUF_VERSION'
               - '.github/workflows/ci-ruby.yml'
             # The pair, as `go_e2e`: this client against a real flexiq-server.
             ruby_e2e:
               - 'sdks/ruby/**'
+              - 'sdks/ruby-executor/**'
               - 'crates/flexiq-server/**'
               - 'contracts/proto/**'
               - 'contracts/descriptor.binpb'

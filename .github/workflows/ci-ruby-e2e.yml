@@ -56,3 +56,19 @@ jobs:
         env:
           FLEXIQ_SERVER_BIN: ${{ github.workspace }}/target/debug/flexiq-server
         run: bundle exec rake e2e
+
+      # The executor gem has a bundle of its own; setup-ruby caches one
+      # working directory per step.
+      - name: Set up the executor gem's bundle
+        uses: ruby/setup-ruby@v1.327.0
+        with:
+          ruby-version: "3.4"
+          working-directory: sdks/ruby-executor
+          bundler-cache: true
+
+      # Jobs the producer gem enqueues, run and settled by an attached executor.
+      - name: Run the executor end-to-end suite
+        working-directory: sdks/ruby-executor
+        env:
+          FLEXIQ_SERVER_BIN: ${{ github.workspace }}/target/debug/flexiq-server
+        run: bundle exec rake e2e

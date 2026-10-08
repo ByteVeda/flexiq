@@ -87,6 +87,14 @@ repos:
         files: ^sdks/ruby/(.*\.rb|.*\.gemspec|Gemfile|Gemfile\.lock|Rakefile|\.rubocop\.yml|bin/.*)$
         pass_filenames: false
 
+      # The executor gem inherits the producer gem's config, so an edit there lints both.
+      - id: ruby-executor-rubocop
+        name: ruby executor lint (rubocop)
+        entry: bash -c 'cd sdks/ruby-executor && bundle exec rubocop'
+        language: system
+        files: ^sdks/(ruby-executor/(.*\.rb|.*\.gemspec|Gemfile|Gemfile\.lock|Rakefile|\.rubocop\.yml)|ruby/\.rubocop\.yml)$
+        pass_filenames: false
+
       - id: node-lint
         name: node lint (biome)
         entry: bash -c 'cd sdks/node && pnpm exec biome ci src test'

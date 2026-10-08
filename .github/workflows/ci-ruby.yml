@@ -1,10 +1,10 @@
 name: CI Ruby
 
-# Reusable Ruby client workflow. The Ruby client speaks the JSON door over the
+# Reusable Ruby client workflow. The producer gem speaks the JSON door over the
 # standard library: it links no native binding, compiles nothing from crates/
 # and has no runtime gem dependency, so this suite needs no Rust toolchain and
-# the version matrix is the whole job. Called by ci.yml when Ruby-relevant
-# paths change.
+# the version matrix is the whole job. The executor gem has jobs of its own
+# below. Called by ci.yml when Ruby-relevant paths change.
 on:
   workflow_call:
 
@@ -67,3 +67,77 @@ jobs:
       # The gem a release would publish must build from the tree as committed.
       - name: Build the gem
         run: gem build flexiq.gemspec
+
+  # The executor gem: a separate gem on grpc, because the executor door has no
+  # HTTP binding. Its unit suite runs a scripted scheduler in process, so it
+  # still needs no Rust toolchain. grpc ships precompiled for every Ruby here.
+  executor-test:
+    name: Executor test (ruby ${{ matrix.ruby }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: sdks/ruby-executor
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ["3.3", "3.4", "4.0"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1.327.0
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          working-directory: sdks/ruby-executor
+          bundler-cache: true
+
+      - name: Test
+        run: bundle exec rake test
+
+  executor-lint:
+    name: Executor RuboCop and stubs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: sdks/ruby-executor
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1.327.0
+        with:
+          ruby-version: "3.4"
+          working-directory: sdks/ruby-executor
+          bundler-cache: true
+
+      - name: Lint
+        run: bundle exec rake lint
+
+      - name: Build the gem
+        run: gem build flexiq-executor.gemspec
+
+      - name: Read the pinned buf version
+        id: pin
+        working-directory: .
+        run: echo "version=$(tr -d '[:space:]' < contracts/BUF_VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up buf
+        uses: bufbuild/buf-action@v1.6.0
+        with:
+          setup_only: true
+          version: ${{ steps.pin.outputs.version }}
+
+      # The stubs are committed because a gem runs no code generator on
+      # install, which makes them a second copy of the contract.
+      - name: Committed stubs match contracts/proto
+        run: |
+          buf generate
+          git diff --exit-code -- lib/flexiq/executor/v1
