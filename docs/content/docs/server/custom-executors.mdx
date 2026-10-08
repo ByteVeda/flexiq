@@ -36,6 +36,7 @@ which are gated on a capability, and what a lease is required on.
   the producer gem's CBOR codec. It advertises `side_channel` and `lease`;
   durable steps are not implemented yet, so it does not claim `steps`.
   Cancellation and timeouts are cooperative: a handler calls `job.check!`.
+  Moving off Sidekiq? See [From Sidekiq](/server/migrate-sidekiq).
 </Callout>
 
 ## What an executor is not allowed to do
