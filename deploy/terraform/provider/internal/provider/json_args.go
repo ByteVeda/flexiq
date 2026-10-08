@@ -165,7 +165,36 @@ func (v jsonValidator) ValidateString(_ context.Context, req validator.StringReq
 	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
 		return
 	}
-	if _, err := parseJSONKind(req.ConfigValue.ValueString(), v.kind); err != nil {
+	value := req.ConfigValue.ValueString()
+	if _, err := parseJSONKind(value, v.kind); err != nil {
 		resp.Diagnostics.AddAttributeError(req.Path, "Invalid JSON", err.Error())
+		return
+	}
+	if unsafe := unsafeIntegers(value); len(unsafe) > 0 {
+		resp.Diagnostics.AddAttributeWarning(req.Path, "Integer sent as a float",
+			fmt.Sprintf("%s exceed ±(2^53-1), so they are sent as 64-bit floats and may lose precision. "+
+				"Pass them as strings to keep every digit.", strings.Join(unsafe, ", ")))
+	}
+}
+
+// unsafeIntegers lists the integer literals in s beyond ±(2^53-1), which
+// parseJSON turns into floats. Literals with a fraction or exponent are floats
+// already and are not listed.
+func unsafeIntegers(s string) []string {
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	var unsafe []string
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return unsafe
+		}
+		n, ok := tok.(json.Number)
+		if !ok || strings.ContainsAny(n.String(), ".eE") {
+			continue
+		}
+		if i, err := strconv.ParseInt(n.String(), 10, 64); err != nil || i > maxSafeInteger || i < -maxSafeInteger {
+			unsafe = append(unsafe, n.String())
+		}
 	}
 }

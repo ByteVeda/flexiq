@@ -5,7 +5,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
@@ -148,6 +150,38 @@ func TestJSONSurvivesThePayload(t *testing.T) {
 	}
 	if !jsonEqual(gotKwargs, kwargs) {
 		t.Errorf("kwargs read back as %s, want %s", gotKwargs, kwargs)
+	}
+}
+
+func TestUnsafeIntegers(t *testing.T) {
+	got := unsafeIntegers(`[9007199254740991, -9007199254740991, 9007199254740992, {"n": -18446744073709551616}, 1e20, 2.5]`)
+	if want := []string{"9007199254740992", "-18446744073709551616"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("unsafeIntegers = %v, want %v", got, want)
+	}
+	if got := unsafeIntegers(`[1, "9007199254740993"]`); len(got) != 0 {
+		t.Errorf("a string holding digits is not a number: %v", got)
+	}
+}
+
+func TestJSONValidatorWarnsOnUnsafeIntegers(t *testing.T) {
+	cases := []struct {
+		value        string
+		wantError    bool
+		wantWarnings int
+	}{
+		{value: `[1, 2]`},
+		{value: `[9007199254740993]`, wantWarnings: 1},
+		{value: `{"a": 1}`, wantError: true},
+	}
+	for _, tc := range cases {
+		var resp validator.StringResponse
+		jsonValidator{kind: jsonArray}.ValidateString(context.Background(), validator.StringRequest{
+			Path: path.Root("args"), ConfigValue: types.StringValue(tc.value),
+		}, &resp)
+		if resp.Diagnostics.HasError() != tc.wantError || resp.Diagnostics.WarningsCount() != tc.wantWarnings {
+			t.Errorf("%s: diagnostics = %v, want error %v and %d warnings",
+				tc.value, resp.Diagnostics, tc.wantError, tc.wantWarnings)
+		}
 	}
 }
 
