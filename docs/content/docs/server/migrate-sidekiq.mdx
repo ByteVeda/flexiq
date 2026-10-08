@@ -1,0 +1,513 @@
+---
+title: From Sidekiq
+description: "Move a Sidekiq app onto flexiq-server: job classes, perform_async and perform_in, sidekiq_options, the retry and dead sets, unique jobs, periodic jobs and the Web UI mapped onto the Ruby gems — with what Ruby cannot do yet stated first."
+---
+
+This page is for a Ruby app that runs its background work on Sidekiq and wants
+to move it to FlexiQ. Ruby has no in-process FlexiQ SDK. It has two gems that
+talk to a running `flexiq-server` over the network: `flexiq` enqueues and reads
+jobs, and `flexiq-executor` runs them. So the shape of the deployment changes,
+not only the API:
+
+```
+before:  app (sidekiq)        → Redis         ← Sidekiq processes
+after:   app (flexiq gem)     → flexiq-server ← Ruby workers (flexiq-executor gem)
+                                     ↕
+                          Postgres, Redis or SQLite
+```
+
+Each section below takes one piece of a Sidekiq app, shows what it becomes, and
+says where the behaviour changes. Read the next section first: it is what
+decides whether to move at all.
+
+## What you add, and what Ruby cannot do yet
+
+**Added:** two things Sidekiq did not need.
+
+- **One long-lived `flexiq-server` process.** It holds the queue, runs the
+  scheduler, serves the dashboard, and holds the database credential, so no
+  Ruby process needs it. Producers enqueue through its gRPC door (`FLEXIQ_GRPC_LISTEN`), and
+  Ruby workers dial the same listener to take work.
+- **A database.** Postgres or Redis in production. SQLite is enough on a
+  laptop.
+
+```bash
+FLEXIQ_DSN=postgres://flexiq:…@db.internal/flexiq \
+FLEXIQ_NAMESPACE=prod \
+FLEXIQ_QUEUES=critical,default,mailers \
+FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
+FLEXIQ_GRPC_TLS_CERT=/etc/flexiq/tls.crt \
+FLEXIQ_GRPC_TLS_KEY=/etc/flexiq/tls.key \
+FLEXIQ_DASHBOARD=0.0.0.0:8080 \
+FLEXIQ_DASHBOARD_AUTH=session \
+flexiq-server
+```
+
+`FLEXIQ_QUEUES` lists the queues the scheduler dispatches from — `default`
+alone when unset. A Sidekiq process's `-q` flags move here; there are no
+weights. [Running the server](/server/operate#configuration) lists every
+variable.
+
+**Ruby is a remote client, not an SDK.** The Ruby workers run your handlers,
+but the queue lives in `flexiq-server`, so these are not available from Ruby
+today:
+
+- **Durable steps.** `flexiq-executor` does not implement them, so a Ruby task
+  restarts from the top on every retry.
+- **Enqueue from inside a handler through the executor's connection.** The
+  executor door has no enqueue call. A handler that fans out holds its own
+  `FlexiQ::Client`, with a `produce` token.
+- **Periodic jobs and the dead-letter queue from Ruby.** Neither gem has an API
+  for them. They are operated with the [`fq` CLI](/server/operate/cli), the
+  dashboard, or [the admin door](/server/operate/admin).
+- **Pre-emptive cancellation and timeouts.** Ruby cannot stop a thread safely,
+  so both are cooperative: a long handler calls `job.check!`.
+- **RubyGems.** Neither gem is published yet; Bundler takes them from the
+  repository.
+
+What Sidekiq has that FlexiQ does not is collected in
+[what you lose](#what-you-lose).
+
+## Installing
+
+Ruby 3.3 or newer. Both gems come from the repository:
+
+```ruby
+# Gemfile
+git "https://github.com/ByteVeda/flexiq", glob: "sdks/{ruby,ruby-executor}/*.gemspec" do
+  gem "flexiq"
+  gem "flexiq-executor"
+end
+```
+
+A process that only enqueues needs `flexiq` alone, and it has no dependencies
+outside the standard library. `flexiq-executor` depends on the `grpc` gem,
+which ships precompiled for Linux and macOS.
+
+Each side needs a token, minted against the server's database. They are
+separate on purpose: a `produce` token cannot run work, and an `execute` token
+cannot enqueue.
+
+```bash
+flexiq-server token create --name rails-app --scope produce
+flexiq-server token create --name ruby-workers --scope execute
+```
+
+The namespace is fixed in the token when it is minted
+([API tokens](/server/operate/tokens)), so no Ruby call names one.
+
+## A worker class
+
+<Tabs items={["Sidekiq", "FlexiQ"]}>
+  <Tab value="Sidekiq">
+
+```ruby
+class WelcomeEmailJob
+  include Sidekiq::Job
+  sidekiq_options queue: "mailers", retry: 5
+
+  def perform(user_id, locale = "en")
+    UserMailer.welcome(User.find(user_id), locale).deliver_now
+  end
+end
+
+# bundle exec sidekiq -c 10 -q critical -q default -q mailers
+```
+
+  </Tab>
+  <Tab value="FlexiQ">
+
+```ruby
+require "flexiq/executor"
+
+worker = FlexiQ::Executor::Worker.new("flexiq.internal:50051",
+                                      token: ENV.fetch("FLEXIQ_EXECUTE_TOKEN"),
+                                      slots: 10)
+
+worker.handle("mailers.welcome") do |job|
+  user_id, locale = job.args
+  UserMailer.welcome(User.find(user_id), locale || "en").deliver_now
+  nil
+end
+
+trap("TERM") { worker.stop }
+worker.run
+```
+
+  </Tab>
+</Tabs>
+
+- **A job class becomes a handler registered by task name.** The task name is
+  any string; it replaces the class name Sidekiq stored in the job. A handler
+  is a block or anything that responds to `call`, and it receives a `Job`.
+- **Routing is by task name, not queue.** The worker tells the scheduler which
+  task names it handles, and gets jobs for those tasks from whichever queue in
+  `FLEXIQ_QUEUES` they were enqueued on. There is no `queues:` setting on the
+  worker. Every task enqueued on a served queue needs a handler on some
+  attached worker: a job no worker handles waits 30 seconds to be placed,
+  holding up the jobs behind it, then fails and retries like any other
+  failure.
+- **`concurrency` becomes `slots:`** — jobs run at once, each on a thread of
+  its own. Sidekiq defaults to 5 threads; `slots:` defaults to the processor
+  count.
+- **`run` blocks**, reconnects when the scheduler rotates the stream, and
+  returns on `stop`, which drains running jobs for up to `shutdown_drain:`
+  seconds (30) and is safe in a signal trap.
+- **The return value is the job's result.** Sidekiq discards what `perform`
+  returns. FlexiQ stores it, so it must be something the CBOR codec can encode
+  — `nil`, booleans, numbers, strings, arrays, hashes. A value that does not
+  encode fails the job **without** a retry, after its side effects have
+  happened. The `nil` at the end of the handler above is deliberate.
+
+An existing job class can be kept as it is once `include Sidekiq::Job` is
+removed, since it is then a plain Ruby class:
+
+```ruby
+worker.handle("mailers.welcome") do |job|
+  WelcomeEmailJob.new.perform(*job.args)
+  nil # perform's return value is not a result
+end
+```
+
+## Enqueueing
+
+<Tabs items={["Sidekiq", "FlexiQ"]}>
+  <Tab value="Sidekiq">
+
+```ruby
+jid = WelcomeEmailJob.perform_async(42, "de")
+WelcomeEmailJob.perform_in(300, 42)
+WelcomeEmailJob.perform_at(Time.now + 3600, 42)
+WelcomeEmailJob.perform_bulk([[1], [2], [3]])
+```
+
+  </Tab>
+  <Tab value="FlexiQ">
+
+```ruby
+require "flexiq"
+
+client = FlexiQ::Client.new("https://flexiq.internal:50051", token: ENV.fetch("FLEXIQ_TOKEN"))
+
+job_id = client.enqueue("mailers.welcome", args: [42, "de"], queue: "mailers", max_retries: 5).job.id
+client.enqueue("mailers.welcome", args: [42], queue: "mailers", max_retries: 5,
+                                  scheduled_at: Time.now + 300)
+client.enqueue("mailers.welcome", args: [42], queue: "mailers", max_retries: 5,
+                                  scheduled_at: Time.now + 3600)
+
+results = client.enqueue_batch([1, 2, 3].map do |id|
+  { task_name: "mailers.welcome", args: [id], options: { queue: "mailers", max_retries: 5 } }
+end)
+results.reject(&:enqueued?).each { |item| warn "item #{item.index}: #{item.error.message}" }
+```
+
+  </Tab>
+</Tabs>
+
+| Sidekiq | FlexiQ |
+| --- | --- |
+| `perform_async(*args)` | `enqueue(task_name, args: [...])` |
+| `perform_in(interval, *args)` | `enqueue(..., scheduled_at: Time.now + interval)`. There is no relative form |
+| `perform_at(time, *args)` | `enqueue(..., scheduled_at: time)` |
+| `perform_bulk`, `Sidekiq::Client.push_bulk` | `enqueue_batch`, one result per item |
+| The returned `jid` | `result.job.id` |
+| `sidekiq_options` on the class | Options on each call ([below](#sidekiq_options)) |
+
+- **Options travel with each call, not with a class.** A producer has no class
+  to read them from, so a small method per task that sets `queue:` and
+  `max_retries:` keeps them in one place.
+- **Arguments: `args:` and `kwargs:`.** Sidekiq passes positional JSON values.
+  FlexiQ passes positional arguments and a keyword hash, encoded as CBOR; the
+  handler reads them as `job.args` and `job.kwargs`. Symbols arrive as strings,
+  and hash keys come back as strings, as they did from Sidekiq's JSON. The
+  bytes are the same any other FlexiQ runtime would write, so a producer in
+  another language can enqueue the same task.
+- **`enqueue_batch` is not atomic.** Each item succeeds or fails on its own,
+  which is why the example checks every result. When the whole call raises
+  instead, nothing was enqueued.
+- **`enqueue` is not idempotent.** If it raises a transport error, the job may
+  exist. Resend only with a `unique_key` ([below](#unique-jobs)).
+
+## `sidekiq_options`
+
+| Sidekiq | FlexiQ |
+| --- | --- |
+| `queue: "mailers"` | `queue: "mailers"` on the enqueue, and the queue listed in `FLEXIQ_QUEUES` |
+| `retry: 5` | `max_retries: 5` |
+| `retry: true` (25 retries) | No default. Pick a number |
+| `retry: false` | Leave `max_retries` out, or raise `FlexiQ::Executor::Fatal` from the handler |
+| `backtrace: true` | Always on: the error is stored with the class, message and full backtrace |
+| `dead: false` | No equivalent. Every exhausted job goes to the dead-letter queue; purge it from there |
+| `sidekiq_retry_in` | A task override's `retryBackoff`, set by an operator ([below](#retries-and-the-dead-set)) |
+| `sidekiq_retries_exhausted` | The dead-letter queue, read and worked with `fq dlq` or the dashboard |
+| No equivalent | `timeout:` — seconds one attempt may run, five minutes by default |
+| No equivalent | `priority:` — higher runs first |
+
+<Callout type="warn" title="Set max_retries on every enqueue">
+Sidekiq retries a failing job 25 times by default. FlexiQ's network door does
+not: `max_retries` left out is `0`, and the first failure sends the job
+straight to the dead-letter queue. Set it on every call.
+</Callout>
+
+**Retry or not is decided by the handler.** Any exception fails the attempt
+and is retried while retries remain. `FlexiQ::Executor::Fatal` fails it with no
+retry. Raised inside a `rescue`, the stored error names the original exception
+rather than `Fatal`:
+
+```ruby
+worker.handle("billing.charge") do |job|
+  Gateway.charge(job.args.first)
+rescue Gateway::CardDeclined
+  raise FlexiQ::Executor::Fatal, "declined" # no retry; the error names CardDeclined
+end
+```
+
+**The error a job failed with** is readable from a producer:
+
+```ruby
+job = client.get_job(job_id)
+job.task_error&.errtype   # => "Gateway::Timeout"
+job.task_error&.traceback # => ["app/jobs/charge.rb:12:in 'call'", ...]
+```
+
+`job.log("warn", "…", extra: { ... })` writes a task log line beside it, shown
+on the dashboard; Sidekiq's equivalent was your logger.
+
+## Retries and the dead set
+
+| Sidekiq | FlexiQ |
+| --- | --- |
+| Retry set | Failed jobs waiting on their next attempt, still in their queue |
+| Backoff `(retry_count ** 4) + 15 + (rand(10) * (retry_count + 1))` seconds, 25 retries over about 20 days | Full jitter: `uniform(0, min(5 min, base × 2^retry))`, base one second |
+| `sidekiq_retry_in` per class | A task override's `retryBackoff`: the base, not the cap |
+| Dead set, kept 6 months or 10 000 jobs | Dead-letter queue, kept until replayed, deleted or purged |
+| Retrying a dead job from the Web UI | `fq dlq replay`, or **Retry** on the dashboard's dead-letters page |
+
+**The backoff is much shorter.** The ceiling stops doubling at five minutes,
+so 25 retries here are spent within an hour and a half at most, where
+Sidekiq's took weeks. A job that waited out a long outage on Sidekiq's curve dead-letters
+here instead, and is replayed from there once the cause is fixed. Size
+`max_retries` for that rather than copying 25.
+
+**The base delay is a task override, not code.** A handler cannot choose its
+own delay, so `sidekiq_retry_in` has no Ruby counterpart. An operator sets the
+base per task, and the scheduler reads overrides when it starts — set it before
+the server boots, or restart it after:
+
+```bash
+fq overrides set-task mailers.welcome --retry-backoff-ms 10000
+```
+
+**The dead-letter queue keeps the job, not a copy.** An exhausted job keeps its
+task, arguments, queue and last error:
+
+```bash
+fq dlq list --task mailers.welcome
+fq dlq show <ID> --payload
+fq dlq replay <ID>                    # enqueue it again; prints the new job
+fq dlq purge --older-than-ms 2592000000
+```
+
+`<ID>` is the dead letter's id, not the original job's. A replay is a new job
+with a new id: it keeps the queue, task, arguments and priority, and drops the
+unique key and dependencies. It is not idempotent; each replay makes a job.
+Reading the queue needs a token with the `inspect` scope, changing it `admin`
+([the admin door](/server/operate/admin#dead-letters)).
+
+## Unique jobs
+
+Sidekiq Enterprise's `unique_for` and the `sidekiq-unique-jobs` gem lock on the
+job's class, arguments and queue for a window you choose. FlexiQ's equivalent
+is `unique_key`, a string you choose:
+
+```ruby
+result = client.enqueue("reports.build", args: [account_id], queue: "reports", max_retries: 3,
+                                         unique_key: "report-#{account_id}")
+result.deduplicated? # => true when a live job held the key; result.job is that job
+```
+
+- **It dedupes against the active job only.** While a job with the key is
+  pending or running, another enqueue returns that job. Once it finishes, the
+  key is free and the next enqueue makes a new job. There is no time window
+  past completion, and no `idempotency_key` on this door.
+- **The key is yours to build.** It is not derived from the arguments. Build it
+  from what makes two jobs the same, and include the task name if two tasks
+  share keys.
+- **It is per namespace.** The same key in another namespace is a different
+  job.
+
+**Debounce** is the other half of what unique-jobs locks were often used for:
+collapsing a burst of enqueues into one run. While a job with the key is
+pending and unclaimed, each new enqueue pushes its run time forward instead of
+adding a job, until `max_wait` from the first:
+
+```ruby
+client.enqueue("search.reindex", args: [product_id], queue: "default", max_retries: 3,
+                                 debounce: { key: "reindex-#{product_id}", window: 5, max_wait: 60 })
+```
+
+`window` and `max_wait` are seconds, and both are required.
+`replace_payload: true` keeps the newest arguments instead of the first.
+
+## The Web UI
+
+The Sidekiq Web UI is a Rack app you mount in your own app. The FlexiQ
+dashboard is served by `flexiq-server` itself, on `FLEXIQ_DASHBOARD`, so
+nothing is mounted in Rails. It shows queues, jobs and their errors, task logs,
+workers and attached executors, workflows, and the dead-letter queue with
+retry, delete and purge. An operator can pause a queue and set task and queue
+overrides from it.
+
+A bind reachable from another host refuses to start with authentication off,
+so set `FLEXIQ_DASHBOARD_AUTH=session`; `FLEXIQ_DASHBOARD_ADMIN_USER` and
+`FLEXIQ_DASHBOARD_ADMIN_PASSWORD` create the first admin.
+[Dashboard settings](/server/operate#dashboard) lists the rest.
+
+## Periodic jobs
+
+Sidekiq Enterprise's periodic jobs and the `sidekiq-cron` gem both declare
+schedules in Ruby. FlexiQ keeps schedules in the database, written by an
+operator rather than declared by a Ruby process:
+
+<Tabs items={["Sidekiq", "FlexiQ"]}>
+  <Tab value="Sidekiq">
+
+```ruby
+Sidekiq.configure_server do |config|
+  config.periodic do |mgr|
+    mgr.register("0 2 * * *", "NightlyReportJob", queue: "reports")
+  end
+end
+```
+
+  </Tab>
+  <Tab value="FlexiQ">
+
+```bash
+fq periodic put nightly-report --task reports.nightly --cron '0 0 2 * * *' \
+  --queue reports --timezone Europe/Berlin
+fq periodic list
+fq periodic trigger nightly-report    # fire one run now
+```
+
+  </Tab>
+</Tabs>
+
+- **Six fields, seconds first.** Sidekiq's five-field `0 2 * * *` becomes
+  `0 0 2 * * *`.
+- **A timezone is an IANA name**, UTC when omitted. Sidekiq Enterprise used the
+  process's zone unless `tz:` said otherwise.
+- **Each firing gets 3 retries and a five-minute timeout.** `fq periodic put`
+  has no flag for either.
+- **The schedule fires from the server's scheduler**, which starts when the
+  first worker attaches. Until a Ruby worker has connected once, nothing fires.
+
+`pause`, `resume` and `delete` do what they say; `put` on an existing name
+replaces its definition but never resumes a paused schedule. The same calls are
+on [the admin door](/server/operate/admin#periodic-tasks) as JSON.
+
+## Waiting, cancelling and progress
+
+Sidekiq discards a job's return value and has no built-in way to cancel one
+that is running; its FAQ suggests a flag the job checks itself, and Iterable
+jobs can be cancelled. FlexiQ stores the result, and cancellation is a call:
+
+```ruby
+job = client.wait(job_id, timeout: 30) # raises FlexiQ::WaitTimeoutError
+job.status        # => :complete, :dead, :cancelled, ...
+job.decode_result # what the handler returned
+
+client.cancel_job(job_id) # idempotent
+```
+
+A pending job is cancelled outright. A running one is asked to stop, and the
+handler sees it at its next `job.check!`:
+
+```ruby
+worker.handle("exports.build") do |job|
+  rows = Export.rows(job.args.first)
+  rows.each_slice(1_000).with_index do |slice, index|
+    job.check! # raises Cancelled once cancelled, TimeoutError past the timeout
+    Export.write(slice)
+    job.progress((index + 1) * 1_000 * 100 / rows.size) # clamped to 100
+  end
+  nil
+end
+```
+
+Letting `Cancelled` propagate settles the job as cancelled, with no retry. A
+handler that never calls `check!` runs to the end; the cancel cannot reach into
+it. `job.progress` shows on the dashboard and on `get_job`. `client.watch_jobs`
+and `client.watch_queue` follow jobs live, and `client.list_jobs` lists them by
+status, queue or task.
+
+## What you gain
+
+**A dead-letter queue you can work from the command line.** Every exhausted
+job keeps its arguments and error until someone acts on it — no 6-month or
+10 000-job limit — and `fq dlq` or the admin door lists, reads, replays and
+purges it from a script.
+
+**Results and cancellation.** A handler's return value is stored and read back
+with `get_job` or `wait`, and `cancel_job` stops a pending job and asks a
+running one to stop. Neither needs a plugin.
+
+**Uniqueness and debounce without Enterprise.** `unique_key` and `debounce`
+are part of every enqueue.
+
+**Workflows.** `submit_workflow` submits a graph of tasks, one job per node
+chained by its edges, and `get_workflow_run` reads the run back. This door
+takes static graphs only; the
+[producer gem's README](https://github.com/ByteVeda/flexiq/tree/master/sdks/ruby#workflows)
+says which constructs it refuses. Sidekiq's nearest equivalent is Pro's
+Batches.
+
+**One queue for every language.** The same server takes enqueues from Python,
+Node, Java and Go, and the same tasks can be run by workers in any of them.
+Moving one task out of Ruby is a change of which worker handles its name.
+
+**It runs on a laptop with SQLite.** `FLEXIQ_DSN` pointing at a file gives the
+whole stack — queue, scheduler, retries, dead-letter queue, dashboard — with
+no Redis.
+
+## What you lose
+
+- **Sidekiq's maturity and ecosystem.** Years of production use, and gems for
+  most needs. The FlexiQ Ruby gems are new.
+- **In-process simplicity.** Sidekiq is a gem and Redis. FlexiQ adds a server
+  process to deploy, watch and keep up, and every job is a network hop from
+  it.
+- **Middleware.** Neither gem has a client or server middleware chain. What a
+  Sidekiq middleware did — tracing, tenant context, metrics — moves into the
+  handler, or a wrapper around it.
+- **ActiveJob.** There is no ActiveJob adapter. A job written against
+  `ApplicationJob` is ported to a handler.
+- **Batches (Pro).** There are no batch callbacks. Workflows cover a fixed
+  graph, not a batch that grows while it runs.
+- **Rate limiting (Enterprise) in Ruby.** Rate limits and concurrency caps
+  exist as task and queue overrides an operator sets, not as a limiter the
+  handler calls.
+- **A long retry curve.** Five minutes is the longest gap between attempts.
+- **Durable steps, enqueue through the executor, periodic and dead-letter
+  APIs, and pre-emptive cancellation from Ruby**, as listed
+  [at the top](#what-you-add-and-what-ruby-cannot-do-yet).
+- **RubyGems.** The gems install from the repository until they are published.
+
+## Checklist
+
+- [ ] `flexiq-server` running somewhere long-lived, on Postgres or Redis, with
+  TLS on its gRPC door
+- [ ] Every Sidekiq queue listed in `FLEXIQ_QUEUES`
+- [ ] A `produce` token for the app and an `execute` token for the workers
+- [ ] Each job class registered with `worker.handle` under a task name, and
+  every handler returning something encodable — `nil` when in doubt
+- [ ] Every enqueue sets `queue:` and `max_retries:`
+- [ ] `perform_in` rewritten as `scheduled_at: Time.now + n`
+- [ ] Handlers raise `FlexiQ::Executor::Fatal` where `retry: false` was set
+- [ ] `sidekiq_retry_in` recreated as task overrides, before the server starts
+- [ ] Unique jobs keyed with `unique_key`, and the window difference checked
+- [ ] Periodic jobs recreated with `fq periodic put`, cron rewritten seconds
+  first
+- [ ] Long handlers call `job.check!` between units of work
+- [ ] Dashboard on `FLEXIQ_DASHBOARD` with `FLEXIQ_DASHBOARD_AUTH=session`
+- [ ] Sidekiq's queues drained before its producers stop writing there
