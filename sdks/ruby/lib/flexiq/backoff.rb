@@ -12,8 +12,9 @@ module FlexiQ
       @delay = START
     end
 
-    def pause
-      sleep(@delay)
+    # Sleeps the current delay, cut short by `deadline` (Deadline) when given.
+    def pause(deadline = nil)
+      sleep(deadline ? deadline.cap(@delay) : @delay)
       @delay = [@delay * 2, CAP].min
     end
   end

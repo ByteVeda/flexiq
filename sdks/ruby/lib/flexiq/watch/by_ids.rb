@@ -4,8 +4,8 @@ module FlexiQ
   class Watch
     # Id watch. Resumes by reopening on unfinished ids; each gets a fresh snapshot.
     class ByIds < Watch
-      def initialize(transport, job_ids)
-        super(transport)
+      def initialize(transport, job_ids, deadline: nil)
+        super(transport, deadline: deadline)
         @pending = Array(job_ids).map(&:to_s).uniq
         raise ArgumentError, "watch_jobs needs at least one job id" if @pending.empty?
       end

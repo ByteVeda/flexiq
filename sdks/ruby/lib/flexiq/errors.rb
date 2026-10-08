@@ -15,4 +15,7 @@ module FlexiQ
   # On a write this does not mean the write failed — the connection may have dropped after
   # the server committed it. Retry a write only with `unique_key` set, reusing the same value.
   class TransportError < Error; end
+
+  # Client#wait timed out before the job finished. The job itself is untouched.
+  class WaitTimeoutError < Error; end
 end

@@ -103,10 +103,32 @@ module FlexiQ
       Watch::ByQueue.new(@transport, queue, resume_cursor).run(&block)
     end
 
+    # Blocks until the job is finished; returns it with its result. Watches, never polls.
+    # Raises WaitTimeoutError after `timeout` seconds (nil: no limit), RPCError JOB_NOT_FOUND
+    # for an id this token cannot see.
+    def wait(job_id, timeout:)
+      deadline = Deadline.within(timeout)
+      Watch::ByIds.new(@transport, [job_id], deadline: deadline).run { nil }
+      read_finished(job_id, deadline)
+    end
+
     # Closes the underlying connection; the next call reopens it.
     def close = @transport.close
 
     private
+
+    # The job is done, so only the read can fail; retry what clears, within the deadline.
+    def read_finished(job_id, deadline)
+      backoff = Backoff.new
+      begin
+        get_job(job_id, include_result: true)
+      rescue TransportError, RPCError => e
+        raise if (e.is_a?(RPCError) && !e.retryable?) || deadline&.expired?
+
+        backoff.pause(deadline)
+        retry
+      end
+    end
 
     def coerce_request(request)
       case request

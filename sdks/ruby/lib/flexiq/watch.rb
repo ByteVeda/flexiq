@@ -13,8 +13,10 @@ module FlexiQ
     # Contract: reopen on these.
     REOPEN = [Reason::WATCH_OVERFLOW, Reason::SHUTTING_DOWN].freeze
 
-    def initialize(transport)
+    # `deadline` (Deadline): raise WaitTimeoutError once it passes.
+    def initialize(transport, deadline: nil)
       @transport = transport
+      @deadline = deadline
       @backoff = Backoff.new
       @opened = false
       @caller_error = nil
@@ -23,8 +25,9 @@ module FlexiQ
     # Yields items until finished; breaking out closes the stream.
     def run(&block)
       until finished?
+        check_deadline
         pace = attempt(block)
-        @backoff.pause if pace == :later && !finished?
+        @backoff.pause(@deadline) if pace == :later && !finished?
       end
     end
 
@@ -56,15 +59,22 @@ module FlexiQ
     rescue TransportError
       # The transport wraps an IOError or SystemCallError the block raised; hand back the original.
       raise @caller_error if @caller_error
+
+      check_deadline # a read cut short by the deadline is a timeout, not a drop
       raise unless @opened
 
       :later
     end
 
+    def check_deadline
+      raise WaitTimeoutError, "gave up after #{@deadline.seconds}s" if @deadline&.expired?
+    end
+
     def read(block)
       parser = Wire::SSE::Parser.new
       ended = false
-      @transport.stream(PATH, query) do |chunk|
+      @transport.stream(PATH, query, deadline: @deadline) do |chunk|
+        check_deadline # keepalives alone would keep a read alive past it
         parser.feed(chunk) do |event|
           case event.type
           when "message" then deliver(item(event.data), block)
