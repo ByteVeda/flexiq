@@ -20,18 +20,16 @@ pub struct Depth {
 }
 
 /// Pending and running jobs in `namespace`, for one queue or (`None`) all of
-/// them. Blocking: call it from the blocking pool.
+/// them. Blocking: call it from the blocking pool. Reads live counts only —
+/// KEDA polls this every few seconds, so it must not scan the archive.
 pub fn depth(
     storage: &StorageBackend,
     namespace: Option<&str>,
     queue: Option<&str>,
 ) -> flexiq_core::Result<Depth> {
-    let stats = match queue {
-        Some(queue) => storage.stats_by_queue(queue, namespace)?,
-        None => storage.stats(namespace)?,
-    };
+    let live = storage.live_counts(queue, namespace)?;
     Ok(Depth {
-        pending: stats.pending,
-        running: stats.running,
+        pending: live.pending,
+        running: live.running,
     })
 }
