@@ -84,9 +84,11 @@ A process that only enqueues needs `flexiq` alone, and it has no dependencies
 outside the standard library. `flexiq-executor` depends on the `grpc` gem,
 which ships precompiled for Linux and macOS.
 
-Each side needs a token, minted against the server's database. They are
-separate on purpose: a `produce` token cannot run work, and an `execute` token
-cannot enqueue.
+Three tokens, minted against the server's database: one for the app, one for
+the workers, and one for an operator. They are separate on purpose: a
+`produce` token cannot run work, an `execute` token cannot enqueue, and
+neither reaches the admin door that dead letters, periodic jobs and overrides
+live behind.
 
 ```bash
 export FLEXIQ_DSN=postgres://flexiq:…@db.internal/flexiq
@@ -94,12 +96,23 @@ export FLEXIQ_NAMESPACE=prod
 
 flexiq-server token create --name rails-app --scope produce
 flexiq-server token create --name ruby-workers --scope execute
+flexiq-server token create --name ops --scope inspect --scope admin
 ```
 
 `token create` reads the same `FLEXIQ_DSN` and `FLEXIQ_NAMESPACE` the server
 runs with, and binds the token to that namespace — one minted under another is
 refused by this server ([API tokens](/server/operate/tokens)). No Ruby call
 names a namespace.
+
+The operator token is for [`fq`](/server/operate/cli), the CLI the rest of this
+page uses for what Ruby has no API for. It reads the server's address and the
+token from the environment:
+
+```bash
+export FLEXIQ_ENDPOINT=https://flexiq.internal:50051
+export FLEXIQ_TOKEN=fqt_…   # the ops token
+fq dlq list
+```
 
 ## A worker class
 
@@ -516,7 +529,8 @@ no Redis.
 - [ ] `flexiq-server` running somewhere long-lived, on Postgres or Redis, with
   TLS on its gRPC door
 - [ ] Every Sidekiq queue listed in `FLEXIQ_QUEUES`
-- [ ] A `produce` token for the app and an `execute` token for the workers
+- [ ] A `produce` token for the app, an `execute` token for the workers, and
+  an `inspect` + `admin` token for `fq`
 - [ ] Each job class registered with `worker.handle` under a task name, and
   every handler returning something encodable — `nil` when in doubt
 - [ ] Every enqueue sets `queue:` and `max_retries:`
