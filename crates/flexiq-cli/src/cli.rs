@@ -111,6 +111,48 @@ pub enum Command {
     /// change within a couple of seconds.
     #[command(subcommand)]
     Quota(QuotaCommand),
+    /// Mint, list and revoke API tokens. Needs the `tokens` scope, which no
+    /// other scope implies; a token can only mint what it already holds.
+    #[command(subcommand)]
+    Tokens(TokensCommand),
+}
+
+/// `fq tokens`.
+#[derive(Debug, Subcommand)]
+pub enum TokensCommand {
+    /// Mint a token. The secret goes to stdout alone and is shown once; the
+    /// summary goes to stderr.
+    Create(TokenCreateArgs),
+    /// List the namespace's tokens, revoked and expired ones included.
+    List,
+    /// Read one token. Never shows its secret.
+    Show(TokenIdArgs),
+    /// Revoke a token. It stops working on its next call.
+    Revoke(TokenIdArgs),
+}
+
+/// `fq tokens create`.
+#[derive(Debug, Args)]
+pub struct TokenCreateArgs {
+    /// Label shown in listings, at most 64 characters.
+    #[arg(long)]
+    pub name: String,
+    /// A grant the token carries, e.g. `produce` or
+    /// `produce:queue=emails-*,task=send_receipt`. Repeat for more than one.
+    /// Each must be covered by a grant the calling token holds.
+    #[arg(long = "scope", required = true)]
+    pub scopes: Vec<String>,
+    /// Days until it expires, 1 to 365; default 90. Refused, never shortened,
+    /// when it would outlive the calling token.
+    #[arg(long)]
+    pub expire_days: Option<i32>,
+}
+
+/// A verb that takes one token id.
+#[derive(Debug, Args)]
+pub struct TokenIdArgs {
+    /// The id a listing shows: the part of the token before the dot.
+    pub id: String,
 }
 
 /// `fq quota`.
@@ -677,6 +719,34 @@ mod tests {
             parse(&["workers"]).expect("parses").command,
             Command::Workers
         ));
+    }
+
+    /// A mint names itself and carries at least one grant, repeatable.
+    #[test]
+    fn tokens_create_takes_repeated_scopes() {
+        assert!(parse(&["tokens", "create", "--name", "ci"]).is_err());
+        assert!(parse(&["tokens", "create", "--scope", "read"]).is_err());
+        let Command::Tokens(TokensCommand::Create(args)) = parse(&[
+            "tokens",
+            "create",
+            "--name",
+            "ci",
+            "--scope",
+            "read",
+            "--scope",
+            "produce:queue=mail-*",
+            "--expire-days",
+            "30",
+        ])
+        .expect("parses")
+        .command
+        else {
+            panic!("a tokens create");
+        };
+        assert_eq!(args.scopes, ["read", "produce:queue=mail-*"]);
+        assert_eq!(args.expire_days, Some(30));
+        assert!(parse(&["tokens", "show"]).is_err());
+        assert!(parse(&["tokens", "revoke", "abc"]).is_ok());
     }
 
     #[test]
