@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module FlexiQ
-  # A producer client: submit work, read it back, list it, cancel it, count it.
+  # A producer client: submit work and workflows, read them back, list, cancel and count jobs.
   #
   #   client = FlexiQ::Client.new("https://flexiq.internal:50051", token: ENV.fetch("FLEXIQ_TOKEN"))
   #   job = client.enqueue("send_receipt", args: [{ "order_id" => "o-1" }], queue: "emails").job
@@ -109,6 +109,37 @@ module FlexiQ
       deadline = Deadline.within(timeout)
       Watch::ByIds.new(@transport, [job_id], deadline: deadline).run { nil }
       read_finished(job_id, deadline)
+    end
+
+    # Submits a static workflow graph (a FlexiQ::WorkflowGraph) and returns the new run's id.
+    # The server enqueues one job per node, chained by the edges; any worker with workflow
+    # tracking enabled advances the run. `params_json` is JSON text the run carries, never a call.
+    #
+    # Static graphs only: a node setting gate, cache, fan_out, fan_in or sub_workflow is refused
+    # with WORKFLOW_CONSTRUCT_UNSUPPORTED, naming one node (`RPCError#workflow_construct`).
+    # Every submission is version 1 of `name`; a different graph under a used name is refused.
+    #
+    # Not idempotent, and there is no `unique_key`: a run cannot be found by name, so a call that
+    # raised TransportError, or RPCError UNAVAILABLE / DEADLINE_EXCEEDED / CANCELLED, may have
+    # submitted a run whose id is lost. A retry submits a second run; never retry blind.
+    def submit_workflow(name, graph, params_json: nil)
+      raise ArgumentError, "a workflow name must be a non-empty String" unless name.is_a?(String) && !name.empty?
+      raise ArgumentError, "graph must be a FlexiQ::WorkflowGraph, got #{graph.class}" unless graph.is_a?(WorkflowGraph)
+      unless params_json.nil? || params_json.is_a?(String)
+        raise ArgumentError, "params_json must be JSON text (a String), got #{params_json.class}"
+      end
+
+      body = { "name" => name, "graph" => graph.validate!.to_wire, "paramsJson" => params_json }.compact
+      run_id = @transport.post("/v1/workflows", body)["runId"]
+      raise TransportError, "the server answered a submission without a run id" if run_id.to_s.empty?
+
+      run_id
+    end
+
+    # Reads a workflow run and every node it has, as a WorkflowRunView. A run in another
+    # namespace, or one whose jobs a narrowed grant does not all reach, reads as NOT_FOUND.
+    def get_workflow_run(run_id)
+      WorkflowRunView.from_json(@transport.get("/v1/workflows/#{Wire::Path.segment(run_id)}"))
     end
 
     # Closes the underlying connection; the next call reopens it.

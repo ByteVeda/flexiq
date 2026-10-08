@@ -132,6 +132,46 @@ class ClientTest < Minitest::Test
     assert_raises(FlexiQ::TransportError) { @client.list_jobs }
   end
 
+  def test_submit_workflow_posts_the_graph_and_returns_the_run_id
+    @response = [200, { "runId" => "r1" }]
+    graph = FlexiQ::WorkflowGraph.new(nodes: [{ name: "a", task_name: "t" }])
+    run_id = @client.submit_workflow("flow", graph, params_json: '{"k":1}')
+    request = @server.last_request
+
+    assert_equal "r1", run_id
+    assert_equal ["POST", "/v1/workflows"], [request.verb, request.path]
+    assert_equal({ "name" => "flow", "graph" => graph.to_wire, "paramsJson" => '{"k":1}' }, request.json)
+  end
+
+  def test_submit_workflow_refuses_a_bad_call_before_sending_it
+    graph = FlexiQ::WorkflowGraph.new(nodes: [{ name: "a", task_name: "t" }], edges: [%w[a b]])
+
+    assert_raises(ArgumentError) { @client.submit_workflow("flow", graph) }
+    assert_raises(ArgumentError) { @client.submit_workflow("", FlexiQ::WorkflowGraph.new(nodes: [])) }
+    assert_raises(ArgumentError) { @client.submit_workflow("flow", { nodes: [] }) }
+    assert_raises(ArgumentError) do
+      @client.submit_workflow("flow", FlexiQ::WorkflowGraph.new(nodes: [{ name: "a", task_name: "t" }]),
+                              params_json: { "k" => 1 })
+    end
+    assert_empty @server.requests
+  end
+
+  def test_a_submission_answer_without_a_run_id_is_a_transport_error
+    @response = [200, {}]
+    graph = FlexiQ::WorkflowGraph.new(nodes: [{ name: "a", task_name: "t" }])
+
+    assert_raises(FlexiQ::TransportError) { @client.submit_workflow("flow", graph) }
+  end
+
+  def test_get_workflow_run_escapes_the_id
+    @response = [200, { "run" => { "id" => "r/1", "state" => "WORKFLOW_STATE_PENDING" }, "nodes" => [] }]
+    view = @client.get_workflow_run("r/1")
+    request = @server.last_request
+
+    assert_equal ["GET", "/v1/workflows/r%2F1"], [request.verb, request.path]
+    assert_equal ["r/1", :pending], [view.run.id, view.run.state]
+  end
+
   def test_a_refusal_raises_rpc_error_with_its_reason
     @response = [404, { "error" => { "code" => 404, "status" => "NOT_FOUND", "message" => "no such job",
                                      "details" => [{ "@type" => FlexiQ::RPCError::ERROR_INFO_TYPE,
