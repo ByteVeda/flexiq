@@ -126,10 +126,10 @@ All SDKs ship in lock-step off one version, held in `[workspace.package]` of the
 `Cargo.toml`. Never hand-edit a version literal — `node scripts/version.mjs --set X.Y.Z` rewrites
 the source and every mirror, and `--check` gates CI.
 
-The standard publishing path is tag-driven: five tag namespaces, one per registry, each with its
-own workflow. Every one of them also accepts `workflow_dispatch` with a `version` input, which is
-the fallback when a tag has already been cut or a single registry needs a retry — crates.io 1.0.0
-went up that way.
+The standard publishing path is tag-driven: one tag namespace per registry, and every one but Go's
+starts a workflow of its own. Every workflow also accepts `workflow_dispatch` with a `version`
+input, which is the fallback when a tag has already been cut or a single registry needs a retry —
+crates.io 1.0.0 went up that way.
 
 | Registry | Tag | Workflow |
 | --- | --- | --- |
@@ -138,6 +138,7 @@ went up that way.
 | npm | `node-vX.Y.Z` | `publish-node.yml` |
 | Maven Central | `java-vX.Y.Z` | `publish-java.yml` |
 | GHCR (server image and Helm chart) | `server-vX.Y.Z` | `publish-server.yml` |
+| RubyGems (`flexiq` and `flexiq-executor`) | `ruby-vX.Y.Z` | `publish-ruby.yml` |
 | Go module proxy | `sdks/go/vX.Y.Z` | none — see below |
 
 The Go client has no publish workflow because a Go module has no registry to push to: the proxy
@@ -146,6 +147,14 @@ only resolvable at `<subdir>/vX.Y.Z`, so it is `sdks/go/v2.0.0` and never `go-v2
 released above v1 carries the major in its own path, which is why the import path is
 `github.com/ByteVeda/flexiq/sdks/go/v2`. Moving to 3.0.0 means editing that path in `go.mod` as
 well as cutting the tag.
+
+The Ruby workflow pushes both gems over RubyGems trusted publishing, so no API key sits in the
+repository's secrets. `flexiq` goes first because `flexiq-executor` pins it at the same version.
+Before the first release, an owner of the org's RubyGems account (MFA on; both gemspecs set
+`rubygems_mfa_required`) adds a trusted publisher for each gem — a *pending* one, while the gem does
+not exist yet — naming repository `ByteVeda/flexiq`, workflow `publish-ruby.yml` and environment
+`rubygems`, and creates that environment in this repository's settings. Without the publisher the
+run stops at the credentials step, after the build and the tests, with nothing pushed.
 
 The server workflow packages the Helm chart during preflight, then publishes it
 after the image, tag, release, and wire-contract assets succeed. On the first
@@ -194,7 +203,7 @@ mutable, so that last push replaces the version already there — which is also
 why the published chart version is worth verifying as part of the release check
 rather than assumed from a green run.
 
-One `git tag` per tag — it takes a single name plus an optional commit, so passing all six at
+One `git tag` per tag — it takes a single name plus an optional commit, so passing all seven at
 once is `fatal: too many arguments` and creates none of them:
 
 ```bash
@@ -203,8 +212,9 @@ git tag crates-vX.Y.Z
 git tag node-vX.Y.Z
 git tag java-vX.Y.Z
 git tag server-vX.Y.Z
+git tag ruby-vX.Y.Z
 git tag sdks/go/vX.Y.Z
-git tag -l          # all six there? a failed tag is silent otherwise
+git tag -l          # all seven there? a failed tag is silent otherwise
 ```
 
 Push them by name, and push `crates-v*` on its own first. `git push origin --tags` is the wrong
@@ -215,7 +225,7 @@ crates.io-first ordering below.
 ```bash
 git push origin crates-vX.Y.Z
 # wait for publish-crates.yml to go green
-git push origin X.Y.Z node-vX.Y.Z java-vX.Y.Z server-vX.Y.Z sdks/go/vX.Y.Z
+git push origin X.Y.Z node-vX.Y.Z java-vX.Y.Z server-vX.Y.Z ruby-vX.Y.Z sdks/go/vX.Y.Z
 ```
 
 Five things are easy to get wrong:
@@ -225,8 +235,8 @@ Five things are easy to get wrong:
 - **`publish-py.yml` also matches `vX.Y.Z`**, but every historical Python tag is bare. Keep it bare.
 - **`sdks/go/vX.Y.Z` starts nothing, and that is not a reason to skip it.** It is the only tag with
   no workflow behind it — the Go module proxy serves the module *from* the tag, so a release that
-  omits it publishes five registries and no Go client. Nothing turns red when it is missing.
-- **A crates.io version can be yanked but never replaced**, and PyPI is the same. That is why
+  omits it publishes every other registry and no Go client. Nothing turns red when it is missing.
+- **A crates.io version can be yanked but never replaced**, and PyPI and RubyGems are the same. That is why
   `crates-v*` goes first and alone: if it fails, the registries that can still be redone are ahead
   of you rather than behind. A bad `X.Y.Z` becomes `X.Y.Z+1`; there is no re-push.
 - **Creating the GitHub Release by hand first is fine.** Each workflow guards its own

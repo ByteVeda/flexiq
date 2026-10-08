@@ -1,0 +1,269 @@
+name: Publish to RubyGems
+
+# Builds the two Ruby gems from the tagged tree — `flexiq` (the producer client)
+# and `flexiq-executor` (the executor client, which pins `flexiq` at the same
+# version) — runs their unit suites, then pushes both to RubyGems over trusted
+# publishing (OIDC): no long-lived API key lives in the repository's secrets.
+# The producer gem goes first because the executor gem depends on it.
+
+on:
+  push:
+    tags:
+      # Ruby releases use a `ruby-v` tag namespace, distinct from the other registries'.
+      - "ruby-v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 2.0.1)"
+        required: true
+        type: string
+      dry-run:
+        description: "Build and test only — skip gem push and tagging"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# A second run mid-push would race the first over the same versions.
+concurrency:
+  group: publish-ruby
+  cancel-in-progress: false
+
+env:
+  RUBY_VERSION: "3.4"
+
+jobs:
+  preflight:
+    name: Preflight checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag_exists: ${{ steps.tag.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve version
+        id: resolve
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            version="${GITHUB_REF_NAME#ruby-v}"
+          else
+            version="${VERSION_INPUT#v}"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version format: ${version}"
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version matches codebase
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          node scripts/version.mjs --check
+          repo_version="$(node scripts/version.mjs --current)"
+          if [ "$repo_version" != "$VERSION" ]; then
+            echo "::error::Resolved ${VERSION} but the repo declares ${repo_version}"
+            exit 1
+          fi
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1.327.0
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+
+      # Asked of Ruby itself rather than grepped: these constants are what each
+      # gemspec stamps on the gem it builds.
+      - name: Verify version matches the gems
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          producer="$(ruby -Isdks/ruby/lib -rflexiq/version -e 'print FlexiQ::VERSION')"
+          executor="$(ruby -Isdks/ruby-executor/lib -rflexiq/executor/version -e 'print FlexiQ::Executor::VERSION')"
+          if [ "$producer" != "$VERSION" ] || [ "$executor" != "$VERSION" ]; then
+            echo "::error::Resolved ${VERSION}, but FlexiQ::VERSION is ${producer} and FlexiQ::Executor::VERSION is ${executor}"
+            exit 1
+          fi
+
+      # An existing tag at the current commit means a previous manual run got
+      # past the tag push but failed later — treat it as a rerun and let the
+      # publish job skip the push. A tag pointing elsewhere is a real conflict.
+      - name: Check remote tag state
+        id: tag
+        if: github.event_name != 'push'
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          remote_sha="$(git ls-remote --tags origin "refs/tags/ruby-v${VERSION}" | awk '{print $1}')"
+          if [ -z "$remote_sha" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          elif [ "$remote_sha" = "$(git rev-parse HEAD)" ]; then
+            echo "::notice::Tag ruby-v${VERSION} already at this commit — treating as rerun"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Tag ruby-v${VERSION} exists on remote at ${remote_sha}, not HEAD"
+            exit 1
+          fi
+
+  test:
+    name: Test ${{ matrix.gem }} (ruby ${{ matrix.ruby }})
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        gem: [ruby, ruby-executor]
+        # The same matrix as ci-ruby.yml: the gemspec floor and the releases after it.
+        ruby: ["3.3", "3.4", "4.0"]
+    defaults:
+      run:
+        working-directory: sdks/${{ matrix.gem }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1.327.0
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          working-directory: sdks/${{ matrix.gem }}
+          bundler-cache: true
+
+      - name: Test
+        run: bundle exec rake test
+
+  publish:
+    name: Publish to RubyGems
+    needs: [preflight, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: rubygems
+    permissions:
+      contents: write # tag + release
+      id-token: write # OIDC trusted publishing
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      TAG_EXISTS: ${{ needs.preflight.outputs.tag_exists }}
+    steps:
+      # Don't persist the write token in .git/config — gem push needs no git
+      # auth, and the only push (the tag) gets the token explicitly.
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1.327.0
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+
+      - name: Build the gems
+        run: |
+          echo "GEM_DIR=${RUNNER_TEMP}/gems" >> "$GITHUB_ENV"
+          GEM_DIR="${RUNNER_TEMP}/gems"
+          mkdir -p "$GEM_DIR"
+          (cd sdks/ruby && gem build flexiq.gemspec -o "${GEM_DIR}/flexiq-${VERSION}.gem")
+          (cd sdks/ruby-executor && gem build flexiq-executor.gemspec -o "${GEM_DIR}/flexiq-executor-${VERSION}.gem")
+
+      # Read back from the built packages, not the gemspecs: this is what
+      # RubyGems will receive. A gemspec's file glob drops a missing file
+      # silently, so a lost LICENSE would otherwise ship unnoticed.
+      - name: Verify the built gems
+        run: |
+          for name in flexiq flexiq-executor; do
+            ruby -rrubygems/package -e '
+              spec = Gem::Package.new(ARGV[0]).spec
+              abort "::error::#{spec.name} built as #{spec.version}, expected #{ARGV[1]}" unless spec.version.to_s == ARGV[1]
+              abort "::error::#{spec.name} #{spec.version} ships no LICENSE" unless spec.files.include?("LICENSE")
+              puts "#{spec.name} #{spec.version}: #{spec.files.size} files"
+            ' "${GEM_DIR}/${name}-${VERSION}.gem" "$VERSION"
+          done
+
+      - name: Configure RubyGems credentials (trusted publishing)
+        if: ${{ !inputs.dry-run }}
+        uses: rubygems/configure-rubygems-credentials@v2.1.0
+
+      # In dependency order. A version already live is skipped, so a rerun after
+      # a partial publish finishes the rest — RubyGems refuses to replace one.
+      - name: Push the gems
+        if: ${{ !inputs.dry-run }}
+        run: |
+          live() {
+            curl -fsS -o /dev/null "https://rubygems.org/api/v2/rubygems/$1/versions/${VERSION}.json"
+          }
+          for name in flexiq flexiq-executor; do
+            if live "$name"; then
+              echo "::notice::${name} ${VERSION} already on RubyGems — skipping"
+              continue
+            fi
+            gem push "${GEM_DIR}/${name}-${VERSION}.gem"
+            # 5 minutes, as for npm: a first-ever gem can take a while to be served.
+            for _attempt in $(seq 1 20); do
+              if live "$name"; then
+                echo "${name} ${VERSION} live on RubyGems"
+                continue 2
+              fi
+              sleep 15
+            done
+            echo "::error::${name} ${VERSION} not found on RubyGems"
+            exit 1
+          done
+
+      # The release is only done when a consumer can install it: resolve both
+      # gems from rubygems.org alone, into an empty gem home, and load them.
+      - name: Install from RubyGems
+        if: ${{ !inputs.dry-run }}
+        env:
+          GEM_HOME: ${{ runner.temp }}/gem-home
+        run: |
+          # The API can report a version before every mirror serves it, so retry.
+          installed=false
+          for _attempt in $(seq 1 10); do
+            if gem install flexiq-executor --version "$VERSION" \
+                --clear-sources --source https://rubygems.org --no-document; then
+              installed=true
+              break
+            fi
+            sleep 30
+          done
+          if [ "$installed" != true ]; then
+            echo "::error::flexiq-executor ${VERSION} did not install from RubyGems"
+            exit 1
+          fi
+          ruby -e '
+            gem "flexiq-executor", ARGV[0]
+            require "flexiq"
+            require "flexiq/executor"
+            abort "::error::installed flexiq #{FlexiQ::VERSION}" unless FlexiQ::VERSION == ARGV[0]
+            puts "flexiq + flexiq-executor #{ARGV[0]} install from RubyGems"
+          ' "$VERSION"
+
+      - name: Create git tag
+        if: github.event_name != 'push' && !inputs.dry-run && env.TAG_EXISTS != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag "ruby-v${VERSION}"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
+            push origin "ruby-v${VERSION}"
+
+      - name: Create GitHub release
+        if: ${{ !inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "ruby-v${VERSION}" >/dev/null 2>&1; then
+            echo "::notice::Release ruby-v${VERSION} already exists — skipping"
+          else
+            gh release create "ruby-v${VERSION}" \
+              --title "flexiq (Ruby) v${VERSION}" \
+              --generate-notes
+          fi
