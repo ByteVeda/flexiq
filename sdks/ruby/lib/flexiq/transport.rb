@@ -48,6 +48,9 @@ module FlexiQ
       request["Accept-Encoding"] = "identity"
       http = build_http(read_timeout_until(deadline))
       http.open_timeout = deadline.cap(@open_timeout) if deadline
+      # Older net-http resends an idempotent GET after a mid-body error, restarting the stream
+      # under the caller's parser. The watch decides when to reopen.
+      http.max_retries = 0
       http.start do
         http.request(request) do |response|
           expect_event_stream(response)
