@@ -347,6 +347,13 @@ async fn a_token_cannot_outlive_the_one_that_minted_it() {
             "{days:?}: {}",
             status.message()
         );
+        // An omitted lifetime is reported as the default, not as a field sent.
+        assert_eq!(
+            status.message().contains("(the default)"),
+            days.is_none(),
+            "{days:?}: {}",
+            status.message()
+        );
     }
     let minted = admin
         .create_token(create("short", &["read"], Some(9)))

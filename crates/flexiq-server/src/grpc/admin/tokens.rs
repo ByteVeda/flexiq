@@ -55,7 +55,13 @@ pub(crate) async fn create(
     }
     let now = now_millis();
     if minted.expires_at(now) > caller.expires_at {
-        return Err(outlives(&caller, minted.lifetime_days, now).into());
+        return Err(outlives(
+            &caller,
+            minted.lifetime_days,
+            request.expire_days.is_some(),
+            now,
+        )
+        .into());
     }
 
     let (row, secret) = on_storage(scoped.storage(), move |storage| {
@@ -192,7 +198,7 @@ fn uncovered(grant: &Grant, what: &str) -> WireError {
 
 /// The refusal for a token that would outlive the caller, naming the latest
 /// expiry it could have.
-fn outlives(caller: &ApiToken, asked_days: i64, now: i64) -> WireError {
+fn outlives(caller: &ApiToken, days: i64, explicit: bool, now: i64) -> WireError {
     let ceiling = rfc3339(caller.expires_at);
     let max_days = (caller.expires_at - now).div_euclid(DAY_MS);
     let advice = if max_days >= 1 {
@@ -202,8 +208,14 @@ fn outlives(caller: &ApiToken, asked_days: i64, now: i64) -> WireError {
          longer-lived one"
             .to_string()
     };
+    // Name the default, not an `expire_days` the caller never sent.
+    let asked = if explicit {
+        format!("expire_days {days}")
+    } else {
+        format!("a lifetime of {days} days (the default)")
+    };
     WireError::invalid_request(format!(
-        "expire_days {asked_days} would outlive this credential, which expires at \
+        "{asked} would outlive this credential, which expires at \
          {ceiling}; a minted token must expire by then — {advice}"
     ))
 }
@@ -237,7 +249,7 @@ mod tests {
     #[test]
     fn an_outliving_mint_names_the_ceiling_and_the_days_left() {
         let caller = token(10 * DAY_MS + 5);
-        let error = outlives(&caller, 90, 0);
+        let error = outlives(&caller, 90, true, 0);
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
         assert!(
             error.message().contains("1970-01-11T00:00:00Z"),
@@ -252,8 +264,25 @@ mod tests {
     }
 
     #[test]
+    fn an_omitted_expiry_is_reported_as_the_default() {
+        let error = outlives(&token(10 * DAY_MS + 5), 90, false, 0);
+        assert!(
+            error
+                .message()
+                .contains("a lifetime of 90 days (the default)"),
+            "{}",
+            error.message()
+        );
+        assert!(
+            !error.message().contains("expire_days"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[test]
     fn a_caller_with_under_a_day_left_is_told_it_can_mint_nothing() {
-        let error = outlives(&token(DAY_MS - 1), 1, 0);
+        let error = outlives(&token(DAY_MS - 1), 1, true, 0);
         assert!(
             error.message().contains("less than a day"),
             "{}",
