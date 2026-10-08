@@ -46,6 +46,8 @@ the JSON facade shares that listener.
 | `enqueue(task, args:, kwargs:, **options)` | `POST /v1/jobs` | Options are `FlexiQ::EnqueueOptions` fields. |
 | `enqueue_batch(requests)` | `POST /v1/jobs:batchEnqueue` | One `BatchItemResult` per item. Not atomic. |
 | `get_job(id, include_payload:, include_result:)` | `GET /v1/jobs/{id}` | Payload and result only on request. |
+| `list_jobs(status:, queue:, task_name:, page_size:, page_token:)` | `GET /v1/jobs` | One `JobPage`, newest first. See [Listing](#listing). |
+| `each_job(status:, queue:, task_name:, page_size:)` | `GET /v1/jobs` | An `Enumerator` over every page. |
 | `cancel_job(id)` | `POST /v1/jobs/{id}:cancel` | Idempotent. |
 | `queue_stats(queue = nil)` | `GET /v1/queues/{queue}/stats`, `GET /v1/stats` | `nil` counts the whole namespace. |
 
@@ -56,6 +58,28 @@ Enqueue options: `queue`, `priority`, `max_retries`, `scheduled_at` (`Time`), `t
 The namespace is the token's, fixed when an operator minted it. No call can name another, and a
 job in another namespace reads as `JOB_NOT_FOUND`. If enqueues succeed and nothing ever runs
 them, check the namespace first.
+
+## Listing
+
+`list_jobs` reads one page, newest first. Every filter is optional, and `status:` takes the
+`FlexiQ::JobStatus` symbols (`:pending`, `:failed`, …). Rows never carry payload or result; read
+one job with `get_job` for those.
+
+```ruby
+page = client.list_jobs(queue: "emails", status: :failed, page_size: 100)
+page.jobs            # => [FlexiQ::Job, ...]
+page.next_page_token # => pass back as page_token: for the next page; nil on the last
+
+client.each_job(queue: "emails", status: :failed).first(500) # follows the cursor for you
+```
+
+`next_page_token` is opaque. Pass it back unchanged and read nothing out of it; a page token the
+server did not issue is refused with `RPCError` reason `INVALID_REQUEST`. `page_size` defaults to
+the server's choice (50) and is capped (500), so trust `last_page?`, not the row count.
+
+A credential whose `produce` or `read` grant is narrowed to queues or tasks must name one it
+reaches: `list_jobs` with no `queue:` is refused with `SCOPE_DENIED`. A listing is never filtered
+down to the rows the credential can see.
 
 ## Credentials and TLS
 
