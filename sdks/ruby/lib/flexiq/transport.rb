@@ -17,20 +17,48 @@ module FlexiQ
     ].freeze
     private_constant :NETWORK_ERRORS
 
+    EVENT_STREAM = "text/event-stream"
+    private_constant :EVENT_STREAM
+
     # `tls:` keys: :ca_file, :ca_path, :cert (OpenSSL::X509::Certificate), :key (OpenSSL::PKey).
+    # `watch_read_timeout`: silence before a watch counts as dropped; keep above the 15 s keepalive.
     def initialize(url, token:, insecure: false, tls: {}, open_timeout: 5, read_timeout: 30,
-                   write_timeout: 30, user_agent: nil)
+                   write_timeout: 30, watch_read_timeout: 60, user_agent: nil)
       @uri = parse_url(url, insecure)
       @authorization = "Bearer #{validate_token(token)}".freeze
       @user_agent = [user_agent, "flexiq-ruby/#{VERSION}"].compact.join(" ").freeze
-      @http = build_http(tls, open_timeout, read_timeout, write_timeout)
+      @tls = tls
+      @open_timeout = open_timeout
+      @write_timeout = write_timeout
+      @watch_read_timeout = watch_read_timeout
+      @http = build_http(read_timeout)
       @lock = Mutex.new
     end
 
     def get(path, query = {})
-      query = query.compact
-      target = query.empty? ? path : "#{path}?#{URI.encode_www_form(query)}"
-      perform(Net::HTTP::Get.new(full_path(target)))
+      perform(Net::HTTP::Get.new(full_path(with_query(path, query))))
+    end
+
+    # Yields an event stream's body in chunks until the server closes it. Own connection, so it
+    # never blocks unary calls. `deadline` (Deadline) caps every read.
+    def stream(path, query = {}, deadline: nil)
+      request = Net::HTTP::Get.new(full_path(with_query(path, query)))
+      authorize(request, EVENT_STREAM)
+      # Compression would buffer events.
+      request["Accept-Encoding"] = "identity"
+      http = build_http(read_timeout_until(deadline))
+      http.open_timeout = deadline.cap(@open_timeout) if deadline
+      http.start do
+        http.request(request) do |response|
+          expect_event_stream(response)
+          response.read_body do |chunk|
+            http.read_timeout = read_timeout_until(deadline)
+            yield chunk
+          end
+        end
+      end
+    rescue *NETWORK_ERRORS => e
+      raise TransportError, "GET #{request.path}: #{e.class}: #{e.message}"
     end
 
     def post(path, body = nil)
@@ -72,12 +100,12 @@ module FlexiQ
       token.to_s
     end
 
-    def build_http(tls, open_timeout, read_timeout, write_timeout)
+    def build_http(read_timeout)
       http = Net::HTTP.new(@uri.host, @uri.port)
-      http.open_timeout = open_timeout
+      http.open_timeout = @open_timeout
       http.read_timeout = read_timeout
-      http.write_timeout = write_timeout
-      configure_tls(http, tls) if @uri.scheme == "https"
+      http.write_timeout = @write_timeout
+      configure_tls(http, @tls) if @uri.scheme == "https"
       http
     end
 
@@ -98,10 +126,21 @@ module FlexiQ
     # A base URL may carry a path prefix, for a server mounted behind a proxy.
     def full_path(path) = "#{@uri.path.chomp("/")}#{path}"
 
-    def perform(request)
+    def with_query(path, query)
+      query = query.compact
+      query.empty? ? path : "#{path}?#{URI.encode_www_form(query)}"
+    end
+
+    def authorize(request, accept)
       request["Authorization"] = @authorization
-      request["Accept"] = "application/json"
+      request["Accept"] = accept
       request["User-Agent"] = @user_agent
+    end
+
+    def read_timeout_until(deadline) = deadline ? deadline.cap(@watch_read_timeout) : @watch_read_timeout
+
+    def perform(request)
+      authorize(request, "application/json")
       response = @lock.synchronize do
         @http.start unless @http.started?
         @http.request(request)
@@ -114,9 +153,22 @@ module FlexiQ
 
     def interpret(response)
       status = response.code.to_i
-      body = parse_json(response.body)
-      return success_body(body, status) if status.between?(200, 299)
+      refuse(response, status) unless status.between?(200, 299)
 
+      success_body(parse_json(response.body), status)
+    end
+
+    # A 2xx that is not an event stream came from something else, e.g. a proxy.
+    def expect_event_stream(response)
+      status = response.code.to_i
+      refuse(response, status) unless status.between?(200, 299)
+      return if response.content_type == EVENT_STREAM
+
+      raise TransportError, "HTTP #{status} answered #{response.content_type.inspect}, not #{EVENT_STREAM}"
+    end
+
+    def refuse(response, status)
+      body = parse_json(response.body)
       error = body.is_a?(Hash) && body["error"].is_a?(Hash) ? body["error"] : nil
       raise RPCError.from_status(error, http_status: status) if error
 

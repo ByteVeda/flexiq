@@ -5,6 +5,7 @@
 
 require_relative "flexiq/version"
 require_relative "flexiq/errors"
+require_relative "flexiq/deadline"
 
 require_relative "flexiq/cbor/encoder"
 require_relative "flexiq/cbor/decoder"
