@@ -24,8 +24,10 @@ use `structured` arguments, no CBOR library either.
   over the JSON facade, waits for jobs over its Server-Sent Events watch, and
   submits static workflows, using nothing outside the Ruby standard library. It
   writes the `raw` CBOR envelope itself, so its payloads, and the `auto:` keys
-  derived from them, match every other runtime's. Like the Go client, it cannot
-  execute tasks.
+  derived from them, match every other runtime's. It cannot execute tasks; its
+  companion gem,
+  [`sdks/ruby-executor`](https://github.com/ByteVeda/flexiq/tree/master/sdks/ruby-executor),
+  does that over the [executor door](/server/custom-executors).
 </Callout>
 
 What you give up is worth naming up front. An SDK gives you task registration,

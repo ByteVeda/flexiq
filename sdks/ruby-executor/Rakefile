@@ -1,0 +1,18 @@
+# frozen_string_literal: true
+
+require "minitest/test_task"
+require "rubocop/rake_task"
+
+# Unit suite: no server, no network beyond loopback.
+Minitest::TestTask.create(:test) do |t|
+  t.test_globs = ["test/unit/**/*_test.rb"]
+end
+
+# Live suite against a real flexiq-server; see test/e2e/support/server.rb.
+Minitest::TestTask.create(:e2e) do |t|
+  t.test_globs = ["test/e2e/**/*_test.rb"]
+end
+
+RuboCop::RakeTask.new(:lint)
+
+task default: %i[lint test]

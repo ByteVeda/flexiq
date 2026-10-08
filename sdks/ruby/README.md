@@ -7,7 +7,8 @@ No database credential, no native extension, no gRPC toolchain — it speaks the
 facade with the Ruby standard library alone.
 
 It is a producer client, not an SDK: it **cannot execute tasks**. It submits work that
-somebody else's workers drain.
+somebody else's workers drain. To run tasks in Ruby, use the companion
+[`flexiq-executor`](../ruby-executor) gem, which attaches to the executor door over gRPC.
 
 ## Install
 

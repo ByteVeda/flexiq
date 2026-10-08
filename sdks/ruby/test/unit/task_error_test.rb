@@ -28,6 +28,19 @@ class TaskErrorTest < Minitest::Test
     end
   end
 
+  def test_encode_writes_the_canonical_key_order
+    assert_equal '{"errtype":"ValueError","message":"bad value 42","traceback":["f1","f2"]}',
+                 FlexiQ::TaskError.encode("ValueError", "bad value 42", %w[f1 f2])
+    assert_equal '{"errtype":"E","message":"","traceback":[]}', FlexiQ::TaskError.encode("E", "")
+  end
+
+  def test_encode_round_trips_through_parse
+    error = FlexiQ::TaskError.parse(FlexiQ::TaskError.encode("KeyError", "no \"k\"\n", ["a:1"]))
+
+    assert_predicate error, :structured?
+    assert_equal ["KeyError", "no \"k\"\n", ["a:1"]], [error.errtype, error.message, error.traceback]
+  end
+
   def test_missing_siblings_take_defaults
     error = FlexiQ::TaskError.parse('{"message":"m","traceback":null}')
 

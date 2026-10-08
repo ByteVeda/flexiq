@@ -87,6 +87,28 @@ const MIRRORS = [
     label: "Ruby lockfile",
   },
   {
+    file: "sdks/ruby-executor/lib/flexiq/executor/version.rb",
+    pattern: /^(    VERSION = ")(.+?)(")$/m,
+    label: "Ruby executor gem",
+  },
+  // The executor's lockfile names three versions: its own, the producer gem's
+  // it bundles from the tree, and the exact producer pin its gemspec declares.
+  {
+    file: "sdks/ruby-executor/Gemfile.lock",
+    pattern: /^(    flexiq-executor \()(.+?)(\))$/m,
+    label: "Ruby executor lockfile",
+  },
+  {
+    file: "sdks/ruby-executor/Gemfile.lock",
+    pattern: /^(    flexiq \()(.+?)(\))$/m,
+    label: "Ruby executor lockfile, producer gem",
+  },
+  {
+    file: "sdks/ruby-executor/Gemfile.lock",
+    pattern: /^(      flexiq \(= )(.+?)(\))$/m,
+    label: "Ruby executor lockfile, producer pin",
+  },
+  {
     file: "deploy/helm/flexiq-server/Chart.yaml",
     pattern: /^(version: )(.+)()$/m,
     label: "Helm chart",

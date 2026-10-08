@@ -64,12 +64,13 @@ lifecycle, and
 [the executor door](/server/operate/grpc#the-executor-door)
 for the `Attach` stream.
 
-<Callout type="info" title="No SDK dials the executor door yet">
+<Callout type="info" title="No SDK's executor CLI dials this door yet">
   Every SDK's `executor` CLI still attaches over TCP or a Unix socket — the
   protocol <SdkLink to="modules/executor">attached executors</SdkLink> already
-  use. `flexiq.executor.v1` exists today for a custom executor written directly
-  against the proto, in any language with a gRPC library, which is the same
-  "no native binding" pitch the producer door makes.
+  use. `flexiq.executor.v1` is dialled by the remote clients — the Go client's
+  `executor` package and the Ruby `flexiq-executor` gem — and by a custom
+  executor written directly against the proto, in any language with a gRPC
+  library, which is the same "no native binding" pitch the producer door makes.
   [Custom executors](/server/custom-executors) is how.
 </Callout>
 
@@ -99,7 +100,7 @@ the same producer door. The Java worker still opens the database file directly.
 |---|---|
 | No CPU-parallelism story — a remote executor is a network hop from the scheduler | Colocate the executor with its scheduler when raw throughput matters more than isolation |
 | A second process to deploy, watch and restart | Reach for it only when local mode's constraint — a native binding, or the credential itself — is the actual blocker |
-| The executor door has no SDK client yet | Use TCP/Unix attach for an SDK-based executor; the gRPC stream is for a custom one |
+| No SDK's `executor` CLI dials the executor door yet | Use TCP/Unix attach for an SDK-based executor; the gRPC stream is for the Go and Ruby remote clients or a custom one |
 | TLS is opt-in, not on by default | Set `FLEXIQ_GRPC_TLS_CERT`/`_TLS_KEY` to terminate it in process ([TLS and mTLS](/server/operate/grpc#tls-and-mtls)), or put a proxy or mesh in front — either way it covers both doors, since they share one listener |
 
 ## The rest of this tier

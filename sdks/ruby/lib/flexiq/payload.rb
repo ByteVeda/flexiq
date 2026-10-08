@@ -23,6 +23,9 @@ module FlexiQ
       CBOR_TAG.chr.b << CBOR::Encoder.encode([args, kwargs])
     end
 
+    # Encodes a task's return value as `0x02 ++ CBOR(value)`, the form `decode_result` reads.
+    def encode_result(value) = CBOR_TAG.chr.b << CBOR::Encoder.encode(value)
+
     # Decodes a call body into `[args, kwargs]`.
     def decode_call(bytes)
       body = decode(bytes)

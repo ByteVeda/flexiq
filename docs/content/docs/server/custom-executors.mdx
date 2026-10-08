@@ -29,6 +29,15 @@ which are gated on a capability, and what a lease is required on.
   register per task. It advertises all three capabilities below.
 </Callout>
 
+<Callout title="So does Ruby">
+  [`sdks/ruby-executor`](https://github.com/ByteVeda/flexiq/tree/master/sdks/ruby-executor),
+  the `flexiq-executor` gem, implements the same handshake, settling frames,
+  lease echo, reconnect and rotation on the `grpc` gem, and encodes results with
+  the producer gem's CBOR codec. It advertises `side_channel` and `lease`;
+  durable steps are not implemented yet, so it does not claim `steps`.
+  Cancellation and timeouts are cooperative: a handler calls `job.check!`.
+</Callout>
+
 ## What an executor is not allowed to do
 
 An attached executor holds **no database credential**. It never reads a job row,
