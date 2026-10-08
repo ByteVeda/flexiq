@@ -66,8 +66,9 @@ Reach for something else when:
 | **Web UI** | Built-in dashboard | Temporal Web UI | The cloud provider's console | Taskforce.sh, or community boards | Flower | Community dashboards | rq-dashboard |
 | **Performance** | [Benchmarked](/about/benchmarks) | Not measured | Not measured | [Benchmarked](/about/benchmarks) | [Benchmarked](/about/benchmarks) | [Benchmarked](/about/benchmarks) | [Benchmarked](/about/benchmarks) |
 
-The benchmark is one scenario and it cuts both ways: FlexiQ's Redis backend
-loses to Dramatiq and BullMQ when Redis is a network hop away, and
+The benchmark is one scenario and it cuts both ways: against a Redis a network
+hop away, FlexiQ's Redis backend is the slowest entrant in the run — behind
+BullMQ, Celery, Dramatiq and RQ alike — and
 [Where FlexiQ loses](/about/benchmarks#where-flexiq-loses) explains why. Temporal
 and the managed services were not part of the run, so this page makes no
 performance claim about them either way.
@@ -166,8 +167,9 @@ Python, .NET, Rust, Elixir and PHP (producer only) that share the same queues.
 | **Workflows** | DAG, fan-out, approval gates, sub-workflows, sagas | Flows (parent and child jobs) |
 | **Other languages** | Python, Java and Rust SDKs share the queue, all on one Rust engine | Ports of the library for other languages |
 
-On a remote Redis, BullMQ beats FlexiQ's Redis backend in the
-[benchmark](/about/benchmarks#where-flexiq-loses).
+On a remote Redis, FlexiQ's Redis backend is the slowest entrant in the
+[benchmark](/about/benchmarks#where-flexiq-loses), and BullMQ is one of the two
+that win it outright.
 
 **Choose FlexiQ if** you want to start without Redis, need durable steps, or
 want every language's workers on one engine rather than a port per language. **Choose BullMQ if** Redis is
@@ -192,7 +194,9 @@ enqueue to the same FlexiQ queues.
 
 **Choose FlexiQ if** you want a queue without a broker, durable steps, or a
 dead-letter queue out of the box. **Choose Celery if** you need its broker
-routing, its ecosystem of extensions, or its long production record.
+routing, its ecosystem of extensions, or its long production record. If your
+FlexiQ would run on a remote Redis, note that Celery outpaces FlexiQ's Redis
+backend in the [benchmark](/about/benchmarks#where-flexiq-loses).
 
 ### vs Dramatiq
 
@@ -208,8 +212,9 @@ Dramatiq is a reliable, performance-focused Python alternative to Celery.
 
 **Choose FlexiQ if** you want to run without a broker, or need durable steps
 and workflows. **Choose Dramatiq if** you already run its broker and want its
-throughput — it outruns FlexiQ's Redis backend in the
-[benchmark](/about/benchmarks#where-flexiq-loses).
+throughput — on a remote Redis it is one of the two entrants that win the
+[benchmark](/about/benchmarks#where-flexiq-loses) outright, where FlexiQ's
+Redis backend is the slowest.
 
 ### vs RQ
 
@@ -224,7 +229,9 @@ RQ focuses on simplicity — a minimal Python task queue built on Redis.
 | **Monitoring** | Built-in dashboard | rq-dashboard |
 
 **Choose FlexiQ if** you want similar simplicity without requiring Redis.
-**Choose RQ if** you already run Redis and want the smallest possible queue.
+**Choose RQ if** you already run Redis and want the smallest possible queue —
+on a remote Redis, RQ also outpaces FlexiQ's Redis backend in the
+[benchmark](/about/benchmarks#where-flexiq-loses).
 
 <SdkOnly sdk="python">
 
