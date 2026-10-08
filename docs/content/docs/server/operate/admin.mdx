@@ -225,6 +225,49 @@ From a shell, [`fq tokens`](/server/operate/cli) calls these four methods.
 No response but `CreateToken`'s carries the secret, and none carries its
 digest. `admin` reaches none of these methods.
 
+## From Go
+
+The Go client's
+[`admin`](https://github.com/ByteVeda/flexiq/tree/master/sdks/go/admin)
+subpackage, `github.com/ByteVeda/flexiq/sdks/go/v2/admin`, wraps the queue,
+override, periodic-task, quota and token methods. It dials from the producer
+client's own options — the token, TLS, the 4 MiB message cap — and fails with
+the same `*flexiq.Error`, so a missing resource is a reason to branch on:
+
+```go
+client, err := admin.New("queue.internal:50051", flexiq.WithToken(os.Getenv("FLEXIQ_ADMIN_TOKEN")))
+if err != nil {
+    return err
+}
+defer client.Close()
+
+_, err = client.PutPeriodicTask(ctx, admin.PeriodicTaskSpec{
+    Name: "nightly-report",
+    Task: "reports.build",
+    Cron: "0 0 2 * * *",
+    Args: []any{map[string]any{"kind": "daily"}},
+})
+if err != nil {
+    return err
+}
+
+task, err := client.GetPeriodicTask(ctx, "nightly-report", admin.GetPeriodicTaskOptions{IncludePayload: true})
+if errors.Is(err, flexiq.ReasonPeriodicTaskNotFound) {
+    // gone: deleted, or never in this token's namespace
+}
+call, err := task.DecodePayload() // the arguments each firing passes
+```
+
+A periodic task's arguments are encoded exactly as an enqueue's, so the
+payload read back is byte-for-byte what was sent — the comparison a
+declarative tool makes to detect drift. A queue, a queue override and a quota
+have no not-found: `GetQueue` and `GetQueueOverride` answer a `found` flag, and
+an unset quota limit is a `nil` pointer.
+
+`CreateToken` is never safe to retry blindly: the server takes no idempotency
+key, so a call that lost its answer may have minted a token whose secret
+nobody holds. Look for it with `ListTokens` and revoke it instead.
+
 ## Errors
 
 Every refusal carries a `google.rpc.ErrorInfo` reason from the same closed list
