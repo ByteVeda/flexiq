@@ -185,6 +185,60 @@ class ProducerE2ETest < Minitest::Test
     assert_kind_of FlexiQ::WatchCheckpoint, checkpoint
   end
 
+  def two_node_graph(queue: QUEUE, **ship)
+    FlexiQ::WorkflowGraph.new(
+      nodes: [
+        { name: "charge", task_name: "wf.charge", args: [{ "order_id" => "o-1" }], queue: queue },
+        { name: "ship", task_name: "wf.ship", queue: queue, condition: :on_success, **ship }
+      ],
+      edges: [%w[charge ship]]
+    )
+  end
+
+  def workflow_name = "ruby-e2e-#{SecureRandom.hex(4)}"
+
+  def test_a_static_workflow_enqueues_each_node_and_reads_back
+    run_id = client.submit_workflow(workflow_name, two_node_graph, params_json: '{"order":"o-1"}')
+    view = client.get_workflow_run(run_id)
+
+    assert_equal run_id, view.run.id
+    # Nothing polls QUEUE, so the run stays where submission left it.
+    assert_equal :running, view.run.state
+    refute_predicate view.run, :terminal?
+    assert_equal %w[charge ship], view.nodes.map(&:name).sort
+    charge = client.get_job(view.node("charge").job_id, include_payload: true)
+
+    assert_equal ["wf.charge", QUEUE], [charge.task_name, charge.queue]
+    assert_equal FlexiQ::Payload.encode_call([{ "order_id" => "o-1" }], {}), charge.payload
+    assert_equal "wf.ship", client.get_job(view.node("ship").job_id).task_name
+  end
+
+  def test_a_dynamic_construct_is_refused_naming_the_node_and_the_field
+    error = assert_raises(FlexiQ::RPCError) do
+      client.submit_workflow(workflow_name, two_node_graph(gate: { timeout: 60 }))
+    end
+
+    assert_equal [FlexiQ::Reason::WORKFLOW_CONSTRUCT_UNSUPPORTED, "FAILED_PRECONDITION"], [error.reason, error.code]
+    assert_equal({ node: "ship", field: "gate" }, error.workflow_construct)
+    assert_match(/ship.*gate/, error.message)
+  end
+
+  def test_a_narrowed_grant_is_checked_on_every_node
+    token = server.mint("ruby-e2e-wf-narrow", "produce:queue=#{QUEUE}")
+    stray = FlexiQ::WorkflowNode.new(name: "ship", task_name: "wf.ship", queue: "elsewhere")
+    graph = FlexiQ::WorkflowGraph.new(nodes: [two_node_graph.nodes.first, stray])
+    error = assert_raises(FlexiQ::RPCError) { client(token).submit_workflow(workflow_name, graph) }
+
+    assert_equal [FlexiQ::Reason::SCOPE_DENIED, "produce", "ship"], [error.reason, error.scope, error.node]
+    run_id = client(token).submit_workflow(workflow_name, two_node_graph)
+
+    assert_equal run_id, client(token).get_workflow_run(run_id).run.id
+    outsider = server.mint("ruby-e2e-wf-outsider", "read:queue=elsewhere")
+    hidden = assert_raises(FlexiQ::RPCError) { client(outsider).get_workflow_run(run_id) }
+
+    assert_equal "NOT_FOUND", hidden.code
+  end
+
   def test_a_token_without_produce_is_scope_denied
     token = server.mint("ruby-e2e-executor", "execute")
     error = assert_raises(FlexiQ::RPCError) { client(token).enqueue("nope", queue: QUEUE) }
