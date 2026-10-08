@@ -1,0 +1,34 @@
+# Stub generation for the Ruby executor gem.
+#
+# The output is committed under lib/flexiq/executor/v1. A gem taken from git or
+# from RubyGems runs no code generator, so a consumer has to find the stubs
+# already there. Regenerate with `buf generate` from this directory; CI fails on
+# a diff.
+#
+# The plugin versions follow the runtime gems in flexiq-executor.gemspec:
+# protocolbuffers/ruby v36 pairs with google-protobuf 4.36.
+version: v2
+
+managed:
+  enabled: true
+  override:
+    # One top-level constant for the whole client. The default would be
+    # Flexiq::Executor::V1, a second module beside FlexiQ that differs only in case.
+    - file_option: ruby_package
+      value: FlexiQ::Executor::V1
+
+plugins:
+  - remote: buf.build/protocolbuffers/ruby:v36.2
+    out: lib
+  - remote: buf.build/grpc/ruby:v1.84.0
+    out: lib
+
+inputs:
+  - directory: ../../contracts/proto
+    # The executor door only. flexiq.v1 is reached over the JSON facade by the
+    # producer gem, and an executor holds no produce scope anyway.
+    #
+    # These paths resolve against this directory, not against `directory:`, so
+    # the full prefix is required.
+    paths:
+      - ../../contracts/proto/flexiq/executor/v1
