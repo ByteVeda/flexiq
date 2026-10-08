@@ -1,0 +1,192 @@
+---
+title: Terraform provider
+description: "Manage queue overrides, namespace quotas, periodic tasks and API tokens from Terraform: what each resource owns, the token scopes the provider needs, and how rotation works."
+---
+
+The `flexiq` Terraform provider drives a running `flexiq-server` through its
+[admin door](/server/operate/admin), so the limits, schedules and credentials
+that otherwise live in a dashboard or an `fq` session can sit in version
+control and go through review.
+
+| Resource | Manages | Admin door |
+| --- | --- | --- |
+| `flexiq_queue` | A queue's concurrency cap, dispatch rate and pause flag | Queue overrides, pause and resume |
+| `flexiq_namespace` | The namespace's [quota](/server/operate/quotas) | Namespace quota |
+| `flexiq_periodic_task` | A cron schedule that enqueues one task | Periodic tasks |
+| `flexiq_token` | An API token, minted and revoked | [Token RPCs](/server/operate/tokens) |
+
+The provider is not published to a registry yet. It lives in
+[`deploy/terraform/provider`](https://github.com/ByteVeda/flexiq/tree/master/deploy/terraform/provider)
+and is built from source, as described [below](#build-and-install-locally).
+
+## Authentication
+
+The provider holds one bearer token. Every call acts in the namespace that token
+was minted for.
+
+```hcl
+provider "flexiq" {
+  address = "flexiq.example.com:443"
+  token   = var.flexiq_token
+}
+```
+
+`address` and `token` fall back to the `FLEXIQ_ADDRESS` and `FLEXIQ_TOKEN`
+environment variables. The default transport is TLS verified against the system
+roots. A `tls` block takes a `ca_cert` PEM for a private CA, or `insecure = true`
+for plaintext, which sends the token readable and belongs on loopback only. Set
+both and the provider refuses the configuration.
+
+The scopes the token needs depend on the resources you use:
+
+| Resources | Token scopes |
+| --- | --- |
+| `flexiq_queue`, `flexiq_namespace`, `flexiq_periodic_task` | `admin` and `inspect` |
+| `flexiq_token` | `tokens`, plus grants that cover every scope the resource mints |
+
+## One provider alias per namespace
+
+The server reads the namespace from the token, never from a request. A provider
+block therefore manages exactly one namespace; to manage several, give each its
+own alias and a token minted for it.
+
+```hcl
+provider "flexiq" {
+  alias   = "billing"
+  address = "flexiq.example.com:443"
+  token   = var.billing_token
+}
+
+resource "flexiq_queue" "invoices" {
+  provider = flexiq.billing
+  name     = "invoices"
+}
+```
+
+The provider's `namespace` argument is only a label. It is recorded as
+`flexiq_namespace`'s `name` and never sent to the server. Changing it later
+leaves state holding the old label, and `terraform import` of a
+`flexiq_namespace` ignores the id you pass: the token decides which namespace is
+read.
+
+## Queues
+
+`flexiq_queue` owns an operator override on one queue: `max_concurrent`,
+`rate_limit` and `paused`. An unset `max_concurrent` or `rate_limit` means the
+queue is not overridden on that dimension, while `max_concurrent = 0` is a real
+cap. `rate_limit` is `<count>/<unit>` with a count of at least one and a unit of
+`s`, `m` or `h`, checked at plan time.
+
+Destroying the resource clears the override, and resumes the queue if the
+resource had paused it.
+
+<Callout type="warn" title="Overrides reach workers at their next start">
+  A worker reads a queue's override when it starts. A change applied while
+  workers run takes effect for each of them the next time it restarts.
+</Callout>
+
+## Namespace quota
+
+`flexiq_namespace` owns the namespace's quota: `max_pending`, `max_running`,
+`enqueue_rate`, `max_archived_rows`, `max_dead_rows` and `on_excess` (`reject`
+or `drop`). The limits and where each is enforced are in
+[Namespace quotas](/server/operate/quotas). Unset is unlimited and `0` is a
+real limit.
+
+A quota with every limit unset is cleared on the server, and a cleared quota
+reads back as `reject`. The provider keeps your configured `on_excess` in that
+case rather than showing a diff on every plan.
+
+## Periodic tasks
+
+`flexiq_periodic_task` owns a schedule: `task_name`, a six-field `cron` with
+seconds first, an optional IANA `timezone`, a `queue` and an `enabled` flag.
+Keep each schedule in one place. A task also declared in worker code is
+re-declared when that worker starts, and the two fight over it.
+
+`args` is a JSON array and `kwargs` a JSON object, both written with
+`jsonencode`:
+
+```hcl
+args   = jsonencode(["ops"])
+kwargs = jsonencode({ window_hours = 24 })
+```
+
+Spelling does not matter: `[2.0,  2.5]` and `[2, 2.5]` plan no change.
+
+<Callout type="warn" title="Number precision">
+  An integer beyond 2^53 - 1 travels as a 64-bit float, so two values that round
+  to the same float compare equal and never produce a diff. Pass such values as
+  strings.
+</Callout>
+
+If a worker re-declares the task with a payload that is not CBOR, the provider
+cannot read it back and the refresh fails with an error naming the task. It does
+not substitute the previous arguments, because that would hide the drift.
+Remove the worker's declaration so Terraform is the only writer.
+
+## Tokens
+
+`flexiq_token` mints a token and revokes it on destroy. The secret is available
+as `secret`, which is sensitive, from the apply that minted it.
+
+```hcl
+resource "flexiq_token" "worker" {
+  name               = "worker"
+  scopes             = ["execute"]
+  expire_days        = 30
+  rotate_before_days = 7
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+```
+
+- **Scopes.** Each entry is `scope` or `scope:queue=<pattern>,task=<pattern>`.
+  The provider's token must hold `tokens` and grants that cover every scope you
+  mint. The server refuses to hand out more than the caller has.
+- **Expiry is required.** `expire_days` is 1 to 365. The server refuses a token
+  that would outlive the provider's own, so the provider's token must outlive
+  every token it mints, replacements included.
+- **Rotation.** `rotate_before_days` plans a replacement that many days before
+  expiry. It must be less than `expire_days`; otherwise each new token is due the
+  moment it is minted and every plan replaces it, so the provider refuses that at
+  plan time. A token that is revoked or expired is replaced on the next plan
+  whatever this is set to.
+- **`create_before_destroy`.** With it, the new secret exists before the old
+  token is revoked. Without it, consumers briefly hold a revoked secret.
+- **Creation is never retried.** A retried mint could leave two live tokens. If
+  the call fails after the server acted, an orphan may exist; the error says so,
+  and it should be revoked.
+- **Import.** A token imports by id with a `null` secret: the secret cannot be
+  recovered. Rotate an imported token before wiring its secret anywhere.
+
+## Build and install locally
+
+The module is `deploy/terraform/provider`. From that directory:
+
+```bash
+make binary
+```
+
+This writes `terraform-provider-flexiq`. Terraform finds a local build through a
+`dev_overrides` entry in its CLI configuration, selected with
+`TF_CLI_CONFIG_FILE`:
+
+```hcl
+provider_installation {
+  dev_overrides {
+    "registry.terraform.io/byteveda/flexiq" = "/path/to/dir/holding/the/binary"
+  }
+  direct {}
+}
+```
+
+With that in place, `terraform validate` runs against the provider without a
+`terraform init`, and prints a warning that development overrides are in effect.
+The examples under `deploy/terraform/provider/examples` validate this way.
+
+`make check` runs the build, vet, lint and unit tests. `make server testacc`
+builds a `flexiq-server` and runs the acceptance tests against it; they download
+a `terraform` binary on first run unless one is on `PATH`.
