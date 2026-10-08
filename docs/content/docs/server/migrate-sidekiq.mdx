@@ -468,12 +468,12 @@ running one to stop. Neither needs a plugin.
 **Uniqueness and debounce without Enterprise.** `unique_key` and `debounce`
 are part of every enqueue.
 
-**Workflows.** `submit_workflow` submits a graph of tasks, one job per node
-chained by its edges, and `get_workflow_run` reads the run back. This door
-takes static graphs only; the
-[producer gem's README](https://github.com/ByteVeda/flexiq/tree/master/sdks/ruby#workflows)
-says which constructs it refuses. Sidekiq's nearest equivalent is Pro's
-Batches.
+**Ordered jobs from one call.** `submit_workflow` submits a static graph of
+tasks as one job per node, chained by its edges, so the jobs run in dependency
+order on any worker, Ruby included. The run's own state is a different matter:
+it is advanced only by a Python, Node or Java worker's workflow tracker, so
+with Ruby workers alone `get_workflow_run` never shows the run finishing. Read
+the node jobs with `get_job` instead.
 
 **One queue for every language.** The same server takes enqueues from Python,
 Node, Java and Go, and the same tasks can be run by workers in any of them.
