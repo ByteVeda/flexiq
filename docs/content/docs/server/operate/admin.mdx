@@ -217,6 +217,10 @@ A token can never mint one wider than itself:
 - **It revokes only tokens whose grants it covers**, or itself.
 - **One namespace.** The new token is the caller's namespace's, and another
   namespace's token is `TOKEN_NOT_FOUND`.
+- **No cascade.** Revoking a token does not revoke the ones it minted; those
+  are bounded by its expiry, not its life.
+
+From a shell, [`fq tokens`](/server/operate/cli) calls these four methods.
 
 No response but `CreateToken`'s carries the secret, and none carries its
 digest. `admin` reaches none of these methods.
