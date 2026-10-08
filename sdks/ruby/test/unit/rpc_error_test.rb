@@ -46,6 +46,35 @@ class RPCErrorTest < Minitest::Test
     refute_predicate error, :retryable?
   end
 
+  def test_a_workflow_construct_refusal_names_the_node_and_the_field
+    info = { "@type" => FlexiQ::RPCError::ERROR_INFO_TYPE, "domain" => FlexiQ::Reason::DOMAIN,
+             "reason" => "WORKFLOW_CONSTRUCT_UNSUPPORTED", "metadata" => { "node" => "review", "field" => "gate" } }
+    error = FlexiQ::RPCError.from_status({ "status" => "FAILED_PRECONDITION", "details" => [info],
+                                           "message" => "node 'review' sets 'gate'" })
+
+    assert_equal({ node: "review", field: "gate" }, error.workflow_construct)
+    assert_equal "review", error.node
+    refute_predicate error, :retryable?
+  end
+
+  def test_a_workflow_construct_refusal_missing_a_key_reads_as_absent
+    info = { "@type" => FlexiQ::RPCError::ERROR_INFO_TYPE, "domain" => FlexiQ::Reason::DOMAIN,
+             "reason" => "WORKFLOW_CONSTRUCT_UNSUPPORTED", "metadata" => { "node" => "review" } }
+    error = FlexiQ::RPCError.from_status({ "status" => "FAILED_PRECONDITION", "details" => [info] })
+
+    assert_nil error.workflow_construct
+    assert_nil FlexiQ::RPCError.from_status(QUEUE_FULL).workflow_construct
+  end
+
+  def test_a_scope_refusal_from_submit_workflow_names_the_node
+    info = { "@type" => FlexiQ::RPCError::ERROR_INFO_TYPE, "domain" => FlexiQ::Reason::DOMAIN,
+             "reason" => "SCOPE_DENIED", "metadata" => { "scope" => "produce", "queue" => "q", "node" => "b" } }
+    error = FlexiQ::RPCError.from_status({ "status" => "PERMISSION_DENIED", "details" => [info] })
+
+    assert_equal %w[produce b], [error.scope, error.node]
+    assert_nil error.workflow_construct
+  end
+
   def test_reasonless_unavailable_is_retryable_but_a_reasoned_internal_is_not
     assert_predicate FlexiQ::RPCError.from_http(503, "<html>"), :retryable?
     assert_equal "DEADLINE_EXCEEDED", FlexiQ::RPCError.from_http(504, "").code
