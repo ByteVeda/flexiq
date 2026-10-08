@@ -89,12 +89,17 @@ separate on purpose: a `produce` token cannot run work, and an `execute` token
 cannot enqueue.
 
 ```bash
+export FLEXIQ_DSN=postgres://flexiq:…@db.internal/flexiq
+export FLEXIQ_NAMESPACE=prod
+
 flexiq-server token create --name rails-app --scope produce
 flexiq-server token create --name ruby-workers --scope execute
 ```
 
-The namespace is fixed in the token when it is minted
-([API tokens](/server/operate/tokens)), so no Ruby call names one.
+`token create` reads the same `FLEXIQ_DSN` and `FLEXIQ_NAMESPACE` the server
+runs with, and binds the token to that namespace — one minted under another is
+refused by this server ([API tokens](/server/operate/tokens)). No Ruby call
+names a namespace.
 
 ## A worker class
 
