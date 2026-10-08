@@ -253,9 +253,15 @@ if err != nil {
 
 task, err := client.GetPeriodicTask(ctx, "nightly-report", admin.GetPeriodicTaskOptions{IncludePayload: true})
 if errors.Is(err, flexiq.ReasonPeriodicTaskNotFound) {
-    // gone: deleted, or never in this token's namespace
+    return nil // gone: deleted, or never in this token's namespace
+} else if err != nil {
+    return err
 }
 call, err := task.DecodePayload() // the arguments each firing passes
+if err != nil {
+    return err
+}
+log.Printf("nightly-report fires with %v", call.Args)
 ```
 
 A periodic task's arguments are encoded exactly as an enqueue's, so the
