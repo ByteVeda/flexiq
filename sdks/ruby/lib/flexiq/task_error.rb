@@ -28,6 +28,12 @@ module FlexiQ
       unstructured(raw)
     end
 
+    # Writes the canonical document. Key order is part of the cross-SDK shape, and a Hash
+    # literal keeps it.
+    def self.encode(errtype, message, traceback = [])
+      JSON.generate({ "errtype" => errtype.to_s, "message" => message.to_s, "traceback" => traceback.map(&:to_s) })
+    end
+
     def self.unstructured(raw)
       new(errtype: nil, message: raw, traceback: [], structured: false, raw: raw)
     end

@@ -12,6 +12,15 @@ class PayloadTest < Minitest::Test
     assert_equal 2**53, FlexiQ::Payload.decode_result(unhex("021b0020000000000000"))
   end
 
+  def test_a_result_encodes_as_a_bare_tagged_value
+    assert_equal "02f5", hex(FlexiQ::Payload.encode_result(true))
+    assert_equal({ "n" => [1, "x"] }, FlexiQ::Payload.decode_result(FlexiQ::Payload.encode_result({ "n" => [1, "x"] })))
+  end
+
+  def test_an_unencodable_result_is_a_codec_error
+    assert_raises(FlexiQ::CodecError) { FlexiQ::Payload.encode_result(Object.new) }
+  end
+
   def test_foreign_codec_tags_are_named
     error = assert_raises(FlexiQ::CodecError) { FlexiQ::Payload.decode(unhex("0080")) }
     assert_match(/0x00 \(language-native\)/, error.message)
