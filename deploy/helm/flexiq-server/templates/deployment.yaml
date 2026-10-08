@@ -192,6 +192,15 @@ spec:
               value: "1"
             {{- end }}
             {{- end }}
+            {{- if or .Values.dashboard.enabled .Values.grpc.enabled }}
+            # Both roles record into the audit trail, and either prunes it.
+            - name: FLEXIQ_AUDIT_RETENTION_DAYS
+              value: "{{ include "flexiq-server.auditRetentionDays" . }}"
+            {{- if not (kindIs "invalid" .Values.audit.readsRetentionDays) }}
+            - name: FLEXIQ_AUDIT_READS_RETENTION_DAYS
+              value: "{{ .Values.audit.readsRetentionDays | int64 }}"
+            {{- end }}
+            {{- end }}
             {{- if .Values.grpc.enabled }}
             # No credential variable: the door authenticates against tokens in
             # the database, so there is nothing here to rotate or restart for.
@@ -205,8 +214,6 @@ spec:
               value: "{{ .Values.grpc.requestTimeout }}"
             - name: FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS
               value: "{{ .Values.grpc.maxConcurrentRequests }}"
-            - name: FLEXIQ_GRPC_AUDIT_RETENTION_DAYS
-              value: "{{ .Values.grpc.auditRetentionDays }}"
             - name: FLEXIQ_GRPC_AUDIT_READS
               value: "{{ if .Values.grpc.auditReads }}on{{ else }}off{{ end }}"
             - name: FLEXIQ_GRPC_AUDIT_READS_WINDOW

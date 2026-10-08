@@ -150,6 +150,29 @@ Called with (dict "prefix" "FLEXIQ_GRPC" "dir" "grpc" "tls" .Values.grpc.tls).
 {{- end }}
 {{- end -}}
 
+{{/*
+The audit window in days: audit.retentionDays, else the legacy
+grpc.auditRetentionDays. `_validate.tpl` has already refused a value that is
+not a whole number of at least 1.
+*/}}
+{{- define "flexiq-server.auditRetentionDays" -}}
+{{- if kindIs "invalid" .Values.audit.retentionDays -}}
+{{- .Values.grpc.auditRetentionDays | int64 -}}
+{{- else -}}
+{{- .Values.audit.retentionDays | int64 -}}
+{{- end -}}
+{{- end -}}
+
+{{/* "true" when `.` is a whole number of at least 1, as a number or a decimal string. */}}
+{{- define "flexiq-server.wholeDays" -}}
+{{- $v := . -}}
+{{- if kindIs "string" $v -}}
+{{- if and (regexMatch "^[1-9][0-9]*$" $v) (eq (toString (int64 $v)) $v) }}true{{ end -}}
+{{- else if or (kindIs "int" $v) (kindIs "int64" $v) (kindIs "float64" $v) -}}
+{{- if and (eq (float64 $v) (float64 (int64 $v))) (ge (int64 $v) 1) }}true{{ end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "flexiq-server.tlsVolumes" -}}
 {{- if .tls.secretName }}
 - name: {{ .dir }}-tls

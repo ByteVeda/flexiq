@@ -116,6 +116,14 @@ jobs:
           refuses "a non-boolean audit reads switch" "${grpc_on[@]}" --set-string grpc.auditReads=tru
           refuses "a non-numeric audit reads window" "${grpc_on[@]}" --set grpc.auditReads=true --set grpc.auditReadsWindow=60s
           refuses "a negative audit reads window" "${grpc_on[@]}" --set grpc.auditReadsWindow=-1
+          # Mirrors config/audit.rs: whole days, at least 1, and reads kept no
+          # longer than writes — checked on a dashboard-only release too.
+          dash_on=(--set storage.dsn=postgres://u:p@db/x --set attach.enabled=false)
+          refuses "a zero audit window" "${dash_on[@]}" --set audit.retentionDays=0
+          refuses "a zero legacy audit window" "${grpc_on[@]}" --set grpc.auditRetentionDays=0
+          refuses "a non-numeric audit window" "${dash_on[@]}" --set-string audit.retentionDays=7d
+          refuses "a fractional read window" "${dash_on[@]}" --set audit.readsRetentionDays=2.5
+          refuses "reads kept longer than writes" "${dash_on[@]}" --set audit.retentionDays=7 --set audit.readsRetentionDays=8
           # Mirrors config/trigger.rs: one namespace, and exactly one source of
           # definitions — a listener with none would answer every request 404.
           refuses "triggers with no namespace" \
@@ -248,7 +256,7 @@ jobs:
                   "FLEXIQ_GRPC_KEEPALIVE_INTERVAL",
                   "FLEXIQ_GRPC_REQUEST_TIMEOUT",
                   "FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS",
-                  "FLEXIQ_GRPC_AUDIT_RETENTION_DAYS",
+                  "FLEXIQ_AUDIT_RETENTION_DAYS",
                   "FLEXIQ_GRPC_AUDIT_READS",
                   "FLEXIQ_GRPC_AUDIT_READS_WINDOW",
                   "FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN",
@@ -274,6 +282,29 @@ jobs:
             || { echo "::error::readiness must use the grpc probe and liveness the socket, with no token in env and the listener tunables set"; exit 1; }
           [ "$legacy" = "['tcpSocket'] ['tcpSocket'] False True" ] \
             || { echo "::error::grpc.healthProbe=false must fall readiness back to the socket"; exit 1; }
+
+      # The dashboard records and prunes the audit trail on its own, so a
+      # dashboard-only release must carry the window too — and the legacy
+      # grpc value must still reach it when audit.retentionDays is unset.
+      - name: The audit windows reach a dashboard-only release's env
+        run: |
+          set -euo pipefail
+          audit_env() {
+            helm template t "$CHART" --set storage.dsn=postgres://u:p@db/x \
+              --set attach.enabled=false "$@" \
+              | python3 -c '
+          import sys, yaml
+          for doc in yaml.safe_load_all(sys.stdin):
+              if doc and doc.get("kind") == "Deployment":
+                  env = {e["name"]: e.get("value") for e in doc["spec"]["template"]["spec"]["containers"][0]["env"]}
+                  print(env.get("FLEXIQ_AUDIT_RETENTION_DAYS"), env.get("FLEXIQ_AUDIT_READS_RETENTION_DAYS"))
+          '
+          }
+          windows="$(audit_env --set audit.retentionDays=30 --set audit.readsRetentionDays=7)"
+          legacy="$(audit_env --set grpc.auditRetentionDays=45)"
+          echo "windows: $windows / legacy: $legacy"
+          [ "$windows" = "30 7" ] || { echo "::error::audit windows must reach the dashboard's env"; exit 1; }
+          [ "$legacy" = "45 None" ] || { echo "::error::grpc.auditRetentionDays must still set the window"; exit 1; }
 
       # A watch bound set in values must reach the server as the variable it
       # reads — including 0, which is meaningful for the cap and the reconcile,
