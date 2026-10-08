@@ -75,6 +75,8 @@ from flexiq.dashboard.static import (
 from flexiq.health import check_health, check_readiness
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from flexiq.app import Queue
     from flexiq.dashboard.oauth.flow import OAuthFlow
 
@@ -91,6 +93,15 @@ _LOG_PATH_MAX = 256
 
 # Hard cap on the request body we'll parse for PUT/POST requests.
 _MAX_BODY_BYTES = 1 * 1024 * 1024  # 1 MiB
+
+# Days a dashboard change stays in the audit trail — the server's default, and
+# its variable, too.
+DEFAULT_AUDIT_RETENTION_DAYS = 90
+AUDIT_RETENTION_ENV = "FLEXIQ_AUDIT_RETENTION_DAYS"
+
+# A request with no session: not recorded. Distinct from ``None``, which is a
+# dashboard with auth off — recorded as anonymous.
+_NO_CALLER = object()
 
 # Defense-in-depth headers on every response. The CSP assumes a fully
 # self-contained SPA bundle (no inline scripts — the theme bootstrap ships as
@@ -138,6 +149,7 @@ def serve_dashboard(
     oauth_flow: OAuthFlow | None = None,
     secure_cookies: bool = True,
     auth_enabled: bool = False,
+    audit_retention_days: int | None = None,
 ) -> None:
     """Start the dashboard HTTP server (blocking).
 
@@ -153,7 +165,12 @@ def serve_dashboard(
             is empty. Ignored unless ``auth_enabled`` is true.
         auth_enabled: Enforce session auth (login/setup, CSRF, RBAC). Off
             by default — the dashboard serves openly.
+        audit_retention_days: Days a record of a dashboard change is kept
+            in the audit trail before this dashboard prunes it. At least 1.
+            Unset reads ``FLEXIQ_AUDIT_RETENTION_DAYS``, the server's
+            variable, then defaults to 90.
     """
+    retention_days = _audit_retention_days(audit_retention_days)
     if auth_enabled:
         bootstrap_admin_from_env(queue)
         if oauth_flow is None:
@@ -166,6 +183,7 @@ def serve_dashboard(
         auth_enabled=auth_enabled,
     )
     server = ThreadingHTTPServer((host, port), handler)
+    queue._inner.start_dashboard_audit(retention_days)
     print(f"flexiq dashboard → http://{host}:{port}")
     print("Press Ctrl+C to stop")
 
@@ -175,6 +193,24 @@ def serve_dashboard(
         pass
     finally:
         server.server_close()
+        queue._inner.close_dashboard_audit()
+
+
+def _audit_retention_days(days: int | None) -> int:
+    """The audit window: ``days``, else the server's variable, else the default."""
+    source = "audit_retention_days"
+    if days is None:
+        raw = os.environ.get(AUDIT_RETENTION_ENV, "").strip()
+        if not raw:
+            return DEFAULT_AUDIT_RETENTION_DAYS
+        source = AUDIT_RETENTION_ENV
+        try:
+            days = int(raw)
+        except ValueError:
+            days = 0
+    if isinstance(days, bool) or days < 1:
+        raise ValueError(f"{source} must be a whole number of days, at least 1")
+    return days
 
 
 def _build_oauth_flow_from_env(queue: Queue) -> OAuthFlow | None:
@@ -209,6 +245,11 @@ def _make_handler(
     cookie_secure_attr = "; Secure" if secure_cookies else ""
 
     class DashboardHandler(BaseHTTPRequestHandler):
+        # The audit record of the change in flight: who made it, and the
+        # status it was answered with.
+        _audit_caller: str | object | None = _NO_CALLER
+        _audit_status: int | None = None
+
         # ── Entry points ────────────────────────────────────────────
 
         def end_headers(self) -> None:
@@ -228,31 +269,55 @@ def _make_handler(
                 self._json_response({"error": "Internal server error"}, status=500)
 
         def do_POST(self) -> None:
-            try:
-                self._handle_post()
-            except BrokenPipeError:
-                pass
-            except Exception:
-                logger.exception("Error handling POST %s", _safe_path(self.path))
-                self._json_response({"error": "Internal server error"}, status=500)
+            self._serve_change("POST", self._handle_post)
 
         def do_PUT(self) -> None:
-            try:
-                self._handle_put()
-            except BrokenPipeError:
-                pass
-            except Exception:
-                logger.exception("Error handling PUT %s", _safe_path(self.path))
-                self._json_response({"error": "Internal server error"}, status=500)
+            self._serve_change("PUT", self._handle_put)
 
         def do_DELETE(self) -> None:
+            self._serve_change("DELETE", self._handle_delete)
+
+        # ── Audit trail ─────────────────────────────────────────────
+
+        def send_response(self, code: int, message: str | None = None) -> None:
+            # Every answer passes here, so the audit record sees the status
+            # actually sent — refusals and 500s included.
+            self._audit_status = code
+            super().send_response(code, message)
+
+        def _serve_change(self, method: str, handle: Callable[[], None]) -> None:
+            """Serve a state-changing request, then record it in the audit trail.
+
+            A keep-alive connection reuses this handler, so the caller and the
+            status are reset per request.
+            """
+            self._audit_caller = _NO_CALLER
+            self._audit_status = None
             try:
-                self._handle_delete()
+                handle()
             except BrokenPipeError:
                 pass
             except Exception:
-                logger.exception("Error handling DELETE %s", _safe_path(self.path))
+                logger.exception("Error handling %s %s", method, _safe_path(self.path))
                 self._json_response({"error": "Internal server error"}, status=500)
+            finally:
+                self._record_change(method)
+
+        def _record_change(self, method: str) -> None:
+            caller, status = self._audit_caller, self._audit_status
+            # No session to name, or nothing was answered: nothing to record,
+            # as on the server's dashboard.
+            if caller is _NO_CALLER or status is None:
+                return
+            username = caller if isinstance(caller, str) else None
+            try:
+                queue._inner.record_dashboard_action(
+                    method, urlparse(self.path).path, status, username
+                )
+            except Exception:
+                # The change already happened; a trail that cannot take the
+                # record must not turn it into an error.
+                logger.exception("could not record %s %s", method, _safe_path(self.path))
 
         # ── Per-method dispatchers ──────────────────────────────────
 
@@ -468,6 +533,10 @@ def _make_handler(
             if not auth_enabled:
                 return self._authorize_open(path)
             ctx = self._build_context()
+            # Named before the checks below, so a refused change is recorded
+            # against the user who tried it.
+            if ctx.is_authenticated:
+                self._audit_caller = ctx.username
 
             # Setup-required short-circuit: before the first user is created
             # every API endpoint (except the public ones) returns 503 so the
@@ -513,6 +582,8 @@ def _make_handler(
             if path.startswith("/api/auth/") and path != "/api/auth/status":
                 self._json_response({"error": "auth_disabled"}, status=404)
                 return ctx, True
+            # Who changed it is unknown with auth off; what changed is not.
+            self._audit_caller = None
             return ctx, False
 
         def _build_context(self) -> RequestContext:
