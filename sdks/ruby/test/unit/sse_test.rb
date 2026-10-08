@@ -64,6 +64,18 @@ class SSETest < Minitest::Test
     assert_equal [nil, nil, "c"], events.map(&:id)
   end
 
+  def test_an_unfinished_line_or_event_past_the_bound_is_refused
+    parser = FlexiQ::Wire::SSE::Parser.new(max_bytes: 4)
+    parser.feed("data: 123\n") { nil } # "123\n" sits exactly at the bound
+    error = assert_raises(FlexiQ::TransportError) { parser.feed("data: 4\n") { nil } }
+
+    assert_match(/event/, error.message)
+    error = assert_raises(FlexiQ::TransportError) do
+      FlexiQ::Wire::SSE::Parser.new(max_bytes: 4).feed("data: 1") { nil }
+    end
+    assert_match(/line/, error.message)
+  end
+
   def test_data_is_utf8_and_a_malformed_byte_is_replaced
     events = parse("data: caf\xC3".b, "\xA9 \xFF\n\n".b)
 

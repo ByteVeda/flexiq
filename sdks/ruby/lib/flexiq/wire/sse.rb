@@ -15,7 +15,12 @@ module FlexiQ
         LF = 10
         private_constant :LINE_BREAK, :CR, :LF
 
-        def initialize
+        # Bound on an unfinished line and on one event's data. A watch item is a few hundred
+        # bytes; a peer that never ends a line or event must not grow memory without bound.
+        MAX_BYTES = 1 << 20
+
+        def initialize(max_bytes: MAX_BYTES)
+          @max_bytes = max_bytes
           @buffer = "".b
           @after_cr = false
           reset_event
@@ -32,6 +37,7 @@ module FlexiQ
             drop_lf_after_cr
             process(line, &)
           end
+          limit!(@buffer, "line")
         end
 
         private
@@ -51,10 +57,16 @@ module FlexiQ
           field, value = line.split(":", 2)
           value = value.nil? ? "".b : value.delete_prefix(" ")
           case field
-          when "data" then @data << value << "\n"
+          when "data" then limit!(@data << value << "\n", "event")
           when "event" then @type = value
           when "id" then @id = value unless value.include?("\0")
           end
+        end
+
+        def limit!(bytes, what)
+          return if bytes.bytesize <= @max_bytes
+
+          raise TransportError, "an event-stream #{what} passed #{@max_bytes} bytes unfinished"
         end
 
         def dispatch
