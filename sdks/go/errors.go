@@ -9,6 +9,8 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/ByteVeda/flexiq/sdks/go/v2/internal/door"
 )
 
 // ErrorDomain scopes the ErrorInfo this client trusts. A detail from another
@@ -246,6 +248,10 @@ func AsError(err error) (*Error, bool) {
 	ok := errors.As(err, &wireErr)
 	return wireErr, ok
 }
+
+// The admin subpackage reads its failures through the same conversion, so its
+// errors are this package's [*Error] and branch on the same reasons.
+func init() { door.FromRPC = fromRPC }
 
 // fromRPC converts what a gRPC call returned into an [*Error].
 //

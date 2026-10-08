@@ -1,11 +1,11 @@
 package flexiq
 
 import (
-	"errors"
 	"fmt"
 
 	"google.golang.org/grpc"
 
+	"github.com/ByteVeda/flexiq/sdks/go/v2/internal/door"
 	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 )
 
@@ -26,11 +26,11 @@ type Client struct {
 //
 // A token is required: there is no anonymous path on this door.
 func New(target string, opts ...Option) (*Client, error) {
-	cfg := defaultConfig()
+	cfg := door.Defaults("flexiq-go/" + Version)
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	dialOptions, err := cfg.dialOptions()
+	dialOptions, err := cfg.DialOptions()
 	if err != nil {
 		return nil, err
 	}
@@ -54,4 +54,4 @@ func (c *Client) Close() error {
 }
 
 // ErrNoToken is returned by [New] when no credential was supplied.
-var ErrNoToken = errors.New("flexiq: no token: every call to this door carries one, use WithToken")
+var ErrNoToken = door.ErrNoToken
