@@ -14,6 +14,7 @@ class WaitTest < Minitest::Test
     @server = FakeServer.new do |request|
       next @watch if request.path.start_with?("/v1/jobs:watch")
 
+      sleep @read_delay if @read_delay
       @reads.length > 1 ? @reads.shift : @reads.first
     end
     @client = FlexiQ::Client.new(@server.url, token: "t", insecure: true)
@@ -86,6 +87,14 @@ class WaitTest < Minitest::Test
     end]
 
     took = elapsed { assert_raises(FlexiQ::WaitTimeoutError) { @client.wait("a", timeout: 0.3) } }
+
+    assert_operator took, :<, 1.5
+  end
+
+  def test_a_stalled_final_read_is_bounded_by_the_timeout
+    @read_delay = 2
+
+    took = elapsed { assert_raises(FlexiQ::WaitTimeoutError) { @client.wait("a", timeout: 0.5) } }
 
     assert_operator took, :<, 1.5
   end

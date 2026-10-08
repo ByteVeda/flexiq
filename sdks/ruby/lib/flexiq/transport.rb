@@ -29,14 +29,18 @@ module FlexiQ
       @user_agent = [user_agent, "flexiq-ruby/#{VERSION}"].compact.join(" ").freeze
       @tls = tls
       @open_timeout = open_timeout
+      @read_timeout = read_timeout
       @write_timeout = write_timeout
       @watch_read_timeout = watch_read_timeout
       @http = build_http(read_timeout)
       @lock = Mutex.new
     end
 
-    def get(path, query = {})
-      perform(Net::HTTP::Get.new(full_path(with_query(path, query))))
+    # With a `deadline` (Deadline), the read runs on a connection of its own whose timeouts are
+    # capped by it, so the shared connection's settings are never touched.
+    def get(path, query = {}, deadline: nil)
+      request = Net::HTTP::Get.new(full_path(with_query(path, query)))
+      deadline ? perform_within(request, deadline) : perform(request)
     end
 
     # Yields an event stream's body in chunks until the server closes it. Own connection, so it
@@ -151,6 +155,16 @@ module FlexiQ
       interpret(response)
     rescue *NETWORK_ERRORS => e
       close_quietly
+      raise TransportError, "#{request.method} #{request.path}: #{e.class}: #{e.message}"
+    end
+
+    def perform_within(request, deadline)
+      authorize(request, "application/json")
+      http = build_http(deadline.cap(@read_timeout))
+      http.open_timeout = deadline.cap(@open_timeout)
+      http.max_retries = 0 # a resend would restart the clock the deadline bounds
+      interpret(http.start { http.request(request) })
+    rescue *NETWORK_ERRORS => e
       raise TransportError, "#{request.method} #{request.path}: #{e.class}: #{e.message}"
     end
 

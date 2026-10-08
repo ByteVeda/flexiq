@@ -39,8 +39,7 @@ module FlexiQ
     # Reads one job. The payload and result are left out unless asked for: they are the largest
     # things a job carries. A job in another namespace reads as JOB_NOT_FOUND.
     def get_job(job_id, include_payload: false, include_result: false)
-      query = { "includePayload" => include_payload || nil, "includeResult" => include_result || nil }
-      job_from(@transport.get("/v1/jobs/#{Wire::Path.segment(job_id)}", query))
+      fetch_job(job_id, include_payload: include_payload, include_result: include_result)
     end
 
     # Reads one page of jobs, newest first. Every filter is optional; `status` is a
@@ -118,16 +117,23 @@ module FlexiQ
     private
 
     # The job is done, so only the read can fail; retry what clears, within the deadline.
+    # The deadline also caps this read, so a stalled answer cannot outlast `wait`'s timeout.
     def read_finished(job_id, deadline)
       backoff = Backoff.new
       begin
-        get_job(job_id, include_result: true)
+        fetch_job(job_id, include_result: true, deadline: deadline)
       rescue TransportError, RPCError => e
-        raise if (e.is_a?(RPCError) && !e.retryable?) || deadline&.expired?
+        raise if e.is_a?(RPCError) && !e.retryable?
+        raise WaitTimeoutError, "gave up after #{deadline.seconds}s reading job #{job_id}" if deadline&.expired?
 
         backoff.pause(deadline)
         retry
       end
+    end
+
+    def fetch_job(job_id, include_payload: false, include_result: false, deadline: nil)
+      query = { "includePayload" => include_payload || nil, "includeResult" => include_result || nil }
+      job_from(@transport.get("/v1/jobs/#{Wire::Path.segment(job_id)}", query, deadline: deadline))
     end
 
     def coerce_request(request)
