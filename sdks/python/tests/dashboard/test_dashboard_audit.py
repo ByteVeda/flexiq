@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -138,6 +139,53 @@ def test_the_retention_window_is_at_least_a_day(
         serve_dashboard(queue, port=0)
     with pytest.raises(ValueError, match="at least 1 day"):
         queue._inner.start_dashboard_audit(0)
+
+
+class _RecordingAudit:
+    """A binding that keeps every dashboard action handed to it."""
+
+    def __init__(self) -> None:
+        self.actions: list[tuple[str, str, int, str | None]] = []
+
+    def record_dashboard_action(
+        self, method: str, path: str, status: int, username: str | None = None
+    ) -> None:
+        self.actions.append((method, path, status, username))
+
+
+class _RecordingQueue:
+    def __init__(self) -> None:
+        self._inner = _RecordingAudit()
+
+
+class _HungUp:
+    """A socket file whose peer has gone: every write fails."""
+
+    def write(self, data: bytes) -> int:
+        raise BrokenPipeError("peer closed")
+
+    def flush(self) -> None:
+        pass
+
+
+def test_a_caller_gone_before_the_headers_is_recorded_499() -> None:
+    queue = _RecordingQueue()
+    handler_class = _make_handler(queue)  # type: ignore[arg-type]
+    # Built without a socket, so no request is served on construction.
+    handler: Any = object.__new__(handler_class)
+    handler.wfile = _HungUp()
+    handler.request_version = "HTTP/1.1"
+    handler.requestline = "POST /api/queues/emails/pause HTTP/1.1"
+    handler.command = "POST"
+    handler.path = "/api/queues/emails/pause"
+    handler.client_address = ("127.0.0.1", 0)
+
+    def change() -> None:
+        handler._audit_caller = "alice"
+        handler._json_response({"ok": True})
+
+    handler._serve_change("POST", change)
+    assert queue._inner.actions == [("POST", "/api/queues/emails/pause", 499, "alice")]
 
 
 class _FailingAudit:

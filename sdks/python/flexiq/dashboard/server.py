@@ -103,6 +103,9 @@ AUDIT_RETENTION_ENV = "FLEXIQ_AUDIT_RETENTION_DAYS"
 # dashboard with auth off — recorded as anonymous.
 _NO_CALLER = object()
 
+# "Client closed request": the caller left before an answer was sent.
+_CLIENT_CLOSED_REQUEST = 499
+
 # Defense-in-depth headers on every response. The CSP assumes a fully
 # self-contained SPA bundle (no inline scripts — the theme bootstrap ships as
 # /theme-init.js); inline style attributes need 'unsafe-inline' in style-src.
@@ -257,7 +260,13 @@ def _make_handler(
             # redirects — carries the security headers.
             for name, value in _SECURITY_HEADERS:
                 self.send_header(name, value)
-            super().end_headers()
+            try:
+                super().end_headers()
+            except OSError:
+                # The status line never reached the caller: record that it
+                # left, not the status we meant to send.
+                self._audit_status = _CLIENT_CLOSED_REQUEST
+                raise
 
         def do_GET(self) -> None:
             try:
