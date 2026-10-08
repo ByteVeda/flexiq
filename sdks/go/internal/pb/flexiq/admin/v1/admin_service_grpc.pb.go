@@ -64,6 +64,10 @@ const (
 	AdminService_SetNamespaceQuota_FullMethodName   = "/flexiq.admin.v1.AdminService/SetNamespaceQuota"
 	AdminService_ClearNamespaceQuota_FullMethodName = "/flexiq.admin.v1.AdminService/ClearNamespaceQuota"
 	AdminService_ListAuditRecords_FullMethodName    = "/flexiq.admin.v1.AdminService/ListAuditRecords"
+	AdminService_CreateToken_FullMethodName         = "/flexiq.admin.v1.AdminService/CreateToken"
+	AdminService_GetToken_FullMethodName            = "/flexiq.admin.v1.AdminService/GetToken"
+	AdminService_ListTokens_FullMethodName          = "/flexiq.admin.v1.AdminService/ListTokens"
+	AdminService_RevokeToken_FullMethodName         = "/flexiq.admin.v1.AdminService/RevokeToken"
 )
 
 // AdminServiceClient is the client API for AdminService service.
@@ -79,7 +83,9 @@ const (
 //
 // Two scopes, chosen by the method's idempotency level rather than listed:
 // `inspect` calls the NO_SIDE_EFFECTS methods, `admin` calls the rest. They are
-// not a hierarchy; an operator's token carries both.
+// not a hierarchy; an operator's token carries both. The token methods are the
+// one exception: all four, reads included, need the `tokens` scope, which
+// neither of the others implies.
 //
 // What it does not offer:
 //
@@ -167,6 +173,20 @@ type AdminServiceClient interface {
 	// token-authorised write this namespace's doors answered, refusals included.
 	// Reads are not recorded.
 	ListAuditRecords(ctx context.Context, in *ListAuditRecordsRequest, opts ...grpc.CallOption) (*ListAuditRecordsResponse, error)
+	// Mint an API token in the caller's namespace. The secret is in this
+	// response and nowhere else, ever. Refused unless every requested grant is
+	// covered by one of the caller's own and the token expires no later than
+	// the caller's.
+	CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error)
+	// One token of the caller's namespace, revoked or expired ones included.
+	GetToken(ctx context.Context, in *GetTokenRequest, opts ...grpc.CallOption) (*GetTokenResponse, error)
+	// Every token of the caller's namespace, newest first, revoked and expired
+	// ones included.
+	ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error)
+	// Revoke a token; it stops working on its next call. Refused unless every
+	// grant it carries is covered by one of the caller's. Revoking a revoked
+	// token returns it unchanged.
+	RevokeToken(ctx context.Context, in *RevokeTokenRequest, opts ...grpc.CallOption) (*RevokeTokenResponse, error)
 }
 
 type adminServiceClient struct {
@@ -447,6 +467,46 @@ func (c *adminServiceClient) ListAuditRecords(ctx context.Context, in *ListAudit
 	return out, nil
 }
 
+func (c *adminServiceClient) CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateTokenResponse)
+	err := c.cc.Invoke(ctx, AdminService_CreateToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) GetToken(ctx context.Context, in *GetTokenRequest, opts ...grpc.CallOption) (*GetTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTokenResponse)
+	err := c.cc.Invoke(ctx, AdminService_GetToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTokensResponse)
+	err := c.cc.Invoke(ctx, AdminService_ListTokens_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) RevokeToken(ctx context.Context, in *RevokeTokenRequest, opts ...grpc.CallOption) (*RevokeTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeTokenResponse)
+	err := c.cc.Invoke(ctx, AdminService_RevokeToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AdminServiceServer is the server API for AdminService service.
 // All implementations must embed UnimplementedAdminServiceServer
 // for forward compatibility.
@@ -460,7 +520,9 @@ func (c *adminServiceClient) ListAuditRecords(ctx context.Context, in *ListAudit
 //
 // Two scopes, chosen by the method's idempotency level rather than listed:
 // `inspect` calls the NO_SIDE_EFFECTS methods, `admin` calls the rest. They are
-// not a hierarchy; an operator's token carries both.
+// not a hierarchy; an operator's token carries both. The token methods are the
+// one exception: all four, reads included, need the `tokens` scope, which
+// neither of the others implies.
 //
 // What it does not offer:
 //
@@ -548,6 +610,20 @@ type AdminServiceServer interface {
 	// token-authorised write this namespace's doors answered, refusals included.
 	// Reads are not recorded.
 	ListAuditRecords(context.Context, *ListAuditRecordsRequest) (*ListAuditRecordsResponse, error)
+	// Mint an API token in the caller's namespace. The secret is in this
+	// response and nowhere else, ever. Refused unless every requested grant is
+	// covered by one of the caller's own and the token expires no later than
+	// the caller's.
+	CreateToken(context.Context, *CreateTokenRequest) (*CreateTokenResponse, error)
+	// One token of the caller's namespace, revoked or expired ones included.
+	GetToken(context.Context, *GetTokenRequest) (*GetTokenResponse, error)
+	// Every token of the caller's namespace, newest first, revoked and expired
+	// ones included.
+	ListTokens(context.Context, *ListTokensRequest) (*ListTokensResponse, error)
+	// Revoke a token; it stops working on its next call. Refused unless every
+	// grant it carries is covered by one of the caller's. Revoking a revoked
+	// token returns it unchanged.
+	RevokeToken(context.Context, *RevokeTokenRequest) (*RevokeTokenResponse, error)
 	mustEmbedUnimplementedAdminServiceServer()
 }
 
@@ -638,6 +714,18 @@ func (UnimplementedAdminServiceServer) ClearNamespaceQuota(context.Context, *Cle
 }
 func (UnimplementedAdminServiceServer) ListAuditRecords(context.Context, *ListAuditRecordsRequest) (*ListAuditRecordsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListAuditRecords not implemented")
+}
+func (UnimplementedAdminServiceServer) CreateToken(context.Context, *CreateTokenRequest) (*CreateTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateToken not implemented")
+}
+func (UnimplementedAdminServiceServer) GetToken(context.Context, *GetTokenRequest) (*GetTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetToken not implemented")
+}
+func (UnimplementedAdminServiceServer) ListTokens(context.Context, *ListTokensRequest) (*ListTokensResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTokens not implemented")
+}
+func (UnimplementedAdminServiceServer) RevokeToken(context.Context, *RevokeTokenRequest) (*RevokeTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevokeToken not implemented")
 }
 func (UnimplementedAdminServiceServer) mustEmbedUnimplementedAdminServiceServer() {}
 func (UnimplementedAdminServiceServer) testEmbeddedByValue()                      {}
@@ -1146,6 +1234,78 @@ func _AdminService_ListAuditRecords_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AdminService_CreateToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).CreateToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_CreateToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).CreateToken(ctx, req.(*CreateTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_GetToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).GetToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_GetToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).GetToken(ctx, req.(*GetTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_ListTokens_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTokensRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).ListTokens(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_ListTokens_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).ListTokens(ctx, req.(*ListTokensRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_RevokeToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).RevokeToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_RevokeToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).RevokeToken(ctx, req.(*RevokeTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AdminService_ServiceDesc is the grpc.ServiceDesc for AdminService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1260,6 +1420,22 @@ var AdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListAuditRecords",
 			Handler:    _AdminService_ListAuditRecords_Handler,
+		},
+		{
+			MethodName: "CreateToken",
+			Handler:    _AdminService_CreateToken_Handler,
+		},
+		{
+			MethodName: "GetToken",
+			Handler:    _AdminService_GetToken_Handler,
+		},
+		{
+			MethodName: "ListTokens",
+			Handler:    _AdminService_ListTokens_Handler,
+		},
+		{
+			MethodName: "RevokeToken",
+			Handler:    _AdminService_RevokeToken_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
