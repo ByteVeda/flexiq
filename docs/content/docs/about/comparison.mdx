@@ -242,19 +242,19 @@ on a remote Redis, RQ also outpaces FlexiQ's Redis backend in the
 | Broker required | **No** | Redis / RabbitMQ | Redis | Redis / RabbitMQ | Redis | Redis / RabbitMQ / Nats |
 | Core language | **Rust + Python** | Python | Python | Python | Python | Python |
 | Priority queues | **Yes** | Yes | No | Yes (per actor) | Yes | Yes |
-| Rate limiting | **Yes** | Yes | No | Yes | No | No |
+| Rate limiting | **Yes** | Yes | No | Yes | Yes (fixed window) | No |
 | Dead letter queue | **Yes** | No | Yes | Yes | No | No |
-| Task chaining | **Yes** (chain/group/chord) | Yes (canvas) | Dependencies only | Yes (pipelines) | No | Yes (pipelines) |
-| Job cancellation | **Yes** | Yes (revoke) | No | No | Yes | No |
+| Task chaining | **Yes** (chain/group/chord) | Yes (canvas) | Dependencies only | Yes (pipelines) | Yes (pipelines, groups, chords) | Yes (pipelines) |
+| Job cancellation | **Yes** | Yes (revoke) | Yes (`job.cancel()`) | No | Yes | No |
 | Progress tracking | **Yes** | Yes (custom) | No | No | No | No |
 | Unique tasks | **Yes** | No (manual) | No | No | Yes | No |
 | Batch enqueue | **Yes** | No | No | No | No | No |
 | Retry with backoff | **Yes** (exponential + jitter) | Yes | Yes | Yes | Yes | Yes |
-| Periodic/cron tasks | **Yes** (6-field with seconds) | Yes (celery-beat) | Yes (rq-scheduler) | Yes (APScheduler) | Yes | Yes (taskiq-cron) |
-| Async support | **Yes** | Yes | No | No | No | Yes (native) |
-| Cancel running tasks | **Yes** (cooperative) | Yes (revoke) | No | No | No | No |
-| Soft timeouts | **Yes** | No | No | No | No | No |
-| Custom serializers | **Yes** | Yes | No | No | No | Yes |
+| Periodic/cron tasks | **Yes** (6-field with seconds) | Yes (celery-beat) | Yes (built-in `CronScheduler`, beta) | Yes (APScheduler) | Yes | Yes (taskiq-cron) |
+| Async support | **Yes** | No (third-party pools) | No | Yes (`AsyncIO` middleware) | — | Yes (native) |
+| Cancel running tasks | **Yes** (cooperative) | Yes (revoke) | Yes (`send_stop_job_command`) | No | No | No |
+| Soft timeouts | **Yes** | Yes (`soft_time_limit`) | No | No | No | No |
+| Custom serializers | **Yes** | Yes | Yes (`serializer=`) | Yes (`set_encoder`) | — | Yes |
 | Per-task middleware | **Yes** | No | No | Yes | No | Yes |
 | Multi-process (prefork) | **Yes** | Yes | No | No | No | No |
 | Namespace isolation | **Yes** | No | No | No | No | No |
@@ -275,8 +275,8 @@ Huey is a lightweight task queue with Redis or SQLite backends.
 |---|---|---|
 | **Backend** | SQLite (Rust-native) | Redis or SQLite (Python) |
 | **Performance** | Rust scheduler + OS threads | Python threads |
-| **Chaining** | chain, group, chord | Pipeline (limited) |
-| **Rate limiting** | Built-in token bucket | No |
+| **Chaining** | chain, group, chord | Pipelines, groups, chords |
+| **Rate limiting** | Built-in token bucket | Fixed-window `rate_limit` |
 | **DLQ** | Built-in | No |
 | **Progress** | Built-in | No |
 
