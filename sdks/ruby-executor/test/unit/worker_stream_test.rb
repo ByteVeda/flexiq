@@ -90,6 +90,15 @@ class WorkerStreamTest < Minitest::Test
     assert_equal :hello, @scheduler.next_attach.receive.frame
   end
 
+  def test_an_id_still_attached_reconnects
+    start
+    first = @scheduler.next_attach
+    first.receive
+    first.fail_with(GRPC::Core::StatusCodes::ALREADY_EXISTS, "wait for the previous stream to end")
+
+    assert_equal :hello, @scheduler.next_attach.receive.frame
+  end
+
   def test_a_protocol_version_mismatch_is_permanent
     start
     attach = @scheduler.next_attach

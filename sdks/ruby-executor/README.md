@@ -82,7 +82,7 @@ that check on their own terms.
 | Keyword | Default | |
 |---|---|---|
 | `token:` | required | carries the `execute` scope |
-| `id:` | `ruby-<host>-<pid>` | unique among attached executors; a second attach under one id is refused |
+| `id:` | `ruby-<host>-<pid>` | unique among attached executors; a second attach under one id is refused, and retried with backoff |
 | `slots:` | processor count | jobs run at once |
 | `credentials:` / `insecure:` | system roots / `false` | transport security |
 | `max_message_bytes:` | 68 MiB | the door's own ceiling; gRPC's 4 MiB default fails on the first large job |

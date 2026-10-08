@@ -19,10 +19,10 @@ module FlexiQ
     # The scheduler refused the attach, or the stream failed.
     #
     # `permanent?` is true where reconnecting would only be refused again: a bad credential, a
-    # missing scope, an executor id already attached, a protocol version mismatch.
+    # missing scope, a protocol version mismatch. ALREADY_EXISTS is not among them: a reconnect
+    # can race the scheduler noticing this executor's previous stream is gone.
     class AttachError < FlexiQ::Error
       PERMANENT_CODES = [
-        GRPC::Core::StatusCodes::ALREADY_EXISTS,
         GRPC::Core::StatusCodes::FAILED_PRECONDITION,
         GRPC::Core::StatusCodes::UNAUTHENTICATED,
         GRPC::Core::StatusCodes::PERMISSION_DENIED
