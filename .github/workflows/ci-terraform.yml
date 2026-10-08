@@ -1,0 +1,119 @@
+name: CI Terraform
+
+# Reusable workflow for the Terraform provider (deploy/terraform/provider).
+#
+# The provider is a Go module of its own that reaches sdks/go through a
+# `replace`, so a change to the admin client or to the wire contract can break
+# it without a line of the provider moving. Called by ci.yml when any of those
+# paths change.
+#
+# `unit` and `static` need only a Go toolchain. `acceptance` builds a real
+# flexiq-server and drives the provider through terraform against it, which is
+# what proves the resources and the server agree.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_RETRY: "10"
+  # Pinned rather than latest, and kept in step with sdks/go and the Makefile
+  # in deploy/terraform/provider, so both modules lint alike.
+  GOLANGCI_LINT_VERSION: v2.13.2
+
+jobs:
+  unit:
+    name: Test (go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor from go.mod, and the newest release.
+        go: ["1.25.x", "1.27.x"]
+    defaults:
+      run:
+        working-directory: deploy/terraform/provider
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: deploy/terraform/provider/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # Without TF_ACC the acceptance tests skip, so this needs no server and
+      # no terraform binary.
+      - name: Test
+        run: go test -race -count=1 ./...
+
+  static:
+    name: Lint and tidiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: deploy/terraform/provider
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version: "1.27.x"
+          cache-dependency-path: deploy/terraform/provider/go.sum
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: deploy/terraform/provider
+
+      - name: go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  acceptance:
+    name: Acceptance against a real flexiq-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      # Read-only restore of the dev-profile namespace ci-rust.yml writes on
+      # master, as ci-go-e2e.yml does, to stay inside the cache quota.
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          shared-key: dev
+          save-if: "false"
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version: "1.27.x"
+          cache-dependency-path: deploy/terraform/provider/go.sum
+
+      - name: Build flexiq-server with the gRPC door
+        run: cargo build -p flexiq-server --features grpc
+
+      # terraform-plugin-testing downloads and verifies a terraform binary
+      # itself when none is on PATH, so no setup step is needed for it.
+      - name: Run the acceptance suite
+        working-directory: deploy/terraform/provider
+        env:
+          FLEXIQ_SERVER_BIN: ${{ github.workspace }}/target/debug/flexiq-server
+        run: make testacc
