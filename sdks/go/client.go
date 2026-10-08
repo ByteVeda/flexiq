@@ -53,5 +53,8 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// ErrNoToken is returned by [New] when no credential was supplied.
+// ErrNoToken is returned by [New], and by the admin subpackage's New, when no
+// credential was supplied: every call on these doors carries a bearer token,
+// so pass [WithToken]. Its message is "flexiq: no token: every call to this
+// door carries one, use WithToken". Match it with [errors.Is].
 var ErrNoToken = door.ErrNoToken

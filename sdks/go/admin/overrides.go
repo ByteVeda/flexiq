@@ -62,8 +62,10 @@ func (c *Client) GetQueueOverride(ctx context.Context, queue string) (QueueOverr
 
 // SetQueueOverride replaces one queue's override and answers it as stored.
 //
-// It is a replace, not a merge: a field left unset is no longer overridden, and
-// an override with every field unset is the same as [Client.ClearQueueOverride].
+// It is a replace, not a merge: a field left unset is no longer overridden. An
+// override with every field unset lifts both limits but, unlike
+// [Client.ClearQueueOverride], keeps a pause flag the dashboard stored in the
+// same document; Clear deletes the whole document.
 // The server validates the values; a malformed rate limit is refused with
 // [flexiq.ReasonInvalidRequest].
 func (c *Client) SetQueueOverride(ctx context.Context, queue string, override QueueOverride) (QueueOverride, error) {
