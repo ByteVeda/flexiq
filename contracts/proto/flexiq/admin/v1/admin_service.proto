@@ -36,7 +36,9 @@ import "google/protobuf/timestamp.proto";
 //
 // Two scopes, chosen by the method's idempotency level rather than listed:
 // `inspect` calls the NO_SIDE_EFFECTS methods, `admin` calls the rest. They are
-// not a hierarchy; an operator's token carries both.
+// not a hierarchy; an operator's token carries both. The token methods are the
+// one exception: all four, reads included, need the `tokens` scope, which
+// neither of the others implies.
 //
 // What it does not offer:
 //
@@ -242,6 +244,38 @@ service AdminService {
   rpc ListAuditRecords(ListAuditRecordsRequest) returns (ListAuditRecordsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
     option (google.api.http) = {get: "/v1/admin/auditRecords"};
+  }
+
+  // Mint an API token in the caller's namespace. The secret is in this
+  // response and nowhere else, ever. Refused unless every requested grant is
+  // covered by one of the caller's own and the token expires no later than
+  // the caller's.
+  rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse) {
+    option (google.api.http) = {
+      post: "/v1/admin/tokens"
+      body: "*"
+    };
+  }
+
+  // One token of the caller's namespace, revoked or expired ones included.
+  rpc GetToken(GetTokenRequest) returns (GetTokenResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/admin/tokens/{token_id}"};
+  }
+
+  // Every token of the caller's namespace, newest first, revoked and expired
+  // ones included.
+  rpc ListTokens(ListTokensRequest) returns (ListTokensResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/admin/tokens"};
+  }
+
+  // Revoke a token; it stops working on its next call. Refused unless every
+  // grant it carries is covered by one of the caller's. Revoking a revoked
+  // token returns it unchanged.
+  rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse) {
+    option idempotency_level = IDEMPOTENT;
+    option (google.api.http) = {post: "/v1/admin/tokens/{token_id}:revoke"};
   }
 }
 
@@ -761,4 +795,82 @@ message ListAuditRecordsResponse {
   repeated AuditRecord records = 1;
   // Empty when this is the last page.
   string next_page_token = 2;
+}
+
+// ── Tokens ─────────────────────────────────────────────────────────────
+
+// What a token is, right now.
+enum TokenStatus {
+  TOKEN_STATUS_UNSPECIFIED = 0;
+  // Usable.
+  TOKEN_STATUS_ACTIVE = 1;
+  // Past its expiry.
+  TOKEN_STATUS_EXPIRED = 2;
+  // Revoked. Wins over expired.
+  TOKEN_STATUS_REVOKED = 3;
+}
+
+// An API token, as a listing shows it. Never carries the secret or its digest.
+message ApiToken {
+  // Public identifier, the handle GetToken and RevokeToken take.
+  string id = 1;
+  // Label chosen at mint. Two tokens may share it.
+  string name = 2;
+  // Grants, spelled `scope` or `scope:queue=<pattern>,task=<pattern>`.
+  repeated string scopes = 3;
+  // The one namespace every call on the token is scoped to.
+  string namespace = 4;
+  google.protobuf.Timestamp created_at = 5;
+  // Absent until first used; written at most once a minute.
+  google.protobuf.Timestamp last_used_at = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  // Absent unless revoked.
+  google.protobuf.Timestamp revoked_at = 8;
+  // A value this reader does not recognise is not an error; show it as unknown.
+  TokenStatus status = 9;
+
+  // Who minted it: a dashboard username, `cli`, or `token:<id>` for a token
+  // minted through CreateToken. Absent when unrecorded.
+  optional string created_by = 16;
+}
+
+message CreateTokenRequest {
+  // At most 64 characters, no control characters.
+  string name = 1;
+  // At least one grant. Each must be covered by one of the caller's own: the
+  // same scope, reaching no queue or task the caller's does not.
+  repeated string scopes = 2;
+  // Days until it expires, 1 to 365. Unset is 90. Refused, never shortened,
+  // when the token would outlive the caller's.
+  optional int32 expire_days = 3;
+}
+
+message CreateTokenResponse {
+  ApiToken token = 1;
+  // The credential to present, shown this once. Unrecoverable afterwards.
+  string secret = 2;
+}
+
+message GetTokenRequest {
+  string token_id = 1;
+}
+
+message GetTokenResponse {
+  ApiToken token = 1;
+}
+
+message ListTokensRequest {}
+
+message ListTokensResponse {
+  // Newest first. Not paginated: bounded by the tokens one namespace mints.
+  repeated ApiToken tokens = 1;
+}
+
+message RevokeTokenRequest {
+  string token_id = 1;
+}
+
+message RevokeTokenResponse {
+  // The token after the call: REVOKED.
+  ApiToken token = 1;
 }

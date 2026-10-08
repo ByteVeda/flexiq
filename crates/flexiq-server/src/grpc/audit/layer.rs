@@ -7,7 +7,8 @@
 //! audit trail is asked about.
 //!
 //! Which calls it records is decided from the gate table, not listed here:
-//! every path whose requirement is a write scope — `produce` or `admin`. So a
+//! every path whose requirement is a write scope — `produce` or `admin` — and
+//! the `tokens` methods that change something. So a
 //! mutating RPC added later is recorded without anyone editing this file, the
 //! same fail-closed default the scope check itself has. The executor door and
 //! public paths pass straight through with no slot and no record.
@@ -87,7 +88,12 @@ pub fn access(method: &http::Method, path: &str) -> Option<Access> {
     // Every scope named, so a new one is a compile error here, not a silent
     // gap in the trail.
     match gate::requirement(method, path) {
-        Requirement::Scoped(Scope::Produce | Scope::Admin | Scope::Tokens) => Some(Access::Write),
+        Requirement::Scoped(Scope::Produce | Scope::Admin) => Some(Access::Write),
+        // One scope for reads and writes alike, so the method decides.
+        Requirement::Scoped(Scope::Tokens) if gate::reads_tokens(method, path) => {
+            Some(Access::Read)
+        }
+        Requirement::Scoped(Scope::Tokens) => Some(Access::Write),
         Requirement::Scoped(Scope::Read | Scope::Inspect) => Some(Access::Read),
         Requirement::Scoped(Scope::Execute) | Requirement::Authenticated | Requirement::Public => {
             None
@@ -249,6 +255,20 @@ mod tests {
         assert_eq!(access(&GET, "/v1/jobs/j1"), read);
         assert_eq!(access(&GET, "/v1/jobs:watch"), read);
         assert_eq!(access(&GET, "/v1/admin/queues"), read);
+
+        // The token door splits by method, not by scope.
+        for (method, path, want) in [
+            (&POST, "/flexiq.admin.v1.AdminService/CreateToken", write),
+            (&POST, "/flexiq.admin.v1.AdminService/RevokeToken", write),
+            (&POST, "/flexiq.admin.v1.AdminService/GetToken", read),
+            (&POST, "/flexiq.admin.v1.AdminService/ListTokens", read),
+            (&POST, "/v1/admin/tokens", write),
+            (&POST, "/v1/admin/tokens/t1:revoke", write),
+            (&GET, "/v1/admin/tokens", read),
+            (&GET, "/v1/admin/tokens/t1", read),
+        ] {
+            assert_eq!(access(method, path), want, "{method} {path}");
+        }
     }
 
     #[test]

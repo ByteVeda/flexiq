@@ -6,7 +6,8 @@
 //! different behaviour, only different spellings of it. Which scope a path
 //! needs is decided before any of this runs: `auth::gate` gives every `GET`
 //! under `/v1/admin` to `inspect` and everything else to `admin`, the same
-//! split the facade's `GET`-iff-`NO_SIDE_EFFECTS` rule makes.
+//! split the facade's `GET`-iff-`NO_SIDE_EFFECTS` rule makes — except
+//! `/v1/admin/tokens`, which needs `tokens` on every verb.
 //!
 //! The custom methods (`:pause`, `:replay`, `:trigger`, …) are not axum
 //! handlers: [`super::routes`] splits the verb off the path and calls the
@@ -429,6 +430,54 @@ pub(super) async fn clear_queue_override(
         message,
         |request| admin.clear_queue_override(request),
         write::empty,
+    )
+    .await
+}
+
+// ── Tokens ───────────────────────────────────────────────────────────
+
+pub(super) async fn create_token(State(admin): State<Admin>, request: Request) -> Response {
+    let (parts, message) = body(request, |token: read::CreateToken| Ok(token.into_message())).await;
+    answer(
+        &parts,
+        message,
+        |request| admin.create_token(request),
+        write::create_token,
+    )
+    .await
+}
+
+pub(super) async fn get_token(
+    State(admin): State<Admin>,
+    id: Result<Path<String>, PathRejection>,
+    parts: Parts,
+) -> Response {
+    let message = path_param(id).map(|token_id| pb::GetTokenRequest { token_id });
+    answer(
+        &parts,
+        message,
+        |request| admin.get_token(request),
+        write::get_token,
+    )
+    .await
+}
+
+pub(super) async fn list_tokens(State(admin): State<Admin>, parts: Parts) -> Response {
+    answer(
+        &parts,
+        Ok(pb::ListTokensRequest {}),
+        |request| admin.list_tokens(request),
+        write::list_tokens,
+    )
+    .await
+}
+
+pub(super) async fn revoke_token(admin: &Admin, parts: &Parts, token_id: String) -> Response {
+    answer(
+        parts,
+        Ok(pb::RevokeTokenRequest { token_id }),
+        |request| admin.revoke_token(request),
+        write::revoke_token,
     )
     .await
 }

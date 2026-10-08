@@ -8,6 +8,7 @@ use flexiq_core::{DeadJob, PeriodicTask, QueueStats, WorkerInfo, WorkerStatus};
 
 use crate::grpc::pb::admin as pb;
 use crate::grpc::producer::convert::timestamp;
+use crate::tokens::{ApiToken, TokenStatus};
 
 /// A queue, with the namespace's pause state and counts for it.
 pub fn queue(name: String, paused: bool, stats: &QueueStats) -> pb::Queue {
@@ -81,6 +82,28 @@ pub fn worker(info: WorkerInfo) -> pb::Worker {
         pool_type: info.pool_type,
         sdk: info.sdk,
         sdk_version: info.sdk_version,
+    }
+}
+
+/// An API token as it stands at `now`. Built field by field so the hash has no
+/// way onto the wire.
+pub fn api_token(token: ApiToken, now: i64) -> pb::ApiToken {
+    let status = match token.status(now) {
+        TokenStatus::Active => pb::TokenStatus::Active,
+        TokenStatus::Expired => pb::TokenStatus::Expired,
+        TokenStatus::Revoked => pb::TokenStatus::Revoked,
+    };
+    pb::ApiToken {
+        id: token.id,
+        name: token.name,
+        scopes: token.scopes.spelled(),
+        namespace: token.namespace,
+        created_at: Some(timestamp(token.created_at)),
+        last_used_at: token.last_used_at.map(timestamp),
+        expires_at: Some(timestamp(token.expires_at)),
+        revoked_at: token.revoked_at.map(timestamp),
+        status: status as i32,
+        created_by: token.created_by,
     }
 }
 

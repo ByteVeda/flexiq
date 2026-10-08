@@ -29,7 +29,8 @@
 //! It serves the `flexiq.v1` producer package and the `flexiq.admin.v1`
 //! operator package, each in full, and nothing else. The operator paths sit
 //! under `/v1/admin`, where the gate asks `inspect` of a `GET` and `admin` of
-//! anything else — the same split the gRPC door makes by idempotency level. The
+//! anything else — the same split the gRPC door makes by idempotency level —
+//! and `tokens` of everything under `/v1/admin/tokens`. The
 //! executor service is not transcoded: a worker surface has different
 //! credentials, different failure modes, and no reason to be reachable from a
 //! browser. Temporal's protos carry the comment "We do not expose worker API to

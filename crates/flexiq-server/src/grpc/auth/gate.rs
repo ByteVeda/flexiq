@@ -63,10 +63,22 @@ pub const INSPECT_METHODS: [&str; 10] = [
     "ListAuditRecords",
     "GetNamespaceQuota",
 ];
+/// The operator package's token methods (#851), which need `tokens` whatever
+/// their idempotency level: who may read the credential list is as much a
+/// credential question as who may mint one. Matched before [`INSPECT_METHODS`]
+/// and named exactly, so an unlisted method still falls through to `admin`.
+pub const TOKEN_METHODS: [&str; 4] = ["CreateToken", "GetToken", "ListTokens", "RevokeToken"];
+/// Of [`TOKEN_METHODS`], the `NO_SIDE_EFFECTS` ones — what the audit trail
+/// files as a read.
+pub const TOKEN_READ_METHODS: [&str; 2] = ["GetToken", "ListTokens"];
 /// The JSON facade's operator namespace: `GET` is `inspect`, anything else
 /// `admin`, which is the same split because the facade serves `GET` exactly
 /// for the `NO_SIDE_EFFECTS` methods.
 const FACADE_ADMIN: &str = "/v1/admin";
+/// The facade's token paths, which need `tokens` on every verb — the
+/// [`TOKEN_METHODS`] by their other spelling. Without it they would fall to
+/// [`FACADE_ADMIN`], and an `admin` token could mint over HTTP.
+const FACADE_TOKENS: &str = "/v1/admin/tokens";
 /// The JSON facade's namespace (#718), which transcodes the producer package
 /// and, under [`FACADE_ADMIN`], the operator package.
 ///
@@ -105,16 +117,32 @@ fn under(path: &str, root: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
+/// Whether a path is the facade's token collection or below it, including a
+/// custom method on the collection itself (`/v1/admin/tokens:x`). A segment
+/// match, so `/v1/admin/tokensx` stays the operator door's.
+fn in_facade_tokens(path: &str) -> bool {
+    path.strip_prefix(FACADE_TOKENS)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/') || rest.starts_with(':'))
+}
+
 /// The scope one operator gRPC method needs.
 fn admin_method(path: &str) -> Scope {
-    let read_only = path
-        .strip_prefix(ADMIN_SERVICE)
-        .is_some_and(|method| INSPECT_METHODS.contains(&method));
-    if read_only {
+    let method = path.strip_prefix(ADMIN_SERVICE);
+    if method.is_some_and(|method| TOKEN_METHODS.contains(&method)) {
+        Scope::Tokens
+    } else if method.is_some_and(|method| INSPECT_METHODS.contains(&method)) {
         Scope::Inspect
     } else {
         Scope::Admin
     }
+}
+
+/// Whether a `tokens` call changes nothing — a read, to the audit trail.
+pub fn reads_tokens(method: &http::Method, path: &str) -> bool {
+    let grpc_read = path
+        .strip_prefix(ADMIN_SERVICE)
+        .is_some_and(|name| TOKEN_READ_METHODS.contains(&name));
+    grpc_read || (in_facade_tokens(path) && method == http::Method::GET)
 }
 
 /// The scope one producer gRPC method needs.
@@ -141,6 +169,10 @@ pub fn requirement(method: &http::Method, path: &str) -> Requirement {
         Requirement::Public
     } else if path.starts_with(ADMIN) {
         Requirement::Scoped(admin_method(path))
+    } else if in_facade_tokens(path) {
+        // Matched before the operator's `/v1/admin`, which would otherwise
+        // claim it for `inspect` and `admin`.
+        Requirement::Scoped(Scope::Tokens)
     } else if under(path, FACADE_ADMIN) {
         // Matched before the producer's `/v1`, which would otherwise claim it.
         if method == http::Method::GET {
@@ -182,13 +214,17 @@ mod tests {
 
     /// Every operator method needs a scope, and which one is its idempotency
     /// level's: the list the gate keeps must match the descriptor both ways.
+    /// The one stated exception is [`TOKEN_METHODS`], which need `tokens`
+    /// whatever their level — and only those four may be excepted.
     #[test]
     fn the_inspect_methods_are_exactly_the_read_only_ones() {
         let rpcs = descriptor::rpcs(descriptor::ADMIN_PACKAGE);
         assert!(!rpcs.is_empty(), "the admin package declares no RPCs");
         for rpc in &rpcs {
             let path = format!("{ADMIN_SERVICE}{}", rpc.method);
-            let want = if rpc.no_side_effects {
+            let want = if TOKEN_METHODS.contains(&rpc.method.as_str()) {
+                Scope::Tokens
+            } else if rpc.no_side_effects {
                 Scope::Inspect
             } else {
                 Scope::Admin
@@ -201,7 +237,68 @@ mod tests {
                     .any(|rpc| rpc.method == method && rpc.no_side_effects),
                 "{method} is not a read-only admin RPC"
             );
+            assert!(!TOKEN_METHODS.contains(&method), "{method} is a token RPC");
         }
+    }
+
+    /// The token exception names exactly the token RPCs the contract declares,
+    /// and its read list is exactly their `NO_SIDE_EFFECTS` ones.
+    #[test]
+    fn the_token_methods_are_declared_and_their_reads_are_the_read_only_ones() {
+        let rpcs = descriptor::rpcs(descriptor::ADMIN_PACKAGE);
+        for method in TOKEN_METHODS {
+            let rpc = rpcs
+                .iter()
+                .find(|rpc| rpc.method == method)
+                .unwrap_or_else(|| panic!("{method} is not an admin RPC"));
+            assert_eq!(
+                TOKEN_READ_METHODS.contains(&method),
+                rpc.no_side_effects,
+                "{method}"
+            );
+            let path = format!("{ADMIN_SERVICE}{method}");
+            assert_eq!(
+                reads_tokens(&http::Method::POST, &path),
+                rpc.no_side_effects
+            );
+        }
+    }
+
+    /// Over HTTP the token paths need `tokens` on every verb: they must not
+    /// inherit `/v1/admin`'s `inspect`-for-`GET`, `admin`-for-the-rest.
+    #[test]
+    fn the_facade_token_paths_need_tokens_on_every_verb() {
+        for path in [
+            "/v1/admin/tokens",
+            "/v1/admin/tokens/",
+            "/v1/admin/tokens/abc",
+            "/v1/admin/tokens/abc:revoke",
+            "/v1/admin/tokens:anything",
+        ] {
+            for verb in [
+                http::Method::GET,
+                http::Method::POST,
+                http::Method::HEAD,
+                http::Method::DELETE,
+            ] {
+                assert_eq!(
+                    requirement(&verb, path),
+                    Requirement::Scoped(Scope::Tokens),
+                    "{verb} {path}"
+                );
+            }
+        }
+        assert!(reads_tokens(&http::Method::GET, "/v1/admin/tokens"));
+        assert!(!reads_tokens(&http::Method::POST, "/v1/admin/tokens"));
+        // A lookalike segment stays the operator door's.
+        assert_eq!(
+            requirement(&http::Method::POST, "/v1/admin/tokensx"),
+            Requirement::Scoped(Scope::Admin)
+        );
+        assert_eq!(
+            requirement(&http::Method::GET, "/v1/admin/tokensx"),
+            Requirement::Scoped(Scope::Inspect)
+        );
     }
 
     /// The producer package splits the same way, by the same rule.

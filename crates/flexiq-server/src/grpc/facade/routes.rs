@@ -168,11 +168,19 @@ pub enum Rpc {
     SetNamespaceQuota,
     /// `AdminService.ClearNamespaceQuota`.
     ClearNamespaceQuota,
+    /// `AdminService.CreateToken`.
+    CreateToken,
+    /// `AdminService.GetToken`.
+    GetToken,
+    /// `AdminService.ListTokens`.
+    ListTokens,
+    /// `AdminService.RevokeToken`.
+    RevokeToken,
 }
 
 impl Rpc {
     /// Every RPC, so a caller that needs the closed set does not restate it.
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 39] = [
         Self::Enqueue,
         Self::EnqueueBatch,
         Self::GetJob,
@@ -208,6 +216,10 @@ impl Rpc {
         Self::GetNamespaceQuota,
         Self::SetNamespaceQuota,
         Self::ClearNamespaceQuota,
+        Self::CreateToken,
+        Self::GetToken,
+        Self::ListTokens,
+        Self::RevokeToken,
     ];
 
     /// The service that declares it.
@@ -247,7 +259,11 @@ impl Rpc {
             | Self::ListAuditRecords
             | Self::GetNamespaceQuota
             | Self::SetNamespaceQuota
-            | Self::ClearNamespaceQuota => Service::Admin,
+            | Self::ClearNamespaceQuota
+            | Self::CreateToken
+            | Self::GetToken
+            | Self::ListTokens
+            | Self::RevokeToken => Service::Admin,
         }
     }
 
@@ -289,6 +305,10 @@ impl Rpc {
             Self::GetNamespaceQuota => "GetNamespaceQuota",
             Self::SetNamespaceQuota => "SetNamespaceQuota",
             Self::ClearNamespaceQuota => "ClearNamespaceQuota",
+            Self::CreateToken => "CreateToken",
+            Self::GetToken => "GetToken",
+            Self::ListTokens => "ListTokens",
+            Self::RevokeToken => "RevokeToken",
         }
     }
 
@@ -389,6 +409,14 @@ pub enum Binding {
     SetNamespaceQuota,
     /// `POST /v1/admin/quota:clear`.
     ClearNamespaceQuota,
+    /// `POST /v1/admin/tokens`.
+    CreateToken,
+    /// `GET /v1/admin/tokens/{token_id}`.
+    GetToken,
+    /// `GET /v1/admin/tokens`.
+    ListTokens,
+    /// `POST /v1/admin/tokens/{token_id}:revoke`.
+    RevokeToken,
 }
 
 impl Binding {
@@ -430,6 +458,10 @@ impl Binding {
             Self::GetNamespaceQuota => Rpc::GetNamespaceQuota,
             Self::SetNamespaceQuota => Rpc::SetNamespaceQuota,
             Self::ClearNamespaceQuota => Rpc::ClearNamespaceQuota,
+            Self::CreateToken => Rpc::CreateToken,
+            Self::GetToken => Rpc::GetToken,
+            Self::ListTokens => Rpc::ListTokens,
+            Self::RevokeToken => Rpc::RevokeToken,
         }
     }
 
@@ -450,7 +482,9 @@ impl Binding {
             | Self::GetPeriodicTask
             | Self::ListOverrides
             | Self::ListAuditRecords
-            | Self::GetNamespaceQuota => Verb::Get,
+            | Self::GetNamespaceQuota
+            | Self::GetToken
+            | Self::ListTokens => Verb::Get,
             Self::Enqueue
             | Self::EnqueueBatch
             | Self::CancelJob
@@ -471,7 +505,9 @@ impl Binding {
             | Self::SetQueueOverride
             | Self::ClearQueueOverride
             | Self::SetNamespaceQuota
-            | Self::ClearNamespaceQuota => Verb::Post,
+            | Self::ClearNamespaceQuota
+            | Self::CreateToken
+            | Self::RevokeToken => Verb::Post,
         }
     }
 
@@ -513,6 +549,9 @@ impl Binding {
             Self::ListAuditRecords => "/v1/admin/auditRecords",
             Self::GetNamespaceQuota | Self::SetNamespaceQuota => "/v1/admin/quota",
             Self::ClearNamespaceQuota => "/v1/admin/quota:clear",
+            Self::CreateToken | Self::ListTokens => "/v1/admin/tokens",
+            Self::GetToken => "/v1/admin/tokens/{token_id}",
+            Self::RevokeToken => "/v1/admin/tokens/{token_id}:revoke",
         }
     }
 
@@ -565,6 +604,9 @@ impl Binding {
             Self::GetNamespaceQuota => get(operator::get_namespace_quota),
             Self::SetNamespaceQuota => post(operator::set_namespace_quota),
             Self::ClearNamespaceQuota => post(operator::clear_namespace_quota),
+            Self::CreateToken => post(operator::create_token),
+            Self::GetToken => get(operator::get_token),
+            Self::ListTokens => get(operator::list_tokens),
             Self::CancelJob
             | Self::PauseQueue
             | Self::ResumeQueue
@@ -574,7 +616,8 @@ impl Binding {
             | Self::DeletePeriodicTask
             | Self::PausePeriodicTask
             | Self::ResumePeriodicTask
-            | Self::TriggerPeriodicTask => post(custom_method),
+            | Self::TriggerPeriodicTask
+            | Self::RevokeToken => post(custom_method),
         }
     }
 }
@@ -617,6 +660,10 @@ pub const ROUTES: &[Binding] = &[
     Binding::GetNamespaceQuota,
     Binding::SetNamespaceQuota,
     Binding::ClearNamespaceQuota,
+    Binding::CreateToken,
+    Binding::GetToken,
+    Binding::ListTokens,
+    Binding::RevokeToken,
 ];
 
 /// Which binding a concrete request path and method reach, if any.
@@ -749,6 +796,7 @@ async fn custom_method(
         Binding::TriggerPeriodicTask => {
             operator::trigger_periodic_task(&doors.admin, &parts, id).await
         }
+        Binding::RevokeToken => operator::revoke_token(&doors.admin, &parts, id).await,
         // Listed rather than `_`, so a new custom method does not compile until
         // it is dispatched. `custom_target` never answers one of these: none of
         // them carries a verb after a parameter.
@@ -777,7 +825,10 @@ async fn custom_method(
         | Binding::ListAuditRecords
         | Binding::GetNamespaceQuota
         | Binding::SetNamespaceQuota
-        | Binding::ClearNamespaceQuota => error::refuse(unrouted(&parts)),
+        | Binding::ClearNamespaceQuota
+        | Binding::CreateToken
+        | Binding::GetToken
+        | Binding::ListTokens => error::refuse(unrouted(&parts)),
     }
 }
 

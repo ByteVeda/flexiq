@@ -39,6 +39,65 @@
         },
         "type": "object"
       },
+      "flexiq.admin.v1.ApiToken": {
+        "description": "An API token, as a listing shows it. Never carries the secret or its digest.",
+        "properties": {
+          "createdAt": {
+            "description": "An instant, RFC 3339 with a `Z` offset.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdBy": {
+            "description": "Who minted it: a dashboard username, `cli`, or `token:<id>` for a token\nminted through CreateToken. Absent when unrecorded.",
+            "type": "string"
+          },
+          "expiresAt": {
+            "description": "An instant, RFC 3339 with a `Z` offset.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "Public identifier, the handle GetToken and RevokeToken take.",
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "description": "Absent until first used; written at most once a minute.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "description": "Label chosen at mint. Two tokens may share it.",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "The one namespace every call on the token is scoped to.",
+            "type": "string"
+          },
+          "revokedAt": {
+            "description": "Absent unless revoked.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "Grants, spelled `scope` or `scope:queue=<pattern>,task=<pattern>`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "description": "A value this reader does not recognise is not an error; show it as unknown.",
+            "enum": [
+              "TOKEN_STATUS_UNSPECIFIED",
+              "TOKEN_STATUS_ACTIVE",
+              "TOKEN_STATUS_EXPIRED",
+              "TOKEN_STATUS_REVOKED"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "flexiq.admin.v1.AuditRecord": {
         "description": "One token-authorised write, or one action a dashboard user or the token\ncommand line took. Names a token by its public id only — never the token,\nnever its digest.",
         "properties": {
@@ -92,6 +151,40 @@
       },
       "flexiq.admin.v1.ClearTaskOverrideResponse": {
         "properties": {},
+        "type": "object"
+      },
+      "flexiq.admin.v1.CreateTokenRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expireDays": {
+            "description": "Days until it expires, 1 to 365. Unset is 90. Refused, never shortened,\nwhen the token would outlive the caller's.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "name": {
+            "description": "At most 64 characters, no control characters.",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "At least one grant. Each must be covered by one of the caller's own: the\nsame scope, reaching no queue or task the caller's does not.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.CreateTokenResponse": {
+        "properties": {
+          "secret": {
+            "description": "The credential to present, shown this once. Unrecoverable afterwards.",
+            "type": "string"
+          },
+          "token": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.ApiToken"
+          }
+        },
         "type": "object"
       },
       "flexiq.admin.v1.DeadLetter": {
@@ -213,6 +306,14 @@
         },
         "type": "object"
       },
+      "flexiq.admin.v1.GetTokenResponse": {
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.ApiToken"
+          }
+        },
+        "type": "object"
+      },
       "flexiq.admin.v1.ListAuditRecordsResponse": {
         "properties": {
           "nextPageToken": {
@@ -282,6 +383,18 @@
             "description": "By name. Not paginated: bounded by the number of queues, not of jobs.",
             "items": {
               "$ref": "#/components/schemas/flexiq.admin.v1.Queue"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.ListTokensResponse": {
+        "properties": {
+          "tokens": {
+            "description": "Newest first. Not paginated: bounded by the tokens one namespace mints.",
+            "items": {
+              "$ref": "#/components/schemas/flexiq.admin.v1.ApiToken"
             },
             "type": "array"
           }
@@ -646,6 +759,15 @@
           "queue": {
             "$ref": "#/components/schemas/flexiq.admin.v1.Queue",
             "description": "The queue after the call."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.admin.v1.RevokeTokenResponse": {
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/flexiq.admin.v1.ApiToken",
+            "description": "The token after the call: REVOKED."
           }
         },
         "type": "object"
@@ -1604,7 +1726,7 @@
     }
   },
   "info": {
-    "description": "The JSON facade of the FlexiQ gRPC producer and admin doors, transcoded from `contracts/proto/flexiq/v1` and `contracts/proto/flexiq/admin/v1`. Every path here reaches the same service method a gRPC client reaches, on the same listener and behind the same token check.\n\nA token's scopes pick what it may call: on the `/v1/` producer paths, `read` reaches every `GET` and `produce` reaches every path; under `/v1/admin/`, `inspect` reaches every `GET` and `admin` every `POST`. A `produce` or `read` grant narrowed to some queues and tasks reaches only those.\n\nRequests are refused when they carry a field the contract does not declare. Responses are not closed: a later release may add one.\n\nA listener serves exactly one namespace and it comes from the token, so no request names one. A resource in another namespace is indistinguishable from one that does not exist.\n\nThis document is generated. Edit the `.proto` files and run `scripts/proto-check.sh --fix`.",
+    "description": "The JSON facade of the FlexiQ gRPC producer and admin doors, transcoded from `contracts/proto/flexiq/v1` and `contracts/proto/flexiq/admin/v1`. Every path here reaches the same service method a gRPC client reaches, on the same listener and behind the same token check.\n\nA token's scopes pick what it may call: on the `/v1/` producer paths, `read` reaches every `GET` and `produce` reaches every path; under `/v1/admin/`, `inspect` reaches every `GET` and `admin` every `POST`, except `/v1/admin/tokens`, which only `tokens` reaches. A `produce` or `read` grant narrowed to some queues and tasks reaches only those.\n\nRequests are refused when they carry a field the contract does not declare. Responses are not closed: a later release may add one.\n\nA listener serves exactly one namespace and it comes from the token, so no request names one. A resource in another namespace is indistinguishable from one that does not exist.\n\nThis document is generated. Edit the `.proto` files and run `scripts/proto-check.sh --fix`.",
     "license": {
       "identifier": "MIT",
       "name": "MIT"
@@ -2787,6 +2909,161 @@
           }
         },
         "summary": "How many jobs finished per queue over a recent window.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/tokens": {
+      "get": {
+        "description": "Every token of the caller's namespace, newest first, revoked and expired\nones included.",
+        "operationId": "AdminService_ListTokens",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.ListTokensResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Every token of the caller's namespace, newest first, revoked and expired",
+        "tags": [
+          "AdminService"
+        ]
+      },
+      "post": {
+        "description": "Mint an API token in the caller's namespace. The secret is in this\nresponse and nowhere else, ever. Refused unless every requested grant is\ncovered by one of the caller's own and the token expires no later than\nthe caller's.",
+        "operationId": "AdminService_CreateToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/flexiq.admin.v1.CreateTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.CreateTokenResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Mint an API token in the caller's namespace. The secret is in this",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/tokens/{token_id}": {
+      "get": {
+        "operationId": "AdminService_GetToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.GetTokenResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "One token of the caller's namespace, revoked or expired ones included.",
+        "tags": [
+          "AdminService"
+        ]
+      }
+    },
+    "/v1/admin/tokens/{token_id}:revoke": {
+      "post": {
+        "description": "Revoke a token; it stops working on its next call. Refused unless every\ngrant it carries is covered by one of the caller's. Revoking a revoked\ntoken returns it unchanged.",
+        "operationId": "AdminService_RevokeToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.admin.v1.RevokeTokenResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Revoke a token; it stops working on its next call. Refused unless every",
         "tags": [
           "AdminService"
         ]
