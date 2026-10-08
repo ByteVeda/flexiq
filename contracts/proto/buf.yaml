@@ -24,10 +24,16 @@ modules:
 deps:
   - buf.build/googleapis/googleapis
 
+# externalscaler/ is KEDA's contract, vendored (#850). Its names and evolution
+# are KEDA's, so neither lint nor breaking judges it.
 lint:
   use:
     - STANDARD
+  ignore:
+    - externalscaler
 
 breaking:
   use:
     - WIRE_JSON
+  ignore:
+    - externalscaler
