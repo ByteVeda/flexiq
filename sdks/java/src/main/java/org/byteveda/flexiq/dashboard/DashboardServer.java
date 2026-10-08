@@ -256,17 +256,26 @@ public final class DashboardServer implements AutoCloseable {
         // Resolve assets and the audit window before binding so a failure can't leak a bound port.
         Path dir = staticDir != null ? Paths.get(staticDir).normalize() : DashboardAssets.resolveOrNull();
         int auditRetentionDays = auditRetentionDays(System.getenv());
-        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
-        DashboardServer dashboard = new DashboardServer(server, queue, dir, secureCookies, token, authEnabled, oauth);
-        // Seed an env admin before serving so no request races the open setup endpoint.
-        if (token == null && authEnabled) {
-            dashboard.authStore.bootstrapAdminFromEnv();
-        }
+        // Audit before binding: HttpServer.stop() on a server never started keeps
+        // the port bound, so a failure after bind could not be undone cleanly.
         queue.startDashboardAudit(auditRetentionDays);
-        server.createContext("/", dashboard::dispatch);
-        server.setExecutor(Executors.newCachedThreadPool());
-        server.start();
-        return dashboard;
+        try {
+            HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+            DashboardServer dashboard =
+                    new DashboardServer(server, queue, dir, secureCookies, token, authEnabled, oauth);
+            // Seed an env admin before serving so no request races the open setup endpoint.
+            if (token == null && authEnabled) {
+                dashboard.authStore.bootstrapAdminFromEnv();
+            }
+            server.createContext("/", dashboard::dispatch);
+            server.setExecutor(Executors.newCachedThreadPool());
+            server.start();
+            return dashboard;
+        } catch (IOException | RuntimeException e) {
+            // No dashboard came up to close it later; stop the writer now.
+            queue.closeDashboardAudit();
+            throw e;
+        }
     }
 
     /**
