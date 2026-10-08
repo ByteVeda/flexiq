@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -29,6 +30,16 @@ func TestCheckRate(t *testing.T) {
 		if err := checkRate(rate); err == nil {
 			t.Errorf("checkRate(%q) = nil, want an error", rate)
 		}
+	}
+}
+
+func TestCheckRateNamesEveryUnit(t *testing.T) {
+	err := checkRate("10/d")
+	if err == nil {
+		t.Fatal("checkRate(10/d) = nil, want an error")
+	}
+	if want := "s, sec, second, m, min, minute, h, hr, hour"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q does not list %q", err, want)
 	}
 }
 

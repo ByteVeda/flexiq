@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -14,6 +15,9 @@ import (
 // decimalCount is the finite subset of Rust's f64 grammar. Go's ParseFloat
 // alone would also take hex floats and `_` separators, which the server refuses.
 var decimalCount = regexp.MustCompile(`^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$`)
+
+// rateUnits is every unit RateLimitConfig::parse takes, case-sensitive.
+var rateUnits = []string{"s", "sec", "second", "m", "min", "minute", "h", "hr", "hour"}
 
 // checkRate mirrors the server's RateLimitConfig::parse so a bad rate fails at
 // plan time rather than mid-apply: exactly one `/`, both parts trimmed, a
@@ -32,10 +36,8 @@ func checkRate(rate string) error {
 	if err != nil || math.IsInf(n, 0) {
 		return fmt.Errorf("%q: count %q is not a finite number", rate, count)
 	}
-	switch unit {
-	case "s", "sec", "second", "m", "min", "minute", "h", "hr", "hour":
-	default:
-		return fmt.Errorf("%q: unit %q is not one of s, m or h", rate, unit)
+	if !slices.Contains(rateUnits, unit) {
+		return fmt.Errorf("%q: unit %q is not one of %s", rate, unit, strings.Join(rateUnits, ", "))
 	}
 	if n < 1 {
 		return fmt.Errorf("%q: count must be at least one", rate)
