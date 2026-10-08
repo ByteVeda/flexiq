@@ -1,5 +1,6 @@
-// Package provider implements the flexiq Terraform provider: queue overrides
-// and namespace quotas over a flexiq-server's admin door.
+// Package provider implements the flexiq Terraform provider: queue overrides,
+// namespace quotas, periodic tasks and API tokens over a flexiq-server's
+// admin door.
 package provider
 
 import (
@@ -140,6 +141,7 @@ func (p *flexiqProvider) Resources(context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		newQueueResource,
 		newNamespaceResource,
+		newPeriodicResource,
 	}
 }
 

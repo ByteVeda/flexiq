@@ -23,9 +23,18 @@ type adminAPI interface {
 	GetNamespaceQuota(ctx context.Context) (admin.NamespaceQuota, error)
 	SetNamespaceQuota(ctx context.Context, quota admin.NamespaceQuota) (admin.NamespaceQuota, error)
 	ClearNamespaceQuota(ctx context.Context) error
+
+	GetPeriodicTask(ctx context.Context, name string, opts admin.GetPeriodicTaskOptions) (admin.PeriodicTask, error)
+	PutPeriodicTask(ctx context.Context, spec admin.PeriodicTaskSpec) (admin.PeriodicTask, error)
+	DeletePeriodicTask(ctx context.Context, name string) error
+	PausePeriodicTask(ctx context.Context, name string) (admin.PeriodicTask, error)
+	ResumePeriodicTask(ctx context.Context, name string) (admin.PeriodicTask, error)
 }
 
 var _ adminAPI = (*admin.Client)(nil)
+
+// nameAttribute is the attribute every resource is named by.
+const nameAttribute = "name"
 
 // providerData is what Configure hands every resource.
 type providerData struct {

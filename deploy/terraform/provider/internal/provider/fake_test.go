@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"fmt"
 
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 	"github.com/ByteVeda/flexiq/sdks/go/v2/admin"
 )
 
@@ -13,6 +15,7 @@ type fakeAdmin struct {
 	overrides map[string]admin.QueueOverride
 	paused    map[string]bool
 	quota     *admin.NamespaceQuota
+	periodic  map[string]admin.PeriodicTask
 
 	// calls records every method in order, for asserting which RPCs ran.
 	calls []string
@@ -26,6 +29,7 @@ func newFakeAdmin() *fakeAdmin {
 	return &fakeAdmin{
 		overrides: map[string]admin.QueueOverride{},
 		paused:    map[string]bool{},
+		periodic:  map[string]admin.PeriodicTask{},
 		fail:      map[string]error{},
 	}
 }
@@ -119,4 +123,82 @@ func (f *fakeAdmin) ClearNamespaceQuota(context.Context) error {
 	}
 	f.quota = nil
 	return nil
+}
+
+func periodicNotFound(name string) error {
+	return fmt.Errorf("periodic task %q: %w", name, flexiq.ReasonPeriodicTaskNotFound)
+}
+
+func (f *fakeAdmin) GetPeriodicTask(_ context.Context, name string, opts admin.GetPeriodicTaskOptions) (admin.PeriodicTask, error) {
+	if err := f.record("GetPeriodicTask"); err != nil {
+		return admin.PeriodicTask{}, err
+	}
+	task, ok := f.periodic[name]
+	if !ok {
+		return admin.PeriodicTask{}, periodicNotFound(name)
+	}
+	if !opts.IncludePayload {
+		task.Payload = nil
+	}
+	return task, nil
+}
+
+func (f *fakeAdmin) PutPeriodicTask(_ context.Context, spec admin.PeriodicTaskSpec) (admin.PeriodicTask, error) {
+	if err := f.record("PutPeriodicTask"); err != nil {
+		return admin.PeriodicTask{}, err
+	}
+	payload, err := flexiq.EncodeCall(spec.Args, spec.Kwargs)
+	if err != nil {
+		return admin.PeriodicTask{}, err
+	}
+	// The server stores an empty queue as "default", and a replace keeps the
+	// pause state whatever StartPaused says.
+	queue := spec.Queue
+	if queue == "" {
+		queue = defaultQueue
+	}
+	enabled := !spec.StartPaused
+	if existing, ok := f.periodic[spec.Name]; ok {
+		enabled = existing.Enabled
+	}
+	task := admin.PeriodicTask{
+		Name: spec.Name, TaskName: spec.Task, Cron: spec.Cron, Queue: queue,
+		Timezone: spec.Timezone, Enabled: enabled, Payload: payload,
+	}
+	f.periodic[spec.Name] = task
+	task.Payload = nil
+	return task, nil
+}
+
+func (f *fakeAdmin) DeletePeriodicTask(_ context.Context, name string) error {
+	if err := f.record("DeletePeriodicTask"); err != nil {
+		return err
+	}
+	if _, ok := f.periodic[name]; !ok {
+		return periodicNotFound(name)
+	}
+	delete(f.periodic, name)
+	return nil
+}
+
+func (f *fakeAdmin) setPeriodicEnabled(method, name string, enabled bool) (admin.PeriodicTask, error) {
+	if err := f.record(method); err != nil {
+		return admin.PeriodicTask{}, err
+	}
+	task, ok := f.periodic[name]
+	if !ok {
+		return admin.PeriodicTask{}, periodicNotFound(name)
+	}
+	task.Enabled = enabled
+	f.periodic[name] = task
+	task.Payload = nil
+	return task, nil
+}
+
+func (f *fakeAdmin) PausePeriodicTask(_ context.Context, name string) (admin.PeriodicTask, error) {
+	return f.setPeriodicEnabled("PausePeriodicTask", name, false)
+}
+
+func (f *fakeAdmin) ResumePeriodicTask(_ context.Context, name string) (admin.PeriodicTask, error) {
+	return f.setPeriodicEnabled("ResumePeriodicTask", name, true)
 }

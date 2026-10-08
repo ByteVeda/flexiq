@@ -55,7 +55,7 @@ func (r *queueResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 				Computed:      true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"name": schema.StringAttribute{
+			nameAttribute: schema.StringAttribute{
 				Description:   "The queue to override. Changing it replaces the resource.",
 				Required:      true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
@@ -143,7 +143,7 @@ func (r *queueResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 }
 
 func (r *queueResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("name"), req, resp)
+	resource.ImportStatePassthroughID(ctx, path.Root(nameAttribute), req, resp)
 }
 
 // overrideFromModel maps the resource's limits to the admin client's: a null

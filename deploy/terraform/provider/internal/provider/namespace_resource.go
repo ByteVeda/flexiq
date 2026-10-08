@@ -79,7 +79,7 @@ func (r *namespaceResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Computed:      true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"name": schema.StringAttribute{
+			nameAttribute: schema.StringAttribute{
 				Description:   `The provider's namespace label, or "current" when it sets none.`,
 				Computed:      true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
