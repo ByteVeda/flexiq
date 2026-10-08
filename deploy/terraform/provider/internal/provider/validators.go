@@ -4,28 +4,38 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 )
 
-// checkRate mirrors the server's rate parser so a bad rate fails at plan time
-// rather than mid-apply: `<count>/<unit>`, unit s, m or h, count a finite
-// number of at least one (a bucket under one never releases a job).
+// decimalCount is the finite subset of Rust's f64 grammar. Go's ParseFloat
+// alone would also take hex floats and `_` separators, which the server refuses.
+var decimalCount = regexp.MustCompile(`^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$`)
+
+// checkRate mirrors the server's RateLimitConfig::parse so a bad rate fails at
+// plan time rather than mid-apply: exactly one `/`, both parts trimmed, a
+// finite count of at least one (a bucket under one never releases a job), and
+// a unit of s|sec|second, m|min|minute or h|hr|hour.
 func checkRate(rate string) error {
-	count, unit, found := strings.Cut(rate, "/")
-	if !found {
+	parts := strings.Split(rate, "/")
+	if len(parts) != 2 {
 		return fmt.Errorf("%q is not <count>/<unit>", rate)
 	}
-	switch unit {
-	case "s", "m", "h":
-	default:
-		return fmt.Errorf("%q: unit %q is not one of s, m or h", rate, unit)
+	count, unit := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	if !decimalCount.MatchString(count) {
+		return fmt.Errorf("%q: count %q is not a number", rate, count)
 	}
 	n, err := strconv.ParseFloat(count, 64)
-	if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
-		return fmt.Errorf("%q: count %q is not a number", rate, count)
+	if err != nil || math.IsInf(n, 0) {
+		return fmt.Errorf("%q: count %q is not a finite number", rate, count)
+	}
+	switch unit {
+	case "s", "sec", "second", "m", "min", "minute", "h", "hr", "hour":
+	default:
+		return fmt.Errorf("%q: unit %q is not one of s, m or h", rate, unit)
 	}
 	if n < 1 {
 		return fmt.Errorf("%q: count must be at least one", rate)
