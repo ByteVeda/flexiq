@@ -20,7 +20,9 @@ type PeriodicTask struct {
 	TaskName string
 	// Cron has six fields, seconds first: "0 */5 * * * *" is every five
 	// minutes.
-	Cron  string
+	Cron string
+	// Queue is the queue each firing enqueues onto. A task put with an empty
+	// queue reads back as "default", the name the server stores.
 	Queue string
 	// Timezone is the IANA name the cron expression is read in. Empty is UTC.
 	Timezone string

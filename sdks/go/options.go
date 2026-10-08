@@ -17,7 +17,14 @@ import (
 // payload into a error from the server halfway through a request. This client
 // applies the cap to both directions so the send fails locally, before the
 // bytes go out.
-const MaxMessageBytes = door.MaxMessageBytes
+const MaxMessageBytes = 4 * 1024 * 1024
+
+// The dialler applies door's copy of the cap; a negative array length fails the
+// build if the two ever disagree.
+var (
+	_ [MaxMessageBytes - door.MaxMessageBytes]struct{}
+	_ [door.MaxMessageBytes - MaxMessageBytes]struct{}
+)
 
 // Option configures a [Client], and the admin client in the
 // [github.com/ByteVeda/flexiq/sdks/go/v2/admin] subpackage, which dials the
