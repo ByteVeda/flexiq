@@ -14,8 +14,10 @@ use `structured` arguments, no CBOR library either.
   [`github.com/ByteVeda/flexiq/sdks/go/v2`](https://github.com/ByteVeda/flexiq/tree/master/sdks/go)
   implements this page — enqueue, batch, read, cancel, count, and submit and
   read a workflow — with the payload envelope, the reason-based errors and the
-  bearer credential already handled.
-  It is a producer client, not an SDK: it cannot execute tasks.
+  bearer credential already handled. Its `executor` package runs tasks over the
+  [executor door](/server/custom-executors), and its `admin` package drives the
+  [admin door](/server/operate/admin).
+  It is a client, not an SDK: it has no task registration or middleware.
 </Callout>
 
 <Callout title="So does Ruby">
