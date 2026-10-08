@@ -445,11 +445,15 @@ jobs can be cancelled. FlexiQ stores the result, and cancellation is a call:
 
 ```ruby
 job = client.wait(job_id, timeout: 30) # raises FlexiQ::WaitTimeoutError
-job.status        # => :complete, :dead, :cancelled, ...
-job.decode_result # what the handler returned
+job.status # => :complete, :dead, :cancelled, ...
+value = job.decode_result if job.status == :complete && job.result
 
 client.cancel_job(job_id) # idempotent
 ```
+
+`decode_result` raises `FlexiQ::CodecError` when the job carries no result:
+one that did not complete, or whose handler returned `nil`, as every handler
+on this page does. Check `job.result` first, as above.
 
 A pending job is cancelled outright. A running one is asked to stop, and the
 handler sees it at its next `job.check!`:
