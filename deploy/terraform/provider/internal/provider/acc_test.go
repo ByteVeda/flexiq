@@ -138,6 +138,21 @@ resource "flexiq_queue" "emails" {
 				Check: expectQueue(int32Ptr(4), "", false),
 			},
 			{
+				// A long unit is stored verbatim, so it round-trips with no
+				// diff; the harness fails the step on a non-empty plan after apply.
+				Config: accConfig(`
+resource "flexiq_queue" "emails" {
+  name           = "tf-acc-emails"
+  max_concurrent = 4
+  rate_limit     = "10/sec"
+}
+`),
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr(address, "rate_limit", "10/sec"),
+					expectQueue(int32Ptr(4), "10/sec", false),
+				),
+			},
+			{
 				ResourceName:      address,
 				ImportState:       true,
 				ImportStateId:     accQueue,
@@ -242,6 +257,21 @@ resource "flexiq_namespace" "this" {
 				Check: expectQuota(func(_, maxRunning, _ *int64, _, _ string) error {
 					if maxRunning == nil || *maxRunning != 5 {
 						return fmt.Errorf("max_running not restored: %v", maxRunning)
+					}
+					return nil
+				}),
+			},
+			{
+				// A long unit is stored verbatim and round-trips with no diff.
+				Config: accConfig(`
+resource "flexiq_namespace" "this" {
+  max_running  = 5
+  enqueue_rate = "5/hr"
+}
+`),
+				Check: expectQuota(func(_, _, _ *int64, rate, _ string) error {
+					if rate != "5/hr" {
+						return fmt.Errorf("enqueue_rate on the server = %q, want 5/hr", rate)
 					}
 					return nil
 				}),
