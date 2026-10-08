@@ -1,46 +1,242 @@
 ---
 title: Comparison
-description: "FlexiQ vs other task queues — feature matrix and decision guide."
+description: "FlexiQ against Temporal, Cloud Tasks and EventBridge, BullMQ, Celery, Dramatiq and RQ — where each one is the better choice."
 ---
 
-**TL;DR**: FlexiQ is <SdkSwap python="Celery" node="BullMQ" java="a task queue" rust="a task queue" /> without the
-broker (a separate server such as Redis or RabbitMQ that holds pending jobs). Rust scheduler, no broker required, and no separate service to operate.
-Start with SQLite; add Postgres or Redis as a backend when you scale out.
+**TL;DR**: FlexiQ is one Rust engine under four SDKs — Python, Node, Java and
+Rust — plus a network door, `flexiq-server`, that any language reaches over
+gRPC or JSON. It embeds the queue in your process, with durable steps and
+workflows on top, and starts on a SQLite file with nothing else installed. When
+you outgrow one machine, the same code moves to Postgres or Redis.
 
-The page below compares features. For speed, see [Benchmarks](/about/benchmarks) —
-measured, reproducible, and not flattering on every axis.
+That makes it a task queue first. The tools people actually weigh it against
+are a durable-execution platform (Temporal), managed cloud queues (Cloud Tasks,
+EventBridge), and the incumbent queue in each language (BullMQ, Celery,
+Dramatiq, RQ). This page says where each of them is the better choice. For
+speed, see [Benchmarks](/about/benchmarks) — measured, reproducible, and not
+flattering on every axis.
 
-## When to use flexiq
+## When to use FlexiQ
 
-flexiq is ideal when:
+FlexiQ fits when:
 
-- **Single-machine deployments** — no need for distributed workers across multiple servers
-- **Zero infrastructure** — you don't want to install, configure, or manage Redis or RabbitMQ
-- **Embedded applications** — CLI tools, desktop apps, or services where simplicity matters
-- **Prototyping** — get a task queue running in 5 lines, iterate fast
-- **Low-to-medium throughput** — hundreds to thousands of jobs per second is plenty
+- **You want no broker to start** — the queue, scheduler, retries, dead-letter
+  queue and dashboard run against a SQLite file, so a laptop, a CLI tool or a
+  single service needs nothing else installed
+- **You want to grow without a rewrite** — the same tasks move to Postgres or
+  Redis when workers spread across machines, and to `flexiq-server` when a
+  caller has no SDK
+- **Several languages share one queue** — Python, Node, Java and Rust SDKs, and
+  Go or Ruby clients over the network door, all enqueue to and drain the same
+  queues
+- **A task needs checkpoints, not a workflow platform** — durable steps memoize
+  work inside one job, and a DAG workflow engine covers fan-out, approval gates
+  and sagas
 
-## When NOT to use flexiq
+## When NOT to use FlexiQ
 
-Consider alternatives when:
+Reach for something else when:
 
-- **Multi-server workers** — you need workers on separate machines (flexiq supports this with Postgres/Redis backends, but a broker-based queue has more mature distributed tooling)
-- **Very high throughput** — millions of jobs/sec across a cluster (use a dedicated broker such as RabbitMQ or Kafka)
-- **Existing broker infrastructure** — if Redis/RabbitMQ is already in your stack, a broker-native queue may be simpler
-- **Complex routing** — you need topic exchanges, message filtering, or fan-out patterns beyond flexiq's pub/sub
+- **Very high throughput across a cluster** — millions of messages per second
+  are a job for a dedicated broker such as Kafka or RabbitMQ
+- **Rich, long-running workflow orchestration** — workflows whose code changes
+  while executions are in flight, that wait on signals for months, and that
+  need a versioning story. That is [Temporal](#vs-temporal)'s ground
+- **Zero operations is the requirement** — if nobody should run a database or a
+  process for the queue, a managed service such as
+  [Cloud Tasks or EventBridge](#vs-cloud-tasks-and-eventbridge) is the answer
+- **A broker-native queue is already in place and working** — if Redis or
+  RabbitMQ is central to your stack and the queue on it does what you need,
+  switching buys little
+- **Complex routing** — topic exchanges, message filtering, or fan-out patterns
+  beyond FlexiQ's pub/sub
+
+## At a glance
+
+| | FlexiQ | Temporal | Cloud Tasks / EventBridge | BullMQ | Celery | Dramatiq | RQ |
+|---|---|---|---|---|---|---|---|
+| **What it is** | Embedded task queue with durable steps and workflows | Durable-execution platform | Managed task queue (Cloud Tasks) and managed event bus (EventBridge) | Queue library for Node.js | Distributed task queue for Python | Task queue for Python | Task queue for Python on Redis |
+| **What you run** | Nothing beyond your app on SQLite; Postgres or Redis to scale out; optionally `flexiq-server` | A Temporal Service — frontend, history, matching and worker services plus a database — and your Workers; or Temporal Cloud and your Workers | Your targets; the queue is the cloud provider's | Redis, or PostgreSQL since BullMQ 6, and your workers | A broker (RabbitMQ or Redis), usually a result backend, and your workers | A broker (RabbitMQ or Redis) and your workers | Redis and your workers |
+| **Languages** | Python, Node, Java, Rust SDKs; Go and Ruby clients; any gRPC or HTTP caller | Go, Java, Python, TypeScript, .NET, PHP, Ruby, Rust SDKs | Any — a target is an HTTP endpoint or a cloud service | Node.js; ports for Python, Elixir and PHP | Python | Python | Python |
+| **Durable steps** | Yes — memoized `step.run`, `step.sleep` | Yes — Activities, with workflow code replayed from history | No | No built-in; a documented pattern saves the step in job data | No | No | No |
+| **Workflow model** | DAG declared up front: fan-out, conditions, approval gates, sub-workflows, sagas | Workflows are code, replayed deterministically; signals, queries, updates, durable timers | None — one task or event, one target | Flows (parent and child jobs) | Canvas: chain, group, chord | Pipelines and groups | Job dependencies |
+| **Dead-letter queue** | Yes — inspect the payload and error, replay as a fresh job | No queue — a failed execution keeps its history and can be reset to an earlier point | Cloud Tasks deletes a task after its last attempt; EventBridge sends to an SQS queue whose redrive is code you write | Failed set; `job.retry()` | No built-in | Yes — dead-lettered messages kept up to 7 days | Failed job registry |
+| **Local development** | A SQLite file, nothing to install | `temporal server start-dev`, in memory unless given a file | No official Cloud Tasks emulator | A local Redis | A local broker | A local broker | A local Redis |
+| **Hosted offering** | None | Temporal Cloud | Fully managed | None | None | None | None |
+| **Web UI** | Built-in dashboard | Temporal Web UI | The cloud provider's console | Taskforce.sh, or community boards | Flower | Community dashboards | rq-dashboard |
+| **Performance** | [Benchmarked](/about/benchmarks) | Not measured | Not measured | [Benchmarked](/about/benchmarks) | [Benchmarked](/about/benchmarks) | [Benchmarked](/about/benchmarks) | [Benchmarked](/about/benchmarks) |
+
+The benchmark is one scenario and it cuts both ways: FlexiQ's Redis backend
+loses to Dramatiq and BullMQ when Redis is a network hop away, and
+[Where FlexiQ loses](/about/benchmarks#where-flexiq-loses) explains why. Temporal
+and the managed services were not part of the run, so this page makes no
+performance claim about them either way.
+
+## Detailed comparison
+
+### vs Temporal
+
+Temporal and FlexiQ overlap on one idea — durable execution with memoized
+steps — and differ on nearly everything around it. In Temporal a workflow is
+ordinary code that the platform replays deterministically from its event
+history; side effects live in Activities, whose results are recorded so a
+replay never repeats them. FlexiQ's
+<SdkLink to="modules/steps">durable steps</SdkLink> are the same idea inside a
+single task: `step.run` commits a result next to the job and every later
+attempt reads it back instead of running the work again.
+
+Temporal's model goes much further, and for a large class of users it is the
+right answer:
+
+- **Workflows are code, not a declared graph.** Loops, branches and child
+  workflows are plain control flow, and the replay guarantees they resume
+  exactly where they stopped.
+- **Talking to a running workflow.** Signals write to it, queries read its
+  state, and updates write and wait for a result.
+- **Timers that last.** A durable timer can be as long as several years, and a
+  waiting workflow costs a Worker nothing.
+- **Versioning.** Worker Versioning and patching let code change while
+  executions that started on the old code are still running. FlexiQ has no
+  versioning API: a step sequence that changes under an in-flight job is a
+  <SdkLink to="modules/steps#divergence-changing-code-while-jobs-are-in-flight">divergence</SdkLink>
+  that dead-letters the job, so deploying such a change is a drain, not a
+  rolling restart.
+- **Recovery and visibility.** A mature Web UI shows every execution's event
+  history, and a stuck execution can be reset to an earlier point once the
+  bug is fixed.
+- **Temporal Cloud.** Temporal runs the service; you run only your Workers.
+
+What Temporal asks for in return is a service to operate. Self-hosted, that is
+the Temporal Service — frontend, history, matching and worker services —
+backed by Cassandra, PostgreSQL or MySQL; its SQLite store is for development
+and testing only. Workflow code must stay deterministic, and changes to it go
+through versioning. `temporal server start-dev` makes local development easy,
+but production is a cluster or a Temporal Cloud account.
+
+FlexiQ is one library in your process, or one `flexiq-server` binary, and runs
+in production on a SQLite file when one machine is enough. It is a task queue
+first — priorities, rate limits, cron, a dead-letter queue you replay from —
+with steps and a DAG workflow engine added on top. Steps are capped in size (a
+checkpoint, not a data store) and cannot change shape mid-flight.
+
+**Choose FlexiQ if** you want a task queue with checkpointed retries and simple
+workflows, without running a cluster or adopting a programming model.
+**Choose Temporal if** your workflows are long-lived business processes, need
+signals or human-scale timers, or will change while executions are in flight —
+or if you want durable execution as a managed service.
+
+### vs Cloud Tasks and EventBridge
+
+Google Cloud Tasks and Amazon EventBridge are fully managed: there is no queue
+to run, patch or back up, and that is a real advantage FlexiQ cannot match.
+Cloud Tasks dispatches each task to an HTTP or App Engine target with a
+per-queue retry policy; EventBridge routes events to targets by rule.
+
+Where they stop is where FlexiQ starts:
+
+|  | FlexiQ | Cloud Tasks / EventBridge |
+|---|---|---|
+| **Operations** | You run the database and, for push, `flexiq-server` | None |
+| **Exhausted retries** | Kept in a dead-letter queue you can list, read and replay | Cloud Tasks deletes the task; EventBridge writes it to an SQS queue, and redriving it is code you write |
+| **Durable steps** | Yes, on a long-lived worker | No |
+| **Local development** | Everything runs against a SQLite file | No official Cloud Tasks emulator |
+| **Who runs the work** | SDK workers, attached executors or push targets, on the same queues | The targets the queue or rule dispatches to |
+
+[Migrating from Cloud Tasks and EventBridge](/server/migrate-cloud-tasks) maps
+each concept across and lists the limits worth knowing first.
+
+**Choose FlexiQ if** you want a dead-letter queue you can replay from, durable
+steps, or a queue that runs on a laptop. **Choose Cloud Tasks or EventBridge
+if** nobody should operate anything for the queue and the targets already
+live in that cloud.
+
+### vs BullMQ
+
+BullMQ is the Node incumbent: a mature library with priorities, rate limits,
+repeatable jobs and parent-child flows. It runs on Redis, and since BullMQ 6
+also on PostgreSQL. Ports exist for Python, Elixir and PHP.
+
+|  | FlexiQ | BullMQ |
+|---|---|---|
+| **Backend** | SQLite with nothing installed; Postgres or Redis | Redis; PostgreSQL since BullMQ 6 |
+| **Core** | Rust scheduler | JavaScript, with Lua scripts on Redis |
+| **Exhausted retries** | Dead-letter queue with replay | Failed set, `job.retry()` |
+| **Durable steps** | Built-in | A documented pattern: save the step in job data |
+| **Workflows** | DAG, fan-out, approval gates, sub-workflows, sagas | Flows (parent and child jobs) |
+| **Other languages** | Python, Java and Rust SDKs share the queue | Language ports of the library |
+
+On a remote Redis, BullMQ beats FlexiQ's Redis backend in the
+[benchmark](/about/benchmarks#where-flexiq-loses).
+
+**Choose FlexiQ if** you want to start without Redis, need durable steps, or
+share queues with workers in other languages. **Choose BullMQ if** Redis is
+already central to your stack and you want its throughput and its ecosystem.
+The [BullMQ migration guide](/node/operate/migration) maps every concept across.
+
+### vs Celery
+
+Celery is the most widely used Python task queue — battle-tested, feature-rich,
+and distributed from the start. Like Dramatiq and RQ it is a Python tool;
+FlexiQ's Python SDK is its counterpart, and producers in other languages can
+enqueue to the same FlexiQ queues.
+
+|  | FlexiQ | Celery |
+|---|---|---|
+| **Setup** | `pip install flexiq` | A broker (RabbitMQ or Redis), a result backend, Celery itself |
+| **Configuration** | Constructor parameters | Settings module or app config |
+| **Worker model** | Rust OS threads, or a prefork pool | Prefork, eventlet or gevent pools |
+| **Distributed** | Multi-server on Postgres or Redis | Yes, broker-based |
+| **Canvas** | chain, group, chord, starmap, chunks | chain, group, chord, starmap, chunks, and more |
+| **Monitoring** | Built-in dashboard | Flower |
+
+**Choose FlexiQ if** you want a queue without a broker, durable steps, or a
+dead-letter queue out of the box. **Choose Celery if** you need its broker
+routing, its ecosystem of extensions, or its long production record.
+
+### vs Dramatiq
+
+Dramatiq is a reliable, performance-focused Python alternative to Celery.
+
+|  | FlexiQ | Dramatiq |
+|---|---|---|
+| **Broker** | None (SQLite), or Postgres or Redis | Redis or RabbitMQ |
+| **Priority** | Yes, per job | Per actor, applied once messages are consumed |
+| **Rate limiting** | Built-in | `dramatiq.rate_limits` helpers |
+| **Dead-letter queue** | Built-in, replayable as a fresh job | Built-in, messages kept up to 7 days |
+| **Middleware** | Hooks + per-task `TaskMiddleware` | Full middleware stack |
+
+**Choose FlexiQ if** you want to run without a broker, or need durable steps
+and workflows. **Choose Dramatiq if** you already run its broker and want its
+throughput — it outruns FlexiQ's Redis backend in the
+[benchmark](/about/benchmarks#where-flexiq-loses).
+
+### vs RQ
+
+RQ focuses on simplicity — a minimal Python task queue built on Redis.
+
+|  | FlexiQ | RQ |
+|---|---|---|
+| **Broker** | None (SQLite), or Postgres or Redis | Redis required |
+| **Priority** | Yes (integer levels) | Separate queues for priority |
+| **Rate limiting** | Built-in | No |
+| **Chaining** | Yes | Job dependencies |
+| **Monitoring** | Built-in dashboard | rq-dashboard |
+
+**Choose FlexiQ if** you want similar simplicity without requiring Redis.
+**Choose RQ if** you already run Redis and want the smallest possible queue.
 
 <SdkOnly sdk="python">
 
-## Feature matrix
+## Python task queues, feature by feature
 
-| Feature | flexiq | Celery | RQ | Dramatiq | Huey | TaskIQ |
+| Feature | FlexiQ | Celery | RQ | Dramatiq | Huey | TaskIQ |
 |---|---|---|---|---|---|---|
 | Broker required | **No** | Redis / RabbitMQ | Redis | Redis / RabbitMQ | Redis | Redis / RabbitMQ / Nats |
 | Core language | **Rust + Python** | Python | Python | Python | Python | Python |
-| Priority queues | **Yes** | Yes | No | No | Yes | Yes |
+| Priority queues | **Yes** | Yes | No | Yes (per actor) | Yes | Yes |
 | Rate limiting | **Yes** | Yes | No | Yes | No | No |
-| Dead letter queue | **Yes** | No | Yes | No | No | No |
-| Task chaining | **Yes** (chain/group/chord) | Yes (canvas) | No | Yes (pipelines) | No | Yes (pipelines) |
+| Dead letter queue | **Yes** | No | Yes | Yes | No | No |
+| Task chaining | **Yes** (chain/group/chord) | Yes (canvas) | Dependencies only | Yes (pipelines) | No | Yes (pipelines) |
 | Job cancellation | **Yes** | Yes (revoke) | No | No | Yes | No |
 | Progress tracking | **Yes** | Yes (custom) | No | No | No | No |
 | Unique tasks | **Yes** | No (manual) | No | No | Yes | No |
@@ -63,60 +259,11 @@ Consider alternatives when:
 | Result backend (where task return values are stored) | **Built-in** (SQLite) | Redis / DB / custom | Redis | Redis / custom | Redis / SQLite | Redis / custom |
 | Setup complexity | **`pip install`** | Broker + backend | Redis server | Broker | Redis server | Broker + backend |
 
-## Detailed comparison
-
-### vs Celery
-
-Celery is the most popular Python task queue — battle-tested, feature-rich, and
-widely adopted.
-
-|  | flexiq | Celery |
-|---|---|---|
-| **Setup** | `pip install flexiq` | Install broker (Redis/RabbitMQ), result backend, Celery itself |
-| **Dependencies** | 1 (cloudpickle) | 10+ (kombu, billiard, vine, etc.) |
-| **Configuration** | Constructor params | Settings module or app config |
-| **Worker model** | Rust OS threads | prefork/eventlet/gevent pools |
-| **Distributed** | Single machine by default; multi-server via Postgres/Redis backend | Yes (multi-server) |
-| **Canvas** | chain, group, chord, starmap, chunks | chain, group, chord, starmap, chunks, and more |
-
-**Choose flexiq** if you want zero-infrastructure simplicity on a single machine.
-**Choose Celery** if you need distributed workers, complex routing, or enterprise features.
-
-### vs RQ (Redis Queue)
-
-RQ focuses on simplicity — a minimal task queue built on Redis.
-
-|  | flexiq | RQ |
-|---|---|---|
-| **Broker** | None (SQLite) | Redis required |
-| **Priority** | Yes (integer levels) | Separate queues for priority |
-| **Rate limiting** | Built-in | No |
-| **Chaining** | Yes | No |
-| **Monitoring** | CLI + progress | rq-dashboard (web) |
-
-**Choose flexiq** if you want similar simplicity without requiring Redis.
-**Choose RQ** if you already run Redis and want a web dashboard.
-
-### vs Dramatiq
-
-Dramatiq is a reliable, performance-focused alternative to Celery.
-
-|  | flexiq | Dramatiq |
-|---|---|---|
-| **Broker** | None (SQLite) | Redis or RabbitMQ |
-| **Priority** | Yes | No (FIFO only) |
-| **Rate limiting** | Built-in | Middleware |
-| **DLQ** | Built-in | No |
-| **Middleware** | Hooks + per-task `TaskMiddleware` | Full middleware stack |
-
-**Choose flexiq** if you want built-in DLQ and priority without a broker.
-**Choose Dramatiq** if you need a middleware ecosystem and distributed workers.
-
 ### vs Huey
 
 Huey is a lightweight task queue with Redis or SQLite backends.
 
-|  | flexiq | Huey |
+|  | FlexiQ | Huey |
 |---|---|---|
 | **Backend** | SQLite (Rust-native) | Redis or SQLite (Python) |
 | **Performance** | Rust scheduler + OS threads | Python threads |
@@ -125,7 +272,7 @@ Huey is a lightweight task queue with Redis or SQLite backends.
 | **DLQ** | Built-in | No |
 | **Progress** | Built-in | No |
 
-**Choose flexiq** if you want higher performance and more features with SQLite.
+**Choose FlexiQ** if you want more features with SQLite.
 **Choose Huey** if you need a mature, well-documented SQLite-backed queue.
 
 ### vs TaskIQ
@@ -133,7 +280,7 @@ Huey is a lightweight task queue with Redis or SQLite backends.
 TaskIQ is a modern, async-native task queue. It's a good fit if you're fully
 async and already have a broker.
 
-|  | flexiq | TaskIQ |
+|  | FlexiQ | TaskIQ |
 |---|---|---|
 | **Broker** | None (DB-backed) | Redis / RabbitMQ / Nats |
 | **Async** | Native + sync | Async-first |
@@ -141,47 +288,48 @@ async and already have a broker.
 | **GIL** (Global Interpreter Lock — only one thread runs Python bytecode at a time) | Rust scheduler bypasses GIL | Python scheduler competes for GIL |
 | **Setup** | `pip install flexiq` | Install broker + taskiq + broker plugin |
 
-Choose flexiq if you want zero infrastructure. Choose TaskIQ if you're fully
+Choose FlexiQ if you want zero infrastructure. Choose TaskIQ if you're fully
 async and already have Redis/Nats.
 
 </SdkOnly>
 
 <SdkOnly sdk="node">
 
-## How flexiq compares
+## Other Node queues
 
 Most Node task queues need a server beside your app: **Bee-Queue** and **Bull**
 require Redis, **BullMQ** requires Redis (or, since version 6, PostgreSQL), and
-**Agenda** requires MongoDB. flexiq embeds the queue in a Rust core with a
+**Agenda** requires MongoDB. FlexiQ embeds the queue in a Rust core with a
 pluggable backend (SQLite, Postgres, or Redis), so you can start with **zero
-infrastructure** and add a server only when you scale out.
+infrastructure** and add a server only when you scale out. BullMQ has its own
+section [above](#vs-bullmq).
 
-|  | flexiq | BullMQ / Bee-Queue | Agenda |
-|---|---|---|---|
-| **Server** | None (SQLite) — optional Postgres/Redis | Redis; BullMQ 6 also PostgreSQL | MongoDB required |
-| **Core** | Rust scheduler | JS + Redis Lua | JS + Mongo |
-| **Priorities / rate limits / DLQ** | Built-in | Priorities + rate limits (BullMQ); no built-in DLQ | Limited |
-| **Workflows** | Builder DAG, fan-out, sub-workflows, sagas | Flows (BullMQ) | No |
-| **Result streaming** | Yes (publish/stream) | No | No |
+|  | FlexiQ | Agenda |
+|---|---|---|
+| **Server** | None (SQLite) — optional Postgres/Redis | MongoDB required |
+| **Core** | Rust scheduler | JS + Mongo |
+| **Priorities / rate limits / DLQ** | Built-in | Limited |
+| **Workflows** | Builder DAG, fan-out, sub-workflows, sagas | No |
+| **Result streaming** | Yes (publish/stream) | No |
 
-**Choose flexiq** for a broker-optional queue with a workflow engine built in.
-**Choose BullMQ** if Redis is already central to your stack and you want its
-mature ecosystem.
+**Choose FlexiQ** for a broker-optional queue with a workflow engine built in.
+**Choose Agenda** if MongoDB is already your system of record and cron-style
+scheduling is what you need.
 
 </SdkOnly>
 
 <SdkOnly sdk="java">
 
-## How flexiq compares
+## JVM job tools
 
 JVM background-job tools each specialize: **Quartz** for cron scheduling,
 **JobRunr** for background jobs (RDBMS or Redis), **Spring Batch** for
-batch/ETL pipelines. flexiq is a general-purpose task queue with a Rust core:
+batch/ETL pipelines. FlexiQ is a general-purpose task queue with a Rust core:
 priorities, rate limits, dead-letter queues, workflows, and result streaming,
 backed by SQLite, Postgres, or Redis, usable standalone or via the Spring Boot
 starter.
 
-|  | flexiq | Quartz | JobRunr | Spring Batch |
+|  | FlexiQ | Quartz | JobRunr | Spring Batch |
 |---|---|---|---|---|
 | **Focus** | Task queue + workflows | Cron scheduling | Background jobs | Batch/ETL pipelines |
 | **Backend** | SQLite / Postgres / Redis | Your RDBMS | Your RDBMS / Redis | Your RDBMS |
@@ -189,13 +337,13 @@ starter.
 | **Workflows** | Builder DAG, fan-out, sub-workflows, sagas | No | No | Step/chunk model |
 | **Result streaming** | Yes (publish/stream) | No | No | No |
 
-**Choose flexiq** for a broker-optional queue with priorities, DLQ, and a
+**Choose FlexiQ** for a broker-optional queue with priorities, DLQ, and a
 workflow engine. **Choose Quartz/Spring Batch** for pure cron scheduling or
 chunk-oriented batch processing tightly coupled to Spring.
 
 </SdkOnly>
 
-{/* Outside the four blocks above on purpose. Every SDK has an
+{/* Outside the blocks above on purpose. Every SDK has an
     `operate/migration` page now, so one <SdkLink> resolves per SDK — and this
     is the only spot on the page all four readers reach. */}
 
@@ -203,4 +351,6 @@ Looking to switch? See the{" "}
 <SdkLink to="operate/migration">
   Migrating from <SdkSwap python="Celery" node="BullMQ" java="JVM job scheduling" rust={<code>flexiq-core</code>} />
 </SdkLink>{" "}
-guide for a step-by-step walkthrough with side-by-side code examples.
+guide for a step-by-step walkthrough with side-by-side code examples. Coming
+from a managed queue instead, [Migrating from Cloud Tasks and
+EventBridge](/server/migrate-cloud-tasks) covers the move to `flexiq-server`.
