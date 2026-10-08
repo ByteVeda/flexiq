@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"testing"
 
@@ -159,6 +160,57 @@ func TestReadPeriodicSeesDrift(t *testing.T) {
 	delete(fake.periodic, "p")
 	if _, found, err := readPeriodic(ctx, fake, plan); err != nil || found {
 		t.Errorf("deleted task: found %v err %v, want gone", found, err)
+	}
+}
+
+// TestPeriodicReadSurvivesAnUnreadablePayload: a payload written by something
+// else warns, reads as null arguments, and the next apply overwrites it.
+func TestPeriodicReadSurvivesAnUnreadablePayload(t *testing.T) {
+	nan, err := flexiq.EncodeCall([]any{math.NaN()}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloads := map[string][]byte{
+		"a language-native payload": {flexiq.TagNative, 0x80, 0x04},
+		"not CBOR at all":           {flexiq.TagCBOR, 0xff, 0xff},
+		"no JSON form (NaN)":        nan,
+	}
+	for name, payload := range payloads {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			fake := newFakeAdmin()
+			r := &periodicResource{client: fake}
+			s := resourceSchema(t, r)
+
+			plan := periodicPlan("", `[1]`, `{}`, false)
+			create := resource.CreateResponse{State: emptyState(s)}
+			r.Create(ctx, resource.CreateRequest{Plan: planOf(t, s, plan)}, &create)
+			if create.Diagnostics.HasError() {
+				t.Fatalf("Create: %v", create.Diagnostics)
+			}
+			task := fake.periodic["p"]
+			task.Payload = payload
+			fake.periodic["p"] = task
+
+			read := resource.ReadResponse{State: create.State}
+			r.Read(ctx, resource.ReadRequest{State: create.State}, &read)
+			if read.Diagnostics.HasError() || read.Diagnostics.WarningsCount() != 1 {
+				t.Fatalf("Read must warn, not fail: %v", read.Diagnostics)
+			}
+			got := stateModel[periodicModel](t, read.State)
+			if !got.Args.IsNull() || !got.Kwargs.IsNull() || got.Enabled.ValueBool() || got.Cron.IsNull() {
+				t.Errorf("state after an unreadable payload = %+v", got)
+			}
+
+			update := resource.UpdateResponse{State: read.State}
+			r.Update(ctx, resource.UpdateRequest{Plan: planOf(t, s, plan), State: read.State}, &update)
+			if update.Diagnostics.HasError() {
+				t.Fatalf("Update: %v", update.Diagnostics)
+			}
+			if _, _, err := readPeriodic(ctx, fake, plan); err != nil {
+				t.Errorf("the apply did not overwrite the payload: %v", err)
+			}
+		})
 	}
 }
 

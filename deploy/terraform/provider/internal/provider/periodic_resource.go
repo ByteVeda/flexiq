@@ -162,7 +162,11 @@ func (r *periodicResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 	current, found, err := readPeriodic(ctx, r.client, state)
-	if err != nil {
+	var unreadable *unreadablePayload
+	switch {
+	case errors.As(err, &unreadable):
+		resp.Diagnostics.AddAttributeWarning(path.Root("args"), "Unreadable periodic task arguments", unreadable.Error())
+	case err != nil:
 		resp.Diagnostics.AddError("Cannot read flexiq_periodic_task", err.Error())
 		return
 	}
@@ -260,7 +264,8 @@ func applyPeriodic(ctx context.Context, api adminAPI, m periodicModel) error {
 
 // readPeriodic reads the task and its payload back into a model. Values that
 // mean what prior already holds keep prior's spelling. found is false when the
-// task is gone.
+// task is gone. An *unreadablePayload error comes with a usable model whose
+// args and kwargs are null.
 func readPeriodic(ctx context.Context, api adminAPI, prior periodicModel) (periodicModel, bool, error) {
 	name := prior.Name.ValueString()
 	task, err := api.GetPeriodicTask(ctx, name, admin.GetPeriodicTaskOptions{IncludePayload: true})
@@ -271,19 +276,6 @@ func readPeriodic(ctx context.Context, api adminAPI, prior periodicModel) (perio
 		return periodicModel{}, false, fmt.Errorf("read periodic task %q: %w", name, err)
 	}
 
-	call, err := task.DecodePayload()
-	if err != nil {
-		return periodicModel{}, false, fmt.Errorf("periodic task %q: %w", name, err)
-	}
-	args, err := jsonFromDecoded(nonNilArgs(call.Args))
-	if err != nil {
-		return periodicModel{}, false, fmt.Errorf("periodic task %q args: %w", name, err)
-	}
-	kwargs, err := jsonFromDecoded(nonNilKwargs(call.Kwargs))
-	if err != nil {
-		return periodicModel{}, false, fmt.Errorf("periodic task %q kwargs: %w", name, err)
-	}
-
 	m := periodicModel{
 		ID:       types.StringValue(task.Name),
 		Name:     types.StringValue(task.Name),
@@ -291,14 +283,53 @@ func readPeriodic(ctx context.Context, api adminAPI, prior periodicModel) (perio
 		Cron:     types.StringValue(task.Cron),
 		Queue:    types.StringValue(keepEquivalent(prior.Queue.ValueString(), task.Queue, known(prior.Queue), queueEqual)),
 		Timezone: types.StringNull(),
-		Args:     types.StringValue(keepEquivalent(prior.Args.ValueString(), args, known(prior.Args), jsonEqual)),
-		Kwargs:   types.StringValue(keepEquivalent(prior.Kwargs.ValueString(), kwargs, known(prior.Kwargs), jsonEqual)),
-		Enabled:  types.BoolValue(task.Enabled),
+		// Null until the payload reads back as JSON: unequal to any config,
+		// so the next plan shows an update and the put overwrites it.
+		Args:    types.StringNull(),
+		Kwargs:  types.StringNull(),
+		Enabled: types.BoolValue(task.Enabled),
 	}
 	if task.Timezone != "" {
 		m.Timezone = types.StringValue(task.Timezone)
 	}
+
+	args, kwargs, err := payloadJSON(task)
+	if err != nil {
+		return m, true, &unreadablePayload{name: name, err: err}
+	}
+	m.Args = types.StringValue(keepEquivalent(prior.Args.ValueString(), args, known(prior.Args), jsonEqual))
+	m.Kwargs = types.StringValue(keepEquivalent(prior.Kwargs.ValueString(), kwargs, known(prior.Kwargs), jsonEqual))
 	return m, true, nil
+}
+
+// unreadablePayload is a task whose payload is not JSON this provider can
+// express — written by something else, e.g. a worker's own declaration. Read
+// warns and carries on rather than wedging refresh and destroy.
+type unreadablePayload struct {
+	name string
+	err  error
+}
+
+func (e *unreadablePayload) Error() string {
+	return fmt.Sprintf("periodic task %q: its arguments do not read back as JSON (%v); "+
+		"the next apply overwrites them with the configured args and kwargs", e.name, e.err)
+}
+
+func (e *unreadablePayload) Unwrap() error { return e.err }
+
+// payloadJSON decodes a task's payload into canonical args and kwargs JSON.
+func payloadJSON(task admin.PeriodicTask) (args, kwargs string, err error) {
+	call, err := task.DecodePayload()
+	if err != nil {
+		return "", "", err
+	}
+	if args, err = jsonFromDecoded(nonNilArgs(call.Args)); err != nil {
+		return "", "", fmt.Errorf("args: %w", err)
+	}
+	if kwargs, err = jsonFromDecoded(nonNilKwargs(call.Kwargs)); err != nil {
+		return "", "", fmt.Errorf("kwargs: %w", err)
+	}
+	return args, kwargs, nil
 }
 
 func known(v types.String) bool {
