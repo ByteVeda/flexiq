@@ -1,0 +1,51 @@
+# KEDA ScaledObject using flexiq-server's built-in external scaler.
+#
+# The scaler is served on the gRPC listener (FLEXIQ_GRPC_LISTEN), so there is
+# no separate scaler Deployment. Prerequisites:
+#   1. flexiq-server running with the gRPC listener (Helm: grpc.enabled=true)
+#   2. A token with the `inspect` scope for the namespace being scaled:
+#        flexiq-server token create --name keda --scope inspect
+#   3. That token in a Secret, exposed as FLEXIQ_SCALER_TOKEN on the container
+#      of the Deployment being scaled. KEDA reads `tokenFromEnv` from there.
+#
+# Adjust the names, scalerAddress (<grpc Service>:<grpc port>) and queue.
+# Push variant: scaled-object-external-stream.yaml.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: flexiq-worker-external
+  namespace: default
+spec:
+  scaleTargetRef:
+    name: flexiq-worker          # Deployment name; must carry FLEXIQ_SCALER_TOKEN
+  pollingInterval: 15             # seconds between KEDA polls
+  cooldownPeriod: 60              # seconds before scaling to zero
+  minReplicaCount: 0              # scale to zero when idle
+  maxReplicaCount: 10
+  triggers:
+    - type: external
+      metadata:
+        scalerAddress: "flexiq-server-grpc:50051"
+        tokenFromEnv: FLEXIQ_SCALER_TOKEN
+        # Optional: one queue (default: every queue in the token's namespace)
+        queue: default
+        targetQueueDepth: "10"        # pending jobs per replica
+        # activationQueueDepth: "0"   # stay at zero until pending+running exceeds this
+        #
+        # TLS (FLEXIQ_GRPC_TLS_*): enable it and give KEDA the CA through a
+        # TriggerAuthentication (secretTargetRef parameter `caCert`).
+        # enableTLS: "true"
+    # authenticationRef:
+    #   name: flexiq-scaler-tls
+---
+# TLS only: the CA that signed the server's certificate.
+# apiVersion: keda.sh/v1alpha1
+# kind: TriggerAuthentication
+# metadata:
+#   name: flexiq-scaler-tls
+#   namespace: default
+# spec:
+#   secretTargetRef:
+#     - parameter: caCert
+#       name: flexiq-grpc-ca
+#       key: ca.crt

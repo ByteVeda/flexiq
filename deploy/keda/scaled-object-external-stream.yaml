@@ -1,0 +1,29 @@
+# KEDA ScaledObject using flexiq-server's external scaler in push mode.
+#
+# `external-push` keeps a StreamIsActive stream open, so scaling from zero
+# starts on the enqueue instead of waiting for the next polling interval.
+# Replica counts still come from the polled metric. Prerequisites are those of
+# scaled-object-external.yaml.
+#
+# Idle detection relies on the server's periodic re-read: keep
+# FLEXIQ_GRPC_WATCH_RECONCILE above 0 (default 5 seconds), or an active stream
+# never sees the queue drain and never scales back to zero.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: flexiq-worker-external-push
+  namespace: default
+spec:
+  scaleTargetRef:
+    name: flexiq-worker          # Deployment name; must carry FLEXIQ_SCALER_TOKEN
+  pollingInterval: 15
+  cooldownPeriod: 60
+  minReplicaCount: 0
+  maxReplicaCount: 10
+  triggers:
+    - type: external-push
+      metadata:
+        scalerAddress: "flexiq-server-grpc:50051"
+        tokenFromEnv: FLEXIQ_SCALER_TOKEN
+        queue: default
+        targetQueueDepth: "10"

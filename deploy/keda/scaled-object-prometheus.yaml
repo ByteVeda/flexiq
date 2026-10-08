@@ -1,5 +1,8 @@
 # KEDA ScaledObject using Prometheus as the metric source.
 #
+# Running flexiq-server? Its gRPC listener serves a native KEDA scaler that
+# needs no Prometheus; see scaled-object-external.yaml.
+#
 # Prerequisites:
 #   1. Prometheus scraping flexiq's /metrics endpoint
 #   2. PrometheusStatsCollector running with the worker
