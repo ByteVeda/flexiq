@@ -97,9 +97,9 @@ func runTests(m *testing.M) int {
 	}
 	defer accServer.stop()
 
-	// Only the scopes the provider's resources need; the harness's own reads
-	// need nothing more.
-	if accServer.token, err = accServer.mint("tf-acc-operator", "admin", "inspect"); err != nil {
+	// Only the scopes the provider's resources need (tokens for flexiq_token);
+	// the harness's own reads need nothing more.
+	if accServer.token, err = accServer.mint("tf-acc-operator", "admin", "inspect", "tokens"); err != nil {
 		fmt.Fprintln(os.Stderr, "mint an operator token:", err)
 		return 1
 	}
@@ -256,9 +256,10 @@ func (s *server) logTail() string {
 }
 
 // mint runs `flexiq-server token create` against the server's database, the
-// way an operator provisions the first credential.
+// way an operator provisions the first credential. It lives the longest the
+// server allows, so every token the tests mint through it expires first.
 func (s *server) mint(name string, scopes ...string) (string, error) {
-	args := []string{"token", "create", "--name", name}
+	args := []string{"token", "create", "--name", name, "--expires-in-days", "365"}
 	for _, scope := range scopes {
 		args = append(args, "--scope", scope)
 	}
