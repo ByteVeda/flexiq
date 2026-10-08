@@ -96,5 +96,22 @@ module FlexiQ
 
     # The scope a SCOPE_DENIED credential lacked, else nil.
     def scope = reason == Reason::SCOPE_DENIED ? metadata["scope"] : nil
+
+    # The graph node a `submit_workflow` refusal names (SCOPE_DENIED or
+    # WORKFLOW_CONSTRUCT_UNSUPPORTED), else nil.
+    def node = metadata["node"]
+
+    # `{node:, field:}` for a WORKFLOW_CONSTRUCT_UNSUPPORTED carrying both, else nil. `field` is
+    # "gate", "cache", "fan_out", "fan_in" or "sub_workflow", or one a newer server added.
+    # One node per refusal, even when several set a construct: clear them one call at a time.
+    def workflow_construct
+      return nil unless reason == Reason::WORKFLOW_CONSTRUCT_UNSUPPORTED
+
+      node = metadata["node"]
+      field = metadata["field"]
+      return nil if node.nil? || field.nil?
+
+      { node: node, field: field }
+    end
   end
 end
