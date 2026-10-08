@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"time"
 
 	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 	"github.com/ByteVeda/flexiq/sdks/go/v2/admin"
@@ -16,6 +17,10 @@ type fakeAdmin struct {
 	paused    map[string]bool
 	quota     *admin.NamespaceQuota
 	periodic  map[string]admin.PeriodicTask
+	tokens    map[string]admin.Token
+	minted    int
+	// clock stamps minted tokens.
+	clock func() time.Time
 
 	// calls records every method in order, for asserting which RPCs ran.
 	calls []string
@@ -30,6 +35,8 @@ func newFakeAdmin() *fakeAdmin {
 		overrides: map[string]admin.QueueOverride{},
 		paused:    map[string]bool{},
 		periodic:  map[string]admin.PeriodicTask{},
+		tokens:    map[string]admin.Token{},
+		clock:     time.Now,
 		fail:      map[string]error{},
 	}
 }
@@ -193,6 +200,53 @@ func (f *fakeAdmin) setPeriodicEnabled(method, name string, enabled bool) (admin
 	f.periodic[name] = task
 	task.Payload = nil
 	return task, nil
+}
+
+func tokenNotFound(id string) error {
+	return fmt.Errorf("token %q: %w", id, flexiq.ReasonTokenNotFound)
+}
+
+func (f *fakeAdmin) CreateToken(_ context.Context, req admin.CreateTokenRequest) (admin.CreatedToken, error) {
+	if err := f.record("CreateToken"); err != nil {
+		return admin.CreatedToken{}, err
+	}
+	f.minted++
+	now := f.clock()
+	token := admin.Token{
+		ID:        fmt.Sprintf("tok-%d", f.minted),
+		Name:      req.Name,
+		Scopes:    req.Scopes,
+		Namespace: "ns",
+		CreatedAt: now,
+		ExpiresAt: now.Add(time.Duration(req.ExpireDays) * day),
+		Status:    admin.TokenStatusActive,
+	}
+	f.tokens[token.ID] = token
+	return admin.CreatedToken{Token: token, Secret: fmt.Sprintf("fqt_secret-%d", f.minted)}, nil
+}
+
+func (f *fakeAdmin) GetToken(_ context.Context, id string) (admin.Token, error) {
+	if err := f.record("GetToken"); err != nil {
+		return admin.Token{}, err
+	}
+	token, ok := f.tokens[id]
+	if !ok {
+		return admin.Token{}, tokenNotFound(id)
+	}
+	return token, nil
+}
+
+func (f *fakeAdmin) RevokeToken(_ context.Context, id string) (admin.Token, error) {
+	if err := f.record("RevokeToken"); err != nil {
+		return admin.Token{}, err
+	}
+	token, ok := f.tokens[id]
+	if !ok {
+		return admin.Token{}, tokenNotFound(id)
+	}
+	token.Status = admin.TokenStatusRevoked
+	f.tokens[id] = token
+	return token, nil
 }
 
 func (f *fakeAdmin) PausePeriodicTask(_ context.Context, name string) (admin.PeriodicTask, error) {

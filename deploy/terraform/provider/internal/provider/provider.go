@@ -70,9 +70,10 @@ func (p *flexiqProvider) Schema(_ context.Context, _ tfprovider.SchemaRequest, r
 				Optional:    true,
 			},
 			"token": schema.StringAttribute{
-				Description: "Bearer token with the admin scope. Falls back to " + tokenEnv + ".",
-				Optional:    true,
-				Sensitive:   true,
+				Description: "Bearer token with the admin scope, plus tokens to manage flexiq_token. " +
+					"Falls back to " + tokenEnv + ".",
+				Optional:  true,
+				Sensitive: true,
 			},
 			"namespace": schema.StringAttribute{
 				Description: "A label for the token's namespace, recorded as flexiq_namespace's name. " +
@@ -142,6 +143,7 @@ func (p *flexiqProvider) Resources(context.Context) []func() resource.Resource {
 		newQueueResource,
 		newNamespaceResource,
 		newPeriodicResource,
+		newTokenResource,
 	}
 }
 

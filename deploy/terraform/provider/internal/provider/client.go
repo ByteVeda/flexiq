@@ -29,6 +29,10 @@ type adminAPI interface {
 	DeletePeriodicTask(ctx context.Context, name string) error
 	PausePeriodicTask(ctx context.Context, name string) (admin.PeriodicTask, error)
 	ResumePeriodicTask(ctx context.Context, name string) (admin.PeriodicTask, error)
+
+	CreateToken(ctx context.Context, req admin.CreateTokenRequest) (admin.CreatedToken, error)
+	GetToken(ctx context.Context, id string) (admin.Token, error)
+	RevokeToken(ctx context.Context, id string) (admin.Token, error)
 }
 
 var _ adminAPI = (*admin.Client)(nil)
