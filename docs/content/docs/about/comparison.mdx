@@ -64,7 +64,7 @@ Reach for something else when:
 | **Code changes under in-flight work** | No versioning API; a changed step sequence dead-letters the job, so deploying one is a drain | Worker Versioning and patching | n/a — no in-flight state | — | — | — | — |
 | **Dead-letter queue** | Yes — inspect the payload and error, replay as a fresh job | No queue — a failed execution keeps its history and can be reset to an earlier point | Cloud Tasks deletes a task after its last attempt; EventBridge sends to an SQS queue, if you attach one, whose redrive is code you write | Failed set; `job.retry()` | No built-in | Yes — dead-lettered messages kept up to 7 days | Failed job registry |
 | **Local development** | A SQLite file, nothing to install | `temporal server start-dev`, in memory unless given a file | No official emulator for Cloud Tasks; EventBridge only through third-party emulators such as LocalStack | A local Redis | A local broker | A local broker | A local Redis |
-| **Hosted offering** | None | Temporal Cloud | Fully managed | No managed queue; Taskforce.sh offers a dashboard and Redis hosting | None | None | None |
+| **Hosted offering** | None | Temporal Cloud | Fully managed | None for the queue; Taskforce.sh is a hosted dashboard | None | None | None |
 | **Web UI** | Built-in dashboard | Temporal Web UI | The cloud provider's console | Taskforce.sh, or community boards | Flower | Community dashboards | rq-dashboard |
 | **Performance** | [Benchmarked](/about/benchmarks) | Not measured | Not measured | [Benchmarked](/about/benchmarks) | [Benchmarked](/about/benchmarks) | [Benchmarked](/about/benchmarks) | [Benchmarked](/about/benchmarks) |
 
@@ -197,8 +197,8 @@ enqueue to the same FlexiQ queues.
 
 **Choose FlexiQ if** you want a queue without a broker, durable steps, or a
 dead-letter queue out of the box. **Choose Celery if** you need its broker
-routing, its ecosystem of extensions, or its long production record. If your
-FlexiQ would run on a remote Redis, note that Celery outpaces FlexiQ's Redis
+routing, its ecosystem of extensions, or its long production record. If you
+would run FlexiQ on a remote Redis, note that Celery outpaces FlexiQ's Redis
 backend in the [benchmark](/about/benchmarks#where-flexiq-loses).
 
 ### vs Dramatiq
@@ -254,7 +254,7 @@ on a remote Redis, RQ also outpaces FlexiQ's Redis backend in the
 | Batch enqueue | **Yes** | No | No | No | No | No |
 | Retry with backoff | **Yes** (exponential + jitter) | Yes | Yes | Yes | Yes | Yes |
 | Periodic/cron tasks | **Yes** (6-field with seconds) | Yes (celery-beat) | Yes (built-in `CronScheduler`, beta) | Yes (APScheduler) | Yes | Yes (taskiq-cron) |
-| Async support | **Yes** | No (third-party pools) | No | Yes (`AsyncIO` middleware) | — | Yes (native) |
+| Async support | **Yes** | No (no native asyncio; eventlet/gevent pools) | No | Yes (`AsyncIO` middleware) | — | Yes (native) |
 | Cancel running tasks | **Yes** (cooperative) | Yes (revoke) | Yes (`send_stop_job_command`) | No | No | No |
 | Soft timeouts | **Yes** | Yes (`soft_time_limit`) | No | No | No | No |
 | Custom serializers | **Yes** | Yes | Yes (`serializer=`) | Yes (`set_encoder`) | — | Yes |
