@@ -267,6 +267,51 @@ async fn stats_report_every_status_bucket() {
     }
 }
 
+/// The metrics-api scaler payload, pinned whole: KEDA and the parity suite
+/// read these exact keys.
+#[tokio::test]
+async fn the_scaler_payload_keeps_its_shape() {
+    let storage = temp_storage("http-scaler");
+    storage.enqueue(new_job("send_email")).expect("enqueue");
+    storage.enqueue(new_job("send_sms")).expect("enqueue");
+    storage
+        .enqueue(NewJob {
+            queue: "emails".to_string(),
+            ..new_job("send_email")
+        })
+        .expect("enqueue");
+    let state = dashboard_state(&storage, AuthMode::Open);
+
+    let per_queue = json!({
+        "default": { "pending": 2, "running": 0 },
+        "emails": { "pending": 1, "running": 0 },
+    });
+    let (status, _, body) = call(&state, get("/api/scaler")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({
+            "metricName": "flexiq_queue_depth",
+            "metricValue": 3,
+            "isActive": true,
+            "liveWorkers": 0,
+            "totalCapacity": 0,
+            "targetQueueDepth": 10,
+            "perQueue": per_queue,
+        })
+    );
+
+    let (_, _, body) = call(&state, get("/api/scaler?queue=emails")).await;
+    assert_eq!(body["metricName"], json!("flexiq_queue_depth_emails"));
+    assert_eq!(body["metricValue"], json!(1));
+    assert_eq!(body["isActive"], json!(true));
+
+    let (_, _, body) = call(&state, get("/api/scaler?queue=absent")).await;
+    assert_eq!(body["metricValue"], json!(0));
+    assert_eq!(body["isActive"], json!(false));
+    assert_eq!(body["perQueue"], per_queue);
+}
+
 #[tokio::test]
 async fn settings_round_trip_and_reserved_keys_stay_hidden() {
     let storage = temp_storage("http-settings");

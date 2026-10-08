@@ -11,9 +11,7 @@ use crate::dashboard::dto;
 use crate::dashboard::error::ApiResult;
 use crate::dashboard::query::Params;
 use crate::dashboard::state::SharedState;
-
-/// Queue depth KEDA scales against by default.
-const TARGET_QUEUE_DEPTH: i64 = 10;
+use crate::scaling::{self, TARGET_QUEUE_DEPTH};
 
 /// `GET /api/stats` — status counts across every queue.
 pub async fn stats(State(state): State<SharedState>) -> ApiResult<Json<Value>> {
@@ -120,9 +118,13 @@ pub async fn resume(
 /// is read from storage and is the field that stays correct under both paths.
 pub async fn scaler(State(state): State<SharedState>, params: Params) -> ApiResult<Json<Value>> {
     let namespace = state.namespace.clone();
+    let queue = params.get("queue").map(str::to_string);
     let overall = {
         let namespace = namespace.clone();
-        on_storage(&state, move |storage| storage.stats(namespace.as_deref())).await?
+        on_storage(&state, move |storage| {
+            scaling::depth(storage, namespace.as_deref(), None)
+        })
+        .await?
     };
     let workers = {
         let namespace = namespace.clone();
@@ -131,10 +133,13 @@ pub async fn scaler(State(state): State<SharedState>, params: Params) -> ApiResu
         })
         .await?
     };
-    let per_queue = on_storage(&state, move |storage| {
-        storage.stats_all_queues(namespace.as_deref())
-    })
-    .await?;
+    let per_queue = {
+        let namespace = namespace.clone();
+        on_storage(&state, move |storage| {
+            storage.stats_all_queues(namespace.as_deref())
+        })
+        .await?
+    };
 
     let total_capacity = state
         .dispatcher
@@ -159,8 +164,13 @@ pub async fn scaler(State(state): State<SharedState>, params: Params) -> ApiResu
 
     // A queue filter narrows the metric the autoscaler reads, and renames it so
     // two scaled objects watching different queues never collide.
-    if let Some(queue) = params.get("queue") {
-        let pending = per_queue.get(queue).map(|stats| stats.pending).unwrap_or(0);
+    if let Some(queue) = queue {
+        let named = queue.clone();
+        let pending = on_storage(&state, move |storage| {
+            scaling::depth(storage, namespace.as_deref(), Some(&named))
+        })
+        .await?
+        .pending;
         body.insert(
             "metricName".into(),
             json!(format!("flexiq_queue_depth_{queue}")),
