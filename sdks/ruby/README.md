@@ -2,7 +2,7 @@
 
 A Ruby client for the **producer door** of a running
 [`flexiq-server`](../../crates/flexiq-server): submit work, read it back, wait for it, cancel it,
-count it.
+count it, and submit static workflows.
 No database credential, no native extension, no gRPC toolchain — it speaks the server's JSON
 facade with the Ruby standard library alone.
 
@@ -54,6 +54,8 @@ the JSON facade shares that listener.
 | `wait(id, timeout:)` | `GET /v1/jobs:watch`, then `GET /v1/jobs/{id}` | The finished `Job`, with its result. |
 | `cancel_job(id)` | `POST /v1/jobs/{id}:cancel` | Idempotent. |
 | `queue_stats(queue = nil)` | `GET /v1/queues/{queue}/stats`, `GET /v1/stats` | `nil` counts the whole namespace. |
+| `submit_workflow(name, graph, params_json:)` | `POST /v1/workflows` | The run id. Static graphs only; not idempotent. See [Workflows](#workflows). |
+| `get_workflow_run(run_id)` | `GET /v1/workflows/{run_id}` | A `WorkflowRunView`: the run and every node. |
 
 Enqueue options: `queue`, `priority`, `max_retries`, `scheduled_at` (`Time`), `timeout`
 (seconds), `unique_key`, `metadata`, `notes`, `depends_on`, `expires_at` (`Time`),
@@ -145,6 +147,61 @@ A queue watch only sees transitions that the server process it reached handles i
 watch holds a connection of its own, so other calls on the same client are never blocked.
 `watch_read_timeout:` (default 60 s) is how long a watch may stay silent before it counts as
 dropped. The server sends a keepalive every 15 s.
+
+## Workflows
+
+A workflow is a graph of steps. Submitting one enqueues a job per node, chained by the edges, and
+any worker with workflow tracking enabled advances the run, not only whoever submitted it.
+
+```ruby
+graph = FlexiQ::WorkflowGraph.new(
+  nodes: [
+    FlexiQ::WorkflowNode.new(name: "charge", task_name: "orders.charge", args: [order], queue: "payments"),
+    FlexiQ::WorkflowNode.new(name: "ship", task_name: "orders.ship", args: [order],
+                             condition: :on_success, timeout: 30, compensate: "orders.unship")
+  ],
+  edges: [%w[charge ship]] # or FlexiQ::WorkflowEdge.new(from: "charge", to: "ship")
+)
+run_id = client.submit_workflow("checkout", graph, params_json: '{"order":"ord-0001"}')
+
+view = client.get_workflow_run(run_id)
+view.run.state            # => :pending, :running, :completed, :failed, … (FlexiQ::WorkflowState)
+view.run.terminal?
+view.node("ship").status  # => :pending, :running, :completed, … (FlexiQ::WorkflowNodeStatus)
+view.node("ship").job_id  # read it with get_job
+```
+
+A node takes the arguments `enqueue` does and sends the same `raw` bytes, plus `queue`,
+`max_retries`, `timeout` (seconds), `priority`, `condition` (`:on_success`, `:on_failure`,
+`:always`) and `compensate`. A Hash of a node's fields works wherever a node does. The graph is
+checked before the call: at least one node, unique names, and no edge to an undeclared node.
+
+**This door advances static graphs only.** A node setting `gate`, `cache`, `fan_out`, `fan_in`
+or `sub_workflow` is refused before anything is written; only a live SDK process can drive those.
+The refusal names one node, so a graph with several clears them one call at a time:
+
+```ruby
+begin
+  client.submit_workflow("review", graph)
+rescue FlexiQ::RPCError => e
+  raise unless e.reason == FlexiQ::Reason::WORKFLOW_CONSTRUCT_UNSUPPORTED
+
+  e.workflow_construct # => { node: "review", field: "gate" }
+end
+```
+
+Every submission is version 1 of `name`. Resubmitting a name with a different graph is refused
+with `INVALID_ARGUMENT`; submit a changed graph under a new name.
+
+**`submit_workflow` is not idempotent**, and a workflow has no `unique_key`. A run cannot be found
+by name, so a call that raised `TransportError` or an ambiguous `RPCError` (`UNAVAILABLE`,
+`DEADLINE_EXCEEDED`, `CANCELLED`) may have submitted a run whose id is lost. A retry submits a
+second run. Never retry it blind.
+
+A narrowed `produce` grant is checked on every node, as `enqueue` would check it, with an empty
+queue counted as `default`. The first node outside the grant refuses the whole graph:
+`SCOPE_DENIED`, with `RPCError#node` naming that node. A node's `compensate` task must be reached
+on every queue. `get_workflow_run` answers `NOT_FOUND` unless the grant reaches every node's job.
 
 ## Credentials and TLS
 
