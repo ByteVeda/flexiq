@@ -253,7 +253,7 @@ results.reject(&:enqueued?).each { |item| warn "item #{item.index}: #{item.error
 | `queue: "mailers"` | `queue: "mailers"` on the enqueue, and the queue listed in `FLEXIQ_QUEUES` |
 | `retry: 5` | `max_retries: 5` |
 | `retry: true` (25 retries) | No default. Pick a number |
-| `retry: false` | Leave `max_retries` out, or raise `FlexiQ::Executor::Fatal` from the handler |
+| `retry: false` | Leave `max_retries` out, or raise `FlexiQ::Executor::Fatal` from the handler. Sidekiq discards such a job; FlexiQ still dead-letters it |
 | `backtrace: true` | Always on: the error is stored with the class, message and full backtrace |
 | `dead: false` | No equivalent. Every exhausted job goes to the dead-letter queue; purge it from there |
 | `sidekiq_retry_in` | A task override's `retryBackoff`, set by an operator ([below](#retries-and-the-dead-set)) |
@@ -316,14 +316,18 @@ the server boots, or restart it after:
 fq overrides set-task mailers.welcome --retry-backoff-ms 10000
 ```
 
-**The dead-letter queue keeps the job, not a copy.** An exhausted job keeps its
-task, arguments, queue and last error:
+`set-task` **replaces** the task's whole override: a flag left out is cleared,
+not kept. Repeat every field the task already overrides — `fq overrides list`
+shows them.
+
+**The dead-letter queue keeps everything the job carried:** its task,
+arguments, queue and last error.
 
 ```bash
 fq dlq list --task mailers.welcome
 fq dlq show <ID> --payload
-fq dlq replay <ID>                    # enqueue it again; prints the new job
-fq dlq purge --older-than-ms 2592000000
+fq dlq replay <ID>                       # enqueue it again; prints the new job
+fq dlq purge --older-than-ms 604800000   # dead-lettered over 7 days ago
 ```
 
 `<ID>` is the dead letter's id, not the original job's. A replay is a new job
@@ -347,9 +351,10 @@ covers what stays on.
 
 ## Unique jobs
 
-Sidekiq Enterprise's `unique_for` and the `sidekiq-unique-jobs` gem lock on the
-job's class, arguments and queue for a window you choose. FlexiQ's equivalent
-is `unique_key`, a string you choose:
+Sidekiq Enterprise's `unique_for` locks on the job's class, arguments and
+queue for a window you choose; the `sidekiq-unique-jobs` gem holds its lock
+until a point in the job's lifecycle that its lock type names. FlexiQ's
+equivalent is `unique_key`, a string you choose:
 
 ```ruby
 result = client.enqueue("reports.build", args: [account_id], queue: "reports", max_retries: 3,
@@ -391,8 +396,12 @@ overrides from it.
 
 A bind reachable from another host refuses to start with authentication off,
 so set `FLEXIQ_DASHBOARD_AUTH=session`; `FLEXIQ_DASHBOARD_ADMIN_USER` and
-`FLEXIQ_DASHBOARD_ADMIN_PASSWORD` create the first admin.
-[Dashboard settings](/server/operate#dashboard) lists the rest.
+`FLEXIQ_DASHBOARD_ADMIN_PASSWORD` create the first admin. The session cookie
+is marked `Secure`, so a browser sends it back only over HTTPS: the listener
+itself is plain HTTP, so put a TLS proxy in front of it, or a login will not
+hold. `FLEXIQ_DASHBOARD_INSECURE_COOKIES=1` drops the flag, for local
+development only. [Dashboard settings](/server/operate#dashboard) lists the
+rest.
 
 ## Periodic jobs
 
@@ -545,5 +554,6 @@ no Redis.
 - [ ] Periodic jobs recreated with `fq periodic put`, cron rewritten seconds
   first
 - [ ] Long handlers call `job.check!` between units of work
-- [ ] Dashboard on `FLEXIQ_DASHBOARD` with `FLEXIQ_DASHBOARD_AUTH=session`
+- [ ] Dashboard on `FLEXIQ_DASHBOARD` with `FLEXIQ_DASHBOARD_AUTH=session`,
+  behind a TLS proxy
 - [ ] Sidekiq's queues drained before its producers stop writing there
