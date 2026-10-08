@@ -8,7 +8,8 @@ import (
 
 // keepEquivalentState plans the prior state's value when the new one means
 // the same thing, so a rewrite that changes nothing never shows as a diff.
-// The attribute must be Computed: only then may the plan differ from config.
+// Terraform accepts a planned prior value in place of an equivalent config
+// value; the attributes using it are Computed only so their defaults apply.
 type keepEquivalentState struct {
 	equal       func(a, b string) bool
 	description string
