@@ -9,7 +9,8 @@ module FlexiQ
   #
   # The namespace is the token's, fixed when it was minted; no call can name another.
   # Methods raise RPCError when the server refuses and TransportError when no answer arrived.
-  # Thread-safe; calls on one client are serialised over one connection.
+  # Thread-safe; calls on one client are serialised over one connection, and each watch holds a
+  # connection of its own.
   class Client
     # See Transport#initialize for the keyword options (TLS, timeouts, user agent).
     def initialize(url, token:, transport: nil, **)
@@ -38,8 +39,7 @@ module FlexiQ
     # Reads one job. The payload and result are left out unless asked for: they are the largest
     # things a job carries. A job in another namespace reads as JOB_NOT_FOUND.
     def get_job(job_id, include_payload: false, include_result: false)
-      query = { "includePayload" => include_payload || nil, "includeResult" => include_result || nil }
-      job_from(@transport.get("/v1/jobs/#{Wire::Path.segment(job_id)}", query))
+      fetch_job(job_id, include_payload: include_payload, include_result: include_result)
     end
 
     # Reads one page of jobs, newest first. Every filter is optional; `status` is a
@@ -80,10 +80,61 @@ module FlexiQ
       QueueStats.from_json(@transport.get(path))
     end
 
+    # Follows jobs by id until each is `terminal?`. Yields a `:snapshot` JobTransition (or
+    # JobNotFound) per id, then live transitions. At most 100 ids. Enumerator without a block.
+    #
+    # A dropped stream reopens on the unfinished ids only.
+    def watch_jobs(job_ids, &block)
+      return enum_for(:watch_jobs, job_ids) unless block
+
+      Watch::ByIds.new(@transport, job_ids).run(&block)
+      nil
+    end
+
+    # Follows `queue` (nil = "default") until the block breaks. Yields a WatchCheckpoint, then
+    # live JobTransitions; no snapshot. Pass the last `cursor` back as `resume_cursor:` to replay.
+    #
+    # A dropped stream resumes from its last cursor; an expired one yields a WatchGap.
+    # Sees only transitions the reached server process handles.
+    def watch_queue(queue = nil, resume_cursor: nil, &block)
+      return enum_for(:watch_queue, queue, resume_cursor: resume_cursor) unless block
+
+      Watch::ByQueue.new(@transport, queue, resume_cursor).run(&block)
+    end
+
+    # Blocks until the job is finished; returns it with its result. Watches, never polls.
+    # Raises WaitTimeoutError after `timeout` seconds (nil: no limit), RPCError JOB_NOT_FOUND
+    # for an id this token cannot see.
+    def wait(job_id, timeout:)
+      deadline = Deadline.within(timeout)
+      Watch::ByIds.new(@transport, [job_id], deadline: deadline).run { nil }
+      read_finished(job_id, deadline)
+    end
+
     # Closes the underlying connection; the next call reopens it.
     def close = @transport.close
 
     private
+
+    # The job is done, so only the read can fail; retry what clears, within the deadline.
+    # The deadline also caps this read, so a stalled answer cannot outlast `wait`'s timeout.
+    def read_finished(job_id, deadline)
+      backoff = Backoff.new
+      begin
+        fetch_job(job_id, include_result: true, deadline: deadline)
+      rescue TransportError, RPCError => e
+        raise if e.is_a?(RPCError) && !e.retryable?
+        raise WaitTimeoutError, "gave up after #{deadline.seconds}s reading job #{job_id}" if deadline&.expired?
+
+        backoff.pause(deadline)
+        retry
+      end
+    end
+
+    def fetch_job(job_id, include_payload: false, include_result: false, deadline: nil)
+      query = { "includePayload" => include_payload || nil, "includeResult" => include_result || nil }
+      job_from(@transport.get("/v1/jobs/#{Wire::Path.segment(job_id)}", query, deadline: deadline))
+    end
 
     def coerce_request(request)
       case request

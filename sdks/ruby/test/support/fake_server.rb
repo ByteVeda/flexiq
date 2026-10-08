@@ -12,7 +12,8 @@ class FakeServer
 
   attr_reader :requests
 
-  # handler: ->(request) { [status, body] }, body a Hash (sent as JSON) or a String (sent raw).
+  # handler: ->(request) { [status, body] }, body a Hash (sent as JSON), a String (sent raw), or
+  # an Array or Proc (sent as an event stream; see #stream).
   def initialize(&handler)
     @handler = handler
     @requests = Queue.new
@@ -46,9 +47,24 @@ class FakeServer
     request = read_request(socket) or return
     @requests << request
     status, body = @handler.call(request)
+    return stream(socket, status, body) if body.is_a?(Array) || body.is_a?(Proc)
+
     payload = body.is_a?(String) ? body : JSON.generate(body)
     socket.write("HTTP/1.1 #{status} X\r\nContent-Type: application/json\r\n" \
                  "Content-Length: #{payload.bytesize}\r\nConnection: close\r\n\r\n#{payload}")
+  rescue Errno::EPIPE, Errno::ECONNRESET
+    nil # client hung up mid-stream
+  end
+
+  # Unsized event stream ended by close. Array: chunks written in turn. Proc: given the socket.
+  def stream(socket, status, body)
+    socket.write("HTTP/1.1 #{status} X\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")
+    return body.call(socket) if body.is_a?(Proc)
+
+    body.each do |chunk|
+      socket.write(chunk)
+      socket.flush
+    end
   end
 
   def read_request(socket)

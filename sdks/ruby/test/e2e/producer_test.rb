@@ -3,10 +3,12 @@
 require_relative "../test_helper"
 require_relative "support/server"
 require "securerandom"
+require "timeout"
 
 # The producer door end to end, against a real flexiq-server over its JSON door.
 class ProducerE2ETest < Minitest::Test
   QUEUE = LiveServer::UNPOLLED_QUEUE
+  WATCH_BUDGET = 30
 
   class << self
     # One server for the suite; started on first use, stopped when Minitest exits.
@@ -34,6 +36,9 @@ class ProducerE2ETest < Minitest::Test
   def server = self.class.live[:server]
 
   def client(token = self.class.live[:token]) = FlexiQ::Client.new(server.url, token: token, insecure: true)
+
+  # A watch that never ends would hang the suite; fail it instead.
+  def bounded(&) = Timeout.timeout(WATCH_BUDGET, &)
 
   def test_an_enqueued_job_reads_back_with_its_exact_payload
     args = [{ "order_id" => "ord-0001", "amount_cents" => 1000 }]
@@ -123,6 +128,61 @@ class ProducerE2ETest < Minitest::Test
     error = assert_raises(FlexiQ::RPCError) { client("fqt_0000000000000000.nope").queue_stats }
 
     assert_equal FlexiQ::Reason::UNAUTHENTICATED, error.reason
+  end
+
+  def test_an_id_watch_follows_a_job_until_it_is_cancelled
+    watcher = client
+    job = watcher.enqueue("watch.me", queue: QUEUE).job
+    missing = SecureRandom.uuid
+    items = []
+    # One client for both: the watch holds a connection of its own, so the cancel is not blocked.
+    bounded do
+      watcher.watch_jobs([job.id, missing]) do |item|
+        items << item
+        watcher.cancel_job(job.id) if items.one?
+      end
+    end
+    transitions = items.grep(FlexiQ::JobTransition)
+
+    assert_includes items, FlexiQ::JobNotFound.new(job_id: missing)
+    assert_equal [:snapshot, :pending, false], transitions.first.to_h.values_at(:kind, :status, :terminal)
+    assert_equal [:cancelled, true], transitions.last.to_h.values_at(:status, :terminal)
+  end
+
+  def test_wait_returns_the_finished_job_and_times_out_on_a_running_one
+    pending = client.enqueue("wait.me", queue: QUEUE).job
+    error = assert_raises(FlexiQ::WaitTimeoutError) { bounded { client.wait(pending.id, timeout: 0.5) } }
+
+    assert_match(/0.5s/, error.message)
+    client.cancel_job(pending.id)
+
+    assert_equal :cancelled, bounded { client.wait(pending.id, timeout: 10) }.status
+    assert_raises(FlexiQ::RPCError) { bounded { client.wait(SecureRandom.uuid, timeout: 10) } }
+  end
+
+  def test_a_queue_watch_resumes_from_any_cursor_and_shows_an_expired_one_as_a_gap
+    queue = "watched-#{SecureRandom.hex(4)}"
+    opened = nil
+    live = bounded do
+      client.watch_queue(queue).each do |item|
+        break item if item.is_a?(FlexiQ::JobTransition)
+
+        opened = item
+        client.enqueue("watch.queue", queue: queue)
+      end
+    end
+
+    assert_equal [:enqueued, queue], [live.kind, live.queue]
+    refute_nil live.cursor
+    replayed = bounded { client.watch_queue(queue, resume_cursor: opened.cursor).take(2) }
+
+    assert_equal [FlexiQ::WatchCheckpoint, live], [replayed[0].class, replayed[1]]
+    # Well-formed, but numbered by no process this server ran.
+    forged = "AAAAAAAAAAAAAAAAAAAAAA"
+    gap, checkpoint = bounded { client.watch_queue(queue, resume_cursor: forged).take(2) }
+
+    assert_equal FlexiQ::WatchGap.new(lost_cursor: forged), gap
+    assert_kind_of FlexiQ::WatchCheckpoint, checkpoint
   end
 
   def test_a_token_without_produce_is_scope_denied

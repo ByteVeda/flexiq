@@ -21,7 +21,8 @@ use `structured` arguments, no CBOR library either.
 <Callout title="So does Ruby">
   [`sdks/ruby`](https://github.com/ByteVeda/flexiq/tree/master/sdks/ruby)
   implements the same producer verbs — enqueue, batch, read, list, cancel, count —
-  over the JSON facade, using nothing outside the Ruby standard library. It
+  over the JSON facade, and waits for jobs over its Server-Sent Events watch,
+  using nothing outside the Ruby standard library. It
   writes the `raw` CBOR envelope itself, so its payloads, and the `auto:` keys
   derived from them, match every other runtime's. Like the Go client, it cannot
   execute tasks.

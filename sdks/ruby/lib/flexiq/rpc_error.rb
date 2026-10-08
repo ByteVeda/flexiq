@@ -91,6 +91,9 @@ module FlexiQ
       { queue: queue, pending: pending, cap: cap }
     end
 
+    # The cap on concurrent watches a WATCH_LIMIT credential is holding, else nil.
+    def watch_limit = reason == Reason::WATCH_LIMIT ? metadata_integer("cap") : nil
+
     # The scope a SCOPE_DENIED credential lacked, else nil.
     def scope = reason == Reason::SCOPE_DENIED ? metadata["scope"] : nil
   end
