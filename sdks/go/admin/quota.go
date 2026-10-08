@@ -12,8 +12,9 @@ import (
 type QuotaOverflow int32
 
 const (
-	// OverflowUnspecified is the zero value, which the server reads as
-	// [OverflowReject].
+	// OverflowUnspecified is the zero value. The server stores it as
+	// [OverflowReject] and reads back OverflowReject, so a declarative caller
+	// sends OverflowReject explicitly or sees drift on its next read.
 	OverflowUnspecified QuotaOverflow = 0
 	// OverflowReject refuses the enqueue: [flexiq.ReasonQueueFull] for depth,
 	// [flexiq.ReasonRateLimited] for rate. Nothing of the call is written.
