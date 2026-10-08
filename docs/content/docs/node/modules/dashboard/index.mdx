@@ -73,3 +73,19 @@ your own auth via the
   `serveDashboard` needs the built SPA in `static/dashboard`
   (`pnpm build:dashboard`). Pass `staticDir` to point at assets elsewhere.
 </Callout>
+
+## Audit trail
+
+Every change made through the dashboard — a `POST`, `PUT`, `PATCH` or `DELETE`
+on `/api/*` — is recorded in the [audit trail](/server/operate/audit#from-an-sdks-dashboard),
+attributed to the signed-in user, or `anonymous` with auth off or behind the
+shared token. A refused change is recorded too. Records are written off the
+request path: a change is never slowed or refused because the audit table is.
+
+The dashboard prunes its namespace's trail hourly. Set the window with
+`auditRetentionDays` (default: `FLEXIQ_AUDIT_RETENTION_DAYS`, else 90 days; at
+least 1):
+
+```ts
+serveDashboard(queue, { port: 8787, authEnabled: true, auditRetentionDays: 30 });
+```

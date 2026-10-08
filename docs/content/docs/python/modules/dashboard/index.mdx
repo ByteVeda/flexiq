@@ -102,6 +102,22 @@ flexiq dashboard --app myapp:queue --host 0.0.0.0 --port 9000
   deployments.
 </Callout>
 
+### Audit trail
+
+Every change made through the dashboard — a `POST`, `PUT` or `DELETE` on
+`/api/*` — is recorded in the [audit trail](/server/operate/audit#from-an-sdks-dashboard),
+attributed to the signed-in user, or `anonymous` with auth off. A refused
+change is recorded too. Records are written off the request path: a change is
+never slowed or refused because the audit table is.
+
+The dashboard prunes its namespace's trail hourly. Set the window with
+`audit_retention_days` (default: `FLEXIQ_AUDIT_RETENTION_DAYS`, else 90 days;
+at least 1):
+
+```python
+serve_dashboard(queue, auth_enabled=True, audit_retention_days=30)
+```
+
 ## Pages
 
 The dashboard is grouped by intent — Monitoring (what's happening),
