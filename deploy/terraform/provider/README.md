@@ -13,6 +13,16 @@ make check            # build, vet, golangci-lint, unit tests
 make server testacc   # acceptance tests against a real flexiq-server
 ```
 
+Examples for the provider and each resource are in `examples/`. The full guide is
+the docs page `server/operate/terraform`.
+
+## Releasing
+
+Not done. Publishing to the Terraform Registry needs a separate
+`terraform-provider-flexiq` repository (the registry requires that name) and a
+GPG signing key, plus a goreleaser workflow. None of that exists yet, so the
+provider is built from source with `make binary`.
+
 ## Tokens
 
 `flexiq_token` needs a provider token with the `tokens` scope and grants that
