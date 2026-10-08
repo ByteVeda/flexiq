@@ -121,9 +121,9 @@ described as having established more:
 
 Three packages and three doors: one scope each for the producer and the
 executor, and three for the operator — `inspect` for its read-only methods,
-`tokens` for its token methods, `admin` for the rest. A single credential **may** carry several scopes, though a
-producer, an executor and an operator are usually separate processes holding a
-token each. `flexiq.executor.v1` and `flexiq.admin.v1` **may** import
+`tokens` for its token methods, `admin` for the rest. A single credential
+**may** carry several scopes, though a producer, an executor and an operator are
+usually separate processes holding a token each. `flexiq.executor.v1` and `flexiq.admin.v1` **may** import
 `flexiq.v1`; the reverse import is forbidden, so a client generated for the
 producer door stays compilable on its own.
 
@@ -350,8 +350,8 @@ An executor client:
   `flexiq.v1` and `flexiq.admin.v1` and nothing else, so this door needs a real
   gRPC library.
 - **No producer or executor credential reaches the operator door.** It takes
-  `inspect`, `admin` or `tokens`, which neither carries; and some operator actions are on
-  no door at all — see
+  `inspect`, `admin` or `tokens`, which neither carries; and some operator
+  actions are on no door at all — see
   [The delta from an embedded SDK](#the-delta-from-an-embedded-sdk).
 
 ### An operator client — `flexiq.admin.v1.AdminService`
