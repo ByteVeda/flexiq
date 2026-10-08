@@ -1,17 +1,16 @@
-package flexiq
+package door
 
 import (
 	"context"
 
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // bearerToken puts `authorization: Bearer <token>` on every call.
 //
 // It is per-RPC credentials rather than a header set at each call site because
-// there is no call on this door that does not carry one, and a header a caller
-// can forget is a header a caller will forget.
+// there is no call on these doors that does not carry one, and a header a
+// caller can forget is a header a caller will forget.
 type bearerToken struct {
 	token string
 	// overInsecure records that the caller knowingly chose an unencrypted hop.
@@ -27,7 +26,3 @@ func (b bearerToken) GetRequestMetadata(context.Context, ...string) (map[string]
 }
 
 func (b bearerToken) RequireTransportSecurity() bool { return !b.overInsecure }
-
-func insecureCredentials() credentials.TransportCredentials {
-	return insecure.NewCredentials()
-}
