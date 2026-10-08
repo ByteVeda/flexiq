@@ -57,7 +57,7 @@ Reach for something else when:
 |---|---|---|---|---|---|---|---|
 | **What it is** | Embedded task queue with durable steps and workflows | Durable-execution platform | Managed task queue (Cloud Tasks) and managed event bus (EventBridge) | Queue library for Node.js | Distributed task queue for Python | Task queue for Python | Task queue for Python on Redis |
 | **What you run** | Nothing beyond your app on SQLite; Postgres or Redis to scale out; optionally `flexiq-server` | A Temporal Service — frontend, history, matching and worker services plus a database — and your Workers; or Temporal Cloud and your Workers | Your targets; the queue is the cloud provider's | Redis, or PostgreSQL since BullMQ 6, and your workers | A broker (RabbitMQ or Redis), usually a result backend, and your workers | A broker (RabbitMQ or Redis) and your workers | Redis and your workers |
-| **Languages** | Python, Node, Java, Rust SDKs; Go and Ruby clients; any gRPC or HTTP caller | Go, Java, Python, TypeScript, .NET, PHP, Ruby, Rust SDKs | Any — a target is an HTTP endpoint or a cloud service | Node.js; ports for Python, Elixir and PHP | Python | Python | Python |
+| **Languages** | Python, Node, Java, Rust SDKs; Go and Ruby clients; any gRPC or HTTP caller | Go, Java, Python, TypeScript, .NET, PHP, Ruby, Rust SDKs | Any — a target is an HTTP endpoint or a cloud service | Node.js and Bun; ports for Python, .NET, Rust, Elixir and PHP (producer only) | Python | Python | Python |
 | **Durable steps** | Yes — memoized `step.run`, `step.sleep` | Yes — Activities, with workflow code replayed from history | No | No built-in; a documented pattern saves the step in job data | No | No | No |
 | **Workflow model** | DAG declared up front: fan-out, conditions, approval gates, sub-workflows, sagas | Workflows are code, replayed deterministically; signals, queries, updates, durable timers | None — one task or event, one target | Flows (parent and child jobs) | Canvas: chain, group, chord | Pipelines and groups | Job dependencies |
 | **Dead-letter queue** | Yes — inspect the payload and error, replay as a fresh job | No queue — a failed execution keeps its history and can be reset to an earlier point | Cloud Tasks deletes a task after its last attempt; EventBridge sends to an SQS queue whose redrive is code you write | Failed set; `job.retry()` | No built-in | Yes — dead-lettered messages kept up to 7 days | Failed job registry |
@@ -154,7 +154,8 @@ live in that cloud.
 
 BullMQ is the Node incumbent: a mature library with priorities, rate limits,
 repeatable jobs and parent-child flows. It runs on Redis, and since BullMQ 6
-also on PostgreSQL. Ports exist for Python, Elixir and PHP.
+also on PostgreSQL. It runs on Node.js and Bun, with ports for
+Python, .NET, Rust, Elixir and PHP (producer only) that share the same queues.
 
 |  | FlexiQ | BullMQ |
 |---|---|---|
@@ -163,13 +164,13 @@ also on PostgreSQL. Ports exist for Python, Elixir and PHP.
 | **Exhausted retries** | Dead-letter queue with replay | Failed set, `job.retry()` |
 | **Durable steps** | Built-in | A documented pattern: save the step in job data |
 | **Workflows** | DAG, fan-out, approval gates, sub-workflows, sagas | Flows (parent and child jobs) |
-| **Other languages** | Python, Java and Rust SDKs share the queue | Language ports of the library |
+| **Other languages** | Python, Java and Rust SDKs share the queue, all on one Rust engine | Ports of the library for other languages |
 
 On a remote Redis, BullMQ beats FlexiQ's Redis backend in the
 [benchmark](/about/benchmarks#where-flexiq-loses).
 
 **Choose FlexiQ if** you want to start without Redis, need durable steps, or
-share queues with workers in other languages. **Choose BullMQ if** Redis is
+want every language's workers on one engine rather than a port per language. **Choose BullMQ if** Redis is
 already central to your stack and you want its throughput and its ecosystem.
 The [BullMQ migration guide](/node/operate/migration) maps every concept across.
 
