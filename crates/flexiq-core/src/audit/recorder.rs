@@ -73,6 +73,9 @@ impl AuditRecorder {
             .name("flexiq-audit".into())
             .spawn(move || {
                 write(&storage, &namespace, retention, &inbox);
+                // Release storage before signalling: `close` returning must
+                // mean the database file is no longer held by this thread.
+                drop(storage);
                 let _ = done.send(());
             })?;
         Ok(Self {
