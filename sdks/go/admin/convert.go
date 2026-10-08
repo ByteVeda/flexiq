@@ -14,6 +14,10 @@ func rpcError(err error) error {
 	if err == nil {
 		return nil
 	}
+	// Unset only if the root's init never ran; the raw error beats a nil-func panic.
+	if door.FromRPC == nil {
+		return err
+	}
 	return door.FromRPC(err)
 }
 
