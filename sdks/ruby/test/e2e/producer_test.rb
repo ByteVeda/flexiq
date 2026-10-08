@@ -84,6 +84,35 @@ class ProducerE2ETest < Minitest::Test
     assert_operator client.queue_stats.pending, :>=, before + 1
   end
 
+  def test_a_listing_pages_past_page_size
+    task = "list.#{SecureRandom.hex(4)}"
+    ids = Array.new(3) { client.enqueue(task, queue: QUEUE).job.id }
+
+    first = client.list_jobs(task_name: task, status: :pending, page_size: 2)
+    last = client.list_jobs(task_name: task, status: :pending, page_size: 2, page_token: first.next_page_token)
+
+    assert_equal [2, 1], [first.jobs.length, last.jobs.length]
+    refute_predicate first, :last_page?
+    assert_predicate last, :last_page?
+    assert_equal ids.sort, (first.jobs + last.jobs).map(&:id).sort
+    assert_equal ids.sort, client.each_job(task_name: task, page_size: 2).map(&:id).sort
+    assert_nil first.jobs.first.payload
+  end
+
+  def test_a_narrowed_grant_must_name_a_queue_it_reaches
+    token = server.mint("ruby-e2e-reader", "read:queue=#{QUEUE}")
+    error = assert_raises(FlexiQ::RPCError) { client(token).list_jobs }
+
+    assert_equal FlexiQ::Reason::SCOPE_DENIED, error.reason
+    assert_kind_of FlexiQ::JobPage, client(token).list_jobs(queue: QUEUE)
+  end
+
+  def test_a_forged_page_token_is_invalid_request
+    error = assert_raises(FlexiQ::RPCError) { client.list_jobs(page_token: "not-a-token") }
+
+    assert_equal [FlexiQ::Reason::INVALID_REQUEST, "INVALID_ARGUMENT"], [error.reason, error.code]
+  end
+
   def test_an_unknown_job_is_job_not_found
     error = assert_raises(FlexiQ::RPCError) { client.get_job(SecureRandom.uuid) }
 

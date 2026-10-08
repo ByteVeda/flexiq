@@ -84,6 +84,54 @@ class ClientTest < Minitest::Test
     assert_equal "/v1/stats", @server.last_request.path
   end
 
+  def test_list_jobs_sends_filters_and_drops_the_unset_ones
+    @response = [200, { "jobs" => [JOB], "nextPageToken" => "" }]
+    page = @client.list_jobs(status: :failed, task_name: "send", page_size: 2)
+
+    assert_equal "/v1/jobs?status=JOB_STATUS_FAILED&taskName=send&pageSize=2", @server.last_request.path
+    assert_equal ["j1"], page.jobs.map(&:id)
+    assert_predicate page, :last_page?
+    assert_raises(ArgumentError) { @client.list_jobs(status: :finished) }
+    assert_raises(ArgumentError) { @client.list_jobs(status: false) }
+  end
+
+  def test_each_job_follows_the_page_token_to_the_end
+    pages = {
+      nil => { "jobs" => [JOB.merge("id" => "j3"), JOB.merge("id" => "j2")], "nextPageToken" => "c/2+=" },
+      "c/2+=" => { "jobs" => [JOB.merge("id" => "j1")], "nextPageToken" => "" }
+    }
+    server = FakeServer.new do |request|
+      query = URI.decode_www_form(URI(request.path).query.to_s).to_h
+      [200, pages.fetch(query["pageToken"])]
+    end
+    client = FlexiQ::Client.new(server.url, token: TOKEN, insecure: true)
+    jobs = client.each_job(queue: "emails", page_size: 2)
+
+    assert_kind_of Enumerator, jobs
+    assert_equal %w[j3 j2 j1], jobs.map(&:id)
+    assert_equal ["/v1/jobs?queue=emails&pageSize=2", "/v1/jobs?queue=emails&pageSize=2&pageToken=c%2F2%2B%3D"],
+                 [server.last_request.path, server.last_request.path]
+  ensure
+    client&.close
+    server&.stop
+  end
+
+  def test_a_token_that_does_not_decode_surfaces_as_the_servers_refusal
+    @response = [400, { "error" => { "code" => 400, "status" => "INVALID_ARGUMENT", "message" => "bad page_token",
+                                     "details" => [{ "@type" => FlexiQ::RPCError::ERROR_INFO_TYPE,
+                                                     "domain" => FlexiQ::Reason::DOMAIN,
+                                                     "reason" => "INVALID_REQUEST" }] } }]
+    error = assert_raises(FlexiQ::RPCError) { @client.list_jobs(page_token: "forged") }
+
+    assert_equal [FlexiQ::Reason::INVALID_REQUEST, "INVALID_ARGUMENT"], [error.reason, error.code]
+    assert_equal "/v1/jobs?pageToken=forged", @server.last_request.path
+  end
+
+  def test_a_listing_without_a_job_list_is_a_transport_error
+    @response = [200, { "jobs" => "nope" }]
+    assert_raises(FlexiQ::TransportError) { @client.list_jobs }
+  end
+
   def test_a_refusal_raises_rpc_error_with_its_reason
     @response = [404, { "error" => { "code" => 404, "status" => "NOT_FOUND", "message" => "no such job",
                                      "details" => [{ "@type" => FlexiQ::RPCError::ERROR_INFO_TYPE,
