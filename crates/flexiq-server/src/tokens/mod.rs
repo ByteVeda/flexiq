@@ -21,6 +21,7 @@
 //! process.
 
 pub mod cli;
+pub mod cover;
 pub mod grant;
 pub mod model;
 pub mod scope;
