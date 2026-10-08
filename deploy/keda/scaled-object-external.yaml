@@ -35,6 +35,7 @@ spec:
         # TLS (FLEXIQ_GRPC_TLS_*): enable it and give KEDA the CA through a
         # TriggerAuthentication (secretTargetRef parameter `caCert`).
         # enableTLS: "true"
+    # Uncomment together with the TriggerAuthentication document below.
     # authenticationRef:
     #   name: flexiq-scaler-tls
 ---

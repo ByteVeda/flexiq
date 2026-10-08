@@ -195,6 +195,12 @@ triggers:
       targetQueueDepth: "10"
 ```
 
+`flexiq-server-grpc` is the gRPC Service the chart names after its release:
+`<release>-flexiq-server-grpc`, shortened to `<release>-grpc` when the release
+name already contains `flexiq-server` (so a release called `flexiq-server`
+gives `flexiq-server-grpc`), or `<fullnameOverride>-grpc` when that is set.
+`50051` is the default `grpc.port`.
+
 KEDA resolves `tokenFromEnv` from the **scale target's** environment and sends
 the value in the trigger metadata. A `token` key puts it in the manifest
 instead, which is only for a throwaway cluster. The namespace measured is the
@@ -225,6 +231,11 @@ The two numbers answer different questions. The metric KEDA sizes replicas on
 is the **pending** count. Whether the target runs at all is **pending +
 running**, so a job already claimed keeps the target up until it finishes. An
 unknown `queue` reports `0` rather than an error, as `/api/scaler` does.
+
+The two doors draw that line differently. gRPC `IsActive` is
+`pending + running > activationQueueDepth`; the `isActive` field of
+`/api/scaler` is `pending > 0`, so it goes false while the last claimed jobs are
+still running.
 
 The metric is named `flexiq-<queue>` (or `flexiq-all`), lowercased with every
 character outside `[a-z0-9]` turned into `-`. So `emails_eu` and `emails-eu`
@@ -260,12 +271,22 @@ back to zero. Leave it above `0` when you use `external-push`.
 Streams count against `FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN` (`16`) per token,
 separately from watches. KEDA opens about one per trigger.
 
+The token is checked when a stream opens, not while it runs. Revoking it does
+not end a stream already open, as with `WatchJobs`; the stream keeps answering
+until it closes, and KEDA's reconnect is then refused. Polled calls fail on the
+next poll.
+
 ### TLS
 
 With `FLEXIQ_GRPC_TLS_*` set, give KEDA the CA through a `TriggerAuthentication`
 whose `secretTargetRef` sets the `caCert` parameter, and point the trigger's
 `authenticationRef` at it. KEDA documents `enableTLS: "true"` for the `external`
-trigger. [TLS and mTLS](/server/operate/grpc#tls-and-mtls) covers the server
+trigger. `external-push` reads the same keys: KEDA builds both scalers from one
+metadata parser and one connection builder, which turns TLS on when `enableTLS`
+is true, a `caCert` parameter is set, or a client certificate
+(`tlsClientCert` with `tlsClientKey`) is loaded. For
+mTLS, add `tlsClientCert` and `tlsClientKey` to the same `TriggerAuthentication`.
+[TLS and mTLS](/server/operate/grpc#tls-and-mtls) covers the server
 side.
 
 Complete manifests are `deploy/keda/scaled-object-external.yaml` and
