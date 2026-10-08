@@ -128,6 +128,14 @@ impl AuditRecorder {
     }
 }
 
+impl Drop for AuditRecorder {
+    /// Closing on drop makes a queue handle's release wait for the writer, so
+    /// its storage clone — an open database file on SQLite — is gone too.
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 /// The recorder an SDK dashboard owns: started when its server starts,
 /// closed when it stops, and fed one call per answered request. Bindings
 /// hold one of these and forward to it, so the record shape and the
@@ -323,6 +331,25 @@ mod tests {
         recorder.record(one("prod", None));
         recorder.close();
         assert_eq!(stored(&storage, "prod"), 300);
+    }
+
+    /// Dropping the recorder — a queue handle released without `close` —
+    /// still flushes and lets go of storage before the drop returns.
+    #[test]
+    fn dropping_the_recorder_waits_for_the_writer() {
+        let storage = backend();
+        let recorder = AuditRecorder::start(storage.clone(), "prod", None).expect("start");
+        recorder.record(one("prod", None));
+        drop(recorder);
+        assert_eq!(stored(&storage, "prod"), 1);
+
+        let audit = DashboardAudit::default();
+        audit
+            .start(storage.clone(), Some("prod"), None)
+            .expect("start");
+        audit.record("POST", "/api/queues/emails/pause", 200, None);
+        drop(audit);
+        assert_eq!(stored(&storage, "prod"), 2);
     }
 
     #[test]
