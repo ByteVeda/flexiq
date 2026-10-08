@@ -136,14 +136,6 @@
     },
     {
       "owner": "FlexiQ",
-      "name": "closeDashboardAudit",
-      "kind": "method",
-      "signature": "void closeDashboardAudit()",
-      "params": [],
-      "returns": "void"
-    },
-    {
-      "owner": "FlexiQ",
       "name": "codel",
       "kind": "method",
       "signature": "FlexiQ codel(String queue, long targetMs, long intervalMs)",
@@ -1497,35 +1489,6 @@
     },
     {
       "owner": "FlexiQ",
-      "name": "recordDashboardAction",
-      "kind": "method",
-      "signature": "void recordDashboardAction(String method, String path, int status, @Nullable String username)",
-      "params": [
-        {
-          "name": "method",
-          "type": "String",
-          "default": null
-        },
-        {
-          "name": "path",
-          "type": "String",
-          "default": null
-        },
-        {
-          "name": "status",
-          "type": "int",
-          "default": null
-        },
-        {
-          "name": "username",
-          "type": "@Nullable String",
-          "default": null
-        }
-      ],
-      "returns": "void"
-    },
-    {
-      "owner": "FlexiQ",
       "name": "registerPeriodic",
       "kind": "method",
       "signature": "long registerPeriodic(PeriodicTask task)",
@@ -1853,20 +1816,6 @@
       "kind": "method",
       "signature": "void shutdown()",
       "params": [],
-      "returns": "void"
-    },
-    {
-      "owner": "FlexiQ",
-      "name": "startDashboardAudit",
-      "kind": "method",
-      "signature": "void startDashboardAudit(int retentionDays)",
-      "params": [
-        {
-          "name": "retentionDays",
-          "type": "int",
-          "default": null
-        }
-      ],
       "returns": "void"
     },
     {
