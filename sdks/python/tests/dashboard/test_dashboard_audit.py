@@ -20,6 +20,7 @@ import pytest
 
 from flexiq import Queue
 from flexiq.dashboard import _make_handler
+from flexiq.dashboard import server as dashboard_server
 from flexiq.dashboard._testing import AuthedClient, seed_admin_and_session
 from flexiq.dashboard.auth import AuthStore
 from flexiq.dashboard.server import serve_dashboard
@@ -137,3 +138,31 @@ def test_the_retention_window_is_at_least_a_day(
         serve_dashboard(queue, port=0)
     with pytest.raises(ValueError, match="at least 1 day"):
         queue._inner.start_dashboard_audit(0)
+
+
+class _FailingAudit:
+    """A binding whose audit writer cannot start."""
+
+    def start_dashboard_audit(self, retention_days: int) -> None:
+        raise RuntimeError("audit writer did not start")
+
+    def close_dashboard_audit(self) -> None:
+        pass
+
+
+class _FailingQueue:
+    _inner = _FailingAudit()
+
+
+def test_a_failed_audit_start_still_closes_the_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[bool] = []
+
+    class _TrackedServer(ThreadingHTTPServer):
+        def server_close(self) -> None:
+            closed.append(True)
+            super().server_close()
+
+    monkeypatch.setattr(dashboard_server, "ThreadingHTTPServer", _TrackedServer)
+    with pytest.raises(RuntimeError, match="did not start"):
+        serve_dashboard(_FailingQueue(), port=0)  # type: ignore[arg-type]
+    assert closed == [True]

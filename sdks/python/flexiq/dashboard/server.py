@@ -183,11 +183,11 @@ def serve_dashboard(
         auth_enabled=auth_enabled,
     )
     server = ThreadingHTTPServer((host, port), handler)
-    queue._inner.start_dashboard_audit(retention_days)
-    print(f"flexiq dashboard → http://{host}:{port}")
-    print("Press Ctrl+C to stop")
-
     try:
+        # Inside the try: a failed start must still close the bound socket.
+        queue._inner.start_dashboard_audit(retention_days)
+        print(f"flexiq dashboard → http://{host}:{port}")
+        print("Press Ctrl+C to stop")
         server.serve_forever()
     except KeyboardInterrupt:
         pass
