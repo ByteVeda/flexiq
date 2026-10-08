@@ -92,6 +92,7 @@ class ClientTest < Minitest::Test
     assert_equal ["j1"], page.jobs.map(&:id)
     assert_predicate page, :last_page?
     assert_raises(ArgumentError) { @client.list_jobs(status: :finished) }
+    assert_raises(ArgumentError) { @client.list_jobs(status: false) }
   end
 
   def test_each_job_follows_the_page_token_to_the_end

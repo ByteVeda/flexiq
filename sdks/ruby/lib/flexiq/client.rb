@@ -47,7 +47,7 @@ module FlexiQ
     # the call raises RPCError SCOPE_DENIED: a listing is refused, never filtered silently.
     def list_jobs(status: nil, queue: nil, task_name: nil, page_size: nil, page_token: nil)
       query = {
-        "status" => status && JobStatus.dump(status), "queue" => queue, "taskName" => task_name,
+        "status" => status.nil? ? nil : JobStatus.dump(status), "queue" => queue, "taskName" => task_name,
         "pageSize" => page_size, "pageToken" => page_token
       }
       JobPage.from_json(@transport.get("/v1/jobs", query))
