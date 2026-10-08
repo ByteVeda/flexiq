@@ -275,6 +275,47 @@ async fn minting_and_revoking_a_token_name_it() {
     }
 }
 
+/// The SDK dashboards record by the core's route list (#1020), so every route
+/// on it must be one this router serves under the same template — or an SDK's
+/// record of a change would name an operation the server's never does.
+#[tokio::test]
+async fn every_shared_route_is_recorded_under_the_cores_template() {
+    use flexiq_core::audit::dashboard::{operation, ROUTES};
+
+    let storage = temp_storage("audit-dash-parity");
+    let state = dashboard_state(&storage, AuthMode::Session);
+    let ops = admin(&state).await;
+
+    // The session ends with logout, so that goes last.
+    let mut routes = ROUTES.to_vec();
+    routes.sort_by_key(|(_, template)| *template == "/api/auth/logout");
+    for (method, template) in &routes {
+        let path = template
+            .split('/')
+            .map(|segment| {
+                if segment.starts_with('{') {
+                    "v"
+                } else {
+                    segment
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        call(&state, ops.send(method, &path, json!({}))).await;
+    }
+
+    let recorded: std::collections::BTreeSet<String> = trail(&storage, "default", ROUTES.len())
+        .await
+        .into_iter()
+        .map(|record| record.operation)
+        .collect();
+    let expected: std::collections::BTreeSet<String> = ROUTES
+        .iter()
+        .map(|(method, template)| operation(method, template))
+        .collect();
+    assert_eq!(recorded, expected);
+}
+
 #[tokio::test]
 async fn a_namespaced_dashboard_records_into_its_namespace() {
     let storage = temp_storage("audit-dash-ns");

@@ -15,7 +15,8 @@
 //!   refused write is recorded `PERMISSION_DENIED`, attributed.
 //! - **Operation.** `dashboard <METHOD> <route template>` — the template, not
 //!   the path, so the operation set stays bounded.
-//! - **Targets.** The route's path parameters, kinded by [`target_kind`]; a
+//! - **Targets.** The route's path parameters, kinded by the core's
+//!   [`target_kind`] — the rule an SDK's dashboard records by too (#1020); a
 //!   handler adds what only it learns — a minted token's id — through
 //!   [`Targets`]. One record per target.
 //!
@@ -27,6 +28,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use axum::extract::{FromRequestParts, MatchedPath, RawPathParams, Request};
 use axum::http::{Method, StatusCode};
 use flexiq_core::scheduler::retention::DEFAULT_NAMESPACE;
+
+use flexiq_core::audit::dashboard::{operation, target_kind};
 
 use crate::audit::record::{self, outcome_of, Access};
 use crate::audit::{Actor, AuditSink, TargetKind};
@@ -145,7 +148,7 @@ pub async fn open(
                 .clone()
                 .unwrap_or_else(|| DEFAULT_NAMESPACE.to_string()),
             actor,
-            operation: format!("dashboard {} {template}", parts.method),
+            operation: operation(parts.method.as_str(), &template),
             targets,
         }),
     };
@@ -158,116 +161,9 @@ pub fn recorded(method: &Method, path: &str) -> bool {
     path.starts_with("/api/") && gate::is_state_changing(method.as_str())
 }
 
-/// The `target_kind` a path parameter of `template` stands for. Keyed by the
-/// parameter's name, and by the resource for the generic ones (`{id}`,
-/// `{name}`). One this table does not know is recorded under its own name —
-/// a vaguer kind, never a missing target.
-pub fn target_kind(template: &str, param: &str) -> String {
-    let resource = template
-        .strip_prefix("/api/")
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or_default();
-    let kind = match (param, resource) {
-        ("job_id", _) => TargetKind::Job,
-        ("dead_id", _) => TargetKind::DeadLetter,
-        ("queue" | "queue_name", _) => TargetKind::Queue,
-        ("task_name", _) => TargetKind::Task,
-        ("run_id", _) => TargetKind::WorkflowRun,
-        ("middleware_name", _) => TargetKind::Middleware,
-        ("topic", _) => TargetKind::Topic,
-        ("name", "topics") => TargetKind::Subscription,
-        ("key", "settings") => TargetKind::Setting,
-        ("id", "grpc-tokens") => TargetKind::Token,
-        ("id", "webhooks") => TargetKind::Webhook,
-        ("delivery_id", "webhooks") => TargetKind::WebhookDelivery,
-        _ => return param.to_string(),
-    };
-    kind.as_str().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Every state-changing route the dashboard serves today, as registered in
-    /// `routes::router` and `auth::router`.
-    const MUTATING_ROUTES: [&str; 26] = [
-        "/api/jobs/{job_id}/cancel",
-        "/api/jobs/{job_id}/replay",
-        "/api/dead-letters/purge",
-        "/api/dead-letters/{dead_id}",
-        "/api/dead-letters/{dead_id}/retry",
-        "/api/queues/{queue}/pause",
-        "/api/queues/{queue}/resume",
-        "/api/settings/{*key}",
-        "/api/topics/{topic}/subscriptions/{name}",
-        "/api/topics/{topic}/subscriptions/{name}/pause",
-        "/api/topics/{topic}/subscriptions/{name}/resume",
-        "/api/tasks/{task_name}/override",
-        "/api/queues/{queue_name}/override",
-        "/api/tasks/{task_name}/middleware",
-        "/api/tasks/{task_name}/middleware/{middleware_name}",
-        "/api/grpc-tokens",
-        "/api/grpc-tokens/{id}",
-        "/api/webhooks",
-        "/api/webhooks/{id}",
-        "/api/webhooks/{id}/test",
-        "/api/webhooks/{id}/rotate-secret",
-        "/api/webhooks/{id}/deliveries/{delivery_id}/replay",
-        "/api/auth/logout",
-        "/api/auth/change-password",
-        "/api/auth/login",
-        "/api/auth/setup",
-    ];
-
-    fn params(template: &str) -> Vec<&str> {
-        template
-            .split('/')
-            .filter_map(|segment| segment.strip_prefix('{')?.strip_suffix('}'))
-            .map(|name| name.trim_start_matches('*'))
-            .collect()
-    }
-
-    /// A new parameter name on a mutating route must be given a kind here,
-    /// or its records would carry the bare parameter name.
-    #[test]
-    fn every_mutating_route_parameter_has_a_known_kind() {
-        let known = [
-            TargetKind::Job,
-            TargetKind::DeadLetter,
-            TargetKind::Queue,
-            TargetKind::Task,
-            TargetKind::Middleware,
-            TargetKind::Topic,
-            TargetKind::Subscription,
-            TargetKind::Setting,
-            TargetKind::Token,
-            TargetKind::Webhook,
-            TargetKind::WebhookDelivery,
-        ]
-        .map(TargetKind::as_str);
-        for template in MUTATING_ROUTES {
-            for param in params(template) {
-                let kind = target_kind(template, param);
-                assert!(
-                    known.contains(&kind.as_str()),
-                    "{template}: `{param}` has no kind (read as `{kind}`)"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn generic_parameters_are_kinded_by_their_resource() {
-        assert_eq!(target_kind("/api/grpc-tokens/{id}", "id"), "token");
-        assert_eq!(target_kind("/api/webhooks/{id}", "id"), "webhook");
-        assert_eq!(
-            target_kind("/api/topics/{topic}/subscriptions/{name}", "name"),
-            "subscription"
-        );
-        assert_eq!(target_kind("/api/settings/{*key}", "key"), "setting");
-        assert_eq!(target_kind("/api/things/{id}", "id"), "id", "unknown");
-    }
 
     #[test]
     fn only_api_mutations_are_recorded() {
