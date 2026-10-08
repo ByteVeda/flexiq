@@ -78,6 +78,22 @@ repos:
         files: ^sdks/go/(.*\.go|go\.mod|go\.sum)$
         pass_filenames: false
 
+      # The Terraform provider is a Go module of its own, so the sdks/go hooks
+      # above never see it. Full lint is `make -C deploy/terraform/provider lint`.
+      - id: terraform-provider-fmt
+        name: terraform provider fmt (gofmt)
+        entry: bash -c 'cd deploy/terraform/provider && test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }'
+        language: system
+        files: ^deploy/terraform/provider/.*\.go$
+        pass_filenames: false
+
+      - id: terraform-provider-vet
+        name: terraform provider vet
+        entry: bash -c 'cd deploy/terraform/provider && go vet ./...'
+        language: system
+        files: ^deploy/terraform/provider/(.*\.go|go\.mod|go\.sum)$
+        pass_filenames: false
+
       # Needs only Ruby and the gem's bundle, which anyone touching sdks/ruby
       # already has. Lints the e2e suite too: it needs a server to run, not to lint.
       - id: ruby-rubocop
