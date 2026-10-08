@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"testing"
 
 	tfresource "github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -103,14 +104,14 @@ func expectReplaced(old *string) tfresource.TestCheckFunc {
 
 func TestAccToken(t *testing.T) {
 	requireAcc(t)
-	var first, second, third string
+	var first, second string
 	replaceFirst := []plancheck.PlanCheck{
 		plancheck.ExpectResourceAction(accTokenAddress, plancheck.ResourceActionCreateBeforeDestroy),
 	}
 
 	tfresource.Test(t, tfresource.TestCase{
 		ProtoV6ProviderFactories: accFactories,
-		CheckDestroy:             expectRevoked(&third),
+		CheckDestroy:             expectRevoked(&second),
 		Steps: []tfresource.TestStep{
 			{
 				Config: tokenConfig(0),
@@ -154,18 +155,21 @@ func TestAccToken(t *testing.T) {
 					expectWorkingSecret(&second),
 				),
 			},
-			{
-				// A window as long as the lifetime: due at once, so this plan
-				// rotates it — and so would every plan after.
-				Config:             tokenConfig(30),
-				ConfigPlanChecks:   tfresource.ConfigPlanChecks{PreApply: replaceFirst},
-				ExpectNonEmptyPlan: true,
-				Check: tfresource.ComposeAggregateTestCheckFunc(
-					expectReplaced(&second),
-					expectWorkingSecret(&third),
-					expectRevoked(&second),
-				),
-			},
 		},
+	})
+}
+
+// TestAccTokenRejectsALoopingWindow: a window as long as the lifetime would
+// make every new token due at once and every plan replace it, so it is refused
+// at plan time. The window itself is covered by TestTokenModifyPlan's clock.
+func TestAccTokenRejectsALoopingWindow(t *testing.T) {
+	requireAcc(t)
+	tfresource.Test(t, tfresource.TestCase{
+		ProtoV6ProviderFactories: accFactories,
+		Steps: []tfresource.TestStep{{
+			Config:      tokenConfig(30),
+			PlanOnly:    true,
+			ExpectError: regexp.MustCompile(`must\s+be\s+less\s+than\s+expire_days`),
+		}},
 	})
 }

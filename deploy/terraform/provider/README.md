@@ -21,7 +21,9 @@ caller, so the provider's own token must outlive every token it mints —
 replacements included. `expire_days` is therefore required.
 
 `rotate_before_days` plans a replacement that many days before expiry; a
-revoked or expired token is replaced on the next plan too. With
+revoked or expired token is replaced on the next plan too. It must be less than
+`expire_days` — otherwise each new token is due the moment it is minted and
+every plan replaces it — and a config that breaks this is refused at plan time. With
 `create_before_destroy`, the new secret exists before the old token is revoked:
 
 ```hcl

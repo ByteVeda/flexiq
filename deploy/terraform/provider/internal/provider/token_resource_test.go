@@ -20,48 +20,66 @@ var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func fixedClock(at time.Time) func() time.Time { return func() time.Time { return at } }
 
-func TestNeedsRotation(t *testing.T) {
+func TestDecideRotation(t *testing.T) {
 	expires := epoch.Add(30 * day)
 	active := admin.TokenStatusActive.String()
+	unspecified := admin.TokenStatusUnspecified.String()
 	cases := []struct {
-		name   string
-		now    time.Time
-		before int64
-		status string
-		want   bool
+		name    string
+		now     time.Time
+		before  int64
+		status  string
+		replace bool
+		unknown bool
 	}{
-		{"fresh, no window", epoch, 0, active, false},
-		{"just before expiry, no window", expires.Add(-time.Second), 0, active, false},
-		{"at expiry, no window", expires, 0, active, true},
-		{"outside the window", epoch, 7, active, false},
-		{"a second before the window", expires.Add(-7*day - time.Second), 7, active, false},
-		{"window opens", expires.Add(-7 * day), 7, active, true},
-		{"inside the window", expires.Add(-day), 7, active, true},
-		{"window as long as the lifetime", epoch, 30, active, true},
-		{"window past the lifetime", epoch, 365, active, true},
-		{"revoked", epoch, 0, admin.TokenStatusRevoked.String(), true},
-		{"expired", epoch, 0, admin.TokenStatusExpired.String(), true},
-		{"unknown status", epoch, 0, admin.TokenStatusUnspecified.String(), true},
+		{"fresh, no window", epoch, 0, active, false, false},
+		{"just before expiry, no window", expires.Add(-time.Second), 0, active, false, false},
+		{"at expiry, no window", expires, 0, active, true, false},
+		{"outside the window", epoch, 7, active, false, false},
+		{"a second before the window", expires.Add(-7*day - time.Second), 7, active, false, false},
+		{"window opens", expires.Add(-7 * day), 7, active, true, false},
+		{"inside the window", expires.Add(-day), 7, active, true, false},
+		{"revoked", epoch, 0, admin.TokenStatusRevoked.String(), true, false},
+		{"expired", epoch, 0, admin.TokenStatusExpired.String(), true, false},
+		// An unknown status alone warns and keeps the token; its window still counts.
+		{"unspecified status", epoch, 0, unspecified, false, true},
+		{"unnamed status", epoch, 0, admin.TokenStatus(9).String(), false, true},
+		{"unknown status in the window", expires.Add(-day), 7, unspecified, true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := needsRotation(tc.now, expires, tc.before, tc.status); got != tc.want {
-				t.Errorf("needsRotation = %v, want %v", got, tc.want)
+			got := decideRotation(tc.now, expires, tc.before, tc.status)
+			if got.replace != tc.replace || got.unknownStatus != tc.unknown {
+				t.Errorf("decideRotation = %+v, want replace %v unknown %v", got, tc.replace, tc.unknown)
 			}
 		})
 	}
-	if needsRotation(epoch, time.Time{}, 7, active) {
+	if decideRotation(epoch, time.Time{}, 7, active).replace {
 		t.Error("an active token with no expiry must not rotate")
 	}
 }
 
 func TestLifetimeDays(t *testing.T) {
-	if got := lifetimeDays(epoch, epoch.Add(30*day)); got != 30 {
-		t.Errorf("lifetimeDays = %d, want 30", got)
+	if got, err := lifetimeDays(epoch, epoch.Add(30*day)); err != nil || got != 30 {
+		t.Errorf("lifetimeDays = %d, %v; want 30", got, err)
 	}
 	// Millisecond rounding on the server never shifts the day count.
-	if got := lifetimeDays(epoch, epoch.Add(90*day-time.Millisecond)); got != 90 {
-		t.Errorf("lifetimeDays = %d, want 90", got)
+	if got, err := lifetimeDays(epoch, epoch.Add(90*day-time.Millisecond)); err != nil || got != 90 {
+		t.Errorf("lifetimeDays = %d, %v; want 90", got, err)
+	}
+	for _, tc := range []struct {
+		name               string
+		created, expiresAt time.Time
+	}{
+		{"no expiry", epoch, time.Time{}},
+		{"no creation time", time.Time{}, epoch},
+		{"under a day", epoch, epoch.Add(time.Hour)},
+		{"past a year", epoch, epoch.Add(366 * day)},
+		{"expires before it was made", epoch, epoch.Add(-day)},
+	} {
+		if _, err := lifetimeDays(tc.created, tc.expiresAt); err == nil {
+			t.Errorf("%s: lifetimeDays = nil error, want one", tc.name)
+		}
 	}
 }
 
@@ -148,20 +166,26 @@ func TestTokenModifyPlan(t *testing.T) {
 
 	revoked := created
 	revoked.Status = types.StringValue("REVOKED")
+	unknown := created
+	unknown.Status = types.StringValue("UNSPECIFIED")
 
+	// The clock moves; the token stays the one minted at epoch, 30 days.
 	cases := []struct {
 		name         string
 		now          time.Time
 		state        tokenModel
 		rotateBefore int32
 		replace      bool
+		warn         bool
 	}{
-		{"fresh token", epoch, created, 0, false},
-		{"outside the window", epoch.Add(day), created, 7, false},
-		{"inside the window", epoch.Add(25 * day), created, 7, true},
-		{"window covers the lifetime", epoch, created, 30, true},
-		{"expired", epoch.Add(31 * day), created, 0, true},
-		{"revoked", epoch, revoked, 0, true},
+		{"fresh token", epoch, created, 0, false, false},
+		{"outside the window", epoch.Add(day), created, 7, false, false},
+		{"a second before the window", epoch.Add(23*day - time.Second), created, 7, false, false},
+		{"window opens", epoch.Add(23 * day), created, 7, true, false},
+		{"inside the window", epoch.Add(25 * day), created, 7, true, false},
+		{"expired", epoch.Add(31 * day), created, 0, true, false},
+		{"revoked", epoch, revoked, 0, true, false},
+		{"unknown status", epoch, unknown, 0, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -182,6 +206,9 @@ func TestTokenModifyPlan(t *testing.T) {
 			replaced := slices.ContainsFunc(resp.RequiresReplace, func(p path.Path) bool { return p.Equal(path.Root("secret")) })
 			if replaced != tc.replace || secret.IsUnknown() != tc.replace {
 				t.Errorf("requires replace = %v, secret unknown = %v; want %v", replaced, secret.IsUnknown(), tc.replace)
+			}
+			if warned := resp.Diagnostics.WarningsCount() > 0; warned != tc.warn {
+				t.Errorf("warned = %v, want %v: %v", warned, tc.warn, resp.Diagnostics)
 			}
 		})
 	}
@@ -251,6 +278,28 @@ func TestTokenImportHasNoSecret(t *testing.T) {
 	}
 }
 
+func TestTokenImportWithoutExpiry(t *testing.T) {
+	ctx := context.Background()
+	fake := newFakeAdmin()
+	fake.tokens["tok-x"] = admin.Token{ID: "tok-x", Name: "x", Scopes: []string{"inspect"}, Status: admin.TokenStatusActive}
+	r := &tokenResource{client: fake, now: time.Now}
+	s := resourceSchema(t, r)
+
+	imported := resource.ImportStateResponse{State: emptyState(s)}
+	r.ImportState(ctx, resource.ImportStateRequest{ID: "tok-x"}, &imported)
+	read := resource.ReadResponse{State: imported.State}
+	r.Read(ctx, resource.ReadRequest{State: imported.State}, &read)
+	if !read.Diagnostics.HasError() {
+		t.Fatal("importing a token with no expiry must fail clearly, not invent expire_days")
+	}
+
+	// A read of a managed token keeps going: the unset times are null.
+	got := withRemoteToken(tokenModel{}, fake.tokens["tok-x"])
+	if !got.ExpiresAt.IsNull() || !got.CreatedAt.IsNull() {
+		t.Errorf("unset times = %v / %v, want null", got.ExpiresAt, got.CreatedAt)
+	}
+}
+
 func TestTokenDeleteRevokes(t *testing.T) {
 	ctx := context.Background()
 	fake := newFakeAdmin()
@@ -309,6 +358,12 @@ func TestTokenConfigValidation(t *testing.T) {
 		{name: "no scopes", wantErr: true, values: base(map[string]tftypes.Value{"scopes": list()})},
 		{name: "empty scope", wantErr: true, values: base(map[string]tftypes.Value{"scopes": list("")})},
 		{name: "negative window", wantErr: true, values: base(map[string]tftypes.Value{"rotate_before_days": num(-1)})},
+		{name: "window inside the lifetime", values: base(map[string]tftypes.Value{"rotate_before_days": num(29)})},
+		{name: "window as long as the lifetime", wantErr: true, values: base(map[string]tftypes.Value{"rotate_before_days": num(30)})},
+		{name: "window past the lifetime", wantErr: true, values: base(map[string]tftypes.Value{"rotate_before_days": num(90)})},
+		{name: "unknown lifetime waits", values: base(map[string]tftypes.Value{
+			"expire_days": tftypes.NewValue(tftypes.Number, tftypes.UnknownValue), "rotate_before_days": num(90),
+		})},
 		{name: "long name", wantErr: true, values: base(map[string]tftypes.Value{"name": str(strings.Repeat("x", 65))})},
 	}
 	for _, tc := range cases {

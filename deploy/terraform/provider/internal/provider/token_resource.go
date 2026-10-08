@@ -26,10 +26,11 @@ import (
 )
 
 var (
-	_ resource.Resource                = (*tokenResource)(nil)
-	_ resource.ResourceWithConfigure   = (*tokenResource)(nil)
-	_ resource.ResourceWithImportState = (*tokenResource)(nil)
-	_ resource.ResourceWithModifyPlan  = (*tokenResource)(nil)
+	_ resource.Resource                   = (*tokenResource)(nil)
+	_ resource.ResourceWithConfigure      = (*tokenResource)(nil)
+	_ resource.ResourceWithImportState    = (*tokenResource)(nil)
+	_ resource.ResourceWithModifyPlan     = (*tokenResource)(nil)
+	_ resource.ResourceWithValidateConfig = (*tokenResource)(nil)
 )
 
 type tokenResource struct {
@@ -102,12 +103,13 @@ func (r *tokenResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 					"that outlives the provider's. Changing it replaces the token.",
 				Required:      true,
 				PlanModifiers: []planmodifier.Int32{int32planmodifier.RequiresReplace()},
-				Validators:    []validator.Int32{int32validator.Between(1, 365)},
+				Validators:    []validator.Int32{int32validator.Between(minLifetimeDays, maxLifetimeDays)},
 			},
 			"rotate_before_days": schema.Int32Attribute{
 				Description: "Plan a replacement this many days before expiry. 0 replaces only once the " +
-					"token has expired or been revoked. The replacement's expiry must still fit inside the " +
-					"provider token's.",
+					"token has expired or been revoked. Must be less than expire_days, or every new token " +
+					"would be due at once and each plan would replace it again. The replacement's expiry " +
+					"must still fit inside the provider token's.",
 				Optional:   true,
 				Computed:   true,
 				Default:    int32default.StaticInt32(0),
@@ -117,9 +119,31 @@ func (r *tokenResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 			"secret":     secret,
 			"expires_at": computed("RFC 3339 expiry."),
 			"created_at": computed("RFC 3339 mint time."),
-			"status":     computed("ACTIVE, EXPIRED or REVOKED. Anything but ACTIVE plans a replacement."),
+			"status": computed("ACTIVE, EXPIRED or REVOKED. EXPIRED or REVOKED plans a replacement; " +
+				"a status this provider does not know warns instead."),
 		},
 	}
+}
+
+// ValidateConfig refuses a rotation window as long as the lifetime: every new
+// token would be due the moment it was minted, so each plan would replace it.
+func (r *tokenResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var expireDays, rotateBeforeDays types.Int32
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("expire_days"), &expireDays)...)
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("rotate_before_days"), &rotateBeforeDays)...)
+	if resp.Diagnostics.HasError() || !knownInt32(expireDays) || !knownInt32(rotateBeforeDays) {
+		return
+	}
+	if rotateBeforeDays.ValueInt32() >= expireDays.ValueInt32() {
+		resp.Diagnostics.AddAttributeError(path.Root("rotate_before_days"), "Rotation window too long",
+			fmt.Sprintf("rotate_before_days (%d) must be less than expire_days (%d): otherwise every new token "+
+				"is due for rotation as soon as it is minted, and every plan replaces it.",
+				rotateBeforeDays.ValueInt32(), expireDays.ValueInt32()))
+	}
+}
+
+func knownInt32(v types.Int32) bool {
+	return !v.IsNull() && !v.IsUnknown()
 }
 
 func (r *tokenResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -151,7 +175,14 @@ func (r *tokenResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanR
 		}
 		expiresAt = parsed
 	}
-	if !needsRotation(r.now(), expiresAt, int64(plan.RotateBeforeDays.ValueInt32()), state.Status.ValueString()) {
+	status := state.Status.ValueString()
+	decision := decideRotation(r.now(), expiresAt, int64(plan.RotateBeforeDays.ValueInt32()), status)
+	if decision.unknownStatus {
+		resp.Diagnostics.AddAttributeWarning(path.Root("status"), "Unrecognised token status",
+			fmt.Sprintf("The server reports status %q, which this provider does not know; the token is not "+
+				"replaced for it. Upgrade the provider, or taint the resource to replace it.", status))
+	}
+	if !decision.replace {
 		return
 	}
 
@@ -257,10 +288,18 @@ func (r *tokenResource) ImportState(ctx context.Context, req resource.ImportStat
 func withRemoteToken(m tokenModel, token admin.Token) tokenModel {
 	m.ID = types.StringValue(token.ID)
 	m.Namespace = types.StringValue(token.Namespace)
-	m.ExpiresAt = types.StringValue(token.ExpiresAt.UTC().Format(time.RFC3339))
-	m.CreatedAt = types.StringValue(token.CreatedAt.UTC().Format(time.RFC3339))
+	m.ExpiresAt = timestamp(token.ExpiresAt)
+	m.CreatedAt = timestamp(token.CreatedAt)
 	m.Status = types.StringValue(token.Status.String())
 	return m
+}
+
+// timestamp is t in RFC 3339, or null when the server did not set it.
+func timestamp(t time.Time) types.String {
+	if t.IsZero() {
+		return types.StringNull()
+	}
+	return types.StringValue(t.UTC().Format(time.RFC3339))
 }
 
 // tokenFromRead refreshes prior from the server. A token's name, grants and
@@ -278,7 +317,12 @@ func tokenFromRead(ctx context.Context, prior tokenModel, token admin.Token) (to
 		m.Scopes = scopes
 	}
 	if prior.ExpireDays.IsNull() {
-		m.ExpireDays = types.Int32Value(int32(lifetimeDays(token.CreatedAt, token.ExpiresAt))) //nolint:gosec // 1..365 by the server's own bound
+		days, err := lifetimeDays(token.CreatedAt, token.ExpiresAt)
+		if err != nil {
+			diags.AddError("Cannot import flexiq_token", fmt.Sprintf("token %q: %v", token.ID, err))
+			return m, diags
+		}
+		m.ExpireDays = types.Int32Value(days)
 	}
 	if prior.RotateBeforeDays.IsNull() {
 		m.RotateBeforeDays = types.Int32Value(0)
