@@ -67,7 +67,21 @@ export interface DashboardHandlerOptions {
   /** Mark session cookies `Secure` (default true). Disable only for plain-HTTP dev. */
   secureCookies?: boolean /** OAuth login flow (built from env by `serveDashboard` when omitted). */;
   oauth?: OAuthFlow;
+  /**
+   * Days a record of a dashboard change is kept in the audit trail before this
+   * dashboard prunes it; at least 1. Unset reads `FLEXIQ_AUDIT_RETENTION_DAYS`,
+   * the server's variable, then defaults to 90.
+   */
+  auditRetentionDays?: number;
 }
+
+/** Days a dashboard change stays in the audit trail — the server's default too. */
+export const DEFAULT_AUDIT_RETENTION_DAYS = 90;
+/** The server's variable for the same window, read when no option is given. */
+const AUDIT_RETENTION_ENV = "FLEXIQ_AUDIT_RETENTION_DAYS";
+
+/** "Client closed request": the caller left before an answer was sent. */
+const CLIENT_CLOSED_REQUEST = 499;
 
 /** Accept the pre-options `DashboardAuth` third argument for compatibility. */
 function normalizeOptions(
@@ -92,6 +106,7 @@ export function createDashboardHandler(
 ): (req: IncomingMessage, res: ServerResponse) => void {
   const assets = new StaticAssets(staticDir);
   const resolved = normalizeOptions(options);
+  queue.startDashboardAudit(auditRetentionDays(resolved));
   return (req, res) => {
     // Single choke point: every response — JSON, assets, probes, redirects —
     // carries the security headers.
@@ -113,7 +128,68 @@ export function createDashboardServer(
   staticDir: string,
   options?: DashboardHandlerOptions | DashboardAuth,
 ): Server {
-  return createServer(createDashboardHandler(queue, staticDir, options));
+  const server = createServer(createDashboardHandler(queue, staticDir, options));
+  // Flush the audit records still buffered once the server stops.
+  server.on("close", () => {
+    queue.closeDashboardAudit().catch((error) => {
+      log.warn(() => `audit flush failed: ${String(error)}`);
+    });
+  });
+  return server;
+}
+
+/** The audit window: the option, else the server's variable, else the default. */
+function auditRetentionDays(options: DashboardHandlerOptions): number {
+  let days = options.auditRetentionDays;
+  let source = "auditRetentionDays";
+  if (days === undefined) {
+    const raw = process.env[AUDIT_RETENTION_ENV]?.trim();
+    if (!raw) {
+      return DEFAULT_AUDIT_RETENTION_DAYS;
+    }
+    source = AUDIT_RETENTION_ENV;
+    days = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  }
+  if (!Number.isInteger(days) || days < 1) {
+    throw new RangeError(`${source} must be a whole number of days, at least 1, got ${days}`);
+  }
+  return days;
+}
+
+/**
+ * Record `req` in the audit trail once it is answered — or abandoned — if it
+ * changes state. `username` is the signed-in user, `undefined` with auth off.
+ * Called before the auth checks, so a refused change is recorded too.
+ */
+/**
+ * The status an audit record names: the one sent once the headers are out —
+ * even if the caller left mid-body — else 499, the caller left first.
+ */
+export function answeredStatus(res: Pick<ServerResponse, "headersSent" | "statusCode">): number {
+  return res.headersSent ? res.statusCode : CLIENT_CLOSED_REQUEST;
+}
+
+function recordChange(
+  queue: Queue,
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  username: string | undefined,
+): void {
+  const method = req.method ?? "GET";
+  if (!isStateChangingMethod(method)) {
+    return;
+  }
+  res.once("close", () => {
+    const status = answeredStatus(res);
+    try {
+      queue.recordDashboardAction(method, path, status, username);
+    } catch (error) {
+      // The change already happened; a trail that cannot take the record
+      // must not turn it into an error.
+      log.error(() => `could not record ${method} ${path}`, error);
+    }
+  });
 }
 
 async function dispatch(
@@ -162,6 +238,10 @@ async function dispatch(
 
   const store = new AuthStore(queue);
   const ctx = buildContext(req, (token) => store.getSession(token));
+  // No session, no one to name: not recorded, as on the server's dashboard.
+  if (ctx.session) {
+    recordChange(queue, req, res, path, ctx.session.username);
+  }
   const denied = authorize(store, ctx, path, req.method ?? "GET");
   if (denied) {
     sendJson(res, denied.status, { error: denied.code });
@@ -399,6 +479,8 @@ async function dispatchOpenMode(
     }
     return;
   }
+  // Who changed it is unknown with auth off; what changed is not.
+  recordChange(queue, req, res, path, undefined);
   const openCtx: RequestContext = {
     session: undefined,
     csrfCookie: undefined,
@@ -431,6 +513,8 @@ async function dispatchTokenMode(
     }
     return;
   }
+  // The shared token names no one: recorded as anonymous.
+  recordChange(queue, req, res, path, undefined);
   const openCtx: RequestContext = {
     session: undefined,
     csrfCookie: undefined,

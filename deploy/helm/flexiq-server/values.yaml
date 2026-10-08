@@ -46,6 +46,16 @@ workers: ""
 # Retention and cleanup. Turn off on extra replicas so one owns the sweeps.
 maintenance: true
 
+# The audit trail: dashboard changes, token-authorised writes, and reads when
+# grpc.auditReads is on. Set whenever the dashboard or the gRPC door runs —
+# whichever records also prunes.
+audit:
+  # Days a record is kept. At least 1. Unset reads grpc.auditRetentionDays.
+  retentionDays: null
+  # Days a read record is kept. At least 1 and no longer than the window
+  # above. Unset keeps reads as long as writes.
+  readsRetentionDays: null
+
 attach:
   enabled: true
   port: 7777
@@ -135,8 +145,8 @@ grpc:
   # than throughput. Per connection, so one noisy client cannot crowd out
   # another's. 0 is unlimited.
   maxConcurrentRequests: 256
-  # Days an audit record of a token-authorised write is kept before the
-  # listener prunes it. At least 1: the trail is not optional.
+  # Legacy name of audit.retentionDays, read when that is unset. Kept so an
+  # existing release's window does not drop back to the default on upgrade.
   auditRetentionDays: 90
   # Record reads (read and inspect calls) in the audit trail too. Off by
   # default: polling dominates read volume. Watch flexiq_audit_records_total

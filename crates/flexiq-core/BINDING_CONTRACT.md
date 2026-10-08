@@ -560,6 +560,30 @@ reads leak credentials, writes spoof a published policy.
   written, or deleted through it. The runtime's own readers and writers use the
   `Storage` settings methods, which stay unrestricted.
 
+## Dashboard audit trail (cross-SDK)
+Every dashboard records its state-changing requests in `audit_log`, and the
+row must read the same whichever dashboard wrote it. So a shell hands over raw
+facts and `audit::DashboardAudit` builds the record (`audit/dashboard.rs`,
+`audit/recorder.rs`), exposed by every binding as
+`start_dashboard_audit(retention_days)`, `record_dashboard_action(method, path,
+status, username)` and `close_dashboard_audit()`.
+
+- **Start** when the dashboard starts, with its window: an explicit option,
+  else `FLEXIQ_AUDIT_RETENTION_DAYS`, else 90 days; at least 1. The recorder
+  prunes the handle's namespace hourly. **Close** when the server stops, so
+  buffered records are flushed.
+- **Record** every answered `/api/` request — the core keeps only
+  state-changing routes in `audit::dashboard::ROUTES` — with the raw request
+  path (no query string, not percent-decoded), the HTTP status sent, or `499`
+  when the caller left before an answer.
+- **Who.** The session's username, named *before* the CSRF and role checks so
+  a refusal is attributed. `None` with auth off or behind the legacy shared
+  token (recorded `anonymous`). A request with no session in session mode is
+  not recorded at all, nor are the auth routes a dashboard with auth off
+  answers `404`.
+- Never fail or slow the request: the write is off-path, and a record the
+  table cannot take goes to the log under `flexiq::audit`.
+
 ## Task and queue override keys (cross-SDK)
 An override is a JSON document in the settings KV — written by a dashboard or
 the admin door, read by a worker at startup. The KV is one keyspace for the

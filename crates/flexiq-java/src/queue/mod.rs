@@ -7,6 +7,7 @@
 //! submodules.
 
 mod admin;
+mod dashboard_audit;
 mod inspect;
 mod locks;
 mod logs;

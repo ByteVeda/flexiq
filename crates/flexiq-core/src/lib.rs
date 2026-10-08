@@ -4,6 +4,8 @@
 // coverage silently rots back down.
 #![deny(missing_docs)]
 
+/// Audit record shape and the dashboard recording rule, shared by every surface.
+pub mod audit;
 /// The contract level a deployment requires, and the floor that enforces it.
 pub mod contract;
 /// Error types: [`QueueError`] and the crate-wide [`Result`] alias.

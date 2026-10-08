@@ -175,6 +175,32 @@ int64 cast reads a malformed window as 0, which would record every read.
 {{- end -}}
 {{- end -}}
 
+{{/*
+Mirrors config/audit.rs: each window is whole days, at least 1, and reads are
+never kept longer than writes. Rendered whenever the dashboard or the gRPC
+door runs, so checked then.
+*/}}
+{{- if or .Values.dashboard.enabled .Values.grpc.enabled -}}
+{{- $key := "audit.retentionDays" -}}
+{{- $days := .Values.audit.retentionDays -}}
+{{- if kindIs "invalid" $days -}}
+{{- $key = "grpc.auditRetentionDays" -}}
+{{- $days = .Values.grpc.auditRetentionDays -}}
+{{- end -}}
+{{- if not (include "flexiq-server.wholeDays" $days) -}}
+{{- fail (printf "flexiq-server: %s must be a whole number of days, at least 1, got '%v'." $key $days) -}}
+{{- end -}}
+{{- $reads := .Values.audit.readsRetentionDays -}}
+{{- if not (kindIs "invalid" $reads) -}}
+{{- if not (include "flexiq-server.wholeDays" $reads) -}}
+{{- fail (printf "flexiq-server: audit.readsRetentionDays must be a whole number of days, at least 1, got '%v'." $reads) -}}
+{{- end -}}
+{{- if gt (int64 $reads) (int64 $days) -}}
+{{- fail (printf "flexiq-server: audit.readsRetentionDays (%d) is longer than %s (%d); reads cannot outlive the writes they relate to." (int64 $reads) $key (int64 $days)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Mirrors config/trigger.rs: one namespace, and a definitions file. */}}
 {{- if .Values.triggers.enabled -}}
 {{- if not .Values.namespace -}}

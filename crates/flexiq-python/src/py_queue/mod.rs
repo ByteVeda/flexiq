@@ -1,6 +1,7 @@
 // pyo3's #[pymethods] macro generates Into<PyErr> conversions that trigger this lint
 #![allow(clippy::useless_conversion)]
 
+mod dashboard_audit;
 mod event_sinks;
 mod inspection;
 mod pubsub;
@@ -108,6 +109,8 @@ pub struct PyQueue {
     /// per-call.
     #[cfg(feature = "workflows")]
     pub(crate) workflow_storage: std::sync::OnceLock<flexiq_workflows::WorkflowStorageBackend>,
+    /// Records the dashboard's changes in the audit trail while it serves.
+    pub(crate) dashboard_audit: flexiq_core::audit::DashboardAudit,
 }
 
 /// Build a per-table [`RetentionConfig`] from a `{table: seconds}` map. An
@@ -342,6 +345,7 @@ impl PyQueue {
             dispatcher: Arc::new(Mutex::new(None)),
             #[cfg(feature = "workflows")]
             workflow_storage: std::sync::OnceLock::new(),
+            dashboard_audit: flexiq_core::audit::DashboardAudit::default(),
         })
     }
 

@@ -709,6 +709,32 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
     List<String> listPausedQueues();
 
     /**
+     * Start recording dashboard changes in the audit trail, pruning records
+     * older than {@code retentionDays}. The dashboard calls this when it
+     * starts; a second call while recording is a no-op. The default records
+     * nothing, so an implementation without an audit trail still serves a
+     * dashboard.
+     *
+     * @param retentionDays days a record is kept; at least 1
+     */
+    default void startDashboardAudit(int retentionDays) {}
+
+    /**
+     * Record one answered dashboard request in the audit trail. Anything but a
+     * state-changing route records nothing, and the write never blocks the
+     * request.
+     *
+     * @param method the HTTP method
+     * @param path the request path, without its query string
+     * @param status the HTTP status it was answered with
+     * @param username the signed-in user, or {@code null} with auth off
+     */
+    default void recordDashboardAction(String method, String path, int status, @Nullable String username) {}
+
+    /** Stop recording dashboard changes and flush what is buffered. The default does nothing. */
+    default void closeDashboardAudit() {}
+
+    /**
      * Write a settings document, overwriting whatever was there.
      *
      * @param key the settings document's key

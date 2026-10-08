@@ -68,6 +68,12 @@ queue.checkFanOutCompletion(
 ): JsFanOutCompletion | null
 ```
 
+### `queue.closeDashboardAudit()`
+
+```typescript
+queue.closeDashboardAudit(): Promise<void>
+```
+
 ### `queue.compensationNodeForJob()`
 
 ```typescript
@@ -543,6 +549,17 @@ queue.reapEphemeralSubscriptions(
 ): Promise<number>
 ```
 
+### `queue.recordDashboardAction()`
+
+```typescript
+queue.recordDashboardAction(
+    method: string,
+    path: string,
+    status: number,
+    username?: string | undefined | null
+): void
+```
+
 ### `queue.registerPeriodic()`
 
 ```typescript
@@ -726,6 +743,12 @@ queue.setWorkflowRunState(
 
 ```typescript
 queue.skipWorkflowNode(runId: string, nodeName: string): void
+```
+
+### `queue.startDashboardAudit()`
+
+```typescript
+queue.startDashboardAudit(retentionDays: number): void
 ```
 
 ### `queue.stats()`

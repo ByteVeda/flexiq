@@ -177,6 +177,18 @@ no login UI in this mode, so it's disabled automatically —
 `start(queue, port, token, ...)` never builds an OAuth flow when `token` is
 non-null.
 
+## Audit trail
+
+Every change made through the dashboard — a `POST`, `PUT`, `PATCH` or `DELETE`
+on `/api/*` — is recorded in the [audit trail](/server/operate/audit#from-an-sdks-dashboard),
+attributed to the signed-in user, or `anonymous` in open or shared-token mode.
+A refused change is recorded too. Records are written off the request path: a
+change is never slowed or refused because the audit table is.
+
+The dashboard prunes its namespace's trail hourly, keeping records for
+`FLEXIQ_AUDIT_RETENTION_DAYS` days (default 90, at least 1); any other value
+makes `start` throw. `close()` flushes the records still buffered.
+
 ## Metrics and health probes
 
 Three routes sit outside `/api/*`:

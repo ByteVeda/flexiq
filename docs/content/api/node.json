@@ -324,6 +324,14 @@
     },
     {
       "owner": "JsQueue",
+      "name": "closeDashboardAudit",
+      "kind": "method",
+      "signature": "closeDashboardAudit(): Promise<void>",
+      "params": [],
+      "returns": "Promise<void>"
+    },
+    {
+      "owner": "JsQueue",
       "name": "compensationNodeForJob",
       "kind": "method",
       "signature": "compensationNodeForJob(jobId: string): JsWorkflowNodeRef | null",
@@ -1409,6 +1417,35 @@
     },
     {
       "owner": "JsQueue",
+      "name": "recordDashboardAction",
+      "kind": "method",
+      "signature": "recordDashboardAction(method: string, path: string, status: number, username?: string | undefined | null): void",
+      "params": [
+        {
+          "name": "method",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "number",
+          "default": null
+        },
+        {
+          "name": "username",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
       "name": "registerPeriodic",
       "kind": "method",
       "signature": "registerPeriodic(name: string, taskName: string, cronExpr: string, args?: Buffer | undefined | null, queue?: string | undefined | null, timezone?: string | undefined | null, enabled?: boolean | undefined | null): number",
@@ -1900,6 +1937,20 @@
         {
           "name": "nodeName",
           "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "startDashboardAudit",
+      "kind": "method",
+      "signature": "startDashboardAudit(retentionDays: number): void",
+      "params": [
+        {
+          "name": "retentionDays",
+          "type": "number",
           "default": null
         }
       ],

@@ -105,6 +105,12 @@ queue.check_fan_out_completion(
 ) -> tuple[bool, list[str]] | None
 ```
 
+### `queue.close_dashboard_audit()`
+
+```python
+queue.close_dashboard_audit() -> None
+```
+
 ### `queue.count_pending_by_queue()`
 
 ```python
@@ -668,6 +674,17 @@ queue.read_topic_messages(
 queue.reap_ephemeral_subscriptions(worker_id: str | None = None) -> int
 ```
 
+### `queue.record_dashboard_action()`
+
+```python
+queue.record_dashboard_action(
+    method: str,
+    path: str,
+    status: int,
+    username: str | None = None
+) -> None
+```
+
 ### `queue.register_periodic()`
 
 ```python
@@ -915,6 +932,12 @@ queue.set_workflow_run_completed_with_failures(run_id: str) -> None
 
 ```python
 queue.skip_workflow_node(run_id: str, node_name: str) -> None
+```
+
+### `queue.start_dashboard_audit()`
+
+```python
+queue.start_dashboard_audit(retention_days: int) -> None
 ```
 
 ### `queue.stats()`

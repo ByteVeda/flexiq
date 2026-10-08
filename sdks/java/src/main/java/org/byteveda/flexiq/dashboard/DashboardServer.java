@@ -66,6 +66,14 @@ import org.jspecify.annotations.Nullable;
 public final class DashboardServer implements AutoCloseable {
     private static final FlexiQLogger LOG = FlexiQLogger.create("dashboard");
     private static final String METRICS_TOKEN_ENV = "FLEXIQ_DASHBOARD_METRICS_TOKEN";
+    /** Days a dashboard change stays in the audit trail; the server reads the same variable. */
+    static final String AUDIT_RETENTION_ENV = "FLEXIQ_AUDIT_RETENTION_DAYS";
+    /** The default window — the server's too. */
+    static final int DEFAULT_AUDIT_RETENTION_DAYS = 90;
+    /** The caller of a dashboard with auth off: what changed is known, who is not. */
+    private static final Object ANONYMOUS = new Object();
+    /** "Client closed request": no answer was sent because the caller left. */
+    private static final int CLIENT_CLOSED_REQUEST = 499;
 
     /**
      * Defense-in-depth headers on every response. The CSP assumes a fully
@@ -245,18 +253,29 @@ public final class DashboardServer implements AutoCloseable {
             boolean authEnabled,
             @Nullable OAuthFlow oauth)
             throws IOException {
-        // Resolve assets before binding so a discovery failure can't leak a bound port.
+        // Resolve assets and the audit window before binding so a failure can't leak a bound port.
         Path dir = staticDir != null ? Paths.get(staticDir).normalize() : DashboardAssets.resolveOrNull();
-        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
-        DashboardServer dashboard = new DashboardServer(server, queue, dir, secureCookies, token, authEnabled, oauth);
-        // Seed an env admin before serving so no request races the open setup endpoint.
-        if (token == null && authEnabled) {
-            dashboard.authStore.bootstrapAdminFromEnv();
+        int auditRetentionDays = auditRetentionDays(System.getenv());
+        // Audit before binding: HttpServer.stop() on a server never started keeps
+        // the port bound, so a failure after bind could not be undone cleanly.
+        queue.startDashboardAudit(auditRetentionDays);
+        try {
+            HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+            DashboardServer dashboard =
+                    new DashboardServer(server, queue, dir, secureCookies, token, authEnabled, oauth);
+            // Seed an env admin before serving so no request races the open setup endpoint.
+            if (token == null && authEnabled) {
+                dashboard.authStore.bootstrapAdminFromEnv();
+            }
+            server.createContext("/", dashboard::dispatch);
+            server.setExecutor(Executors.newCachedThreadPool());
+            server.start();
+            return dashboard;
+        } catch (IOException | RuntimeException e) {
+            // No dashboard came up to close it later; stop the writer now.
+            queue.closeDashboardAudit();
+            throw e;
         }
-        server.createContext("/", dashboard::dispatch);
-        server.setExecutor(Executors.newCachedThreadPool());
-        server.start();
-        return dashboard;
     }
 
     /**
@@ -302,11 +321,19 @@ public final class DashboardServer implements AutoCloseable {
     @Override
     public void close() {
         server.stop(0);
+        // Flush the audit records still buffered.
+        try {
+            queue.closeDashboardAudit();
+        } catch (IllegalStateException e) {
+            // The queue closed first; its recorder drained as the handle went.
+            LOG.debug("dashboard audit already closed with its queue: " + e.getMessage());
+        }
     }
 
     // ---- dispatch ----------------------------------------------------------
 
     private void dispatch(HttpExchange exchange) throws IOException {
+        Caller caller = new Caller();
         try {
             // Single choke point: every response — JSON, assets, probes,
             // redirects — carries the security headers.
@@ -321,7 +348,7 @@ public final class DashboardServer implements AutoCloseable {
             } else if (path.equals("/metrics")) {
                 serveMetrics(exchange);
             } else if (path.startsWith("/api/")) {
-                handleApi(exchange, path);
+                handleApi(exchange, path, caller);
             } else if (!tokenBootstrapRedirect(exchange, path)) {
                 serveStatic(exchange, path);
             }
@@ -333,19 +360,73 @@ public final class DashboardServer implements AutoCloseable {
             LOG.warn("dashboard request failed: " + exchange.getRequestMethod() + " " + exchange.getRequestURI(), e);
             safeRespond(exchange, 500, Http.errorBody("internal_error"));
         } finally {
+            recordChange(exchange, caller);
             exchange.close();
         }
     }
 
-    private void handleApi(HttpExchange exchange, String path) throws IOException {
+    // ---- audit trail -------------------------------------------------------
+
+    /**
+     * Who is making one request, for its audit record: a username, or
+     * {@link #ANONYMOUS} with auth off. A request never named — no session — is
+     * not recorded. Named before the auth checks, so a refused change is
+     * recorded against whoever tried it. Per request, not an exchange
+     * attribute: those are shared by every exchange on the context.
+     */
+    private static final class Caller {
+        private @Nullable Object who;
+    }
+
+    /** Record the answered request in the audit trail, if it changed state and has a caller. */
+    private void recordChange(HttpExchange exchange, Caller caller) {
+        Object who = caller.who;
+        if (who == null) {
+            return;
+        }
+        String method = exchange.getRequestMethod();
+        int sent = exchange.getResponseCode();
+        int status = sent > 0 ? sent : CLIENT_CLOSED_REQUEST;
+        @Nullable String username = who instanceof String name ? name : null;
+        try {
+            queue.recordDashboardAction(method, exchange.getRequestURI().getRawPath(), status, username);
+        } catch (RuntimeException e) {
+            // The change already happened; a trail that cannot take the record
+            // must not turn it into an error.
+            LOG.warn(
+                    "could not record " + method + " "
+                            + exchange.getRequestURI().getPath(),
+                    e);
+        }
+    }
+
+    /** Days a record is kept, from {@value #AUDIT_RETENTION_ENV}; the server's variable too. */
+    static int auditRetentionDays(Map<String, String> env) {
+        String raw = env.get(AUDIT_RETENTION_ENV);
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_AUDIT_RETENTION_DAYS;
+        }
+        try {
+            int days = Integer.parseInt(raw.trim());
+            if (days >= 1) {
+                return days;
+            }
+        } catch (NumberFormatException e) {
+            // Refused below, with the variable named.
+        }
+        throw new IllegalArgumentException(
+                AUDIT_RETENTION_ENV + " must be a whole number of days, at least 1, got '" + raw + "'");
+    }
+
+    private void handleApi(HttpExchange exchange, String path, Caller caller) throws IOException {
         Map<String, String> query = Http.query(exchange);
         String method = exchange.getRequestMethod();
         if (tokenAuth != null) {
-            handleTokenMode(tokenAuth, exchange, path, method, query);
+            handleTokenMode(tokenAuth, exchange, path, method, query, caller);
             return;
         }
         if (!authEnabled) {
-            handleOpenMode(exchange, path, method, query);
+            handleOpenMode(exchange, path, method, query, caller);
             return;
         }
         // OAuth routes emit redirects (not JSON), so they bypass the router; they
@@ -354,6 +435,9 @@ public final class DashboardServer implements AutoCloseable {
             return;
         }
         RequestContext ctx = RequestContext.build(exchange, authStore);
+        if (ctx.session() != null) {
+            caller.who = ctx.session().username();
+        }
         Policy.authorize(path, method, ctx, authStore);
         if (!router.dispatch(exchange, method, path, query, ctx)) {
             Http.respondError(exchange, 404, "not found");
@@ -364,7 +448,8 @@ public final class DashboardServer implements AutoCloseable {
      * Open mode (auth disabled, the default): every route serves without a
      * session; the auth endpoints respond 404 so the SPA hides login affordances.
      */
-    private void handleOpenMode(HttpExchange exchange, String path, String method, Map<String, String> query)
+    private void handleOpenMode(
+            HttpExchange exchange, String path, String method, Map<String, String> query, Caller caller)
             throws IOException {
         if (path.equals("/api/auth/status")) {
             Http.respondJson(exchange, 200, Map.of("auth_enabled", false, "setup_required", false));
@@ -374,13 +459,19 @@ public final class DashboardServer implements AutoCloseable {
             Http.respondError(exchange, 404, "auth_disabled");
             return;
         }
+        caller.who = ANONYMOUS;
         if (!router.dispatch(exchange, method, path, query, RequestContext.open())) {
             Http.respondError(exchange, 404, "not found");
         }
     }
 
     private void handleTokenMode(
-            TokenAuth tokenAuth, HttpExchange exchange, String path, String method, Map<String, String> query)
+            TokenAuth tokenAuth,
+            HttpExchange exchange,
+            String path,
+            String method,
+            Map<String, String> query,
+            Caller caller)
             throws IOException {
         if (path.equals("/api/auth/status")) {
             Http.respondJson(exchange, 200, TokenAuth.openStatus());
@@ -401,6 +492,8 @@ public final class DashboardServer implements AutoCloseable {
             Http.respondError(exchange, 404, "not found");
             return;
         }
+        // The shared token names no one: recorded as anonymous.
+        caller.who = ANONYMOUS;
         if (!router.dispatch(exchange, method, path, query, RequestContext.open())) {
             Http.respondError(exchange, 404, "not found");
         }

@@ -95,8 +95,20 @@ the database — so the record says *that* it happened and to which token. A
 revoke naming no token is recorded `NOT_FOUND`. If the trail cannot take the
 record, the command still succeeds and says so on stderr.
 
-A dashboard an SDK serves in-process does not record; only `flexiq-server`
-owns the trail and its retention.
+### From an SDK's dashboard
+
+A dashboard an SDK serves in-process records the same changes, into the same
+table, with the same row: who, operation, targets, outcome and namespace are
+decided in the shared core, so a filter for `dashboard POST
+/api/queues/{queue}/pause` finds a pause whichever dashboard took it. An SDK
+dashboard with the legacy shared-token gate names no one, and records as
+`anonymous`. A route only `flexiq-server` serves — minting a gRPC token — is
+recorded only there.
+
+The write is off the request path, as on the server: an action is never
+refused or slowed because the audit table is, and a record the table cannot
+take goes to the log under `flexiq::audit`. The SDK dashboard also prunes its
+namespace hourly; see [retention](#retention).
 
 ## Reading it back
 
@@ -234,23 +246,28 @@ is far higher than write volume: watch
 ## Retention
 
 Records are kept for **90 days**, then deleted. Set
-`FLEXIQ_AUDIT_RETENTION_DAYS` to keep them longer or shorter; it must be at
-least `1`. There is no "forever": a table nobody prunes grows without bound.
-The variable's earlier name, `FLEXIQ_GRPC_AUDIT_RETENTION_DAYS` (Helm:
-`grpc.auditRetentionDays`), is still read; setting both to different values
-stops the server at startup.
+`FLEXIQ_AUDIT_RETENTION_DAYS` (Helm: `audit.retentionDays`) to keep them longer
+or shorter; it must be at least `1`. There is no "forever": a table nobody
+prunes grows without bound. The variable's earlier name,
+`FLEXIQ_GRPC_AUDIT_RETENTION_DAYS` (Helm: `grpc.auditRetentionDays`, read when
+`audit.retentionDays` is unset), is still read; setting both to different
+values stops the server at startup. The chart sets the window whenever the
+dashboard or the gRPC door runs.
 
 [Read records](#recording-reads) can be kept for less: set
-`FLEXIQ_AUDIT_READS_RETENTION_DAYS` (default: the write window). It must be at
-least `1` and no longer than the write window — a read must not outlive the
-writes it relates to, so a longer value stops the server at startup. Every
-record says which it is: a write, or a read.
+`FLEXIQ_AUDIT_READS_RETENTION_DAYS` (Helm: `audit.readsRetentionDays`; default:
+the write window). It must be at least `1` and no longer than the write window
+— a read must not outlive the writes it relates to, so a longer value stops the
+server at startup. Every record says which it is: a write, or a read.
 
 Each gRPC listener prunes its own namespace once an hour, and so does a
-dashboard running without one. The delete is idempotent, so replicas sharing a
-database prune without electing a leader — the second one finds nothing left.
-The window is the server's alone; it is not part of the per-queue retention an
-SDK configures, because no SDK writes this table.
+dashboard running without one. An SDK's dashboard prunes its namespace too,
+with its own window: its `audit_retention_days` / `auditRetentionDays` option,
+else the same `FLEXIQ_AUDIT_RETENTION_DAYS`, else 90 days. The delete is
+idempotent, so replicas and dashboards sharing a database prune without
+electing a leader — the second one finds nothing left. Where several prune one
+namespace with different windows, the shortest wins. The window is not part of
+the per-queue retention an SDK configures for its jobs.
 
 ## When a record cannot be stored
 

@@ -64,6 +64,7 @@ pub(crate) fn make_test_pyqueue() -> PyQueue {
         event_hub: Mutex::new(None),
         dispatcher: Arc::new(Mutex::new(None)),
         workflow_storage,
+        dashboard_audit: Default::default(),
     }
 }
 

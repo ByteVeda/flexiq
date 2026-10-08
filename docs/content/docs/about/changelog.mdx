@@ -19,6 +19,16 @@ their entries below keep that name.
 
 ### Added
 
+- **SDK-served dashboards record changes in the audit trail** (#1020). A dashboard the Python,
+  Node or Java SDK serves now records every state-changing request as the `flexiq-server`
+  dashboard does — signed-in user (or `anonymous` with auth off or the shared token), refusals
+  included, same operation, targets and outcome — because the rule and the off-path writer moved
+  into the shared core (`flexiq_core::audit`). Each prunes its namespace hourly:
+  `audit_retention_days` / `auditRetentionDays`, else `FLEXIQ_AUDIT_RETENTION_DAYS`, else 90
+  days. The Helm chart sets `FLEXIQ_AUDIT_RETENTION_DAYS` whenever the dashboard or gRPC door
+  runs, from the new `audit.retentionDays` (falling back to `grpc.auditRetentionDays`), plus
+  `audit.readsRetentionDays`.
+
 - **Shorter retention for audited reads** (#1018). `FLEXIQ_AUDIT_READS_RETENTION_DAYS` keeps
   read records for less than writes (default: the write window; longer is refused at startup).
   A new `access` column (migration `0027_audit_access`; existing rows read `write`) says whether

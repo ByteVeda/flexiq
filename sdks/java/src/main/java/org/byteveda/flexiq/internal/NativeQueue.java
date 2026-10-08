@@ -345,6 +345,33 @@ public final class NativeQueue {
     public static native String listPausedQueues(long handle);
 
     /**
+     * Start recording dashboard changes in the audit trail.
+     *
+     * @param handle the queue handle from {@link #open}
+     * @param retentionDays days a record is kept before it is pruned; at least 1
+     */
+    public static native void startDashboardAudit(long handle, int retentionDays);
+
+    /**
+     * Record one answered dashboard request.
+     *
+     * @param handle the queue handle from {@link #open}
+     * @param method the HTTP method
+     * @param path the request path, without its query string
+     * @param status the HTTP status it was answered with
+     * @param username the signed-in user, or {@code null} with auth off
+     */
+    public static native void recordDashboardAction(
+            long handle, String method, String path, int status, @Nullable String username);
+
+    /**
+     * Stop recording dashboard changes and flush what is buffered.
+     *
+     * @param handle the queue handle from {@link #open}
+     */
+    public static native void closeDashboardAudit(long handle);
+
+    /**
      * Returns the value, or {@code null} if unset.
      *
      * @param handle the queue handle from {@link #open}

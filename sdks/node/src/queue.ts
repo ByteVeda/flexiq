@@ -1620,6 +1620,31 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     return this.native.listSettings();
   }
 
+  // ── Dashboard audit trail ─────────────────────────────────────────
+
+  /**
+   * Start recording dashboard changes in the audit trail, pruning records
+   * older than `retentionDays`. The dashboard calls this; a second call while
+   * recording is a no-op.
+   */
+  startDashboardAudit(retentionDays: number): void {
+    this.native.startDashboardAudit(retentionDays);
+  }
+
+  /**
+   * Record one answered dashboard request. `username` is the signed-in user,
+   * `undefined` with auth off. Anything but a state-changing route records
+   * nothing, and the write never blocks the request.
+   */
+  recordDashboardAction(method: string, path: string, status: number, username?: string): void {
+    this.native.recordDashboardAction(method, path, status, username);
+  }
+
+  /** Stop recording dashboard changes and flush what is buffered. */
+  closeDashboardAudit(): Promise<void> {
+    return this.native.closeDashboardAudit();
+  }
+
   /**
    * Apply any pending schema changes and report what ran.
    *

@@ -37,6 +37,12 @@ export interface DashboardOptions {
    * `FLEXIQ_DASHBOARD_OAUTH_*` environment variables if they are set.
    */
   oauth?: OAuthFlow;
+  /**
+   * Days a record of a dashboard change is kept in the audit trail before
+   * this dashboard prunes it; at least 1. Unset reads
+   * `FLEXIQ_AUDIT_RETENTION_DAYS`, the server's variable, then defaults to 90.
+   */
+  auditRetentionDays?: number;
 }
 
 // Built relative to dist/ at runtime. The path is assembled dynamically so the
@@ -67,6 +73,7 @@ export function serveDashboard(queue: Queue, options: DashboardOptions = {}): Se
     authEnabled: options.authEnabled,
     secureCookies: options.secureCookies,
     oauth: options.oauth ?? (sessionMode ? buildOauthFlowFromEnv(queue) : undefined),
+    auditRetentionDays: options.auditRetentionDays,
   });
   // A bind failure (e.g. EADDRINUSE) without an 'error' listener crashes the process.
   server.on("error", (error) => {
