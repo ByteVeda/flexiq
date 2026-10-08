@@ -280,7 +280,7 @@ on the dashboard; Sidekiq's equivalent was your logger.
 | Retry set | Failed jobs waiting on their next attempt, still in their queue |
 | Backoff `(retry_count ** 4) + 15 + (rand(10) * (retry_count + 1))` seconds, 25 retries over about 20 days | Full jitter: `uniform(0, min(5 min, base × 2^retry))`, base one second |
 | `sidekiq_retry_in` per class | A task override's `retryBackoff`: the base, not the cap |
-| Dead set, kept 6 months or 10 000 jobs | Dead-letter queue, kept until replayed, deleted or purged |
+| Dead set, kept 6 months or 10 000 jobs | Dead-letter queue, kept 30 days by default ([below](#dead-letters-expire-after-30-days)) |
 | Retrying a dead job from the Web UI | `fq dlq replay`, or **Retry** on the dashboard's dead-letters page |
 
 **The backoff is much shorter.** The ceiling stops doubling at five minutes,
@@ -313,6 +313,19 @@ with a new id: it keeps the queue, task, arguments and priority, and drops the
 unique key and dependencies. It is not idempotent; each replay makes a job.
 Reading the queue needs a token with the `inspect` scope, changing it `admin`
 ([the admin door](/server/operate/admin#dead-letters)).
+
+### Dead letters expire after 30 days
+
+`flexiq-server` runs retention by default, and a dead letter is deleted 30 days
+after it lands — a shorter window than Sidekiq's six months. Finished jobs are
+deleted from the archive after 7 days by the same sweep. Replay or keep what
+you need before then. A [namespace quota](/server/operate/quotas)'s
+`max_dead_rows` can cap the queue by count as well.
+
+`FLEXIQ_MAINTENANCE=off` stops this process running the sweep, and with it
+every other retention window; the server takes no variable for the window
+itself. [What `FLEXIQ_MAINTENANCE=off` does not turn off](/server/operate#what-flexiq_maintenanceoff-does-not-turn-off)
+covers what stays on.
 
 ## Unique jobs
 
@@ -443,10 +456,10 @@ status, queue or task.
 
 ## What you gain
 
-**A dead-letter queue you can work from the command line.** Every exhausted
-job keeps its arguments and error until someone acts on it — no 6-month or
-10 000-job limit — and `fq dlq` or the admin door lists, reads, replays and
-purges it from a script.
+**A dead-letter queue you can work from the command line.** An exhausted job
+keeps its arguments and error, and `fq dlq` or the admin door lists, reads,
+replays and purges it from a script. It is kept for 30 days by default, not
+six months ([above](#dead-letters-expire-after-30-days)).
 
 **Results and cancellation.** A handler's return value is stored and read back
 with `get_job` or `wait`, and `cancel_job` stops a pending job and asks a
