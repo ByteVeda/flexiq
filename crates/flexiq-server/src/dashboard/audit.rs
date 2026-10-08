@@ -28,7 +28,7 @@ use axum::extract::{FromRequestParts, MatchedPath, RawPathParams, Request};
 use axum::http::{Method, StatusCode};
 use flexiq_core::scheduler::retention::DEFAULT_NAMESPACE;
 
-use crate::audit::record::{self, outcome_of};
+use crate::audit::record::{self, outcome_of, Access};
 use crate::audit::{Actor, AuditSink, TargetKind};
 use crate::dashboard::auth::gate;
 use crate::dashboard::state::SharedState;
@@ -89,6 +89,7 @@ impl Pending {
             for record in record::records(
                 &call.namespace,
                 &call.actor,
+                Access::Write,
                 &call.operation,
                 call.targets.take(),
                 outcome,

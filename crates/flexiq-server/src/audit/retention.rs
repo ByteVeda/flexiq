@@ -10,17 +10,23 @@
 use std::time::Duration;
 
 use flexiq_core::job::now_millis;
-use flexiq_core::{Storage, StorageBackend};
+use flexiq_core::{AuditCutoffs, Storage, StorageBackend};
 
+use crate::config::audit::AuditRetention;
 use crate::runtime::shutdown::Shutdown;
 
 /// How often the window is enforced. A record lives at most this much past
 /// its window, which against a window of days is noise.
 pub const PRUNE_EVERY: Duration = Duration::from_secs(3_600);
 
-/// Prune `namespace`'s records older than `window`, now and every
+/// Prune `namespace`'s records past their window, now and every
 /// [`PRUNE_EVERY`] until `shutdown`.
-pub fn start(storage: StorageBackend, namespace: String, window: Duration, shutdown: Shutdown) {
+pub fn start(
+    storage: StorageBackend,
+    namespace: String,
+    window: AuditRetention,
+    shutdown: Shutdown,
+) {
     tokio::spawn(async move {
         let mut ticks = tokio::time::interval(PRUNE_EVERY);
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -34,11 +40,15 @@ pub fn start(storage: StorageBackend, namespace: String, window: Duration, shutd
     });
 }
 
-/// One pass: delete what the window has passed, and say so.
-async fn prune(storage: &StorageBackend, namespace: &str, window: Duration) {
-    let cutoff = cutoff(now_millis(), window);
+/// One pass: delete what the windows have passed, and say so.
+async fn prune(storage: &StorageBackend, namespace: &str, window: AuditRetention) {
+    let now = now_millis();
+    let cutoffs = AuditCutoffs {
+        writes_before_ms: cutoff(now, window.writes),
+        reads_before_ms: cutoff(now, window.reads),
+    };
     let (storage, scope) = (storage.clone(), namespace.to_string());
-    match tokio::task::spawn_blocking(move || storage.purge_audit(&scope, cutoff)).await {
+    match tokio::task::spawn_blocking(move || storage.purge_audit(&scope, &cutoffs)).await {
         Ok(Ok(0)) => {}
         Ok(Ok(removed)) => {
             log::info!(
@@ -77,7 +87,32 @@ mod tests {
             target_kind: None,
             target: None,
             outcome: "OK".to_string(),
+            access: "write".to_string(),
         }
+    }
+
+    fn read(namespace: &str, id: &str, at_ms: i64) -> AuditRecord {
+        AuditRecord {
+            operation: "flexiq.v1.ProducerService/GetJob".to_string(),
+            access: "read".to_string(),
+            ..record(namespace, id, at_ms)
+        }
+    }
+
+    fn uniform(window: Duration) -> AuditRetention {
+        AuditRetention {
+            writes: window,
+            reads: window,
+        }
+    }
+
+    fn ids(storage: &StorageBackend, namespace: &str) -> Vec<String> {
+        storage
+            .list_audit_after(namespace, &AuditFilter::default(), 100, None)
+            .expect("list")
+            .into_iter()
+            .map(|r| r.id)
+            .collect()
     }
 
     #[test]
@@ -103,21 +138,34 @@ mod tests {
             ])
             .expect("append");
 
-        prune(&storage, "prod", DAY).await;
+        prune(&storage, "prod", uniform(DAY)).await;
 
-        let left = |namespace: &str| -> Vec<String> {
-            storage
-                .list_audit_after(namespace, &AuditFilter::default(), 100, None)
-                .expect("list")
-                .into_iter()
-                .map(|r| r.id)
-                .collect()
-        };
-        assert_eq!(left("prod"), ["new"]);
+        assert_eq!(ids(&storage, "prod"), ["new"]);
         assert_eq!(
-            left("staging"),
+            ids(&storage, "staging"),
             ["theirs"],
             "another namespace keeps its trail"
         );
+    }
+
+    /// #1018: a read past its own window goes; a write of the same age stays.
+    #[tokio::test]
+    async fn reads_are_pruned_at_their_own_window() {
+        let storage = StorageBackend::Sqlite(SqliteStorage::in_memory().expect("sqlite"));
+        let two_days_ago = now_millis() - 2 * 86_400_000;
+        storage
+            .append_audit(&[
+                record("prod", "write", two_days_ago),
+                read("prod", "read", two_days_ago),
+            ])
+            .expect("append");
+
+        let window = AuditRetention {
+            writes: 7 * DAY,
+            reads: DAY,
+        };
+        prune(&storage, "prod", window).await;
+
+        assert_eq!(ids(&storage, "prod"), ["write"]);
     }
 }

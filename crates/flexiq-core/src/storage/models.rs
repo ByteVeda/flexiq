@@ -451,6 +451,7 @@ pub struct AuditRow {
     pub target: Option<String>,
     pub outcome: String,
     pub principal_kind: String,
+    pub access: String,
 }
 
 // ── Circuit Breaker ──────────────────────────────────────────────
@@ -1078,6 +1079,7 @@ impl From<AuditRow> for AuditRecord {
             target_kind: r.target_kind,
             target: r.target,
             outcome: r.outcome,
+            access: r.access,
         }
     }
 }
@@ -1095,6 +1097,7 @@ impl From<&AuditRecord> for AuditRow {
             target: r.target.clone(),
             outcome: r.outcome.clone(),
             principal_kind: r.principal_kind.clone(),
+            access: r.access.clone(),
         }
     }
 }

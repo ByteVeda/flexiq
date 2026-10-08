@@ -2,7 +2,28 @@
 
 use axum::http::StatusCode;
 use flexiq_core::job::now_millis;
+use flexiq_core::storage::records::{AUDIT_ACCESS_READ, AUDIT_ACCESS_WRITE};
 use flexiq_core::AuditRecord;
+
+/// What an audited action does to the namespace. Stored as its
+/// [`Self::as_str`] form; reads keep a shorter window (#1018).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    /// It changes state. Always recorded.
+    Write,
+    /// It only looks. Recorded when reads are turned on (#993).
+    Read,
+}
+
+impl Access {
+    /// The stored spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Write => AUDIT_ACCESS_WRITE,
+            Self::Read => AUDIT_ACCESS_READ,
+        }
+    }
+}
 
 /// Who a record's `token_id` names. Stored as its [`Self::as_str`] form,
 /// which is the `principal_kind` a listing filters on.
@@ -87,6 +108,7 @@ impl Actor {
 pub fn records(
     namespace: &str,
     actor: &Actor,
+    access: Access,
     operation: &str,
     targets: Vec<(String, String)>,
     outcome: &str,
@@ -105,6 +127,7 @@ pub fn records(
             target_kind,
             target,
             outcome: outcome.to_string(),
+            access: access.as_str().to_string(),
         }
     };
     if targets.is_empty() {
@@ -145,17 +168,19 @@ mod tests {
             ("topic".to_string(), "orders".to_string()),
             ("subscription".to_string(), "audit".to_string()),
         ];
-        let records = records("prod", &actor, "op", targets, "OK");
+        let records = records("prod", &actor, Access::Write, "op", targets, "OK");
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].principal_kind, "user");
+        assert_eq!(records[0].access, "write");
         assert_eq!(records[0].token_id, "alice");
         assert_eq!(records[0].principal, "alice");
         assert_eq!(records[1].target_kind.as_deref(), Some("subscription"));
         assert_ne!(records[0].id, records[1].id);
 
-        let untargeted = super::records("prod", &actor, "op", Vec::new(), "OK");
+        let untargeted = super::records("prod", &actor, Access::Read, "op", Vec::new(), "OK");
         assert_eq!(untargeted.len(), 1);
         assert_eq!(untargeted[0].target_kind, None);
+        assert_eq!(untargeted[0].access, "read");
     }
 
     #[test]

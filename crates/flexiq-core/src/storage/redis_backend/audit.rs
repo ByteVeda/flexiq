@@ -2,16 +2,17 @@
 //!
 //! Each record is a JSON string at `audit:rec:<id>`, indexed by three ZSETs
 //! scored by `at_ms` — the whole namespace, per token, per target — the same
-//! three questions the SQL table's indexes answer. A listing walks the most
+//! three questions the SQL table's indexes answer. Read records are also in a
+//! fourth, per namespace, which their shorter retention walks (#1018). A listing walks the most
 //! selective index and re-checks every record against the namespace and the
 //! full filter, so an index key that two odd names happen to share can cost a
 //! longer walk but never a wrong row.
 
 use redis::Commands;
 
-use super::{map_err, zset_keyset_page, RedisStorage, SCAN_BATCH};
+use super::{map_err, zset_keyset_page, RedisConnection, RedisStorage, SCAN_BATCH};
 use crate::error::Result;
-use crate::storage::records::{AuditFilter, AuditRecord};
+use crate::storage::records::{AuditCutoffs, AuditFilter, AuditRecord, AUDIT_ACCESS_READ};
 
 /// Store one record and index it — but only if its id was free. Indexing a
 /// duplicate would leave entries naming fields the stored record does not
@@ -35,6 +36,11 @@ impl RedisStorage {
 
     fn audit_all_key(&self, namespace: &str) -> String {
         self.key(&["audit", "all", namespace])
+    }
+
+    /// Read records only: what the read retention walks (#1018).
+    fn audit_read_key(&self, namespace: &str) -> String {
+        self.key(&["audit", "read", namespace])
     }
 
     fn audit_token_key(&self, namespace: &str, token_id: &str) -> String {
@@ -70,6 +76,9 @@ impl RedisStorage {
             ];
             if let (Some(kind), Some(target)) = (&record.target_kind, &record.target) {
                 keys.push(self.audit_target_key(&record.namespace, kind, target));
+            }
+            if record.access == AUDIT_ACCESS_READ {
+                keys.push(self.audit_read_key(&record.namespace));
             }
             pipe.cmd("EVAL")
                 .arg(APPEND_SCRIPT)
@@ -156,16 +165,42 @@ impl RedisStorage {
         }
     }
 
-    /// Delete one namespace's audit records older than the cutoff, draining
-    /// the `-inf..cutoff` window in bounded batches.
-    pub fn purge_audit(&self, namespace: &str, older_than_ms: i64) -> Result<u64> {
+    /// Delete one namespace's audit records past their cutoffs: the whole
+    /// namespace index up to the writes cutoff, then the read index up to the
+    /// reads one.
+    pub fn purge_audit(&self, namespace: &str, cutoffs: &AuditCutoffs) -> Result<u64> {
         let mut conn = self.conn()?;
+        let all = self.drain_audit_index(
+            &mut conn,
+            namespace,
+            &self.audit_all_key(namespace),
+            cutoffs.writes_before_ms,
+        )?;
+        let reads = self.drain_audit_index(
+            &mut conn,
+            namespace,
+            &self.audit_read_key(namespace),
+            cutoffs.reads_before_ms,
+        )?;
+        Ok(all + reads)
+    }
+
+    /// Delete every record `walk_key` holds below `older_than_ms`, in bounded
+    /// batches, removing each from every index that can name it.
+    fn drain_audit_index(
+        &self,
+        conn: &mut RedisConnection,
+        namespace: &str,
+        walk_key: &str,
+        older_than_ms: i64,
+    ) -> Result<u64> {
         let all_key = self.audit_all_key(namespace);
+        let read_key = self.audit_read_key(namespace);
         let mut total = 0u64;
 
         loop {
             let ids: Vec<String> = conn
-                .zrangebyscore_limit(&all_key, "-inf", format!("({older_than_ms}"), 0, SCAN_BATCH)
+                .zrangebyscore_limit(walk_key, "-inf", format!("({older_than_ms}"), 0, SCAN_BATCH)
                 .map_err(map_err)?;
             if ids.is_empty() {
                 break;
@@ -197,8 +232,11 @@ impl RedisStorage {
                 }
                 pipe.del(&record_key).ignore();
                 pipe.zrem(&all_key, id).ignore();
+                // Named without the record, so an unreadable one leaves no
+                // read-index entry behind either.
+                pipe.zrem(&read_key, id).ignore();
             }
-            pipe.query::<()>(&mut conn).map_err(map_err)?;
+            pipe.query::<()>(conn).map_err(map_err)?;
 
             total += ids.len() as u64;
             if (ids.len() as isize) < SCAN_BATCH {

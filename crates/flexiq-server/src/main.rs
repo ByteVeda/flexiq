@@ -93,6 +93,9 @@ Configuration (environment only):
                                  (default: 90; at least 1). The old name
                                  FLEXIQ_GRPC_AUDIT_RETENTION_DAYS is still
                                  read; set both only to the same value
+  FLEXIQ_AUDIT_READS_RETENTION_DAYS  days a read record is kept (default:
+                                 the audit retention; at least 1, never
+                                 longer than it)
   FLEXIQ_GRPC_AUDIT_READS       record reads (read and inspect calls) in the
                                  audit trail too (default: off)
   FLEXIQ_GRPC_AUDIT_READS_WINDOW  seconds a repeated read — same token, RPC,

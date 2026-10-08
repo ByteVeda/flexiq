@@ -151,6 +151,7 @@ mod tests {
             target_kind: None,
             target: None,
             outcome: "PERMISSION_DENIED".into(),
+            access: "write".into(),
         });
         assert_eq!(wire.principal_kind, "token");
         assert_eq!(wire.target_kind, "");

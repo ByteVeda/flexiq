@@ -79,23 +79,41 @@ macro_rules! impl_diesel_audit_ops {
                 Ok(rows.into_iter().map(Into::into).collect())
             }
 
-            /// Delete one namespace's audit records older than the cutoff, in
-            /// bounded batches — see `diesel_common::purge`.
-            pub fn purge_audit(&self, namespace: &str, older_than_ms: i64) -> Result<u64> {
-                $crate::storage::diesel_common::purge::drain_batches(|| {
-                    self.write_transaction(|conn| {
-                        let ids: Vec<String> = audit_log::table
-                            .filter(audit_log::namespace.eq(namespace))
-                            .filter(audit_log::at_ms.lt(older_than_ms))
-                            .select(audit_log::id)
-                            .limit($crate::storage::diesel_common::purge::PURGE_BATCH)
-                            .load(conn)?;
-                        let affected =
-                            diesel::delete(audit_log::table.filter(audit_log::id.eq_any(&ids)))
-                                .execute(conn)?;
-                        Ok(affected as u64)
+            /// Delete one namespace's audit records past their cutoffs, in
+            /// bounded batches — see `diesel_common::purge`. Two passes: every
+            /// record past the writes cutoff, then reads past the reads one.
+            pub fn purge_audit(
+                &self,
+                namespace: &str,
+                cutoffs: &$crate::storage::records::AuditCutoffs,
+            ) -> Result<u64> {
+                // `access = None` drains every record, `Some` only that kind.
+                let drain = |before_ms: i64, access: Option<&str>| {
+                    $crate::storage::diesel_common::purge::drain_batches(|| {
+                        self.write_transaction(|conn| {
+                            let mut query = audit_log::table
+                                .filter(audit_log::namespace.eq(namespace))
+                                .filter(audit_log::at_ms.lt(before_ms))
+                                .select(audit_log::id)
+                                .limit($crate::storage::diesel_common::purge::PURGE_BATCH)
+                                .into_boxed();
+                            if let Some(access) = access {
+                                query = query.filter(audit_log::access.eq(access.to_string()));
+                            }
+                            let ids: Vec<String> = query.load(conn)?;
+                            let affected =
+                                diesel::delete(audit_log::table.filter(audit_log::id.eq_any(&ids)))
+                                    .execute(conn)?;
+                            Ok(affected as u64)
+                        })
                     })
-                })
+                };
+                let all = drain(cutoffs.writes_before_ms, None)?;
+                let reads = drain(
+                    cutoffs.reads_before_ms,
+                    Some($crate::storage::records::AUDIT_ACCESS_READ),
+                )?;
+                Ok(all + reads)
             }
         }
     };

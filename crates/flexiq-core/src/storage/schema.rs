@@ -324,6 +324,7 @@ diesel::table! {
         target -> Nullable<Text>,
         outcome -> Text,
         principal_kind -> Text,
+        access -> Text,
     }
 }
 

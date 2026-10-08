@@ -203,6 +203,7 @@ mod tests {
             target_kind: None,
             target: None,
             outcome: "OK".to_string(),
+            access: "write".to_string(),
         }
     }
 

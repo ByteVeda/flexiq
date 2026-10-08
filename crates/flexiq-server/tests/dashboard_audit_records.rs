@@ -23,6 +23,7 @@ fn record(namespace: &str, at_ms: i64, token_id: &str, target: (&str, &str)) -> 
         target_kind: Some(target.0.to_string()),
         target: Some(target.1.to_string()),
         outcome: "OK".to_string(),
+        access: "write".to_string(),
     }
 }
 
