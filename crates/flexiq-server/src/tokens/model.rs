@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use super::grant::Grants;
 
 /// Milliseconds in a day, the unit every lifetime here is expressed in.
-const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// How long a token lives when the operator does not say.
 pub const DEFAULT_LIFETIME_DAYS: i64 = 90;
@@ -207,7 +207,18 @@ impl NewToken {
     /// The row this request becomes, given the material [`super::secret::mint`]
     /// generated.
     pub fn into_row(self, id: String, hash: String) -> ApiToken {
-        let created_at = now_millis();
+        self.into_row_at(id, hash, now_millis())
+    }
+
+    /// When a token minted at `created_at` from this request expires.
+    pub fn expires_at(&self, created_at: i64) -> i64 {
+        created_at + self.lifetime_days * DAY_MS
+    }
+
+    /// [`Self::into_row`] at a given instant, so a caller that checked the
+    /// expiry against a bound writes exactly the expiry it checked.
+    pub fn into_row_at(self, id: String, hash: String, created_at: i64) -> ApiToken {
+        let expires_at = self.expires_at(created_at);
         ApiToken {
             id,
             name: self.name,
@@ -217,7 +228,7 @@ impl NewToken {
             created_at,
             created_by: self.created_by,
             last_used_at: None,
-            expires_at: created_at + self.lifetime_days * DAY_MS,
+            expires_at,
             revoked_at: None,
         }
     }
