@@ -398,10 +398,46 @@ pub struct AuditRecord {
     pub target: Option<String>,
     /// gRPC status code name the call ended with (`OK`, `PERMISSION_DENIED`, …).
     pub outcome: String,
+    /// `write` or `read` — reads keep a shorter retention window (#1018).
+    /// Records written before the field existed read back `write`, the
+    /// longer window, so none is dropped early.
+    #[serde(default = "write_access")]
+    pub access: String,
 }
+
+/// `AuditRecord::access` of a state-changing call.
+pub const AUDIT_ACCESS_WRITE: &str = "write";
+/// `AuditRecord::access` of a read-only call.
+pub const AUDIT_ACCESS_READ: &str = "read";
 
 fn token_principal() -> String {
     "token".to_string()
+}
+
+fn write_access() -> String {
+    AUDIT_ACCESS_WRITE.to_string()
+}
+
+/// How far back a purge keeps one namespace's audit trail (#1018): every
+/// record before `writes_before_ms` goes, and reads also before
+/// `reads_before_ms`. A reads cutoff earlier than the writes one changes
+/// nothing — reads never outlive writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuditCutoffs {
+    /// Unix-millisecond time before which every record goes.
+    pub writes_before_ms: i64,
+    /// Unix-millisecond time before which read records go.
+    pub reads_before_ms: i64,
+}
+
+impl AuditCutoffs {
+    /// One cutoff for both kinds of record.
+    pub fn uniform(before_ms: i64) -> Self {
+        Self {
+            writes_before_ms: before_ms,
+            reads_before_ms: before_ms,
+        }
+    }
 }
 
 /// Which audit records a listing returns. Every set field must match; an empty
@@ -956,6 +992,17 @@ mod tests {
             "outcome":"OK"}"#;
         let record: AuditRecord = serde_json::from_str(legacy).expect("legacy record");
         assert_eq!(record.principal_kind, "token");
+    }
+
+    /// A Redis record stored before #1018 has no access; it keeps the longer
+    /// write window rather than being dropped early as a read.
+    #[test]
+    fn an_audit_record_without_an_access_reads_back_as_a_write() {
+        let legacy = r#"{"id":"r1","namespace":"prod","at_ms":1,"token_id":"tok",
+            "principal":"ci","operation":"op","target_kind":null,"target":null,
+            "outcome":"OK"}"#;
+        let record: AuditRecord = serde_json::from_str(legacy).expect("legacy record");
+        assert_eq!(record.access, super::AUDIT_ACCESS_WRITE);
     }
 
     #[test]

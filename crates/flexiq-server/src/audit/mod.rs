@@ -13,6 +13,6 @@ pub mod retention;
 pub mod sink;
 pub mod target;
 
-pub use record::{Actor, PrincipalKind};
+pub use record::{Access, Actor, PrincipalKind};
 pub use sink::AuditSink;
 pub use target::TargetKind;

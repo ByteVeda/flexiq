@@ -1207,9 +1207,9 @@ macro_rules! impl_storage {
             fn purge_audit(
                 &self,
                 namespace: &str,
-                older_than_ms: i64,
+                cutoffs: &$crate::storage::records::AuditCutoffs,
             ) -> $crate::error::Result<u64> {
-                self.purge_audit(namespace, older_than_ms)
+                self.purge_audit(namespace, cutoffs)
             }
             fn get_circuit_breaker(
                 &self,
@@ -2434,8 +2434,8 @@ impl Storage for StorageBackend {
     ) -> Result<Vec<records::AuditRecord>> {
         delegate!(self, list_audit_after, namespace, filter, limit, after)
     }
-    fn purge_audit(&self, namespace: &str, older_than_ms: i64) -> Result<u64> {
-        delegate!(self, purge_audit, namespace, older_than_ms)
+    fn purge_audit(&self, namespace: &str, cutoffs: &records::AuditCutoffs) -> Result<u64> {
+        delegate!(self, purge_audit, namespace, cutoffs)
     }
     fn get_circuit_breaker(&self, task_name: &str) -> Result<Option<records::CircuitBreakerState>> {
         delegate!(self, get_circuit_breaker, task_name)

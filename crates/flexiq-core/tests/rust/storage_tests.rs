@@ -11,8 +11,9 @@ use flexiq_core::error::QueueError;
 use flexiq_core::job::{now_millis, JobCompletion, JobStatus, NewJob};
 use flexiq_core::step::{classify_step_failure, StepLimits, StepSession, StepSleep};
 use flexiq_core::storage::records::{
-    AuditFilter, AuditRecord, DebounceOptions, NewJobStep, SettleClaimant, SettleGrant,
-    SleepOutcome, StepCommit, StepKind, SubscriptionMode, WorkerRegistration, WorkerStatus,
+    AuditCutoffs, AuditFilter, AuditRecord, DebounceOptions, NewJobStep, SettleClaimant,
+    SettleGrant, SleepOutcome, StepCommit, StepKind, SubscriptionMode, WorkerRegistration,
+    WorkerStatus, AUDIT_ACCESS_READ, AUDIT_ACCESS_WRITE,
 };
 use flexiq_core::storage::{DeadJob, RetentionCutoffs, Storage};
 use flexiq_core::{SqliteStorage, RETRY_BUDGET_EXHAUSTED};
@@ -3197,6 +3198,16 @@ fn audit(
         target_kind: target.map(|(kind, _)| kind.to_string()),
         target: target.map(|(_, id)| id.to_string()),
         outcome: "OK".to_string(),
+        access: AUDIT_ACCESS_WRITE.to_string(),
+    }
+}
+
+/// A read record (#993) — what the shorter read retention prunes (#1018).
+fn audit_read(ns: &str, id: &str, at_ms: i64) -> AuditRecord {
+    AuditRecord {
+        operation: "flexiq.producer.v1.Producer/GetJob".to_string(),
+        access: AUDIT_ACCESS_READ.to_string(),
+        ..audit(ns, id, at_ms, "tok-r", Some(("job", "j1")))
     }
 }
 
@@ -3389,7 +3400,7 @@ fn test_audit_purge_is_namespace_scoped(s: &impl Storage) {
     seed_audit(s, ns, other);
 
     // Strictly older than the cutoff: the two rows at 3_000 survive.
-    assert_eq!(s.purge_audit(ns, 3_000).unwrap(), 2);
+    assert_eq!(s.purge_audit(ns, &AuditCutoffs::uniform(3_000)).unwrap(), 2);
     let left = s
         .list_audit_after(ns, &AuditFilter::default(), 100, None)
         .unwrap();
@@ -3418,7 +3429,62 @@ fn test_audit_purge_is_namespace_scoped(s: &impl Storage) {
         ["b1"],
         "another namespace keeps its trail"
     );
-    assert_eq!(s.purge_audit(ns, 3_000).unwrap(), 0, "purge is idempotent");
+    assert_eq!(
+        s.purge_audit(ns, &AuditCutoffs::uniform(3_000)).unwrap(),
+        0,
+        "purge is idempotent"
+    );
+}
+
+/// #1018: reads go at their own, later cutoff; writes of the same age stay.
+fn test_audit_purge_drops_reads_before_writes(s: &impl Storage) {
+    let (ns, other) = ("audit-purge-reads", "audit-purge-reads-other");
+    s.append_audit(&[
+        audit(ns, "w1", 1_000, "tok-a", Some(("job", "j1"))),
+        audit_read(ns, "r1", 1_500),
+        audit(ns, "w2", 5_000, "tok-a", None),
+        audit_read(ns, "r2", 5_000),
+        audit_read(ns, "r3", 9_000),
+        audit_read(other, "o1", 5_000),
+    ])
+    .unwrap();
+
+    let cutoffs = AuditCutoffs {
+        writes_before_ms: 2_000,
+        reads_before_ms: 6_000,
+    };
+    // w1 and r1 past the writes cutoff, r2 past the reads one.
+    assert_eq!(s.purge_audit(ns, &cutoffs).unwrap(), 3);
+    let left = s
+        .list_audit_after(ns, &AuditFilter::default(), 100, None)
+        .unwrap();
+    assert_eq!(audit_ids(&left), ["r3", "w2"]);
+    let left = s
+        .list_audit_after(
+            ns,
+            &AuditFilter {
+                token_id: Some("tok-r".into()),
+                ..Default::default()
+            },
+            100,
+            None,
+        )
+        .unwrap();
+    assert_eq!(audit_ids(&left), ["r3"], "the token index loses them too");
+
+    let theirs = s
+        .list_audit_after(other, &AuditFilter::default(), 100, None)
+        .unwrap();
+    assert_eq!(
+        audit_ids(&theirs),
+        ["o1"],
+        "another namespace keeps its reads"
+    );
+    assert_eq!(
+        s.purge_audit(ns, &cutoffs).unwrap(),
+        0,
+        "purge is idempotent"
+    );
 }
 
 /// #841: `count_by_namespace` counts one tenant's live jobs in one status —
@@ -3648,6 +3714,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_audit_keyset_pages_walk_every_record_once(s);
     test_audit_append_never_overwrites(s);
     test_audit_purge_is_namespace_scoped(s);
+    test_audit_purge_drops_reads_before_writes(s);
     test_record_and_get_errors(s);
     test_workers(s);
     test_workers_are_namespace_scoped(s);

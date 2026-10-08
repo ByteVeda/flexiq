@@ -34,7 +34,7 @@ use tower_service::Service;
 
 use super::context::AuditContext;
 use super::dedup::ReadDedup;
-use crate::audit::{record, Actor, AuditSink};
+use crate::audit::{record, Access, Actor, AuditSink};
 use crate::grpc::auth::gate::{self, Requirement};
 use crate::grpc::auth::Scope;
 use crate::grpc::facade::error::code_name;
@@ -80,16 +80,8 @@ pub struct Audited<S> {
     reads: Option<Arc<ReadDedup>>,
 }
 
-/// What an auditable call does to the namespace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Access {
-    /// It needs `produce` or `admin`. Always recorded.
-    Write,
-    /// It needs `read` or `inspect`. Recorded when reads are turned on.
-    Read,
-}
-
-/// Which kind of auditable call `path` is, or `None` for one the trail never
+/// Which kind of auditable call `path` is — a write needs `produce` or
+/// `admin`, a read `read` or `inspect` — or `None` for one the trail never
 /// records: the executor door, public paths and the merely-authenticated ones.
 pub fn access(method: &http::Method, path: &str) -> Option<Access> {
     // Every scope named, so a new one is a compile error here, not a silent
@@ -125,9 +117,9 @@ where
         let mut inner = std::mem::replace(&mut self.inner, clone);
 
         // A read is folded through the dedup; a write never is.
-        let dedup = match access(request.method(), request.uri().path()) {
-            Some(Access::Write) => None,
-            Some(Access::Read) if self.reads.is_some() => self.reads.clone(),
+        let (access, dedup) = match access(request.method(), request.uri().path()) {
+            Some(Access::Write) => (Access::Write, None),
+            Some(Access::Read) if self.reads.is_some() => (Access::Read, self.reads.clone()),
             Some(Access::Read) | None => return Box::pin(inner.call(request)),
         };
 
@@ -138,6 +130,7 @@ where
         let mut pending = Pending {
             call: Some(Call {
                 context,
+                access,
                 operation,
                 sink: self.sink.clone(),
                 dedup,
@@ -167,6 +160,7 @@ struct Pending {
 /// What settling one call needs.
 struct Call {
     context: AuditContext,
+    access: Access,
     operation: Cow<'static, str>,
     sink: AuditSink,
     /// Set on a read: the repeats it folds away.
@@ -176,7 +170,7 @@ struct Call {
 impl Pending {
     fn settle(&mut self, code: Code) {
         if let Some(call) = self.call.take() {
-            for record in records(&call.context, &call.operation, code) {
+            for record in records(&call.context, call.access, &call.operation, code) {
                 if call.dedup.as_ref().is_none_or(|dedup| dedup.admit(&record)) {
                     call.sink.record(record);
                 }
@@ -195,7 +189,12 @@ impl Drop for Pending {
 /// target when the call was refused before naming any. None at all when no
 /// credential was believed — there is no trustworthy token id to record, and
 /// the token store already logs those refusals.
-fn records(context: &AuditContext, operation: &str, code: Code) -> Vec<AuditRecord> {
+fn records(
+    context: &AuditContext,
+    access: Access,
+    operation: &str,
+    code: Code,
+) -> Vec<AuditRecord> {
     let (Some(principal), targets) = context.take() else {
         return Vec::new();
     };
@@ -205,6 +204,7 @@ fn records(context: &AuditContext, operation: &str, code: Code) -> Vec<AuditReco
             principal.credential().to_string(),
             principal.name().to_string(),
         ),
+        access,
         operation,
         targets
             .into_iter()
@@ -285,7 +285,7 @@ mod tests {
         context.target(TargetKind::Job, "j1");
         context.target(TargetKind::Job, "j2");
 
-        let records = records(&context, operation(), Code::Ok);
+        let records = records(&context, Access::Write, operation(), Code::Ok);
         assert_eq!(records.len(), 2);
         for (record, job) in records.iter().zip(["j1", "j2"]) {
             assert_eq!(record.token_id, "tok_1");
@@ -303,7 +303,7 @@ mod tests {
     fn a_refusal_before_any_target_is_one_untargeted_record() {
         let context = AuditContext::default();
         context.identify(&Principal::new("tok_1", "prod", ScopeSet::ALL));
-        let records = records(&context, operation(), Code::PermissionDenied);
+        let records = records(&context, Access::Write, operation(), Code::PermissionDenied);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].target_kind, None);
         assert_eq!(records[0].target, None);
@@ -314,7 +314,7 @@ mod tests {
     fn no_believed_credential_records_nothing() {
         let context = AuditContext::default();
         context.target(TargetKind::Job, "j1");
-        assert!(records(&context, operation(), Code::Unauthenticated).is_empty());
+        assert!(records(&context, Access::Write, operation(), Code::Unauthenticated).is_empty());
     }
 
     /// The trail as the sink's writer stored it, once `count` records are in.
@@ -339,6 +339,7 @@ mod tests {
         Pending {
             call: Some(Call {
                 context,
+                access: Access::Write,
                 operation: Cow::Borrowed(operation()),
                 sink,
                 dedup: None,
@@ -413,6 +414,7 @@ mod tests {
         let records = through_layer(None, &[GET_JOB, WATCH, CANCEL]).await;
         assert_eq!(records.len(), 1, "only the write: {records:?}");
         assert_eq!(records[0].operation, "flexiq.v1.ProducerService/CancelJob");
+        assert_eq!(records[0].access, "write");
     }
 
     #[tokio::test]
@@ -421,6 +423,7 @@ mod tests {
         assert_eq!(records.len(), 1, "{records:?}");
         assert_eq!(records[0].operation, "flexiq.v1.ProducerService/GetJob");
         assert_eq!(records[0].target.as_deref(), Some("j1"));
+        assert_eq!(records[0].access, "read", "kept for the read window");
     }
 
     #[tokio::test]

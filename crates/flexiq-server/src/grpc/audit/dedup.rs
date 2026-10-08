@@ -135,6 +135,7 @@ mod tests {
             target_kind: Some("job".to_string()),
             target: Some(target.to_string()),
             outcome: outcome.to_string(),
+            access: "read".to_string(),
         }
     }
 

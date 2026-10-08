@@ -2,11 +2,11 @@ use crate::error::{QueueError, Result};
 use crate::job::{Job, JobStatus, NewJob};
 use crate::step::StepLimits;
 use crate::storage::records::{
-    AttemptFence, AuditFilter, AuditRecord, CircuitBreakerState, DebounceOptions, Dequeued,
-    JobError, JobStep, LockInfo, NewJobStep, NewPeriodicTask, NewSubscription, PeriodicTask,
-    RateLimitState, ReplayEntry, SettleClaimant, SettleGrant, SleepOutcome, StaleJob, StepCommit,
-    Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage,
-    WorkerInfo, WorkerRegistration, WorkerStatus,
+    AttemptFence, AuditCutoffs, AuditFilter, AuditRecord, CircuitBreakerState, DebounceOptions,
+    Dequeued, JobError, JobStep, LockInfo, NewJobStep, NewPeriodicTask, NewSubscription,
+    PeriodicTask, RateLimitState, ReplayEntry, SettleClaimant, SettleGrant, SleepOutcome, StaleJob,
+    StepCommit, Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicLogStats,
+    TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
 };
 use crate::storage::{
     DeadJob, DispatchOrder, QueueStats, RetentionCounts, RetentionCutoffs, SubscriptionBacklogStats,
@@ -805,9 +805,11 @@ pub trait Storage: Send + Sync + Clone {
         limit: i64,
         after: Option<(i64, &str)>,
     ) -> Result<Vec<AuditRecord>>;
-    /// Delete one namespace's audit records older than the cutoff. Returns the
-    /// count removed. Idempotent, so concurrent callers need no election.
-    fn purge_audit(&self, namespace: &str, older_than_ms: i64) -> Result<u64>;
+    /// Delete one namespace's audit records past their cutoff: every record
+    /// before `writes_before_ms`, and read records before the (never earlier)
+    /// reads cutoff. Returns the count removed. Idempotent, so concurrent
+    /// callers need no election.
+    fn purge_audit(&self, namespace: &str, cutoffs: &AuditCutoffs) -> Result<u64>;
 
     // ── Circuit breaker operations ──────────────────────────────────
 

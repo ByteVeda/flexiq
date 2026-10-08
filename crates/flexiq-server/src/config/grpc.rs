@@ -147,7 +147,7 @@ pub struct GrpcConfig {
     /// The key material TLS is terminated with. `None` serves plaintext.
     pub tls: Option<TlsFiles>,
     /// How long an audit record is kept before the listener prunes it.
-    pub audit_retention: Duration,
+    pub audit_retention: audit::AuditRetention,
     /// The window repeated reads are folded within when reads are audited;
     /// `None` audits writes only. A zero window records every read.
     pub audit_reads: Option<Duration>,
@@ -340,7 +340,7 @@ mod tests {
                 .expect("valid")
                 .expect("configured");
             assert_eq!(
-                config.audit_retention,
+                config.audit_retention.writes,
                 Duration::from_secs(7 * 86_400),
                 "{var}"
             );

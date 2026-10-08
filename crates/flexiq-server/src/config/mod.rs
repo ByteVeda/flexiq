@@ -77,7 +77,7 @@ pub struct Config {
     pub auto_migrate: bool,
     /// How long an audit record is kept. Not a role: whichever role records
     /// into the trail prunes it.
-    pub audit_retention: std::time::Duration,
+    pub audit_retention: audit::AuditRetention,
 }
 
 impl Config {

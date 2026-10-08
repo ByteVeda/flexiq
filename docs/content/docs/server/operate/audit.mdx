@@ -226,10 +226,10 @@ read one replica served. If more distinct reads arrive inside one window than
 the server can track, the extra ones are recorded every time rather than
 dropped.
 
-Reads share the trail's [retention](#retention) and its
-[overflow path](#when-a-record-cannot-be-stored). Read volume is far higher
-than write volume: watch `flexiq_audit_records_total{outcome="overflow"}` after
-turning this on.
+Reads share the trail's [overflow path](#when-a-record-cannot-be-stored), and
+by default its [retention](#retention); they can be kept for less. Read volume
+is far higher than write volume: watch
+`flexiq_audit_records_total{outcome="overflow"}` after turning this on.
 
 ## Retention
 
@@ -240,11 +240,17 @@ The variable's earlier name, `FLEXIQ_GRPC_AUDIT_RETENTION_DAYS` (Helm:
 `grpc.auditRetentionDays`), is still read; setting both to different values
 stops the server at startup.
 
+[Read records](#recording-reads) can be kept for less: set
+`FLEXIQ_AUDIT_READS_RETENTION_DAYS` (default: the write window). It must be at
+least `1` and no longer than the write window — a read must not outlive the
+writes it relates to, so a longer value stops the server at startup. Every
+record says which it is: a write, or a read.
+
 Each gRPC listener prunes its own namespace once an hour, and so does a
 dashboard running without one. The delete is idempotent, so replicas sharing a
-database prune without electing a leader — the second one finds nothing left. The window is the server's alone; it is not
-part of the per-queue retention an SDK configures, because no SDK writes this
-table.
+database prune without electing a leader — the second one finds nothing left.
+The window is the server's alone; it is not part of the per-queue retention an
+SDK configures, because no SDK writes this table.
 
 ## When a record cannot be stored
 

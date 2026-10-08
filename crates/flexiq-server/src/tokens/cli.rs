@@ -23,7 +23,7 @@ use super::model::{mint_namespace, NewToken};
 use super::store;
 use crate::audit::record;
 use crate::audit::sink::{record_now, LOG_TARGET};
-use crate::audit::{Actor, TargetKind};
+use crate::audit::{Access, Actor, TargetKind};
 use crate::config::{flag, value, Env};
 
 /// Managing the credentials the gRPC door accepts.
@@ -231,6 +231,7 @@ fn audit(storage: &StorageBackend, namespace: &str, action: &str, id: &str, outc
     let records = record::records(
         namespace,
         &Actor::cli(),
+        Access::Write,
         &format!("cli token {action}"),
         vec![(TargetKind::Token.as_str().to_string(), id.to_string())],
         outcome,

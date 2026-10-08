@@ -19,6 +19,11 @@ their entries below keep that name.
 
 ### Added
 
+- **Shorter retention for audited reads** (#1018). `FLEXIQ_AUDIT_READS_RETENTION_DAYS` keeps
+  read records for less than writes (default: the write window; longer is refused at startup).
+  A new `access` column (migration `0027_audit_access`; existing rows read `write`) says whether
+  a record is a write or a read, and the hourly prune drops reads at their own window.
+
 - **Audit trail page on the dashboard** (#995). The `flexiq-server` dashboard lists the trail
   under Configuration → Audit trail, newest first, filtered by principal kind, token id or
   username, target kind, target and a time range, paged by cursor; targets link to the job,
