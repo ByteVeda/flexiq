@@ -522,7 +522,7 @@ async fn the_grpc_scope_list_is_served() {
         .collect();
     assert_eq!(
         names,
-        vec!["produce", "read", "execute", "inspect", "admin"]
+        vec!["produce", "read", "execute", "inspect", "admin", "tokens"]
     );
     let narrowable: Vec<&str> = body
         .as_array()
@@ -531,7 +531,8 @@ async fn the_grpc_scope_list_is_served() {
         .filter(|scope| scope["narrowable"] == json!(true))
         .map(|scope| scope["name"].as_str().expect("a name"))
         .collect();
-    assert_eq!(narrowable, names);
+    // `tokens` addresses credentials, never a queue or task.
+    assert_eq!(narrowable, &names[..names.len() - 1]);
 }
 
 #[tokio::test]

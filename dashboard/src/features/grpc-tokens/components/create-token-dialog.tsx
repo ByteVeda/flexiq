@@ -31,6 +31,7 @@ const SCOPE_HELP: Record<string, string> = {
   execute: "Claim work and report on it.",
   inspect: "Look at queues, dead letters, workers, schedules and overrides.",
   admin: "Pause queues, replay dead letters, manage schedules and overrides.",
+  tokens: "Mint, list and revoke API tokens, never wider than its own.",
 };
 
 export function CreateGrpcTokenDialog() {

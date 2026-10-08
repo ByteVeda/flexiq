@@ -1,7 +1,8 @@
 //! What a credential may do, at the granularity the wire contract draws it.
 //!
 //! One scope per proto package (design doc D1), except the operator package,
-//! which has two: `inspect` for its read-only methods and `admin` for the rest.
+//! which has three: `inspect` for its read-only methods, `tokens` for its
+//! credential methods, and `admin` for the rest.
 //! A package is the right unit because the audiences differ — a producer
 //! submits work and an executor runs it — and because a scope that named an RPC
 //! would have to grow every time the service does. The operator split is drawn
@@ -31,16 +32,21 @@ pub enum Scope {
     /// `flexiq.admin.v1`, every other method — pause, replay, delete, purge,
     /// schedule and override.
     Admin,
+    /// `flexiq.admin.v1`, the token methods — mint, read and revoke API
+    /// tokens, reads included. Never implied by `admin`: a credential that can
+    /// mint credentials is a different grant from one that can pause a queue.
+    Tokens,
 }
 
 impl Scope {
     /// Every scope there is, in the order a listing shows them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Produce,
         Self::Read,
         Self::Execute,
         Self::Inspect,
         Self::Admin,
+        Self::Tokens,
     ];
 
     /// This scope's bit in a [`ScopeSet`].
@@ -51,6 +57,7 @@ impl Scope {
             Self::Inspect => 1 << 2,
             Self::Admin => 1 << 3,
             Self::Read => 1 << 4,
+            Self::Tokens => 1 << 5,
         }
     }
 
@@ -58,8 +65,8 @@ impl Scope {
     ///
     /// `produce` has always reached the producer's reads, so it still does:
     /// narrowing it would take reads away from every token minted before `read`
-    /// existed. That is the only implication; `inspect` is not implied by
-    /// `admin`.
+    /// existed. That is the only implication; neither `inspect` nor `tokens`
+    /// is implied by `admin`.
     pub fn is_granted_by(self, granted: Self) -> bool {
         granted == self || (self == Self::Read && granted == Self::Produce)
     }
@@ -72,6 +79,7 @@ impl Scope {
             Self::Execute => "execute",
             Self::Inspect => "inspect",
             Self::Admin => "admin",
+            Self::Tokens => "tokens",
         }
     }
 
@@ -115,7 +123,8 @@ impl ScopeSet {
             | Scope::Read.bit()
             | Scope::Execute.bit()
             | Scope::Inspect.bit()
-            | Scope::Admin.bit(),
+            | Scope::Admin.bit()
+            | Scope::Tokens.bit(),
     );
 
     /// No scopes at all. A credential carrying this opens nothing.
@@ -227,8 +236,31 @@ mod tests {
         );
         let read = ScopeSet::of(&[Scope::Read]);
         assert!(read.opens(Scope::Read));
-        for scope in [Scope::Produce, Scope::Execute, Scope::Inspect, Scope::Admin] {
+        for scope in [
+            Scope::Produce,
+            Scope::Execute,
+            Scope::Inspect,
+            Scope::Admin,
+            Scope::Tokens,
+        ] {
             assert!(!read.opens(scope), "read must not open {scope}");
         }
+    }
+
+    /// Minting credentials is its own grant: no other scope opens it, and it
+    /// opens nothing else.
+    #[test]
+    fn tokens_is_implied_by_nothing_and_implies_nothing() {
+        for scope in Scope::ALL.into_iter().filter(|s| *s != Scope::Tokens) {
+            assert!(
+                !ScopeSet::of(&[scope]).opens(Scope::Tokens),
+                "{scope} must not open tokens"
+            );
+            assert!(
+                !ScopeSet::of(&[Scope::Tokens]).opens(scope),
+                "tokens must not open {scope}"
+            );
+        }
+        assert_eq!(Scope::parse("tokens"), Some(Scope::Tokens));
     }
 }

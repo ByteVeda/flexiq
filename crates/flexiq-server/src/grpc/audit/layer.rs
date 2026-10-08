@@ -87,7 +87,7 @@ pub fn access(method: &http::Method, path: &str) -> Option<Access> {
     // Every scope named, so a new one is a compile error here, not a silent
     // gap in the trail.
     match gate::requirement(method, path) {
-        Requirement::Scoped(Scope::Produce | Scope::Admin) => Some(Access::Write),
+        Requirement::Scoped(Scope::Produce | Scope::Admin | Scope::Tokens) => Some(Access::Write),
         Requirement::Scoped(Scope::Read | Scope::Inspect) => Some(Access::Read),
         Requirement::Scoped(Scope::Execute) | Requirement::Authenticated | Requirement::Public => {
             None

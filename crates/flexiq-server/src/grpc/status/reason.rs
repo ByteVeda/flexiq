@@ -146,7 +146,7 @@ pub const KEY_ACTUAL: &str = "actual";
 /// The permitted value, `uint64`, in `limit`'s unit. `STEP_LIMIT_EXCEEDED`.
 pub const KEY_ALLOWED: &str = "allowed";
 /// The scope the credential lacks — one of `produce`, `read`, `execute`,
-/// `inspect`, `admin`. `SCOPE_DENIED`.
+/// `inspect`, `admin`, `tokens`. `SCOPE_DENIED`.
 pub const KEY_SCOPE: &str = "scope";
 /// 0-based position in an `EnqueueBatch` request, `int32`.
 ///
