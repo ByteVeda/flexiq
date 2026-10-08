@@ -9,7 +9,8 @@ module FlexiQ
   #
   # The namespace is the token's, fixed when it was minted; no call can name another.
   # Methods raise RPCError when the server refuses and TransportError when no answer arrived.
-  # Thread-safe; calls on one client are serialised over one connection.
+  # Thread-safe; calls on one client are serialised over one connection, and each watch holds a
+  # connection of its own.
   class Client
     # See Transport#initialize for the keyword options (TLS, timeouts, user agent).
     def initialize(url, token:, transport: nil, **)
@@ -78,6 +79,28 @@ module FlexiQ
     def queue_stats(queue = nil)
       path = queue.nil? ? "/v1/stats" : "/v1/queues/#{Wire::Path.segment(queue)}/stats"
       QueueStats.from_json(@transport.get(path))
+    end
+
+    # Follows jobs by id until each is `terminal?`. Yields a `:snapshot` JobTransition (or
+    # JobNotFound) per id, then live transitions. At most 100 ids. Enumerator without a block.
+    #
+    # A dropped stream reopens on the unfinished ids only.
+    def watch_jobs(job_ids, &block)
+      return enum_for(:watch_jobs, job_ids) unless block
+
+      Watch::ByIds.new(@transport, job_ids).run(&block)
+      nil
+    end
+
+    # Follows `queue` (nil = "default") until the block breaks. Yields a WatchCheckpoint, then
+    # live JobTransitions; no snapshot. Pass the last `cursor` back as `resume_cursor:` to replay.
+    #
+    # A dropped stream resumes from its last cursor; an expired one yields a WatchGap.
+    # Sees only transitions the reached server process handles.
+    def watch_queue(queue = nil, resume_cursor: nil, &block)
+      return enum_for(:watch_queue, queue, resume_cursor: resume_cursor) unless block
+
+      Watch::ByQueue.new(@transport, queue, resume_cursor).run(&block)
     end
 
     # Closes the underlying connection; the next call reopens it.
