@@ -97,7 +97,9 @@ func runTests(m *testing.M) int {
 	}
 	defer accServer.stop()
 
-	if accServer.token, err = accServer.mint("tf-acc-operator", "admin", "inspect", "tokens"); err != nil {
+	// Only the scopes the provider's resources need; the harness's own reads
+	// need nothing more.
+	if accServer.token, err = accServer.mint("tf-acc-operator", "admin", "inspect"); err != nil {
 		fmt.Fprintln(os.Stderr, "mint an operator token:", err)
 		return 1
 	}
