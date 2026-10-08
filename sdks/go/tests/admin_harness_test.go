@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
@@ -15,8 +17,8 @@ import (
 )
 
 // fakeAdmin is an AdminService double, built like fakeProducer: every RPC a
-// test is about is a function field, and any other call fails loudly through
-// the unimplemented embed.
+// test is about is a function field. A field a test left nil answers
+// UNIMPLEMENTED, as does any RPC with no field, through the embed.
 type fakeAdmin struct {
 	adminv1.UnimplementedAdminServiceServer
 
@@ -33,12 +35,15 @@ type fakeAdmin struct {
 	putPeriodic    func(context.Context, *adminv1.PutPeriodicTaskRequest) (*adminv1.PutPeriodicTaskResponse, error)
 	deletePeriodic func(context.Context, *adminv1.DeletePeriodicTaskRequest) (*adminv1.DeletePeriodicTaskResponse, error)
 	pausePeriodic  func(context.Context, *adminv1.PausePeriodicTaskRequest) (*adminv1.PausePeriodicTaskResponse, error)
+	resumePeriodic func(context.Context, *adminv1.ResumePeriodicTaskRequest) (*adminv1.ResumePeriodicTaskResponse, error)
 
-	getQuota func(context.Context, *adminv1.GetNamespaceQuotaRequest) (*adminv1.GetNamespaceQuotaResponse, error)
-	setQuota func(context.Context, *adminv1.SetNamespaceQuotaRequest) (*adminv1.SetNamespaceQuotaResponse, error)
+	getQuota   func(context.Context, *adminv1.GetNamespaceQuotaRequest) (*adminv1.GetNamespaceQuotaResponse, error)
+	setQuota   func(context.Context, *adminv1.SetNamespaceQuotaRequest) (*adminv1.SetNamespaceQuotaResponse, error)
+	clearQuota func(context.Context, *adminv1.ClearNamespaceQuotaRequest) (*adminv1.ClearNamespaceQuotaResponse, error)
 
 	createToken func(context.Context, *adminv1.CreateTokenRequest) (*adminv1.CreateTokenResponse, error)
 	getToken    func(context.Context, *adminv1.GetTokenRequest) (*adminv1.GetTokenResponse, error)
+	listTokens  func(context.Context, *adminv1.ListTokensRequest) (*adminv1.ListTokensResponse, error)
 	revokeToken func(context.Context, *adminv1.RevokeTokenRequest) (*adminv1.RevokeTokenResponse, error)
 
 	// calls counts every RPC that reached the server, so a test can prove a
@@ -53,84 +58,92 @@ func (f *fakeAdmin) record(ctx context.Context) {
 	f.metadata, _ = metadata.FromIncomingContext(ctx)
 }
 
-func (f *fakeAdmin) ListQueues(ctx context.Context, req *adminv1.ListQueuesRequest) (*adminv1.ListQueuesResponse, error) {
+// answer records the call and runs fn, or answers UNIMPLEMENTED when the test
+// left fn nil — a status the client can report, where a nil call would panic
+// inside the server goroutine.
+func answer[Req, Resp any](ctx context.Context, f *fakeAdmin, fn func(context.Context, Req) (Resp, error), req Req) (Resp, error) {
 	f.record(ctx)
-	return f.listQueues(ctx, req)
+	if fn == nil {
+		var zero Resp
+		return zero, status.Error(codes.Unimplemented, "fakeAdmin: no handler for this RPC")
+	}
+	return fn(ctx, req)
+}
+
+func (f *fakeAdmin) ListQueues(ctx context.Context, req *adminv1.ListQueuesRequest) (*adminv1.ListQueuesResponse, error) {
+	return answer(ctx, f, f.listQueues, req)
 }
 
 func (f *fakeAdmin) PauseQueue(ctx context.Context, req *adminv1.PauseQueueRequest) (*adminv1.PauseQueueResponse, error) {
-	f.record(ctx)
-	return f.pauseQueue(ctx, req)
+	return answer(ctx, f, f.pauseQueue, req)
 }
 
 func (f *fakeAdmin) ResumeQueue(ctx context.Context, req *adminv1.ResumeQueueRequest) (*adminv1.ResumeQueueResponse, error) {
-	f.record(ctx)
-	return f.resumeQueue(ctx, req)
+	return answer(ctx, f, f.resumeQueue, req)
 }
 
 func (f *fakeAdmin) ListOverrides(ctx context.Context, req *adminv1.ListOverridesRequest) (*adminv1.ListOverridesResponse, error) {
-	f.record(ctx)
-	return f.listOverrides(ctx, req)
+	return answer(ctx, f, f.listOverrides, req)
 }
 
 func (f *fakeAdmin) SetQueueOverride(ctx context.Context, req *adminv1.SetQueueOverrideRequest) (*adminv1.SetQueueOverrideResponse, error) {
-	f.record(ctx)
-	return f.setQueueOverride(ctx, req)
+	return answer(ctx, f, f.setQueueOverride, req)
 }
 
 func (f *fakeAdmin) ClearQueueOverride(ctx context.Context, req *adminv1.ClearQueueOverrideRequest) (*adminv1.ClearQueueOverrideResponse, error) {
-	f.record(ctx)
-	return f.clearQueueOverride(ctx, req)
+	return answer(ctx, f, f.clearQueueOverride, req)
 }
 
 func (f *fakeAdmin) ListPeriodicTasks(ctx context.Context, req *adminv1.ListPeriodicTasksRequest) (*adminv1.ListPeriodicTasksResponse, error) {
-	f.record(ctx)
-	return f.listPeriodic(ctx, req)
+	return answer(ctx, f, f.listPeriodic, req)
 }
 
 func (f *fakeAdmin) GetPeriodicTask(ctx context.Context, req *adminv1.GetPeriodicTaskRequest) (*adminv1.GetPeriodicTaskResponse, error) {
-	f.record(ctx)
-	return f.getPeriodic(ctx, req)
+	return answer(ctx, f, f.getPeriodic, req)
 }
 
 func (f *fakeAdmin) PutPeriodicTask(ctx context.Context, req *adminv1.PutPeriodicTaskRequest) (*adminv1.PutPeriodicTaskResponse, error) {
-	f.record(ctx)
-	return f.putPeriodic(ctx, req)
+	return answer(ctx, f, f.putPeriodic, req)
 }
 
 func (f *fakeAdmin) DeletePeriodicTask(ctx context.Context, req *adminv1.DeletePeriodicTaskRequest) (*adminv1.DeletePeriodicTaskResponse, error) {
-	f.record(ctx)
-	return f.deletePeriodic(ctx, req)
+	return answer(ctx, f, f.deletePeriodic, req)
 }
 
 func (f *fakeAdmin) PausePeriodicTask(ctx context.Context, req *adminv1.PausePeriodicTaskRequest) (*adminv1.PausePeriodicTaskResponse, error) {
-	f.record(ctx)
-	return f.pausePeriodic(ctx, req)
+	return answer(ctx, f, f.pausePeriodic, req)
+}
+
+func (f *fakeAdmin) ResumePeriodicTask(ctx context.Context, req *adminv1.ResumePeriodicTaskRequest) (*adminv1.ResumePeriodicTaskResponse, error) {
+	return answer(ctx, f, f.resumePeriodic, req)
 }
 
 func (f *fakeAdmin) GetNamespaceQuota(ctx context.Context, req *adminv1.GetNamespaceQuotaRequest) (*adminv1.GetNamespaceQuotaResponse, error) {
-	f.record(ctx)
-	return f.getQuota(ctx, req)
+	return answer(ctx, f, f.getQuota, req)
 }
 
 func (f *fakeAdmin) SetNamespaceQuota(ctx context.Context, req *adminv1.SetNamespaceQuotaRequest) (*adminv1.SetNamespaceQuotaResponse, error) {
-	f.record(ctx)
-	return f.setQuota(ctx, req)
+	return answer(ctx, f, f.setQuota, req)
+}
+
+func (f *fakeAdmin) ClearNamespaceQuota(ctx context.Context, req *adminv1.ClearNamespaceQuotaRequest) (*adminv1.ClearNamespaceQuotaResponse, error) {
+	return answer(ctx, f, f.clearQuota, req)
 }
 
 func (f *fakeAdmin) CreateToken(ctx context.Context, req *adminv1.CreateTokenRequest) (*adminv1.CreateTokenResponse, error) {
-	f.record(ctx)
-	return f.createToken(ctx, req)
+	return answer(ctx, f, f.createToken, req)
 }
 
 func (f *fakeAdmin) GetToken(ctx context.Context, req *adminv1.GetTokenRequest) (*adminv1.GetTokenResponse, error) {
-	f.record(ctx)
-	return f.getToken(ctx, req)
+	return answer(ctx, f, f.getToken, req)
+}
+
+func (f *fakeAdmin) ListTokens(ctx context.Context, req *adminv1.ListTokensRequest) (*adminv1.ListTokensResponse, error) {
+	return answer(ctx, f, f.listTokens, req)
 }
 
 func (f *fakeAdmin) RevokeToken(ctx context.Context, req *adminv1.RevokeTokenRequest) (*adminv1.RevokeTokenResponse, error) {
-	f.record(ctx)
-	return f.revokeToken(ctx, req)
+	return answer(ctx, f, f.revokeToken, req)
 }
 
 // serveAdmin starts the double and returns an admin client connected to it.
