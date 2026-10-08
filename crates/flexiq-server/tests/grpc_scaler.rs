@@ -608,6 +608,13 @@ async fn a_stream_is_authenticated_and_capped() {
 #[tokio::test]
 async fn stream_metric_spec_is_unimplemented() {
     let harness = Harness::start("grpc-scaler-streams").await;
+    // Tokenless first: an unserved path must not answer before authentication.
+    let status = harness
+        .client()
+        .stream_metric_spec(object(&[]))
+        .await
+        .expect_err("no token");
+    assert_eq!(status.code(), Code::Unauthenticated, "{status:?}");
     let token = harness.inspect();
     let status = harness
         .client()

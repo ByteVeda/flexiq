@@ -162,11 +162,13 @@ impl ExternalScaler for Scaler {
     type StreamMetricSpecStream = Answers<pb::GetMetricSpecResponse>;
 
     /// Optional upstream: KEDA falls back to polling `GetMetricSpec` on
-    /// `UNIMPLEMENTED`, and a fixed target never changes anyway.
+    /// `UNIMPLEMENTED`, and a fixed target never changes anyway. The caller is
+    /// still authenticated first: no scaler path answers a tokenless call.
     async fn stream_metric_spec(
         &self,
-        _request: Request<pb::ScaledObjectRef>,
+        request: Request<pb::ScaledObjectRef>,
     ) -> Result<Response<Self::StreamMetricSpecStream>, Status> {
+        self.scope(&request, Some(request.get_ref())).await?;
         Err(Status::unimplemented("StreamMetricSpec is not served"))
     }
 }

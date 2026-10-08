@@ -337,10 +337,13 @@ and the same message.
 
 That is deliberate on both counts: a distinguishable answer tells a client
 guessing tokens which guess was closer, and a path answered before
-authentication tells it which services the build carries. The two
-`grpc.health.v1` RPCs are the only exception — see
+authentication tells it which services the build carries. There are two
+exceptions. The two `grpc.health.v1` RPCs answer without a credential — see
 [The gRPC door](/server/operate/grpc) for why a probe cannot
-carry a credential.
+carry a credential. And the KEDA external scaler reads its token from the
+request body, so a tokenless body over its 64 KiB cap is refused with
+`OUT_OF_RANGE`, and one that does not decode with a decode error, before that
+token is checked; every scaler request that decodes is authenticated first.
 
 <Callout type="warn" title="A bearer token is one factor">
 It proves the peer holds a string. It does not encrypt the connection on its
