@@ -19,6 +19,7 @@ pub type OutcomeCallback =
     ThreadsafeFunction<JsOutcome, Unknown<'static>, JsOutcome, Status, false>;
 
 mod admin;
+mod dashboard_audit;
 mod inspect;
 mod locks;
 mod logs;
@@ -41,6 +42,9 @@ pub struct JsQueue {
     /// workflow migrations only run when workflows are actually used.
     #[cfg(feature = "workflows")]
     workflow_storage: std::sync::OnceLock<flexiq_workflows::WorkflowStorageBackend>,
+    /// Records the dashboard's changes in the audit trail while it serves.
+    /// Shared so closing it can run off the event loop.
+    dashboard_audit: std::sync::Arc<flexiq_core::audit::DashboardAudit>,
 }
 
 #[napi]
@@ -66,6 +70,7 @@ impl JsQueue {
             auto_migrate,
             #[cfg(feature = "workflows")]
             workflow_storage: std::sync::OnceLock::new(),
+            dashboard_audit: std::sync::Arc::default(),
         })
     }
 
