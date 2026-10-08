@@ -13,6 +13,7 @@ use flexiq_core::storage::Storage;
 use flexiq_core::{now_millis, NewJob};
 use flexiq_server::config::grpc::GrpcConfig;
 use flexiq_server::config::listen::ListenAddress;
+use flexiq_server::grpc::limits::SCALER_MAX_MESSAGE_BYTES;
 use flexiq_server::grpc::pb::externalscaler::external_scaler_client::ExternalScalerClient;
 use flexiq_server::grpc::pb::externalscaler::{GetMetricsRequest, ScaledObjectRef};
 use flexiq_server::grpc::status::reason;
@@ -424,6 +425,21 @@ async fn another_namespace_is_not_counted() {
             .metric_value;
         assert_eq!(value, 1, "{metadata:?}");
     }
+    harness.stop().await;
+}
+
+/// Reachable without a header, so a request far beyond what KEDA sends is
+/// refused at decode, before any token is looked at.
+#[tokio::test]
+async fn an_oversized_request_is_refused() {
+    let harness = Harness::start("grpc-scaler-oversized").await;
+    let padding = "x".repeat(SCALER_MAX_MESSAGE_BYTES);
+    let status = harness
+        .client()
+        .is_active(object(&[("queue", "emails"), ("padding", &padding)]))
+        .await
+        .expect_err("over the cap");
+    assert_eq!(status.code(), Code::OutOfRange, "{status:?}");
     harness.stop().await;
 }
 

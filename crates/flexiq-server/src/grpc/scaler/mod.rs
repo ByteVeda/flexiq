@@ -22,7 +22,7 @@ use tonic::{Request, Response, Status};
 
 use crate::grpc::audit::{self, AuditContext};
 use crate::grpc::auth::{Authenticator, Principal, Scope};
-use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
+use crate::grpc::limits::SCALER_MAX_MESSAGE_BYTES;
 use crate::grpc::pb::externalscaler as pb;
 use crate::grpc::pb::externalscaler::external_scaler_server::{
     ExternalScaler, ExternalScalerServer,
@@ -54,12 +54,12 @@ impl Scaler {
         }
     }
 
-    /// The registered service. KEDA's messages are tiny; the producer cap is
-    /// simply the listener's default.
+    /// The registered service, capped small: it is reachable without a header
+    /// credential, so an oversized request must fail before it is decoded.
     pub fn into_service(self) -> ExternalScalerServer<Self> {
         ExternalScalerServer::new(self)
-            .max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES)
-            .max_encoding_message_size(PRODUCER_MAX_MESSAGE_BYTES)
+            .max_decoding_message_size(SCALER_MAX_MESSAGE_BYTES)
+            .max_encoding_message_size(SCALER_MAX_MESSAGE_BYTES)
     }
 
     /// Authenticate the caller, read its query and check it reaches the queue.
