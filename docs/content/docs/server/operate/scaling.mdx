@@ -97,8 +97,8 @@ Two things about them that matter to a server deployment specifically:
 has exactly one subcommand, `token`. So `scaled-object.yaml` and
 `scaled-job.yaml`, which point a `metrics-api` trigger at a `flexiq scaler`
 Service, require an SDK process to run that endpoint. A deployment whose only
-FlexiQ process is the server has no such endpoint and should use the Prometheus
-trigger instead.
+FlexiQ process is the server has no such endpoint and should use the
+[external scaler](#external-scaler) below, or the Prometheus trigger.
 
 **The Prometheus manifest's queries name SDK metrics.** `flexiq_queue_depth` and
 `flexiq_worker_utilization` come from an SDK's Prometheus collector; the server
@@ -143,9 +143,133 @@ not is the maintenance owner: retention, the dead-worker reaper and periodic
 task scheduling all need a process running. Keep that one replica up.
 </Callout>
 
-A real KEDA external scaler — `IsActive`, `GetMetricSpec`, `GetMetrics` over
-gRPC, with push-based wake-up instead of a 15-second poll — is tracked as
-[#850](https://github.com/ByteVeda/flexiq/issues/850).
+## External scaler
+
+When the gRPC listener is on, `flexiq-server` serves KEDA's external scaler
+(`externalscaler.ExternalScaler`) on it. There is no separate scaler
+Deployment and no SDK process: KEDA dials the same Service your producers do.
+
+| | `metrics-api` | `external` / `external-push` |
+| --- | --- | --- |
+| Needs | An SDK process serving `/api/scaler`, or the dashboard role | The gRPC listener |
+| Auth | None (keep it in-cluster) | A token with the `inspect` scope |
+| Scale from zero | Next polling interval | `external-push`: on the enqueue |
+| TLS | Plain HTTP | `FLEXIQ_GRPC_TLS_*`, with `caCert` in KEDA |
+
+Pick `external` when the server is your only FlexiQ process, or when the
+metric endpoint should be authenticated rather than trusted by network
+position. Pick `metrics-api` when an SDK scaler is already running and the
+network is your boundary.
+
+### Mint a token and hand it to KEDA
+
+The scaler checks the token itself, because KEDA cannot send a header. Mint one
+with the `inspect` scope for the namespace being scaled
+([Tokens](/server/operate/tokens) covers where to run it):
+
+```bash
+flexiq-server token create --name keda --scope inspect
+```
+
+Put it in a Secret and expose it on the container of the Deployment KEDA
+scales, as `FLEXIQ_SCALER_TOKEN`:
+
+```yaml
+env:
+  - name: FLEXIQ_SCALER_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: flexiq-scaler-token
+        key: token
+```
+
+The trigger then names the variable, not the secret value:
+
+```yaml
+triggers:
+  - type: external
+    metadata:
+      scalerAddress: "flexiq-server-grpc:50051"
+      tokenFromEnv: FLEXIQ_SCALER_TOKEN
+      queue: default
+      targetQueueDepth: "10"
+```
+
+KEDA resolves `tokenFromEnv` from the **scale target's** environment and sends
+the value in the trigger metadata. A `token` key puts it in the manifest
+instead, which is only for a throwaway cluster. The namespace measured is the
+token's own, so there is no namespace key.
+
+A narrowed grant works: `inspect:queue=emails` may scale a trigger whose
+`queue` is `emails`, and is refused for any other queue and for a trigger with
+no `queue`. A grant narrowed to tasks is always refused, since the depth counts
+every task.
+
+### Metadata
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `scalerAddress` | — (required) | `host:port` of the gRPC Service. KEDA's own key |
+| `queue` | every queue in the namespace | The queue measured. An empty value is refused |
+| `targetQueueDepth` | `10` | Pending jobs per replica. At least `1` |
+| `activationQueueDepth` | `0` | The trigger is active while `pending + running` exceeds it. At least `0` |
+| `token` | — | The token, in the manifest |
+| `tokenFromEnv` | — | Name of an environment variable on the scale target holding the token |
+
+A missing token is `UNAUTHENTICATED`; a token without `inspect` is
+`PERMISSION_DENIED`; a malformed value is `INVALID_ARGUMENT` naming the key. If
+the call carries an `authorization` header it wins over the metadata, and a bad
+header is not rescued by a good `token`. Requests are capped at 64 KiB.
+
+The two numbers answer different questions. The metric KEDA sizes replicas on
+is the **pending** count. Whether the target runs at all is **pending +
+running**, so a job already claimed keeps the target up until it finishes. An
+unknown `queue` reports `0` rather than an error, as `/api/scaler` does.
+
+The metric is named `flexiq-<queue>` (or `flexiq-all`), lowercased with every
+character outside `[a-z0-9]` turned into `-`. So `emails_eu` and `emails-eu`
+both become `flexiq-emails-eu`. That is harmless: KEDA prefixes each trigger's
+metric with `s<index>-`, so two triggers in one `ScaledObject` still differ.
+
+### Push: scale from zero on the enqueue
+
+`external-push` also opens a `StreamIsActive` stream. The server answers once
+on open and again whenever the queue flips between idle and active, so a first
+job wakes the target without waiting for the polling interval:
+
+```yaml
+triggers:
+  - type: external-push
+    metadata:
+      scalerAddress: "flexiq-server-grpc:50051"
+      tokenFromEnv: FLEXIQ_SCALER_TOKEN
+      queue: default
+```
+
+Replica counts still come from the polled metric. An enqueue through the
+server wakes an idle stream at once; everything else, including a drain, is
+seen on the periodic re-read, `FLEXIQ_GRPC_WATCH_RECONCILE` (5 seconds by
+default).
+
+<Callout type="warn" title="Zero turns off the drain check">
+`FLEXIQ_GRPC_WATCH_RECONCILE=0` also turns off the scaler stream's re-read. An
+active stream then never sees the queue drain, and KEDA never scales that target
+back to zero. Leave it above `0` when you use `external-push`.
+</Callout>
+
+Streams count against `FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN` (`16`) per token,
+separately from watches. KEDA opens about one per trigger.
+
+### TLS
+
+With `FLEXIQ_GRPC_TLS_*` set, give KEDA the CA through a `TriggerAuthentication`
+whose `secretTargetRef` sets the `caCert` parameter, and point the trigger's
+`authenticationRef` at it. KEDA documents `enableTLS: "true"` for the `external`
+trigger. [TLS and mTLS](/server/operate/grpc#tls-and-mtls) covers the server
+side.
+
+Complete manifests are `deploy/keda/scaled-object-external.yaml` and
+`deploy/keda/scaled-object-external-stream.yaml` in the repository.
 
 ## The storage ceiling
 
