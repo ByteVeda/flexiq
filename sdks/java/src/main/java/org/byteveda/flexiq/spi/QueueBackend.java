@@ -325,6 +325,30 @@ public interface QueueBackend extends AutoCloseable, ConditionalSettings {
     String listPausedQueuesJson();
 
     /**
+     * Start recording dashboard changes in the audit trail, pruning records
+     * past {@code retentionDays}. A second call while recording is a no-op.
+     * The default is for a backend with no audit trail, which records nothing.
+     *
+     * @param retentionDays days a record is kept; at least 1
+     */
+    default void startDashboardAudit(int retentionDays) {}
+
+    /**
+     * Record one answered dashboard request. Anything but a state-changing
+     * route records nothing; never blocks on storage. The default records
+     * nothing.
+     *
+     * @param method the HTTP method
+     * @param path the request path, without its query string
+     * @param status the HTTP status it was answered with
+     * @param username the signed-in user, or {@code null} with auth off
+     */
+    default void recordDashboardAction(String method, String path, int status, @Nullable String username) {}
+
+    /** Stop recording dashboard changes and flush what is buffered. The default does nothing. */
+    default void closeDashboardAudit() {}
+
+    /**
      * Write a settings document, overwriting whatever was there.
      *
      * @param key the document's key

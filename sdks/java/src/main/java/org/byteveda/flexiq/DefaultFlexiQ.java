@@ -906,6 +906,21 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     }
 
     @Override
+    public void startDashboardAudit(int retentionDays) {
+        backend.startDashboardAudit(retentionDays);
+    }
+
+    @Override
+    public void recordDashboardAction(String method, String path, int status, @Nullable String username) {
+        backend.recordDashboardAction(method, path, status, username);
+    }
+
+    @Override
+    public void closeDashboardAudit() {
+        backend.closeDashboardAudit();
+    }
+
+    @Override
     public Optional<String> getSetting(String key) {
         return backend.getSetting(key);
     }

@@ -230,6 +230,30 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
+    public void startDashboardAudit(int retentionDays) {
+        withOpenHandle(() -> {
+            NativeQueue.startDashboardAudit(handle, retentionDays);
+            return null;
+        });
+    }
+
+    @Override
+    public void recordDashboardAction(String method, String path, int status, @Nullable String username) {
+        withOpenHandle(() -> {
+            NativeQueue.recordDashboardAction(handle, method, path, status, username);
+            return null;
+        });
+    }
+
+    @Override
+    public void closeDashboardAudit() {
+        withOpenHandle(() -> {
+            NativeQueue.closeDashboardAudit(handle);
+            return null;
+        });
+    }
+
+    @Override
     public Optional<String> getSetting(String key) {
         return withOpenHandle(() -> Optional.ofNullable(NativeQueue.getSetting(handle, key)));
     }

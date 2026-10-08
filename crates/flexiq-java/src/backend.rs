@@ -29,6 +29,8 @@ pub struct QueueHandle {
     /// race in Postgres's catalog, failing one thread's first workflow call.
     #[cfg(feature = "workflows")]
     workflow_init: std::sync::Mutex<()>,
+    /// Records the dashboard's changes in the audit trail while it serves.
+    pub dashboard_audit: flexiq_core::audit::DashboardAudit,
 }
 
 #[cfg(feature = "workflows")]
@@ -172,6 +174,7 @@ pub fn open(options: OpenOptions) -> Result<QueueHandle, BindingError> {
         workflow_storage: std::sync::OnceLock::new(),
         #[cfg(feature = "workflows")]
         workflow_init: std::sync::Mutex::new(()),
+        dashboard_audit: flexiq_core::audit::DashboardAudit::default(),
     })
 }
 
