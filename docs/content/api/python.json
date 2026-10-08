@@ -462,6 +462,14 @@
     },
     {
       "owner": "PyQueue",
+      "name": "close_dashboard_audit",
+      "kind": "method",
+      "signature": "close_dashboard_audit() -> None",
+      "params": [],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
       "name": "count_pending_by_queue",
       "kind": "method",
       "signature": "count_pending_by_queue(queue_name: str) -> int",
@@ -1878,6 +1886,35 @@
     },
     {
       "owner": "PyQueue",
+      "name": "record_dashboard_action",
+      "kind": "method",
+      "signature": "record_dashboard_action(method: str, path: str, status: int, username: str | None = None) -> None",
+      "params": [
+        {
+          "name": "method",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "path",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "username",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
       "name": "register_periodic",
       "kind": "method",
       "signature": "register_periodic(name: str, task_name: str, cron_expr: str, args: bytes | None = None, queue: str = \"default\", timezone: str | None = None) -> None",
@@ -2545,6 +2582,20 @@
         {
           "name": "node_name",
           "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "start_dashboard_audit",
+      "kind": "method",
+      "signature": "start_dashboard_audit(retention_days: int) -> None",
+      "params": [
+        {
+          "name": "retention_days",
+          "type": "int",
           "default": null
         }
       ],

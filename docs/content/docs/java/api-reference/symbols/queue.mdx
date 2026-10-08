@@ -61,6 +61,12 @@ void cancelWorkflow(String runId)
 void close()
 ```
 
+### `flexiq.closeDashboardAudit()`
+
+```java
+void closeDashboardAudit()
+```
+
 ### `flexiq.codel()`
 
 ```java
@@ -508,6 +514,17 @@ List<TopicMessage> readTopic(String topic, String name, int limit)
 List<TopicMessage> readTopic(String topic, String name)
 ```
 
+### `flexiq.recordDashboardAction()`
+
+```java
+void recordDashboardAction(
+    String method,
+    String path,
+    int status,
+    @Nullable String username
+)
+```
+
 ### `flexiq.registerPeriodic()`
 
 ```java
@@ -615,6 +632,12 @@ void setSetting(String key, String value)
 
 ```java
 void shutdown()
+```
+
+### `flexiq.startDashboardAudit()`
+
+```java
+void startDashboardAudit(int retentionDays)
 ```
 
 ### `flexiq.stats()`
