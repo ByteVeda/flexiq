@@ -24,6 +24,7 @@ Gem::Specification.new do |spec|
     "rubygems_mfa_required" => "true"
   }
 
-  spec.files = Dir["lib/**/*.rb", "README.md"]
+  # LICENSE is a copy of the repository root's: a gem can only ship files under its own directory.
+  spec.files = Dir["lib/**/*.rb", "README.md", "LICENSE"]
   spec.require_paths = ["lib"]
 end
