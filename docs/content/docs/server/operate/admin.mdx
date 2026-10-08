@@ -11,17 +11,20 @@ calls as JSON under `/v1/admin/`. It is how a script, a runbook or
 without an SDK.
 
 It is not the producer door with more methods. It is its own package behind its
-own two scopes, because an operator surface and a producer surface must not
+own scopes, because an operator surface and a producer surface must not
 share a credential:
 
 | Scope | Reaches |
 | --- | --- |
 | `inspect` | Every read-only method: `ListQueues`, `GetThroughput`, `ListDeadLetters`, `GetDeadLetter`, `ListWorkers`, `ListPeriodicTasks`, `GetPeriodicTask`, `ListOverrides`, `GetNamespaceQuota`, `ListAuditRecords` |
-| `admin` | Every other method |
+| `admin` | Every other method, except the token methods |
+| `tokens` | `CreateToken`, `GetToken`, `ListTokens`, `RevokeToken`, reads included |
 
 The split is not a list someone keeps: a method that declares
 `idempotency_level = NO_SIDE_EFFECTS` needs `inspect`, and anything else needs
 `admin`. Over JSON that is the verb — `GET` is `inspect`, `POST` is `admin`.
+The [token methods](#tokens) are the one exception: everything under
+`/v1/admin/tokens` needs `tokens`, which neither of the others implies.
 Neither implies the other, so an operator's token carries both:
 
 ```bash
@@ -187,15 +190,47 @@ every token-authorised write — this door's included — naming the token, the
 RPC, the target and the outcome. It filters by `tokenId`, `targetKind`, `target`, `since`
 and `until`, and pages with `pageSize` and `pageToken`.
 
+## Tokens
+
+A token holding the `tokens` scope manages the namespace's
+[API tokens](/server/operate/tokens) without the dashboard — what a
+provisioning tool needs to mint a credential per service and revoke it on
+teardown.
+
+| RPC | JSON | Does |
+| --- | --- | --- |
+| `CreateToken` | `POST /v1/admin/tokens` | Mints a token; the response carries its secret, once |
+| `GetToken` | `GET /v1/admin/tokens/{token_id}` | One token, revoked or expired included |
+| `ListTokens` | `GET /v1/admin/tokens` | Every token in the namespace, newest first |
+| `RevokeToken` | `POST /v1/admin/tokens/{token_id}:revoke` | Revokes it; revoking twice answers the same token |
+
+A token can never mint one wider than itself:
+
+- **Every grant must be covered by one of the caller's own.** Same scope, and
+  a queue and task pattern at least as wide: `produce:queue=emails-*` covers
+  `produce:queue=emails-eu`, not `produce` or `read`. Otherwise the call is
+  `SCOPE_DENIED`, naming the scope.
+- **It expires no later than the caller.** A request that would outlive it is
+  refused with `INVALID_REQUEST`, naming the latest expiry allowed — never
+  quietly shortened. The default of 90 days is refused by a caller with less
+  than that left, so pass `expireDays`.
+- **It revokes only tokens whose grants it covers**, or itself.
+- **One namespace.** The new token is the caller's namespace's, and another
+  namespace's token is `TOKEN_NOT_FOUND`.
+
+No response but `CreateToken`'s carries the secret, and none carries its
+digest. `admin` reaches none of these methods.
+
 ## Errors
 
 Every refusal carries a `google.rpc.ErrorInfo` reason from the same closed list
-the producer door uses, plus three of this door's own:
+the producer door uses, plus four of this door's own:
 
 | Reason | Code | When |
 | --- | --- | --- |
 | `DEAD_LETTER_NOT_FOUND` | `NOT_FOUND` | No such entry in this namespace |
 | `PERIODIC_TASK_NOT_FOUND` | `NOT_FOUND` | No such periodic task in this namespace |
 | `WORKER_NOT_FOUND` | `NOT_FOUND` | No such registered worker in this namespace |
-| `INVALID_REQUEST` | `INVALID_ARGUMENT` | An empty name, a bad cron expression, timezone, rate or window |
-| `SCOPE_DENIED` | `PERMISSION_DENIED` | The token lacks `inspect` or `admin`, or its grants do not reach the queue or task named; the metadata says which |
+| `TOKEN_NOT_FOUND` | `NOT_FOUND` | No such API token in this namespace |
+| `INVALID_REQUEST` | `INVALID_ARGUMENT` | An empty name, a bad cron expression, timezone, rate or window, or a token that would outlive its minter |
+| `SCOPE_DENIED` | `PERMISSION_DENIED` | The token lacks `inspect`, `admin` or `tokens`, or its grants do not reach the queue or task named, or do not cover a grant it tried to mint or revoke; the metadata says which |

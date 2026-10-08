@@ -676,8 +676,9 @@ Same posture as the attach listener:
 - **The operator surface is scoped apart.** Pausing queues, dead-letter
   operations, workers, periodic tasks and overrides need `inspect` or `admin`,
   which no producer or executor token carries, so a `produce` token that leaks
-  costs you an enqueue path, not a tenant. Settings, webhook secrets and token
-  minting are on no gRPC surface at all.
+  costs you an enqueue path, not a tenant. Token minting needs its own `tokens`
+  scope and can never widen a grant; settings and webhook secrets are on no
+  gRPC surface at all.
 - **The schema is behind the credential, but not behind a scope.** Any live
   token reads every package this build carries, its own scope included and the
   other one too — see

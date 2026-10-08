@@ -62,7 +62,10 @@ kubectl exec deploy/flexiq-flexiq-server -- \
 
 The dashboard does the same three things under **Configuration → gRPC tokens**,
 behind its existing admin role — minting is an operator action, and a producer
-credential must never be able to mint itself a wider one.
+credential must never be able to mint itself a wider one. Automation that has
+no dashboard session mints over [the admin door's token
+methods](/server/operate/admin#tokens) instead, with a token carrying the
+`tokens` scope, and can only mint what that token already holds.
 
 ## Scopes
 
@@ -76,6 +79,7 @@ also opens everything `read` does, because it always has.
 | `execute` | `flexiq.executor.v1` | Claim work and report on it |
 | `inspect` | `flexiq.admin.v1`, read-only methods | Look at queues, dead letters, workers, schedules and overrides |
 | `admin` | `flexiq.admin.v1`, every other method | Pause queues, replay and purge dead letters, manage schedules and overrides |
+| `tokens` | `flexiq.admin.v1`, the token methods | Mint, list and revoke tokens, never wider or longer-lived than its own; not implied by `admin`, and not narrowable |
 
 A producer and an executor need opposite permissions, so **a token that can poll
 for work cannot enqueue it**, and a `produce` token asked for an executor RPC is
@@ -95,10 +99,11 @@ flexiq-server token create --name ops --scope inspect --scope admin
 ```
 
 `produce` reaches none of it, so a producer credential that leaks costs you an
-enqueue path rather than an operator. The settings store, webhook secrets and
-token minting stay behind the dashboard's session and role check — they are on
-no gRPC surface at all. [The admin door](/server/operate/admin) is the page for
-what `inspect` and `admin` reach.
+enqueue path rather than an operator. Token minting over gRPC needs the
+separate `tokens` scope, and the settings store and webhook secrets stay behind
+the dashboard's session and role check — they are on no gRPC surface at all.
+[The admin door](/server/operate/admin) is the page for what `inspect`,
+`admin` and `tokens` reach.
 
 The table is about *calls*, not about the schema. Server reflection asks only
 that a caller be authenticated, so any row above reads every package — a
@@ -109,7 +114,7 @@ has the shape of that, and why revoking is the control rather than scoping.
 
 ## Narrowing a token to queues and tasks
 
-Any grant can be narrowed to some queues, some tasks, or both. This is how you give a webhook receiver or an untrusted edge
+Any grant but `tokens` can be narrowed to some queues, some tasks, or both. This is how you give a webhook receiver or an untrusted edge
 service a token that can enqueue exactly one task and nothing else:
 
 ```bash

@@ -120,8 +120,8 @@ described as having established more:
 ## The surface
 
 Three packages and three doors: one scope each for the producer and the
-executor, and two for the operator — `inspect` for its read-only methods,
-`admin` for the rest. A single credential **may** carry several scopes, though a
+executor, and three for the operator — `inspect` for its read-only methods,
+`tokens` for its token methods, `admin` for the rest. A single credential **may** carry several scopes, though a
 producer, an executor and an operator are usually separate processes holding a
 token each. `flexiq.executor.v1` and `flexiq.admin.v1` **may** import
 `flexiq.v1`; the reverse import is forbidden, so a client generated for the
@@ -350,7 +350,7 @@ An executor client:
   `flexiq.v1` and `flexiq.admin.v1` and nothing else, so this door needs a real
   gRPC library.
 - **No producer or executor credential reaches the operator door.** It takes
-  `inspect` or `admin`, which neither carries; and some operator actions are on
+  `inspect`, `admin` or `tokens`, which neither carries; and some operator actions are on
   no door at all — see
   [The delta from an embedded SDK](#the-delta-from-an-embedded-sdk).
 
@@ -361,7 +361,11 @@ Each acts on the credential's namespace alone, and a resource in another
 namespace answers `NOT_FOUND` exactly as an absent one does. The scope a method
 needs is a function of its idempotency level — `NO_SIDE_EFFECTS` takes
 `inspect`, anything else `admin` — so a client can compute it from the
-descriptor.
+descriptor. The four token methods are the one exception: each takes `tokens`,
+which neither `inspect` nor `admin` implies. A token mints only grants one of
+its own already covers (same scope, a queue and task pattern at least as wide),
+never past its own expiry, and revokes only tokens whose grants it covers, or
+itself.
 
 | RPC | Idempotency | Scope | Notes |
 |---|---|---|---|
@@ -383,10 +387,13 @@ descriptor.
 | `GetNamespaceQuota` | `NO_SIDE_EFFECTS` | `inspect` | The token's own namespace; the request names none. An unset limit is absent. |
 | `SetNamespaceQuota` | `IDEMPOTENT` | `admin` | Replaces the whole quota, and an all-unset quota is a clear. Every process reads it within about two seconds. |
 | `ClearNamespaceQuota` | `IDEMPOTENT` | `admin` | Lifts every limit. Clearing a namespace with no quota succeeds. |
+| `CreateToken` | none | `tokens` | The secret is in this response only. An uncovered grant is `SCOPE_DENIED`; an expiry past the caller's is `INVALID_REQUEST`, never shortened. |
+| `GetToken`, `ListTokens` | `NO_SIDE_EFFECTS` | `tokens` | Revoked and expired tokens included. Never the secret or its digest. |
+| `RevokeToken` | `IDEMPOTENT` | `tokens` | A revoked token answers unchanged. Another namespace's id is `TOKEN_NOT_FOUND`. |
 
 ### If there is no gRPC library either
 
-The eight `flexiq.v1` RPCs and the twenty-six `flexiq.admin.v1` RPCs — the
+The eight `flexiq.v1` RPCs and the thirty-one `flexiq.admin.v1` RPCs — the
 latter under `/v1/admin/` — are also served as ordinary HTTP with JSON bodies, on
 the same listener and the same credential. `GET` is served for exactly the
 `NO_SIDE_EFFECTS` RPCs and `POST` for everything else, so the method is never a
@@ -531,6 +538,7 @@ The closed list, with the code each arrives under:
 | `DEAD_LETTER_NOT_FOUND` | `NOT_FOUND` | No such dead-letter entry in this namespace. `flexiq.admin.v1`. |
 | `PERIODIC_TASK_NOT_FOUND` | `NOT_FOUND` | No such periodic task in this namespace. `flexiq.admin.v1`. |
 | `WORKER_NOT_FOUND` | `NOT_FOUND` | No such registered worker in this namespace. `flexiq.admin.v1`. |
+| `TOKEN_NOT_FOUND` | `NOT_FOUND` | No such API token in this namespace. `flexiq.admin.v1`. |
 | `DEPENDENCY_NOT_FOUND` | `FAILED_PRECONDITION` | A `depends_on` id names nothing this caller may depend on. |
 | `QUEUE_FULL` | `RESOURCE_EXHAUSTED` | Carries `queue`, `pending`, `cap`. |
 | `RATE_LIMITED` | `RESOURCE_EXHAUSTED` | A rate limit rejected the call. |
