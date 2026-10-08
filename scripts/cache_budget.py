@@ -30,6 +30,9 @@ GIB = 1_000_000_000
 #: How long a replaced entry must sit unread before it counts as superseded.
 SUPERSEDED_IDLE = timedelta(hours=24)
 
+#: Non-Cargo caches that hold one live key per lineage (CodeQL keys per commit).
+SINGLE_KEY_PREFIXES = ("codeql-trap-",)
+
 #: Where a Cargo cache is allowed to exist. Every other ref restores from it.
 CARGO_HOME_REF = "refs/heads/master"
 
@@ -121,25 +124,25 @@ def load(source: str) -> list[Entry]:
     ]
 
 
-def superseded(entries: list[Entry], now: datetime) -> list[Entry]:
-    """Entries no run has read since a same-family successor was saved.
+def superseded(entries: list[Entry], now: datetime, cargo_prefix: str) -> list[Entry]:
+    """Entries no run has read since their replacement was saved.
 
     GitHub keeps them until the 10 GB LRU sweep or 7 idle days, so they crowd
-    out live caches. "Newest per family" is not enough: one family can hold
-    several live keys (a pnpm cache per lockfile), so an entry goes only when
-    it has not been read since a sibling appeared, and not for a day either.
-    buildkit blobs are skipped: an index may still reference an idle layer.
+    out live caches. Only keys whose last hash is the sole thing that changes
+    on replacement qualify: a rust-cache job and a CodeQL trap cache each hold
+    one live key. A pnpm key hashes whichever lockfile its job reads, so an
+    idle one may be another lockfile's live cache, not a replaced one.
     """
-    by_family: dict[tuple[str, str], list[Entry]] = defaultdict(list)
+    by_lineage: dict[tuple[str, str], list[Entry]] = defaultdict(list)
     for entry in entries:
-        if not entry.key.startswith(tuple(prefix for prefix, _ in DIGEST_FAMILIES)):
-            by_family[(entry.ref, family_of(entry.key))].append(entry)
+        if entry.key.startswith((cargo_prefix, *SINGLE_KEY_PREFIXES)):
+            by_lineage[(entry.ref, _HASH_SUFFIX.sub("", entry.key))].append(entry)
     stale = []
-    for family in by_family.values():
-        newest = max(entry.created for entry in family)
+    for lineage in by_lineage.values():
+        newest = max(entry.created for entry in lineage)
         stale += [
             entry
-            for entry in family
+            for entry in lineage
             if entry.last_used < newest and now - entry.last_used > SUPERSEDED_IDLE
         ]
     return stale
@@ -233,13 +236,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    cargo_prefix = cargo_prefix_from(args.setup_rust)
     entries = load(args.caches)
     if args.superseded:
-        for entry in superseded(entries, datetime.now(timezone.utc)):
+        for entry in superseded(entries, datetime.now(timezone.utc), cargo_prefix):
             print(entry.id)
         return 0
 
-    cargo_prefix = cargo_prefix_from(args.setup_rust)
     total = sum(entry.size for entry in entries)
 
     report = render(entries, total, args.limit_gb, args.rows)
