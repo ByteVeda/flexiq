@@ -36,6 +36,7 @@ pub mod metrics;
 pub mod pb;
 pub mod producer;
 pub mod reflection;
+pub mod scaler;
 pub mod status;
 pub mod tls;
 

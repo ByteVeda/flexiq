@@ -35,6 +35,7 @@ use crate::grpc::executor::ExecutorDoor;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
 use crate::grpc::producer::watch::Watches;
 use crate::grpc::producer::Producer;
+use crate::grpc::scaler::Scaler;
 use crate::grpc::{facade, health, metrics, reflection};
 use crate::runtime::shutdown::Shutdown;
 use crate::tls::{watch, ServerTls};
@@ -192,6 +193,13 @@ impl Listener {
         // Always registered: what separates an operator from a producer is the
         // token's scope, checked by the one gate in front of both.
         let admin = Admin::new(storage.clone(), events.clone());
+        // One token store for the layer and the scaler's in-band check, so
+        // its expiry-warning and last-used caches are shared.
+        let tokens: Arc<dyn auth::Authenticator> = Arc::new(auth::TokenStore::new(
+            storage.clone(),
+            self.config.namespace.as_str(),
+        ));
+        let scaler = Scaler::new(storage.clone(), Arc::clone(&tokens));
         let health = health::serve(
             storage.clone(),
             self.config.namespace.clone(),
@@ -226,6 +234,7 @@ impl Listener {
         let mut routes = Routes::from(http)
             .add_service(producer.into_service())
             .add_service(admin.into_service())
+            .add_service(scaler.into_service())
             .add_service(health.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
             .add_service(reflection::v1()?.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
             .add_service(
@@ -283,10 +292,7 @@ impl Listener {
         let mut server = builder
             .layer(metrics::MetricsLayer::new(rpc_metrics))
             .layer(AuditLayer::new(audit_sink, self.config.audit_reads))
-            .layer(AuthLayer::new(Arc::new(auth::TokenStore::new(
-                storage.clone(),
-                self.config.namespace.as_str(),
-            ))));
+            .layer(AuthLayer::new(tokens));
         let router = server.add_routes(routes);
 
         let listen = self.config.listen.clone();

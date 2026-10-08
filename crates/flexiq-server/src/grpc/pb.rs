@@ -60,3 +60,9 @@ mod flexiq {
 }
 
 pub use flexiq::admin::v1 as admin;
+
+/// KEDA's vendored `externalscaler` types (#850), served by
+/// [`super::scaler`].
+pub mod externalscaler {
+    include!(concat!(env!("OUT_DIR"), "/externalscaler.rs"));
+}
