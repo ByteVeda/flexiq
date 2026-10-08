@@ -11,3 +11,9 @@ require "grpc"
 
 require_relative "executor/version"
 require_relative "executor/v1/executor_service_services_pb"
+
+require_relative "executor/clock"
+require_relative "executor/errors"
+require_relative "executor/config"
+require_relative "executor/job"
+require_relative "executor/outcome"
