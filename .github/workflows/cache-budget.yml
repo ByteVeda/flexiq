@@ -11,7 +11,13 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  # Write, to delete superseded entries before measuring.
+  actions: write
+
+env:
+  CACHES_JQ: >-
+    .actions_caches[] | {id, size: .size_in_bytes, ref, key,
+    created: .created_at, last_used: .last_accessed_at}
 
 jobs:
   budget:
@@ -19,6 +25,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
+
+      - name: Test the prune rule
+        working-directory: scripts
+        run: python3 -m unittest test_cache_budget
+
+      # A replaced key lingers until the 10 GB LRU sweep or 7 idle days, so
+      # without this the total sits at the cap and evicts live caches.
+      - name: Delete superseded caches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/actions/caches?per_page=100" --paginate \
+            --jq "$CACHES_JQ" | jq -s '.' > caches.json
+          python3 scripts/cache_budget.py caches.json --superseded > stale.txt
+          while read -r id; do
+            gh api -X DELETE "repos/$REPO/actions/caches/$id"
+          done < stale.txt
+          echo "Deleted $(wc -l < stale.txt) superseded cache(s)." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Measure cache usage
         env:
@@ -30,8 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$REPO/actions/caches?per_page=100" --paginate \
-            --jq '.actions_caches[] | {size: .size_in_bytes, ref: .ref, key: .key}' \
-            | jq -s '.' > caches.json
+            --jq "$CACHES_JQ" | jq -s '.' > caches.json
           python3 scripts/cache_budget.py caches.json \
             --limit-gb "$LIMIT_GB" \
             --budget-gb "$BUDGET_GB" \

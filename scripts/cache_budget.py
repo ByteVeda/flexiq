@@ -6,10 +6,12 @@ master caches every run restores from. Usage is checked here before that, along
 with the rule that keeps it down: Cargo caches live on master only.
 
     gh api "repos/$REPO/actions/caches?per_page=100" --paginate \\
-      --jq '.actions_caches[] | {size: .size_in_bytes, ref: .ref, key: .key}' \\
+      --jq '.actions_caches[] | {id, size: .size_in_bytes, ref, key,
+            created: .created_at, last_used: .last_accessed_at}' \\
       | jq -s '.' | python3 scripts/cache_budget.py -
 
-Prints Markdown, exits non-zero on a violation.
+Prints Markdown, exits non-zero on a violation. With ``--superseded`` it prints
+the ids of entries a newer same-family key replaced, one per line, instead.
 """
 
 from __future__ import annotations
@@ -20,9 +22,13 @@ import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 GIB = 1_000_000_000
+
+#: How long a replaced entry must sit unread before it counts as superseded.
+SUPERSEDED_IDLE = timedelta(hours=24)
 
 #: Where a Cargo cache is allowed to exist. Every other ref restores from it.
 CARGO_HOME_REF = "refs/heads/master"
@@ -41,9 +47,12 @@ _HASH_SUFFIX = re.compile(r"-(?:[0-9a-f]{8,}|\d+)(?:#\d+)?$")
 class Entry:
     """One cache entry as the API reports it."""
 
+    id: int
     size: int
     ref: str
     key: str
+    created: datetime
+    last_used: datetime
 
 
 @dataclass
@@ -100,8 +109,40 @@ def load(source: str) -> list[Entry]:
     """Read the caches array from a file, or from stdin when given ``-``."""
     raw = sys.stdin.read() if source == "-" else Path(source).read_text()
     return [
-        Entry(size=int(item["size"]), ref=item["ref"], key=item["key"]) for item in json.loads(raw)
+        Entry(
+            id=int(item["id"]),
+            size=int(item["size"]),
+            ref=item["ref"],
+            key=item["key"],
+            created=datetime.fromisoformat(item["created"]),
+            last_used=datetime.fromisoformat(item["last_used"]),
+        )
+        for item in json.loads(raw)
     ]
+
+
+def superseded(entries: list[Entry], now: datetime) -> list[Entry]:
+    """Entries no run has read since a same-family successor was saved.
+
+    GitHub keeps them until the 10 GB LRU sweep or 7 idle days, so they crowd
+    out live caches. "Newest per family" is not enough: one family can hold
+    several live keys (a pnpm cache per lockfile), so an entry goes only when
+    it has not been read since a sibling appeared, and not for a day either.
+    buildkit blobs are skipped: an index may still reference an idle layer.
+    """
+    by_family: dict[tuple[str, str], list[Entry]] = defaultdict(list)
+    for entry in entries:
+        if not entry.key.startswith(tuple(prefix for prefix, _ in DIGEST_FAMILIES)):
+            by_family[(entry.ref, family_of(entry.key))].append(entry)
+    stale = []
+    for family in by_family.values():
+        newest = max(entry.created for entry in family)
+        stale += [
+            entry
+            for entry in family
+            if entry.last_used < newest and now - entry.last_used > SUPERSEDED_IDLE
+        ]
+    return stale
 
 
 def render(entries: list[Entry], total: int, limit_gb: float, rows: int) -> list[str]:
@@ -185,10 +226,20 @@ def main() -> int:
         help="action to read the Cargo cache prefix-key from",
     )
     parser.add_argument("--rows", type=int, default=12, help="families to list")
+    parser.add_argument(
+        "--superseded",
+        action="store_true",
+        help="print ids of superseded entries, one per line, and exit",
+    )
     args = parser.parse_args()
 
-    cargo_prefix = cargo_prefix_from(args.setup_rust)
     entries = load(args.caches)
+    if args.superseded:
+        for entry in superseded(entries, datetime.now(timezone.utc)):
+            print(entry.id)
+        return 0
+
+    cargo_prefix = cargo_prefix_from(args.setup_rust)
     total = sum(entry.size for entry in entries)
 
     report = render(entries, total, args.limit_gb, args.rows)
