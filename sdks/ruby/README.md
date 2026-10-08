@@ -1,7 +1,8 @@
 # FlexiQ Ruby client
 
 A Ruby client for the **producer door** of a running
-[`flexiq-server`](../../crates/flexiq-server): submit work, read it back, cancel it, count it.
+[`flexiq-server`](../../crates/flexiq-server): submit work, read it back, wait for it, cancel it,
+count it.
 No database credential, no native extension, no gRPC toolchain — it speaks the server's JSON
 facade with the Ruby standard library alone.
 
@@ -48,6 +49,9 @@ the JSON facade shares that listener.
 | `get_job(id, include_payload:, include_result:)` | `GET /v1/jobs/{id}` | Payload and result only on request. |
 | `list_jobs(status:, queue:, task_name:, page_size:, page_token:)` | `GET /v1/jobs` | One `JobPage`, newest first. See [Listing](#listing). |
 | `each_job(status:, queue:, task_name:, page_size:)` | `GET /v1/jobs` | An `Enumerator` over every page. |
+| `watch_jobs(ids)` | `GET /v1/jobs:watch` (SSE) | Yields each job's transitions until all are finished. See [Waiting](#waiting). |
+| `watch_queue(queue = nil, resume_cursor:)` | `GET /v1/jobs:watch` (SSE) | Yields a queue's live transitions until you break. |
+| `wait(id, timeout:)` | `GET /v1/jobs:watch`, then `GET /v1/jobs/{id}` | The finished `Job`, with its result. |
 | `cancel_job(id)` | `POST /v1/jobs/{id}:cancel` | Idempotent. |
 | `queue_stats(queue = nil)` | `GET /v1/queues/{queue}/stats`, `GET /v1/stats` | `nil` counts the whole namespace. |
 
@@ -82,6 +86,66 @@ A credential whose `produce` or `read` grant is narrowed must name what the gran
 and both when the grant narrows both. Otherwise `list_jobs` is refused with `SCOPE_DENIED`. A
 listing is never filtered down to the rows the credential can see.
 
+## Waiting
+
+Watch a job instead of polling `get_job`. `wait` blocks until the job is finished and reads it
+back with its result:
+
+```ruby
+job = client.wait(job_id, timeout: 60) # raises FlexiQ::WaitTimeoutError after 60 s; nil = no limit
+job.status        # => :complete, :dead or :cancelled
+job.decode_result
+```
+
+`watch_jobs` yields every step on the way. Each id opens with a `:snapshot` of its current
+state (or a `FlexiQ::JobNotFound`), then live transitions follow, and the call returns once
+every job is finished:
+
+```ruby
+client.watch_jobs([a, b]) do |item|
+  case item
+  in FlexiQ::JobTransition => t then puts "#{t.job_id} #{t.kind} -> #{t.status}"
+  in FlexiQ::JobNotFound => n then puts "#{n.job_id} not visible to this token"
+  end
+end
+```
+
+Decide that a job is finished by `JobTransition#terminal?`, never by its status: `:failed` is
+not final while a retry or a dead-letter is still to come.
+
+`watch_queue` follows every job in a queue until you `break`. It has no snapshot. It opens with a
+`FlexiQ::WatchCheckpoint`, and then yields one `JobTransition` per live change. Every item
+carries a `cursor`; keep the last one, checkpoints included, and pass it back as
+`resume_cursor:` to replay what you missed:
+
+```ruby
+client.watch_queue("emails", resume_cursor: saved) do |item|
+  case item
+  in FlexiQ::WatchGap then reconcile_with(client.list_jobs(queue: "emails"))
+  in FlexiQ::JobTransition => t then handle(t)
+  else nil
+  end
+  saved = item.cursor if item.respond_to?(:cursor)
+end
+```
+
+Watches keep themselves alive:
+
+- **Dropped connection, `WATCH_OVERFLOW` or `SHUTTING_DOWN`:** the watch reopens after a
+  backoff. An id watch reopens on the jobs that are not finished yet, each with a fresh
+  snapshot. A queue watch resumes from its last cursor.
+- **Expired cursor** (`WATCH_CURSOR_EXPIRED`): the server keeps a bounded window, per process.
+  The queue watch yields a `FlexiQ::WatchGap` and starts again from now. The transitions in the
+  gap are gone; `list_jobs` reads current state, not history.
+- **Failure before the first item:** it raises. This covers a wrong URL, a missing `read`
+  scope, and a token already at its cap of concurrent watches (`WATCH_LIMIT`;
+  `RPCError#watch_limit` is the cap).
+
+A queue watch only sees transitions that the server process it reached handles itself. Each
+watch holds a connection of its own, so other calls on the same client are never blocked.
+`watch_read_timeout:` (default 60 s) is how long a watch may stay silent before it counts as
+dropped. The server sends a keepalive every 15 s.
+
 ## Credentials and TLS
 
 Every call sends `Authorization: Bearer <token>`. The token is opaque; the client never parses it.
@@ -100,7 +164,8 @@ FlexiQ::Client.new(url, token: token, tls: {
 `http://` is refused unless you pass `insecure: true`, which is for a loopback listener you
 trust. A bearer token on a plaintext network hop can be replayed by anything that sees it.
 
-Other keywords: `open_timeout`, `read_timeout`, `write_timeout` (seconds) and `user_agent`.
+Other keywords: `open_timeout`, `read_timeout`, `write_timeout`, `watch_read_timeout` (seconds)
+and `user_agent`.
 
 ## Errors
 
@@ -112,6 +177,7 @@ Every error is a `FlexiQ::Error`:
 | `FlexiQ::TransportError` | No answer arrived: connect, TLS, timeout, or a body that was not FlexiQ's. |
 | `FlexiQ::ConfigurationError` | The client was built with settings it will not honour. |
 | `FlexiQ::CodecError` | A value could not be encoded into, or decoded from, a payload. |
+| `FlexiQ::WaitTimeoutError` | `wait` ran out of time. The job is untouched. |
 
 ```ruby
 begin
@@ -130,7 +196,8 @@ safe to resend.
 
 ## Retries
 
-The client never retries. A write that raised `TransportError`, or `RPCError` with code
+The client never retries a call; only watches reopen themselves, since a watch writes nothing.
+A write that raised `TransportError`, or `RPCError` with code
 `UNAVAILABLE`, `DEADLINE_EXCEEDED` or `CANCELLED`, may have landed before the connection dropped,
 and nothing on the wire says which. Resend a write only with `unique_key` set, reusing the same
 value. `unique_key` dedupes against the *active* job only — once that job finishes the key is
