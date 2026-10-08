@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module FlexiQ
-  # A producer client: submit work, read it back, cancel it, count it.
+  # A producer client: submit work, read it back, list it, cancel it, count it.
   #
   #   client = FlexiQ::Client.new("https://flexiq.internal:50051", token: ENV.fetch("FLEXIQ_TOKEN"))
   #   job = client.enqueue("send_receipt", args: [{ "order_id" => "o-1" }], queue: "emails").job
@@ -40,6 +40,32 @@ module FlexiQ
     def get_job(job_id, include_payload: false, include_result: false)
       query = { "includePayload" => include_payload || nil, "includeResult" => include_result || nil }
       job_from(@transport.get("/v1/jobs/#{Wire::Path.segment(job_id)}", query))
+    end
+
+    # Reads one page of jobs, newest first. Every filter is optional; `status` is a
+    # FlexiQ::JobStatus symbol. A grant narrowed to queues or tasks must name one it reaches, or
+    # the call raises RPCError SCOPE_DENIED: a listing is refused, never filtered silently.
+    def list_jobs(status: nil, queue: nil, task_name: nil, page_size: nil, page_token: nil)
+      query = {
+        "status" => status && JobStatus.dump(status), "queue" => queue, "taskName" => task_name,
+        "pageSize" => page_size, "pageToken" => page_token
+      }
+      JobPage.from_json(@transport.get("/v1/jobs", query))
+    end
+
+    # Every job `list_jobs` reaches with these filters, one page at a time. Without a block,
+    # returns an Enumerator; a page is fetched only when iteration reaches it.
+    def each_job(status: nil, queue: nil, task_name: nil, page_size: nil, &block)
+      return enum_for(:each_job, status: status, queue: queue, task_name: task_name, page_size: page_size) unless block
+
+      filters = { status: status, queue: queue, task_name: task_name, page_size: page_size }
+
+      # Not `loop`: it would swallow a StopIteration the caller's block raised.
+      page = nil
+      until page&.last_page?
+        page = list_jobs(**filters, page_token: page&.next_page_token)
+        page.jobs.each(&block)
+      end
     end
 
     # Requests cancellation and returns the job as the call left it. Idempotent.

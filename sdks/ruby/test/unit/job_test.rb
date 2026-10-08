@@ -34,6 +34,15 @@ class JobTest < Minitest::Test
     end
   end
 
+  def test_a_status_filter_dumps_back_to_its_wire_name
+    FlexiQ::JobStatus::BY_WIRE_NAME.each do |wire, status|
+      assert_equal wire, FlexiQ::JobStatus.dump(status)
+    end
+    assert_equal "JOB_STATUS_ARCHIVED", FlexiQ::JobStatus.dump("JOB_STATUS_ARCHIVED")
+    assert_raises(ArgumentError) { FlexiQ::JobStatus.dump(:finished) }
+    assert_raises(ArgumentError) { FlexiQ::JobStatus.dump(3) }
+  end
+
   def test_failed_is_not_terminal
     refute_predicate FlexiQ::Job.from_json("id" => "j", "status" => "JOB_STATUS_FAILED"), :terminal?
   end
