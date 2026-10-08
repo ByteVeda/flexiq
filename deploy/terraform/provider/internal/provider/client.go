@@ -2,6 +2,9 @@ package provider
 
 import (
 	"context"
+	"fmt"
+
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 
 	"github.com/ByteVeda/flexiq/sdks/go/v2/admin"
 )
@@ -30,4 +33,18 @@ type providerData struct {
 	// namespace is the provider's label for the token's namespace; the server
 	// reads the real one from the token.
 	namespace string
+}
+
+// providerDataFrom unpacks a resource's ProviderData. Nil is not an error:
+// Terraform configures resources once before the provider itself is.
+func providerDataFrom(data any, diags *diag.Diagnostics) *providerData {
+	if data == nil {
+		return nil
+	}
+	pd, ok := data.(*providerData)
+	if !ok {
+		diags.AddError("Unexpected provider data", fmt.Sprintf("want *providerData, got %T", data))
+		return nil
+	}
+	return pd
 }

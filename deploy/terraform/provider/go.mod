@@ -9,6 +9,7 @@ replace github.com/ByteVeda/flexiq/sdks/go/v2 => ../../../sdks/go
 require (
 	github.com/ByteVeda/flexiq/sdks/go/v2 v2.0.0
 	github.com/hashicorp/terraform-plugin-framework v1.19.0
+	github.com/hashicorp/terraform-plugin-framework-validators v0.19.0
 	github.com/hashicorp/terraform-plugin-go v0.31.0
 )
 

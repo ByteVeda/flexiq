@@ -137,7 +137,9 @@ func (p *flexiqProvider) Configure(ctx context.Context, req tfprovider.Configure
 }
 
 func (p *flexiqProvider) Resources(context.Context) []func() resource.Resource {
-	return []func() resource.Resource{}
+	return []func() resource.Resource{
+		newQueueResource,
+	}
 }
 
 func (p *flexiqProvider) DataSources(context.Context) []func() datasource.DataSource {
