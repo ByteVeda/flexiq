@@ -9,7 +9,8 @@ gRPC or JSON. It embeds the queue in your process, with durable steps and
 workflows on top, and starts on a SQLite file with nothing else installed. When
 you outgrow one machine, the same code moves to Postgres or Redis.
 
-That makes it a task queue first. The tools people actually weigh it against
+Steps and workflows sit on top of the queue, not the other way round: FlexiQ
+is a task queue first. The tools people actually weigh it against
 are a durable-execution platform (Temporal), managed cloud queues (Cloud Tasks,
 EventBridge), and the incumbent queue in each language (BullMQ, Celery,
 Dramatiq, RQ). This page says where each of them is the better choice. For
@@ -37,8 +38,8 @@ FlexiQ fits when:
 
 Reach for something else when:
 
-- **Very high throughput across a cluster** — millions of messages per second
-  are a job for a dedicated broker such as Kafka or RabbitMQ
+- **Very high throughput across a cluster** — streaming-scale message volume is
+  a job for a dedicated broker such as Kafka or RabbitMQ
 - **Rich, long-running workflow orchestration** — workflows whose code changes
   while executions are in flight, that wait on signals for months, and that
   need a versioning story. That is [Temporal](#vs-temporal)'s ground
@@ -61,9 +62,9 @@ Reach for something else when:
 | **Durable steps** | Yes — memoized `step.run`, `step.sleep` | Yes — Activities, with workflow code replayed from history | No | No built-in; a documented pattern saves the step in job data | No | No | No |
 | **Workflow model** | DAG declared up front: fan-out, conditions, approval gates, sub-workflows, sagas | Workflows are code, replayed deterministically; signals, queries, updates, durable timers | None — one task or event, one target | Flows (parent and child jobs) | Canvas: chain, group, chord | Pipelines and groups | Job dependencies |
 | **Code changes under in-flight work** | No versioning API; a changed step sequence dead-letters the job, so deploying one is a drain | Worker Versioning and patching | n/a — no in-flight state | — | — | — | — |
-| **Dead-letter queue** | Yes — inspect the payload and error, replay as a fresh job | No queue — a failed execution keeps its history and can be reset to an earlier point | Cloud Tasks deletes a task after its last attempt; EventBridge sends to an SQS queue whose redrive is code you write | Failed set; `job.retry()` | No built-in | Yes — dead-lettered messages kept up to 7 days | Failed job registry |
-| **Local development** | A SQLite file, nothing to install | `temporal server start-dev`, in memory unless given a file | No official Cloud Tasks emulator | A local Redis | A local broker | A local broker | A local Redis |
-| **Hosted offering** | None | Temporal Cloud | Fully managed | None | None | None | None |
+| **Dead-letter queue** | Yes — inspect the payload and error, replay as a fresh job | No queue — a failed execution keeps its history and can be reset to an earlier point | Cloud Tasks deletes a task after its last attempt; EventBridge sends to an SQS queue, if you attach one, whose redrive is code you write | Failed set; `job.retry()` | No built-in | Yes — dead-lettered messages kept up to 7 days | Failed job registry |
+| **Local development** | A SQLite file, nothing to install | `temporal server start-dev`, in memory unless given a file | No official emulator for Cloud Tasks; EventBridge only through third-party emulators such as LocalStack | A local Redis | A local broker | A local broker | A local Redis |
+| **Hosted offering** | None | Temporal Cloud | Fully managed | No managed queue; Taskforce.sh offers a dashboard and Redis hosting | None | None | None |
 | **Web UI** | Built-in dashboard | Temporal Web UI | The cloud provider's console | Taskforce.sh, or community boards | Flower | Community dashboards | rq-dashboard |
 | **Performance** | [Benchmarked](/about/benchmarks) | Not measured | Not measured | [Benchmarked](/about/benchmarks) | [Benchmarked](/about/benchmarks) | [Benchmarked](/about/benchmarks) | [Benchmarked](/about/benchmarks) |
 
@@ -139,9 +140,9 @@ Where they stop is where FlexiQ starts:
 |  | FlexiQ | Cloud Tasks / EventBridge |
 |---|---|---|
 | **Operations** | You run the database and, for push, `flexiq-server` | None |
-| **Exhausted retries** | Kept in a dead-letter queue you can list, read and replay | Cloud Tasks deletes the task; EventBridge writes it to an SQS queue, and redriving it is code you write |
+| **Exhausted retries** | Kept in a dead-letter queue you can list, read and replay | Cloud Tasks deletes the task; EventBridge writes it to an SQS queue if you attach one, and redriving it is code you write |
 | **Durable steps** | Yes, on a long-lived worker | No |
-| **Local development** | Everything runs against a SQLite file | No official Cloud Tasks emulator |
+| **Local development** | Everything runs against a SQLite file | No official emulator for Cloud Tasks; third-party ones such as LocalStack for EventBridge |
 | **Who runs the work** | SDK workers, attached executors or push targets, on the same queues | The targets the queue or rule dispatches to |
 
 [Migrating from Cloud Tasks and EventBridge](/server/migrate-cloud-tasks) maps
@@ -173,8 +174,9 @@ On a remote Redis, FlexiQ's Redis backend is the slowest entrant in the
 that win it outright.
 
 **Choose FlexiQ if** you want to start without Redis, need durable steps, or
-want every language's workers on one engine rather than a port per language. **Choose BullMQ if** Redis is
-already central to your stack and you want its throughput and its ecosystem.
+want every language's workers on one engine rather than a port per language.
+**Choose BullMQ if** Redis is already central to your stack and you want its
+throughput and its ecosystem.
 The [BullMQ migration guide](/node/operate/migration) maps every concept across.
 
 ### vs Celery
@@ -186,7 +188,7 @@ enqueue to the same FlexiQ queues.
 
 |  | FlexiQ | Celery |
 |---|---|---|
-| **Setup** | `pip install flexiq` | A broker (RabbitMQ or Redis), a result backend, Celery itself |
+| **Setup** | `pip install flexiq` | A broker (RabbitMQ or Redis), usually a result backend, Celery itself |
 | **Configuration** | Constructor parameters | Settings module or app config |
 | **Worker model** | Rust OS threads, or a prefork pool | Prefork, eventlet or gevent pools |
 | **Distributed** | Multi-server on Postgres or Redis | Yes, broker-based |
