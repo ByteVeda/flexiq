@@ -608,6 +608,86 @@ async fn the_json_facade_mints_and_lists_without_the_secret() {
     harness.stop().await;
 }
 
+/// The facade reads one token and revokes it, and the revoke is repeatable.
+#[tokio::test]
+async fn the_json_facade_gets_and_revokes_one_token() {
+    let harness = Harness::start("tokens-facade-one").await;
+    let caller = harness.mint(&["tokens", "read"]);
+    let target = harness.mint(&["read"]);
+    let client = reqwest::Client::new();
+    let one = format!("{}/v1/admin/tokens/{}", harness.base, target.id);
+
+    let (status, got) = harness
+        .http(client.get(&one).bearer_auth(&caller.plaintext))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{got}");
+    assert_eq!(got["token"]["id"], target.id.as_str());
+    assert_eq!(got["token"]["status"], "TOKEN_STATUS_ACTIVE");
+    let rendered = got.to_string();
+    assert!(
+        !rendered.contains(secret_of(&target.plaintext)),
+        "{rendered}"
+    );
+
+    for _ in 0..2 {
+        let (status, revoked) = harness
+            .http(
+                client
+                    .post(format!("{one}:revoke"))
+                    .bearer_auth(&caller.plaintext),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{revoked}");
+        assert_eq!(revoked["token"]["status"], "TOKEN_STATUS_REVOKED");
+    }
+
+    let (status, missing) = harness
+        .http(
+            client
+                .get(format!("{}/v1/admin/tokens/nope", harness.base))
+                .bearer_auth(&caller.plaintext),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+    assert_eq!(
+        missing["error"]["details"][0]["reason"],
+        reason::TOKEN_NOT_FOUND
+    );
+    harness.stop().await;
+}
+
+/// An out-of-range lifetime is a 400 on the facade, as it is on gRPC.
+#[tokio::test]
+async fn the_json_facade_refuses_an_out_of_range_expiry() {
+    let harness = Harness::start("tokens-facade-expiry").await;
+    let caller = harness.mint(&["tokens", "read"]);
+    let client = reqwest::Client::new();
+
+    for days in [0, -1, 366] {
+        let (status, refused) = harness
+            .http(
+                client
+                    .post(format!("{}/v1/admin/tokens", harness.base))
+                    .bearer_auth(&caller.plaintext)
+                    .json(&json!({"name": "x", "scopes": ["read"], "expireDays": days})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{days}: {refused}");
+        assert_eq!(
+            refused["error"]["details"][0]["reason"],
+            reason::INVALID_REQUEST
+        );
+    }
+    assert_eq!(
+        store::list(&*harness.storage, Some(NAMESPACE))
+            .expect("list")
+            .len(),
+        1,
+        "nothing was minted"
+    );
+    harness.stop().await;
+}
+
 /// A mint and a revoke are on the audit trail, naming the token — and no
 /// record carries the secret.
 #[tokio::test]
