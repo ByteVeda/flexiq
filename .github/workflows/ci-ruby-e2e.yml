@@ -1,0 +1,58 @@
+name: CI Ruby e2e
+
+# Reusable workflow: the Ruby client against a real flexiq-server.
+#
+# A workflow of its own rather than a job in ci-ruby.yml for the reason
+# ci-go-e2e.yml gives: ci-ruby.yml needs no Rust toolchain, and building the
+# server for every README typo would end that. What only this suite covers is
+# the two halves meeting — that a job this client enqueues over the JSON door
+# is the job that server stores, byte for byte, and that a reason this client
+# branches on is a reason that server sends.
+#
+# Called by ci.yml when Ruby, contract or server paths change.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_RETRY: "10"
+
+jobs:
+  e2e:
+    name: Ruby client against a real flexiq-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      # Read-only restore of the dev-profile namespace ci-rust.yml writes on
+      # master, as ci-go-e2e.yml does.
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          shared-key: dev
+          save-if: "false"
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1.327.0
+        with:
+          # One version: whether the two halves agree on a wire does not differ
+          # per Ruby release, and the matrix lives in ci-ruby.yml.
+          ruby-version: "3.4"
+          working-directory: sdks/ruby
+          bundler-cache: true
+
+      - name: Build flexiq-server with the gRPC door
+        run: cargo build -p flexiq-server --features grpc
+
+      - name: Run the end-to-end suite
+        working-directory: sdks/ruby
+        env:
+          FLEXIQ_SERVER_BIN: ${{ github.workspace }}/target/debug/flexiq-server
+        run: bundle exec rake e2e

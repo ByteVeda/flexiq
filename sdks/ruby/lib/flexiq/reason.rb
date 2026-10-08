@@ -1,0 +1,51 @@
+# frozen_string_literal: true
+
+module FlexiQ
+  # The closed list of `google.rpc.ErrorInfo.reason` values. Branch on these, never on a
+  # message: messages are for humans and may be reworded in any release.
+  #
+  # A newer server may send a reason missing here; it arrives verbatim on `RPCError#reason`.
+  module Reason
+    UNAUTHENTICATED = "UNAUTHENTICATED"
+    SCOPE_DENIED = "SCOPE_DENIED"
+    INVALID_REQUEST = "INVALID_REQUEST"
+    MALFORMED_PAYLOAD = "MALFORMED_PAYLOAD"
+    NO_SUCH_METHOD = "NO_SUCH_METHOD"
+    JOB_NOT_FOUND = "JOB_NOT_FOUND"
+    DEAD_LETTER_NOT_FOUND = "DEAD_LETTER_NOT_FOUND"
+    PERIODIC_TASK_NOT_FOUND = "PERIODIC_TASK_NOT_FOUND"
+    WORKER_NOT_FOUND = "WORKER_NOT_FOUND"
+    DEPENDENCY_NOT_FOUND = "DEPENDENCY_NOT_FOUND"
+    QUEUE_FULL = "QUEUE_FULL"
+    RATE_LIMITED = "RATE_LIMITED"
+    TASK_NOT_REGISTERED = "TASK_NOT_REGISTERED"
+    WORKFLOW_CONSTRUCT_UNSUPPORTED = "WORKFLOW_CONSTRUCT_UNSUPPORTED"
+    CONTRACT_TOO_OLD = "CONTRACT_TOO_OLD"
+    JOB_TIMEOUT = "JOB_TIMEOUT"
+    CLAIM_LOST = "CLAIM_LOST"
+    JOB_CANCELLED = "JOB_CANCELLED"
+    STEP_DIVERGED = "STEP_DIVERGED"
+    STEP_LIMIT_EXCEEDED = "STEP_LIMIT_EXCEEDED"
+    STEP_REFUSED = "STEP_REFUSED"
+    LOCK_HELD = "LOCK_HELD"
+    SETTING_CONFLICT = "SETTING_CONFLICT"
+    WATCH_LIMIT = "WATCH_LIMIT"
+    WATCH_OVERFLOW = "WATCH_OVERFLOW"
+    WATCH_CURSOR_EXPIRED = "WATCH_CURSOR_EXPIRED"
+    SHUTTING_DOWN = "SHUTTING_DOWN"
+    STORAGE_UNAVAILABLE = "STORAGE_UNAVAILABLE"
+    STORAGE_CONSTRAINT = "STORAGE_CONSTRAINT"
+    SERVER_MISCONFIGURED = "SERVER_MISCONFIGURED"
+    INTERNAL = "INTERNAL"
+    UNKNOWN = "UNKNOWN"
+
+    # Conditions that clear on their own. Says nothing about whether a write is safe to resend.
+    TRANSIENT = [
+      QUEUE_FULL, RATE_LIMITED, STORAGE_UNAVAILABLE, LOCK_HELD,
+      SETTING_CONFLICT, WATCH_LIMIT, WATCH_OVERFLOW, SHUTTING_DOWN
+    ].freeze
+
+    # The domain every FlexiQ ErrorInfo carries; details from any other domain are ignored.
+    DOMAIN = "flexiq.byteveda.org"
+  end
+end

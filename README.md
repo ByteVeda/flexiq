@@ -44,6 +44,7 @@ Each SDK is self-contained — see its README for install, quickstart, and the f
 | Language | Install | Package | Opens |
 |----------|---------|---------|-------|
 | **Go** | `go get github.com/ByteVeda/flexiq/sdks/go/v2` | [`sdks/go`](sdks/go) | The producer door of a running `flexiq-server` |
+| **Ruby** | Bundler, from this repository — see [`sdks/ruby`](sdks/ruby#install) | [`sdks/ruby`](sdks/ruby) | The producer door, over its JSON facade |
 
 A remote client is not an SDK: it holds no database credential, links no native binding, and
 **cannot execute tasks** — it submits work that somebody else's workers drain. For a language with

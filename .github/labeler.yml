@@ -15,6 +15,11 @@ area/sdk-go:
       - any-glob-to-any-file:
           - "sdks/go/**"
 
+area/sdk-ruby:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "sdks/ruby/**"
+
 dashboard:
   - changed-files:
       - any-glob-to-any-file:

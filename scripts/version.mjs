@@ -75,6 +75,18 @@ const MIRRORS = [
     label: "Go module",
   },
   {
+    file: "sdks/ruby/lib/flexiq/version.rb",
+    pattern: /^(  VERSION = ")(.+?)(")$/m,
+    label: "Ruby gem",
+  },
+  {
+    // The lockfile records the gem's own version; a frozen `bundle install`
+    // in CI refuses a lock that disagrees with the gemspec.
+    file: "sdks/ruby/Gemfile.lock",
+    pattern: /^(    flexiq \()(.+?)(\))$/m,
+    label: "Ruby lockfile",
+  },
+  {
     file: "deploy/helm/flexiq-server/Chart.yaml",
     pattern: /^(version: )(.+)()$/m,
     label: "Helm chart",
