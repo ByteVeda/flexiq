@@ -199,7 +199,13 @@ impl Listener {
             storage.clone(),
             self.config.namespace.as_str(),
         ));
-        let scaler = Scaler::new(storage.clone(), Arc::clone(&tokens));
+        let scaler = Scaler::new(
+            storage.clone(),
+            Arc::clone(&tokens),
+            &hub,
+            &self.config.watch,
+            shutdown.clone(),
+        );
         let health = health::serve(
             storage.clone(),
             self.config.namespace.clone(),

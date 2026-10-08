@@ -3,8 +3,8 @@
 //!
 //! KEDA polls it for whether a deployment should run at all ([`service::is_active`])
 //! and how many replicas the queue depth asks for ([`service::metric_spec`],
-//! [`service::metrics`]). The contract is KEDA's, vendored under
-//! `contracts/proto/externalscaler`. A scaled object names its queue and its
+//! [`service::metrics`]), or is told when activity flips ([`stream`]). The
+//! contract is KEDA's, vendored under `contracts/proto/externalscaler`. A scaled object names its queue and its
 //! token in trigger metadata ([`metadata`]); the token is checked in-band
 //! ([`auth`]) because KEDA cannot send a header, and the namespace measured is
 //! the token's.
@@ -12,14 +12,16 @@
 pub mod auth;
 pub mod metadata;
 pub mod service;
+pub mod stream;
 
 use std::pin::Pin;
 use std::sync::Arc;
 
-use flexiq_core::StorageBackend;
+use flexiq_core::{EventHub, StorageBackend};
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 
+use crate::config::watch::WatchConfig;
 use crate::grpc::audit::{self, AuditContext};
 use crate::grpc::auth::{Authenticator, Principal, Scope};
 use crate::grpc::limits::SCALER_MAX_MESSAGE_BYTES;
@@ -28,13 +30,17 @@ use crate::grpc::pb::externalscaler::external_scaler_server::{
     ExternalScaler, ExternalScalerServer,
 };
 use crate::grpc::status::WireError;
+use crate::runtime::shutdown::Shutdown;
 use metadata::Query;
+use stream::Streams;
 
-/// The scaler's state: storage, and the authenticator the auth layer holds.
+/// The scaler's state: storage, the authenticator the auth layer holds, and
+/// the open `StreamIsActive` streams.
 #[derive(Clone)]
 pub struct Scaler {
     storage: StorageBackend,
     authenticator: Arc<dyn Authenticator>,
+    streams: Arc<Streams>,
 }
 
 // Hand-written: neither field is `Debug`, and the authenticator guards secrets.
@@ -46,11 +52,19 @@ impl std::fmt::Debug for Scaler {
 
 impl Scaler {
     /// Serve out of `storage`, checking tokens with `authenticator` — the one
-    /// the auth layer was built with, so both share its caches.
-    pub fn new(storage: StorageBackend, authenticator: Arc<dyn Authenticator>) -> Self {
+    /// the auth layer was built with, so both share its caches. Streams wake
+    /// on `hub` and are held to the `watch` bounds until `shutdown`.
+    pub fn new(
+        storage: StorageBackend,
+        authenticator: Arc<dyn Authenticator>,
+        hub: &EventHub,
+        watch: &WatchConfig,
+        shutdown: Shutdown,
+    ) -> Self {
         Self {
             storage,
             authenticator,
+            streams: Streams::start(hub, watch, shutdown),
         }
     }
 
@@ -120,9 +134,10 @@ impl ExternalScaler for Scaler {
 
     async fn stream_is_active(
         &self,
-        _request: Request<pb::ScaledObjectRef>,
+        request: Request<pb::ScaledObjectRef>,
     ) -> Result<Response<Self::StreamIsActiveStream>, Status> {
-        Err(Status::unimplemented("StreamIsActive is not served yet"))
+        let scoped = self.scope(&request, Some(request.get_ref())).await?;
+        self.streams.open(scoped).await.map(Response::new)
     }
 
     async fn get_metric_spec(

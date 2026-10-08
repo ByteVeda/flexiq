@@ -35,7 +35,8 @@ const DEFAULT_BUFFER: usize = 4_096;
 /// has stopped reading does not hold its place for long.
 const DEFAULT_STALL: Duration = Duration::from_secs(30);
 
-/// The bounds every `WatchJobs` stream on this listener is held to.
+/// The bounds every `WatchJobs` stream on this listener is held to. The
+/// scaler's `StreamIsActive` streams share them, each with its own count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatchConfig {
     /// Concurrent watches per credential. Zero leaves it unbounded.
