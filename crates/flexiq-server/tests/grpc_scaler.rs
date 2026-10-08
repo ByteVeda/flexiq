@@ -8,25 +8,37 @@
 mod support;
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use flexiq_core::storage::Storage;
 use flexiq_core::{now_millis, NewJob};
 use flexiq_server::config::grpc::GrpcConfig;
 use flexiq_server::config::listen::ListenAddress;
+use flexiq_server::config::watch::WatchConfig;
 use flexiq_server::grpc::limits::SCALER_MAX_MESSAGE_BYTES;
 use flexiq_server::grpc::pb::externalscaler::external_scaler_client::ExternalScalerClient;
-use flexiq_server::grpc::pb::externalscaler::{GetMetricsRequest, ScaledObjectRef};
+use flexiq_server::grpc::pb::externalscaler::{
+    GetMetricsRequest, IsActiveResponse, ScaledObjectRef,
+};
+use flexiq_server::grpc::pb::producer_service_client::ProducerServiceClient;
+use flexiq_server::grpc::pb::{enqueue_request, CancelJobRequest, EnqueueOptions, EnqueueRequest};
 use flexiq_server::grpc::status::reason;
 use flexiq_server::grpc::Listener;
 use flexiq_server::runtime::shutdown::Shutdown;
 use flexiq_server::tokens::{store, Grants, ScopeSet};
 use tonic::transport::Channel;
-use tonic::{Code, Request, Status};
+use tonic::{Code, Request, Status, Streaming};
 use tonic_types::StatusExt;
 
-use support::{mint_token, temp_storage, temp_workflows, TempStorage};
+use support::{mint_token, temp_storage, temp_workflows, Bearer, TempStorage};
 
 const NAMESPACE: &str = "grpc-scaler-tests";
+
+/// How long any one expectation may take. A failure deadline, not a delay.
+const WAIT: Duration = Duration::from_secs(20);
+
+type Producer =
+    ProducerServiceClient<tonic::service::interceptor::InterceptedService<Channel, Bearer>>;
 
 struct Harness {
     channel: Channel,
@@ -37,12 +49,20 @@ struct Harness {
 
 impl Harness {
     async fn start(label: &str) -> Self {
+        Self::start_with(label, WatchConfig::default()).await
+    }
+
+    /// A listener whose streams are held to `watch`.
+    async fn start_with(label: &str, watch: WatchConfig) -> Self {
         let storage = temp_storage(label);
         let shutdown = Shutdown::default();
-        let listener = Listener::bind(&GrpcConfig::new(
-            ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
-            NAMESPACE,
-        ))
+        let listener = Listener::bind(&GrpcConfig {
+            watch,
+            ..GrpcConfig::new(
+                ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
+                NAMESPACE,
+            )
+        })
         .await
         .expect("bind");
         let addr = listener
@@ -81,6 +101,12 @@ impl Harness {
     /// A client sending no header, as KEDA does.
     fn client(&self) -> ExternalScalerClient<Channel> {
         ExternalScalerClient::new(self.channel.clone())
+    }
+
+    /// A producer-door client holding every scope.
+    fn producer(&self) -> Producer {
+        let token = mint_token(&self.storage, NAMESPACE, ScopeSet::ALL);
+        ProducerServiceClient::with_interceptor(self.channel.clone(), Bearer::new(&token))
     }
 
     /// Seed one pending job on `queue` in `namespace`.
@@ -137,6 +163,36 @@ fn metrics_request(object: ScaledObjectRef) -> GetMetricsRequest {
         metric_name: "ignored".into(),
         scaled_object_ref: Some(object),
     }
+}
+
+/// Enqueue one job on `queue` through the producer door, so the server
+/// announces it. Returns its id.
+async fn enqueue_through_door(producer: &mut Producer, queue: &str) -> String {
+    producer
+        .enqueue(EnqueueRequest {
+            task_name: "task".into(),
+            body: Some(enqueue_request::Body::Raw(vec![0x02, 0x82, 0x80, 0xa0])),
+            options: Some(EnqueueOptions {
+                queue: queue.into(),
+                ..Default::default()
+            }),
+        })
+        .await
+        .expect("enqueue")
+        .into_inner()
+        .job
+        .expect("a job")
+        .id
+}
+
+/// The stream's next answer, failing the test if none arrives in time.
+async fn next_answer(stream: &mut Streaming<IsActiveResponse>) -> bool {
+    tokio::time::timeout(WAIT, stream.message())
+        .await
+        .expect("the stream must answer in time")
+        .expect("an answer, not an error")
+        .expect("an answer, not the end")
+        .result
 }
 
 fn refusal_reason(status: &Status) -> String {
@@ -443,9 +499,114 @@ async fn an_oversized_request_is_refused() {
     harness.stop().await;
 }
 
-/// The stream is not served yet; KEDA falls back to polling.
+/// Current state first, then one answer per flip: on by the hub when the
+/// door enqueues, off by the re-read once the job is cancelled.
 #[tokio::test]
-async fn the_streams_are_unimplemented() {
+async fn a_stream_answers_on_each_flip_only() {
+    let reconcile = Duration::from_secs(1);
+    let harness = Harness::start_with(
+        "grpc-scaler-stream",
+        WatchConfig {
+            reconcile_interval: reconcile,
+            ..WatchConfig::default()
+        },
+    )
+    .await;
+    let token = harness.inspect();
+    let mut producer = harness.producer();
+    let mut stream = harness
+        .client()
+        .stream_is_active(object(&[("token", &token), ("queue", "emails")]))
+        .await
+        .expect("stream")
+        .into_inner();
+
+    assert!(!next_answer(&mut stream).await, "an empty queue opens idle");
+    // Another queue's job is not this stream's news.
+    enqueue_through_door(&mut producer, "other").await;
+    let id = enqueue_through_door(&mut producer, "emails").await;
+    assert!(next_answer(&mut stream).await, "an enqueue activates");
+    // A cancel is not a wake; the re-read sees the queue drained.
+    producer
+        .cancel_job(CancelJobRequest { job_id: id })
+        .await
+        .expect("cancel");
+    assert!(!next_answer(&mut stream).await, "a drained queue goes idle");
+
+    // Several re-reads find the same state, and none of them is sent.
+    let quiet = tokio::time::timeout(3 * reconcile, stream.message()).await;
+    assert!(
+        quiet.is_err(),
+        "an unchanged state is not repeated: {quiet:?}"
+    );
+    harness.stop().await;
+}
+
+/// With the re-read off, only the hub can have woken it: the door's enqueue
+/// reaches the stream at once.
+#[tokio::test]
+async fn an_enqueue_through_the_door_wakes_a_stream() {
+    let harness = Harness::start_with(
+        "grpc-scaler-stream-hub",
+        WatchConfig {
+            reconcile_interval: Duration::ZERO,
+            ..WatchConfig::default()
+        },
+    )
+    .await;
+    let token = harness.inspect();
+    let mut stream = harness
+        .client()
+        .stream_is_active(object(&[("token", &token)]))
+        .await
+        .expect("stream")
+        .into_inner();
+    assert!(!next_answer(&mut stream).await);
+    enqueue_through_door(&mut harness.producer(), "emails").await;
+    assert!(next_answer(&mut stream).await);
+    harness.stop().await;
+}
+
+/// The stream is checked as `IsActive` is, and capped per credential as
+/// watches are.
+#[tokio::test]
+async fn a_stream_is_authenticated_and_capped() {
+    let harness = Harness::start_with(
+        "grpc-scaler-stream-cap",
+        WatchConfig {
+            max_per_credential: 1,
+            ..WatchConfig::default()
+        },
+    )
+    .await;
+    let status = harness
+        .client()
+        .stream_is_active(object(&[("queue", "emails")]))
+        .await
+        .expect_err("no token");
+    assert_eq!(status.code(), Code::Unauthenticated);
+
+    let token = harness.inspect();
+    let mut first = harness
+        .client()
+        .stream_is_active(object(&[("token", &token)]))
+        .await
+        .expect("stream")
+        .into_inner();
+    assert!(!next_answer(&mut first).await);
+    let status = harness
+        .client()
+        .stream_is_active(object(&[("token", &token)]))
+        .await
+        .expect_err("over the cap");
+    assert_eq!(status.code(), Code::ResourceExhausted);
+    assert_eq!(refusal_reason(&status), reason::WATCH_LIMIT);
+    harness.stop().await;
+}
+
+/// Optional upstream; KEDA falls back to polling `GetMetricSpec`.
+#[tokio::test]
+async fn stream_metric_spec_is_unimplemented() {
     let harness = Harness::start("grpc-scaler-streams").await;
     let token = harness.inspect();
     let status = harness
