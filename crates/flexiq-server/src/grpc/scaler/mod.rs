@@ -4,8 +4,9 @@
 //! KEDA polls it for whether a deployment should run at all ([`service::is_active`])
 //! and how many replicas the queue depth asks for ([`service::metric_spec`],
 //! [`service::metrics`]), or is told when activity flips ([`stream`]). The
-//! contract is KEDA's, vendored under `contracts/proto/externalscaler`. A scaled object names its queue and its
-//! token in trigger metadata ([`metadata`]); the token is checked in-band
+//! contract is KEDA's, vendored under `contracts/proto/externalscaler`. A
+//! scaled object names its queue and its token in trigger metadata
+//! ([`metadata`]); the token is checked in-band
 //! ([`auth`]) because KEDA cannot send a header, and the namespace measured is
 //! the token's.
 

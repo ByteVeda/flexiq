@@ -173,11 +173,17 @@ impl Task {
                 () = tick => {}
             }
             // One read for the whole burst: whatever else queued meanwhile is
-            // answered by the read below.
-            while !matches!(
-                self.arrivals.try_recv(),
-                Err(broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed)
-            ) {}
+            // answered by the read below. Bounded, so a sustained enqueue rate
+            // cannot keep the task draining.
+            for _ in 0..WAKES {
+                if matches!(
+                    self.arrivals.try_recv(),
+                    Err(broadcast::error::TryRecvError::Empty
+                        | broadcast::error::TryRecvError::Closed)
+                ) {
+                    break;
+                }
+            }
             let active = match service::is_active(&self.scoped).await {
                 Ok(answer) => answer.result,
                 Err(status) => {

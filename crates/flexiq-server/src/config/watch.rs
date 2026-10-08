@@ -42,7 +42,9 @@ pub struct WatchConfig {
     /// Concurrent watches per credential. Zero leaves it unbounded.
     pub max_per_credential: usize,
     /// How often every watched id is re-read. Zero turns the re-read off, and
-    /// with it every transition another process handles.
+    /// with it every transition another process handles. It also turns off the
+    /// scaler stream's re-read, so an active stream never sees a queue drain
+    /// and KEDA never scales to zero.
     pub reconcile_interval: Duration,
     /// Transitions kept in memory. At least one.
     pub buffer: usize,
