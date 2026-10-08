@@ -14,6 +14,7 @@ require_relative "flexiq/wire/bytes"
 require_relative "flexiq/wire/duration"
 require_relative "flexiq/wire/int64"
 require_relative "flexiq/wire/path"
+require_relative "flexiq/wire/sse"
 require_relative "flexiq/wire/timestamp"
 
 require_relative "flexiq/reason"
