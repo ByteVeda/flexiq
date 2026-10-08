@@ -187,11 +187,13 @@ impl NewToken {
         }
         let lifetime_days = lifetime_days.unwrap_or(DEFAULT_LIFETIME_DAYS);
         if lifetime_days < 1 {
-            return Err("expires_in_days must be at least 1".to_string());
+            return Err("the lifetime must be at least 1 day".to_string());
         }
         if lifetime_days > MAX_LIFETIME_DAYS {
+            // Field-neutral: the CLI flag, the dashboard body and the gRPC field
+            // each spell the lifetime differently.
             return Err(format!(
-                "expires_in_days must be at most {MAX_LIFETIME_DAYS} — a credential \
+                "the lifetime must be at most {MAX_LIFETIME_DAYS} days — a credential \
                  with no maximum lifetime is a permanent one with extra steps"
             ));
         }
