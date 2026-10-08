@@ -11,6 +11,11 @@ variable "flexiq_token" {
   sensitive = true
 }
 
+variable "flexiq_billing_token" {
+  type      = string
+  sensitive = true
+}
+
 # The server reads the namespace from the token, so one provider block manages
 # one namespace. `namespace` is only the label recorded in state.
 provider "flexiq" {
@@ -31,9 +36,4 @@ provider "flexiq" {
   tls {
     ca_cert = file("${path.module}/ca.pem")
   }
-}
-
-variable "flexiq_billing_token" {
-  type      = string
-  sensitive = true
 }

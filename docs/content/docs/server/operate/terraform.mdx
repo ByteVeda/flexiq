@@ -74,8 +74,9 @@ read.
 `flexiq_queue` owns an operator override on one queue: `max_concurrent`,
 `rate_limit` and `paused`. An unset `max_concurrent` or `rate_limit` means the
 queue is not overridden on that dimension, while `max_concurrent = 0` is a real
-cap. `rate_limit` is `<count>/<unit>` with a count of at least one and a unit of
-`s`, `m` or `h`, checked at plan time.
+cap. `rate_limit` is `<count>/<unit>` with a count of at least one, checked at plan time. The
+short units `s`, `m` and `h` are recommended; `sec`, `second`, `min`, `minute`,
+`hr` and `hour` are accepted too.
 
 Destroying the resource clears the override, and resumes the queue if the
 resource had paused it.
@@ -121,9 +122,10 @@ Spelling does not matter: `[2.0,  2.5]` and `[2, 2.5]` plan no change.
 </Callout>
 
 If a worker re-declares the task with a payload that is not CBOR, the provider
-cannot read it back and the refresh fails with an error naming the task. It does
-not substitute the previous arguments, because that would hide the drift.
-Remove the worker's declaration so Terraform is the only writer.
+cannot read it back. The refresh raises a warning on `args`, state records
+`args` and `kwargs` as null, and the next plan shows a diff, so applying
+overwrites the payload with the configured one. Remove the worker's declaration
+so Terraform is the only writer.
 
 ## Tokens
 
