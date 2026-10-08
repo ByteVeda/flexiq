@@ -161,6 +161,14 @@ function auditRetentionDays(options: DashboardHandlerOptions): number {
  * changes state. `username` is the signed-in user, `undefined` with auth off.
  * Called before the auth checks, so a refused change is recorded too.
  */
+/**
+ * The status an audit record names: the one sent once the headers are out —
+ * even if the caller left mid-body — else 499, the caller left first.
+ */
+export function answeredStatus(res: Pick<ServerResponse, "headersSent" | "statusCode">): number {
+  return res.headersSent ? res.statusCode : CLIENT_CLOSED_REQUEST;
+}
+
 function recordChange(
   queue: Queue,
   req: IncomingMessage,
@@ -173,7 +181,7 @@ function recordChange(
     return;
   }
   res.once("close", () => {
-    const status = res.writableFinished ? res.statusCode : CLIENT_CLOSED_REQUEST;
+    const status = answeredStatus(res);
     try {
       queue.recordDashboardAction(method, path, status, username);
     } catch (error) {

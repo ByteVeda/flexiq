@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDashboardServer } from "../../src/dashboard";
+import { answeredStatus } from "../../src/dashboard/server";
 import { seedAdminAndSession } from "../../src/dashboard/testing";
 import { Queue } from "../../src/index";
 
@@ -128,6 +129,11 @@ describe.skipIf(sqlite === undefined)("dashboard audit trail", () => {
       operation: "dashboard POST /api/dead-letters/purge",
       target_kind: null,
     });
+  });
+
+  it("records the sent status even when the caller leaves mid-body", () => {
+    expect(answeredStatus({ headersSent: true, statusCode: 200 })).toBe(200);
+    expect(answeredStatus({ headersSent: false, statusCode: 200 })).toBe(499);
   });
 
   it("refuses a retention window under a day", () => {
