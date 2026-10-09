@@ -128,7 +128,13 @@ export function createTaskCallback(
       payload = codec.decode(payload);
     }
     const args = deserializeCall(serializer, payload);
-    const ctx: TaskContext = { jobId: invocation.id, taskName: invocation.taskName, args };
+    const metadata = invocation.metadata ?? undefined;
+    const ctx: TaskContext = {
+      jobId: invocation.id,
+      taskName: invocation.taskName,
+      args,
+      metadata,
+    };
     // Resolve the middleware chain BEFORE allocating the cancel poller and
     // task scope — it reads storage and may throw, and nothing would clean
     // those up yet.
@@ -142,6 +148,7 @@ export function createTaskCallback(
     const latch = new StepLatch();
     const context: JobContext = {
       jobId: invocation.id,
+      metadata,
       signal: controller.signal,
       // Step results are encoded with the *queue* serializer, which already
       // carries the queue codec chain — that is how `new Queue({ codec })`

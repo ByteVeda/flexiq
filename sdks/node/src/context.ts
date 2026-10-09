@@ -9,6 +9,8 @@ import type { TaskLogLevel } from "./types";
 export interface JobContext {
   /** The running job's id. */
   readonly jobId: string;
+  /** The job's metadata JSON as enqueued, if any. */
+  readonly metadata?: string;
   /** Aborts when cancellation is requested — check `signal.aborted` or listen. */
   readonly signal: AbortSignal;
   /** Report progress (0–100) for observability. */

@@ -175,6 +175,7 @@ async fn run_one(
         payload: Buffer::from(std::mem::take(&mut job.payload)),
         attempt: job.retry_count,
         queue: job.queue.clone(),
+        metadata: job.metadata.clone(),
     };
     // After the payload has been moved out, so the recorded copy is a handful of
     // strings rather than however many megabytes the task was called with. The
