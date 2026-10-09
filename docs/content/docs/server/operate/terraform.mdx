@@ -94,6 +94,9 @@ or `drop`). The limits and where each is enforced are in
 [Namespace quotas](/server/operate/quotas). Unset is unlimited and `0` is a
 real limit.
 
+Two `flexiq_namespace` resources under the same provider alias manage the
+same quota and overwrite each other.
+
 A quota with every limit unset is cleared on the server, and a cleared quota
 reads back as `reject`. The provider keeps your configured `on_excess` in that
 case rather than showing a diff on every plan.
@@ -121,7 +124,7 @@ Spelling does not matter: `[2.0,  2.5]` and `[2, 2.5]` plan no change.
   strings.
 </Callout>
 
-If a worker re-declares the task with a payload that is not CBOR, the provider
+If a worker re-declares the task with a payload that is not CBOR, or is CBOR that JSON cannot express (non-string map keys, byte strings), the provider
 cannot read it back. The refresh raises a warning on `args`, state records
 `args` and `kwargs` as null, and the next plan shows a diff, so applying
 overwrites the payload with the configured one. Remove the worker's declaration
@@ -143,7 +146,19 @@ resource "flexiq_token" "worker" {
     create_before_destroy = true
   }
 }
+
+resource "kubernetes_secret" "worker_token" {
+  metadata {
+    name = "flexiq-worker-token"
+  }
+  data = {
+    FLEXIQ_TOKEN = flexiq_token.worker.secret
+  }
+}
 ```
+
+The secret is stored in plaintext in Terraform state. Use an encrypted remote
+backend and restrict access to the state.
 
 - **Scopes.** Each entry is `scope` or `scope:queue=<pattern>,task=<pattern>`.
   The provider's token must hold `tokens` and grants that cover every scope you
