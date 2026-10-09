@@ -6,13 +6,16 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from flexiq.events import EventType
+from flexiq.trace_context import TRACEPARENT, TRACESTATE
 from flexiq.workflows.builder import Workflow, WorkflowProxy
 from flexiq.workflows.incremental import compute_dirty_set
 from flexiq.workflows.run import WorkflowRun
 from flexiq.workflows.tracker.dag import build_dag_maps
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
+
+    from flexiq.middleware import TaskMiddleware
 
 
 logger = logging.getLogger("flexiq.workflows")
@@ -28,6 +31,7 @@ class QueueWorkflowMixin:
 
     _inner: Any
     _workflow_registry: dict[str, WorkflowProxy]
+    _global_middleware: list[TaskMiddleware]
 
     def submit_workflow(
         self,
@@ -35,6 +39,7 @@ class QueueWorkflowMixin:
         *,
         incremental: bool = False,
         base_run: str | None = None,
+        trace_context: Mapping[str, str] | None = None,
     ) -> WorkflowRun:
         """Submit a built :class:`Workflow` for execution.
 
@@ -42,6 +47,10 @@ class QueueWorkflowMixin:
             workflow: The workflow to submit.
             incremental: If ``True``, skip nodes that completed in *base_run*.
             base_run: Run ID of a prior run to use for cache comparison.
+            trace_context: W3C carrier (``traceparent``, ``tracestate``) every
+                node job carries, so each step's span joins this trace. When
+                omitted, middleware ``on_workflow_submit`` hooks may supply
+                one — the OpenTelemetry middleware passes the current context.
 
         Static step jobs are created up front with ``depends_on`` chains.
         Deferred nodes (fan-out, fan-in, conditions, ``on_failure="continue"``)
@@ -81,6 +90,7 @@ class QueueWorkflowMixin:
             if cached:
                 cache_hit_nodes = cached
 
+        carrier = self._workflow_trace_carrier(workflow.name, trace_context)
         handle = self._inner.submit_workflow(
             workflow.name,
             workflow.version,
@@ -93,6 +103,8 @@ class QueueWorkflowMixin:
             None,  # parent_run_id
             None,  # parent_node_name
             cache_hit_nodes,
+            carrier.get(TRACEPARENT),
+            carrier.get(TRACESTATE),
         )
 
         # The run is already persisted — a listener failure must not abort
@@ -138,6 +150,19 @@ class QueueWorkflowMixin:
             )
 
         return WorkflowRun(self, handle.run_id, handle.name)  # type: ignore[arg-type]
+
+    def _workflow_trace_carrier(
+        self, workflow_name: str, trace_context: Mapping[str, str] | None
+    ) -> Mapping[str, str]:
+        """The carrier a submit stores on its run: ``trace_context`` as given,
+        else whatever the ``on_workflow_submit`` middleware hooks supply."""
+        options: dict[str, Any] = {"trace_context": trace_context}
+        for mw in self._global_middleware:
+            try:
+                mw.on_workflow_submit(workflow_name, options)
+            except Exception:
+                logger.exception("middleware on_workflow_submit() error")
+        return options.get("trace_context") or {}
 
     def approve_gate(self, run_id: str, node_name: str) -> None:
         """Approve an approval gate, allowing the workflow to continue."""

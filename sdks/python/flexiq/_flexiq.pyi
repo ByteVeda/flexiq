@@ -384,8 +384,11 @@ class PyQueue:
         parent_run_id: str | None = None,
         parent_node_name: str | None = None,
         cache_hit_nodes: dict[str, str] | None = None,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
     ) -> PyWorkflowHandle: ...
     def get_workflow_run_status(self, run_id: str) -> PyWorkflowRunStatus: ...
+    def get_workflow_trace_carrier(self, run_id: str) -> dict[str, str]: ...
     def list_workflow_runs(
         self,
         definition_name: str | None = None,

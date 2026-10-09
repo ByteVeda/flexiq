@@ -43,6 +43,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from flexiq.events import EventType
+from flexiq.trace_context import merge_trace_carrier
 from flexiq.workflows.analysis import topological_levels
 from flexiq.workflows.saga.context import CompensationContext
 from flexiq.workflows.types import NodeStatus
@@ -371,13 +372,18 @@ class SagaOrchestrator:
         )
 
         idempotency_key = f"compensation:{run_id}:{node_name}"
-        metadata_blob = json.dumps(
-            {
-                "workflow_run_id": run_id,
-                "workflow_node_name": node_name,
-                "forward_job_id": forward_job_id,
-                "_kind": "compensation",
-            }
+        # The run's carrier goes in first: an enqueue hook only adds one to
+        # metadata without it, so the saga runner's own context can't win.
+        metadata_blob = merge_trace_carrier(
+            json.dumps(
+                {
+                    "workflow_run_id": run_id,
+                    "workflow_node_name": node_name,
+                    "forward_job_id": forward_job_id,
+                    "_kind": "compensation",
+                }
+            ),
+            self._run_trace_carrier(run_id),
         )
 
         # SQLite serializes writes; the result handler that just failed
@@ -668,6 +674,15 @@ class SagaOrchestrator:
             method(*args)
         except Exception:
             logger.exception("saga: %s(%s) failed", method_name, args)
+
+    def _run_trace_carrier(self, run_id: str) -> dict[str, str]:
+        """The run's stored trace carrier. A failed read costs the
+        compensation its trace, never the compensation itself."""
+        try:
+            return self._queue._inner.get_workflow_trace_carrier(run_id)
+        except (RuntimeError, ValueError):
+            logger.exception("saga: failed to read the trace context of %s", run_id)
+            return {}
 
     def _load_forward_payload(
         self,

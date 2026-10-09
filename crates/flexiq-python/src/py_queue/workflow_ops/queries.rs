@@ -1,9 +1,12 @@
 //! Read-only queries: run status, base run node data, definition DAG.
 
+use std::collections::HashMap;
+
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 use flexiq_core::error::Result as CoreResult;
+use flexiq_core::trace::{TRACEPARENT, TRACESTATE};
 use flexiq_workflows::{WorkflowState, WorkflowStorage};
 
 use crate::py_queue::workflow_ops::{status_to_py, workflow_storage};
@@ -45,6 +48,35 @@ impl PyQueue {
                 completed_at: run.completed_at,
                 error: run.error,
                 nodes: node_rows,
+            }))
+        });
+
+        result
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+            .ok_or_else(|| PyValueError::new_err(format!("workflow run '{run_id}' not found")))
+    }
+
+    /// The run's stored W3C trace context as a carrier — `traceparent` and,
+    /// when present, `tracestate` — or an empty dict for a run without one.
+    /// A job enqueued on the run's behalf (a compensation) carries it.
+    pub fn get_workflow_trace_carrier(
+        &self,
+        py: Python<'_>,
+        run_id: &str,
+    ) -> PyResult<HashMap<String, String>> {
+        let wf_storage = workflow_storage(self)?;
+        let run_id_owned = run_id.to_string();
+
+        let result: CoreResult<Option<HashMap<String, String>>> = py.detach(|| {
+            Ok(wf_storage.get_workflow_run(&run_id_owned)?.map(|run| {
+                let mut carrier = HashMap::new();
+                if let Some(trace) = run.trace_context() {
+                    carrier.insert(TRACEPARENT.to_string(), trace.traceparent().to_string());
+                    if let Some(state) = trace.tracestate() {
+                        carrier.insert(TRACESTATE.to_string(), state.to_string());
+                    }
+                }
+                carrier
             }))
         });
 

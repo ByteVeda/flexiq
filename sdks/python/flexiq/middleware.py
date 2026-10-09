@@ -113,6 +113,15 @@ class TaskMiddleware:
         queue, etc.) and may be mutated to modify the enqueue call.
         """
 
+    def on_workflow_submit(self, workflow_name: str, options: dict) -> None:
+        """Called when a workflow is about to be submitted.
+
+        ``options["trace_context"]`` is the W3C carrier (``traceparent``,
+        ``tracestate``) every node job of the run will carry, or ``None``; it
+        may be set here. Fires for every global middleware — a workflow is not
+        a task, so a task ``predicate`` does not gate it.
+        """
+
     def on_dead_letter(self, ctx: JobContext, error: Exception) -> None:
         """Called when a job exhausts retries and moves to the dead-letter queue."""
 

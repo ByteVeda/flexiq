@@ -61,7 +61,7 @@ impl PyQueue {
         let queue_owned = queue.to_string();
 
         let result: CoreResult<Vec<String>> = py.detach(|| {
-            require_visible_run(&wf_storage, &run_id_owned)?;
+            let trace = require_visible_run(&wf_storage, &run_id_owned)?.trace_context();
             let now = now_millis();
             let count = child_names.len() as i32;
 
@@ -93,7 +93,11 @@ impl PyQueue {
                     max_retries,
                     timeout_ms,
                     unique_key: None,
-                    metadata: Some(build_metadata_json(&run_id_owned, child_name, None)),
+                    metadata: Some(build_metadata_json(
+                        &run_id_owned,
+                        child_name,
+                        trace.as_ref(),
+                    )),
                     notes: None,
                     depends_on: vec![],
                     expires_at: None,
@@ -156,7 +160,7 @@ impl PyQueue {
         let queue_owned = queue.to_string();
 
         let result: CoreResult<String> = py.detach(|| {
-            require_visible_run(&wf_storage, &run_id_owned)?;
+            let trace = require_visible_run(&wf_storage, &run_id_owned)?.trace_context();
             let now = now_millis();
             let new_job = NewJob {
                 queue: queue_owned,
@@ -167,7 +171,11 @@ impl PyQueue {
                 max_retries,
                 timeout_ms,
                 unique_key: None,
-                metadata: Some(build_metadata_json(&run_id_owned, &node_name_owned, None)),
+                metadata: Some(build_metadata_json(
+                    &run_id_owned,
+                    &node_name_owned,
+                    trace.as_ref(),
+                )),
                 notes: None,
                 depends_on: vec![],
                 expires_at: None,

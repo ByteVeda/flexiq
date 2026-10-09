@@ -7,6 +7,7 @@ use pyo3::prelude::*;
 
 use flexiq_core::error::Result as CoreResult;
 use flexiq_core::job::now_millis;
+use flexiq_core::trace::TraceContext;
 use flexiq_workflows::lifecycle::{
     parse_step_metadata, SubmitStaticWorkflowRequest, SubmitWorkflowError,
 };
@@ -27,11 +28,15 @@ impl PyQueue {
     /// `WorkflowNode` only (no job) — their jobs are created at runtime by the
     /// Python tracker (fan-out / fan-in orchestration).
     ///
+    /// `traceparent`/`tracestate` are the submitter's W3C trace context; every
+    /// node job carries them. A sub-workflow given none inherits its parent's.
+    ///
     /// Returns a `PyWorkflowHandle` carrying the run id.
     #[pyo3(signature = (
         name, version, dag_bytes, step_metadata_json, node_payloads,
         queue_default="default", params_json=None, deferred_node_names=None,
-        parent_run_id=None, parent_node_name=None, cache_hit_nodes=None
+        parent_run_id=None, parent_node_name=None, cache_hit_nodes=None,
+        traceparent=None, tracestate=None
     ))]
     #[allow(clippy::too_many_arguments)]
     pub fn submit_workflow(
@@ -47,6 +52,8 @@ impl PyQueue {
         parent_run_id: Option<String>,
         parent_node_name: Option<String>,
         cache_hit_nodes: Option<HashMap<String, String>>,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
     ) -> PyResult<PyWorkflowHandle> {
         let wf_storage = workflow_storage(self)?;
         let step_metadata = parse_step_metadata(step_metadata_json)
@@ -76,7 +83,7 @@ impl PyQueue {
                 result_ttl_ms: self.result_ttl_ms,
                 namespace: self.namespace.clone(),
                 enqueued_by: None,
-                trace: None,
+                trace: TraceContext::from_headers(traceparent.as_deref(), tracestate.as_deref()),
             },
         )
         .map_err(|e| match e {
@@ -235,6 +242,7 @@ mod tests {
             let handle = queue
                 .submit_workflow(
                     "linear", 1, dag, &metadata, payloads, "default", None, None, None, None, None,
+                    None, None,
                 )
                 .unwrap();
 
@@ -277,6 +285,8 @@ mod tests {
                     "default",
                     None,
                     Some(vec!["a".to_string()]),
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -328,6 +338,8 @@ mod tests {
                     None,
                     None,
                     Some(cache),
+                    None,
+                    None,
                 )
                 .unwrap();
 
@@ -365,6 +377,8 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
+                    None,
                 )
                 .unwrap();
             let second = queue
@@ -375,6 +389,8 @@ mod tests {
                     &metadata,
                     make_node_payloads(&["a"]),
                     "default",
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -402,6 +418,7 @@ mod tests {
 
             let result = queue.submit_workflow(
                 "broken", 1, dag, &metadata, payloads, "default", None, None, None, None, None,
+                None, None,
             );
             let err = match result {
                 Err(e) => e,
