@@ -1,5 +1,5 @@
 {
   "title": "Server & wire",
   "root": true,
-  "pages": ["index", "contract", "clients", "custom-executors", "limits", "migrate-cloud-tasks"]
+  "pages": ["index", "contract", "clients", "custom-executors", "limits", "migrate-cloud-tasks", "migrate-sidekiq"]
 }
