@@ -38,6 +38,8 @@ pub mod settings;
 pub mod step;
 /// The [`Storage`] trait, backend implementations, and shared records.
 pub mod storage;
+/// W3C trace context carried in job metadata: [`trace::TraceContext`].
+pub mod trace;
 /// Writing the cross-SDK payload envelope: [`wire::encode_call`].
 pub mod wire;
 /// Native worker: task registry, dispatcher trait, worker runner.

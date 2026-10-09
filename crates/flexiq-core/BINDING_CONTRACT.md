@@ -602,6 +602,29 @@ from the handle's namespace — reading or writing the default layout from a
 namespaced handle shares one override between tenants — and MUST pass the
 vectors in `overrides.rs`'s tests.
 
+## Trace context (cross-SDK)
+A trace started in one SDK continues in whichever SDK runs the job, so every
+shell carries W3C Trace Context the same way (`trace.rs`):
+
+- **Carrier.** The job's metadata JSON object is the text map: `traceparent`
+  and `tracestate` at its top level, under their W3C header names. No other
+  slot, no prefix. Retry, `step.sleep`, pub/sub fan-out, dead-letter replay
+  and both executor transports keep the metadata, so they keep the trace.
+- **Inject** at enqueue, from the caller's active context — or, when the
+  enqueue runs inside a job and the caller has no span of its own, from that
+  job's execute span, so a handler's follow-up job continues the trace. Merge
+  by `TraceContext::merge_into`'s rule: absent metadata becomes the carrier, an
+  object gains the keys unless it already names either one, anything else is
+  left untouched. Never replace user metadata to make room.
+- **Extract** at execution: parse the metadata as an object and hand its string
+  members to the propagator; the execute span is a child of what it returns.
+  Metadata that is absent, not an object, or carries no valid `traceparent`
+  starts a new trace — never an error.
+- A job a scheduler creates on its own starts a trace of its own: a periodic
+  firing, and a workflow node, whose metadata is the run's routing keys (#1047).
+- The gRPC producer door merges a `traceparent`/`tracestate` request header the
+  same way, for a client that propagates by header rather than by metadata.
+
 ## Contract level and the floor (cross-SDK)
 A deployment outlives individual SDK releases, so the storage carries the lowest
 level a process may speak and still join it.
