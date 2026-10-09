@@ -1300,7 +1300,7 @@ checksum = "b7ac824320a75a52197e8f2d787f6a38b6718bb6897a35142d749af3c0e8f4fe"
 
 [[package]]
 name = "flexiq"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1322,7 +1322,7 @@ dependencies = [
 
 [[package]]
 name = "flexiq-cli"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1342,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "flexiq-core"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "async-nats",
  "async-trait",
@@ -1378,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "flexiq-java"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "flexiq-macros"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "flexiq-mesh"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "base64 0.23.1",
  "bincode",
@@ -1422,7 +1422,7 @@ dependencies = [
 
 [[package]]
 name = "flexiq-node"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "async-trait",
  "crossbeam-channel",
@@ -1441,7 +1441,7 @@ dependencies = [
 
 [[package]]
 name = "flexiq-openapi"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "prost",
  "prost-types",
@@ -1451,7 +1451,7 @@ dependencies = [
 
 [[package]]
 name = "flexiq-python"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "async-trait",
  "crossbeam-channel",
@@ -1470,7 +1470,7 @@ dependencies = [
 
 [[package]]
 name = "flexiq-server"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1522,7 +1522,7 @@ dependencies = [
 
 [[package]]
 name = "flexiq-tui"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "flexiq-workflows"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "dagron-core",
  "diesel",

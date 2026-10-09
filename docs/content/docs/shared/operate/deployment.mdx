@@ -604,7 +604,7 @@ services:
 
   # The SDK serves no dashboard; flexiq-server does, from the same file.
   dashboard:
-    image: ghcr.io/byteveda/flexiq-server:2.0.0
+    image: ghcr.io/byteveda/flexiq-server:2.1.0
     environment:
       FLEXIQ_DSN: /data/flexiq.db
       FLEXIQ_DASHBOARD: 0.0.0.0:8080
@@ -786,7 +786,7 @@ schedules for any app:
 ```yaml
 services:
   scheduler:
-    image: ghcr.io/byteveda/flexiq-server:2.0.0
+    image: ghcr.io/byteveda/flexiq-server:2.1.0
     environment:
       FLEXIQ_DSN: postgresql://flexiq:secret@postgres:5432/myapp
       FLEXIQ_LISTEN: 0.0.0.0:7777
@@ -927,7 +927,7 @@ spec:
         # A native sidecar (Kubernetes 1.29+): starts before the app containers,
         # keeps running beside them, and restarts on its own.
         - name: scheduler
-          image: ghcr.io/byteveda/flexiq-server:2.0.0
+          image: ghcr.io/byteveda/flexiq-server:2.1.0
           restartPolicy: Always
           env:
             - name: FLEXIQ_DSN
@@ -1039,7 +1039,7 @@ spec:
     spec:
       containers:
         - name: scheduler
-          image: ghcr.io/byteveda/flexiq-server:2.0.0
+          image: ghcr.io/byteveda/flexiq-server:2.1.0
           env:
             - name: FLEXIQ_DSN
               valueFrom:

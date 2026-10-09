@@ -6,4 +6,4 @@ package flexiq
 //
 // Kept in step with the workspace version by scripts/version.mjs. Never edit
 // it by hand.
-const Version = "2.0.0"
+const Version = "2.1.0"

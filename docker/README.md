@@ -5,7 +5,7 @@ FlexiQ publishes the scheduler image at
 `flexiq-server` binary and can serve executors from any supported SDK.
 
 ```bash
-docker pull ghcr.io/byteveda/flexiq-server:2.0.0
+docker pull ghcr.io/byteveda/flexiq-server:2.1.0
 
 # A non-loopback attach port dispatches code, so the server refuses to start
 # without a token of at least 16 characters.
@@ -15,7 +15,7 @@ docker run --rm -p 7777:7777 \
   -e FLEXIQ_DSN=postgres://user:pass@host/db \
   -e FLEXIQ_LISTEN=0.0.0.0:7777 \
   -e FLEXIQ_ATTACH_TOKEN="$ATTACH_TOKEN" \
-  ghcr.io/byteveda/flexiq-server:2.0.0
+  ghcr.io/byteveda/flexiq-server:2.1.0
 ```
 
 `-p 7777:7777` is for a local trial. The attach port dispatches code, and the
@@ -52,7 +52,7 @@ For the strongest reproducibility, resolve the versioned manifest to its digest
 and deploy the digest reference:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/byteveda/flexiq-server:2.0.0
+docker buildx imagetools inspect ghcr.io/byteveda/flexiq-server:2.1.0
 docker pull ghcr.io/byteveda/flexiq-server@sha256:<manifest-digest>
 ```
 

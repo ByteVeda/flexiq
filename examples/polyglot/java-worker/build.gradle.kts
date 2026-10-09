@@ -11,10 +11,10 @@ repositories {
 }
 
 dependencies {
-    implementation("org.byteveda:flexiq:2.0.0")
+    implementation("org.byteveda:flexiq:2.1.0")
     // The native library ships as a per-platform classifier artifact. Swap for
     // your platform: linux-x86_64, linux-aarch64, osx-x86_64, osx-aarch64, windows-x86_64.
-    runtimeOnly("org.byteveda:flexiq:2.0.0:linux-x86_64")
+    runtimeOnly("org.byteveda:flexiq:2.1.0:linux-x86_64")
     // CborSerializer needs Jackson's CBOR dataformat, which the SDK leaves optional.
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.20.0")
     // FlexiQOtel needs the OpenTelemetry API, which the SDK leaves optional; the
@@ -23,7 +23,7 @@ dependencies {
     implementation("io.opentelemetry:opentelemetry-sdk:1.66.0")
     // Compile-time @TaskHandler bindings — what makes notifyCustomer discoverable
     // by `flexiq executor` via META-INF/services.
-    annotationProcessor("org.byteveda:flexiq-processor:2.0.0")
+    annotationProcessor("org.byteveda:flexiq-processor:2.1.0")
 }
 
 // No toolchain pin on purpose: the SDK's baseline is Java 17, so whatever JDK
