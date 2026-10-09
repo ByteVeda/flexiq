@@ -10,7 +10,9 @@
 use std::collections::{HashMap, HashSet};
 
 use flexiq_core::job::{now_millis, NewJob};
+use flexiq_core::trace::TraceContext;
 use flexiq_core::{Storage, StorageBackend};
+use flexiq_workflows::lifecycle::{build_metadata_json, carry_trace, run_trace_context};
 use flexiq_workflows::{
     topological_order, StepMetadata, WorkflowDefinition, WorkflowNode, WorkflowNodeStatus,
     WorkflowRun, WorkflowSqliteStorage, WorkflowState, WorkflowStorage, WorkflowStorageBackend,
@@ -45,6 +47,10 @@ impl JsQueue {
     /// them). A deferred node gets a `Pending` node row but **no job**, and is
     /// excluded from its successors' `depends_on` so the static scheduler never
     /// blocks on a job that will not exist until expansion.
+    ///
+    /// `traceparent`/`tracestate` are the submitter's W3C trace context, stored
+    /// on the run and carried by every node job; a sub-workflow given none
+    /// inherits its parent run's.
     #[napi]
     #[allow(clippy::too_many_arguments)]
     pub fn submit_workflow(
@@ -59,8 +65,16 @@ impl JsQueue {
         deferred_node_names: Option<Vec<String>>,
         parent_run_id: Option<String>,
         parent_node_name: Option<String>,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
     ) -> Result<String> {
         let wf = self.workflow_store()?;
+        let trace = run_trace_context(
+            &wf,
+            TraceContext::from_headers(traceparent.as_deref(), tracestate.as_deref()),
+            parent_run_id.as_deref(),
+        )
+        .map_err(to_napi_err)?;
         let dag = dag_bytes.to_vec();
         let step_meta: HashMap<String, StepMetadata> =
             serde_json::from_str(&step_metadata_json).map_err(|e| reason(e.to_string()))?;
@@ -114,7 +128,10 @@ impl JsQueue {
             parent_run_id,
             parent_node_name,
             created_at: now,
-        };
+            traceparent: None,
+            tracestate: None,
+        }
+        .with_trace_context(trace.as_ref());
         wf.create_workflow_run(&run).map_err(to_napi_err)?;
 
         let mut job_ids: HashMap<String, String> = HashMap::new();
@@ -163,7 +180,7 @@ impl JsQueue {
                 max_retries: meta.max_retries.unwrap_or(DEFAULT_MAX_RETRIES),
                 timeout_ms: meta.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS),
                 unique_key: None,
-                metadata: Some(workflow_metadata_json(&run_id, &topo.name)),
+                metadata: Some(build_metadata_json(&run_id, &topo.name, trace.as_ref())),
                 notes: None,
                 depends_on,
                 expires_at: None,
@@ -429,7 +446,7 @@ impl JsQueue {
             )));
         }
         let wf = self.workflow_store()?;
-        require_visible_run(&wf, &run_id)?;
+        let trace = require_visible_run(&wf, &run_id)?.trace_context();
         let now = now_millis();
         let count = child_names.len() as i32;
 
@@ -456,7 +473,7 @@ impl JsQueue {
                 max_retries,
                 timeout_ms,
                 unique_key: None,
-                metadata: Some(workflow_metadata_json(&run_id, child_name)),
+                metadata: Some(build_metadata_json(&run_id, child_name, trace.as_ref())),
                 notes: None,
                 depends_on: vec![],
                 expires_at: None,
@@ -500,7 +517,7 @@ impl JsQueue {
         priority: i32,
     ) -> Result<String> {
         let wf = self.workflow_store()?;
-        require_visible_run(&wf, &run_id)?;
+        let trace = require_visible_run(&wf, &run_id)?.trace_context();
         let new_job = NewJob {
             queue,
             task_name,
@@ -510,7 +527,7 @@ impl JsQueue {
             max_retries,
             timeout_ms,
             unique_key: None,
-            metadata: Some(workflow_metadata_json(&run_id, &node_name)),
+            metadata: Some(build_metadata_json(&run_id, &node_name, trace.as_ref())),
             notes: None,
             depends_on: vec![],
             expires_at: None,
@@ -719,7 +736,7 @@ impl JsQueue {
         priority: i32,
     ) -> Result<String> {
         let wf = self.workflow_store()?;
-        require_visible_run(&wf, &run_id)?;
+        let trace = require_visible_run(&wf, &run_id)?.trace_context();
         let now = now_millis();
         let new_job = NewJob {
             queue,
@@ -730,7 +747,11 @@ impl JsQueue {
             max_retries,
             timeout_ms,
             unique_key: Some(format!("compensation:{run_id}:{node_name}")),
-            metadata: Some(compensation_metadata_json(&run_id, &node_name)),
+            metadata: Some(compensation_metadata_json(
+                &run_id,
+                &node_name,
+                trace.as_ref(),
+            )),
             notes: None,
             depends_on: vec![],
             expires_at: None,
@@ -828,17 +849,17 @@ impl JsQueue {
     }
 }
 
-/// Refuse a `run_id` this queue's namespace cannot see.
+/// The run behind `run_id`, refusing one this queue's namespace cannot see.
 ///
 /// The fan-out, deferred and compensation paths enqueue the job *before*
 /// binding it to its node. A scoped bind against a foreign run has no effect,
 /// which would leave the job running untracked — so refuse before anything is
-/// enqueued rather than after.
-fn require_visible_run(wf: &WorkflowStorageBackend, run_id: &str) -> Result<()> {
-    match wf.get_workflow_run(run_id).map_err(to_napi_err)? {
-        Some(_) => Ok(()),
-        None => Err(reason(format!("workflow run not found: {run_id}"))),
-    }
+/// enqueued rather than after. The row is returned because those jobs carry
+/// its trace context.
+fn require_visible_run(wf: &WorkflowStorageBackend, run_id: &str) -> Result<WorkflowRun> {
+    wf.get_workflow_run(run_id)
+        .map_err(to_napi_err)?
+        .ok_or_else(|| reason(format!("workflow run not found: {run_id}")))
 }
 
 /// Construct the workflow storage matching the queue's core backend.
@@ -897,23 +918,19 @@ fn new_workflow_node(run_id: &str, node_name: &str, job_id: Option<String>) -> W
     }
 }
 
-/// Job-metadata blob that links a job back to its workflow node.
-fn workflow_metadata_json(run_id: &str, node_name: &str) -> String {
-    serde_json::json!({
-        "workflow_run_id": run_id,
-        "workflow_node_name": node_name,
-    })
-    .to_string()
-}
-
-/// Like `workflow_metadata_json` but flags a node's rollback (compensation) job.
-fn compensation_metadata_json(run_id: &str, node_name: &str) -> String {
-    serde_json::json!({
+/// Like `build_metadata_json` but flags a node's rollback (compensation) job.
+fn compensation_metadata_json(
+    run_id: &str,
+    node_name: &str,
+    trace: Option<&TraceContext>,
+) -> String {
+    let routing = serde_json::json!({
         "workflow_run_id": run_id,
         "workflow_node_name": node_name,
         "compensation": true,
     })
-    .to_string()
+    .to_string();
+    carry_trace(routing, trace)
 }
 
 /// Parse `{workflow_run_id, workflow_node_name}` from a job's metadata blob.

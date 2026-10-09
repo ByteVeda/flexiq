@@ -23,6 +23,7 @@
       "PyQueue.fail_workflow_node": "workflow engine internals",
       "PyQueue.finalize_run_if_terminal": "workflow engine internals",
       "PyQueue.get_base_run_node_data": "workflow engine internals",
+      "PyQueue.get_workflow_trace_carrier": "workflow engine internals — the saga reads it to stamp a compensation with the run's trace",
       "PyQueue.is_migrated": "Queue.__init__ reads it to decide whether state deferred at construction can preload; no public accessor forwards it, and migrate() is the user-facing half",
       "PyQueue.mark_workflow_node_result": "workflow engine internals",
       "PyQueue.purge_dead_by_task": "declared on the native queue but nothing in the shell forwards it — the Python API purges dead letters by age only, via Queue.purge_dead; naming the gap here beats documenting a call no user can make",
@@ -60,7 +61,7 @@
   "documented": {
     "python": 116,
     "node": 105,
-    "java": 166,
+    "java": 167,
     "rust": 68
   }
 }

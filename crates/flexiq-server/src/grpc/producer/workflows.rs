@@ -77,6 +77,9 @@ pub(crate) async fn submit_workflow(
         result_ttl_ms: None,
         namespace: Some(namespace),
         enqueued_by: Some(scoped.token_id().to_string()),
+        // Header context, as on `Enqueue`: every node job joins the
+        // submitter's trace as a child of the submit span.
+        trace: scoped.trace().cloned(),
     };
 
     let handle = on_storage_and_workflows(

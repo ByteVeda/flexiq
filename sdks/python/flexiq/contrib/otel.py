@@ -51,7 +51,8 @@ class OpenTelemetryMiddleware(TaskMiddleware):
     the job's metadata (``traceparent``/``tracestate``, merged, never replacing
     the caller's keys), and the execute span is a child of it — whichever SDK
     enqueued the job. An enqueue made inside a task with no span of its own
-    continues that task's execute span.
+    continues that task's execute span. A workflow submit stores the same
+    context on the run, so every step's execute span is a child of the submit.
 
     Args:
         tracer_name: OpenTelemetry tracer name.
@@ -124,6 +125,14 @@ class OpenTelemetryMiddleware(TaskMiddleware):
         carrier: dict[str, str] = {}
         propagate.inject(carrier, context=self._enqueue_context())
         options["metadata"] = merge_trace_carrier(options.get("metadata"), carrier)
+
+    def on_workflow_submit(self, workflow_name: str, options: dict) -> None:
+        # A carrier the caller passed explicitly wins, as metadata keys do.
+        if options.get("trace_context"):
+            return
+        carrier: dict[str, str] = {}
+        propagate.inject(carrier, context=self._enqueue_context())
+        options["trace_context"] = carrier or None
 
     def _enqueue_context(self) -> Any:
         """The context an enqueue propagates: the caller's own span if it has

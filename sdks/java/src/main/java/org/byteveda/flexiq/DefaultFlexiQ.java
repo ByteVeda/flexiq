@@ -49,8 +49,10 @@ import org.byteveda.flexiq.internal.MiddlewareDisables;
 import org.byteveda.flexiq.internal.SettingsDocument;
 import org.byteveda.flexiq.locks.Lock;
 import org.byteveda.flexiq.locks.LockInfo;
+import org.byteveda.flexiq.logging.FlexiQLogger;
 import org.byteveda.flexiq.middleware.EnqueueContext;
 import org.byteveda.flexiq.middleware.Middleware;
+import org.byteveda.flexiq.middleware.WorkflowSubmitContext;
 import org.byteveda.flexiq.model.CircuitBreakerState;
 import org.byteveda.flexiq.model.DeadJob;
 import org.byteveda.flexiq.model.DispatchOrder;
@@ -125,6 +127,8 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
             CALLER_METADATA.getTypeFactory().constructMapType(LinkedHashMap.class, String.class, Object.class);
 
     private static final long DEFAULT_LOCK_TTL_MS = 30_000;
+
+    private static final FlexiQLogger LOG = FlexiQLogger.create("queue");
 
     private final QueueBackend backend;
     private final CoreFacade facade;
@@ -1366,6 +1370,12 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
 
     @Override
     public WorkflowRun submitWorkflow(Workflow workflow, Map<String, Object> suppliedPayloads) {
+        return submitWorkflow(workflow, suppliedPayloads, java.util.Collections.emptyMap());
+    }
+
+    @Override
+    public WorkflowRun submitWorkflow(
+            Workflow workflow, Map<String, Object> suppliedPayloads, Map<String, String> traceContext) {
         List<Step> steps = workflow.steps();
         rejectCachedFanProducers(steps);
         Set<String> deferred = deferredNodes(steps);
@@ -1389,6 +1399,7 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
                 payloads.add(serializer.serializeCall(payload));
             }
         }
+        Map<String, String> carrier = workflowTraceCarrier(workflow.name(), traceContext);
         String runId = backend.submitWorkflow(
                 workflow.name(),
                 workflow.version(),
@@ -1399,9 +1410,28 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
                 null,
                 deferred.toArray(new String[0]),
                 null,
-                null);
+                null,
+                carrier.get("traceparent"),
+                carrier.get("tracestate"));
         events.emit(new WorkflowEvent(EventName.WORKFLOW_SUBMITTED, runId, workflow.name(), null));
         return new WorkflowRun(backend, VIEWS, runId, workflow.name());
+    }
+
+    /**
+     * The carrier a submit stores on its run: the caller's own, else whatever the
+     * middleware {@code onWorkflowSubmit} hooks supply.
+     */
+    private Map<String, String> workflowTraceCarrier(String workflowName, Map<String, String> traceContext) {
+        WorkflowSubmitContext context = new WorkflowSubmitContext(workflowName, traceContext);
+        for (Middleware m : middleware) {
+            // Tracing must never cost the submit: a failing hook is logged and skipped.
+            try {
+                m.onWorkflowSubmit(context);
+            } catch (RuntimeException e) {
+                LOG.warn("middleware onWorkflowSubmit failed for workflow '" + workflowName + "'", e);
+            }
+        }
+        return context.traceContext();
     }
 
     /**

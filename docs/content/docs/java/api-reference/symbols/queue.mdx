@@ -640,6 +640,11 @@ QueueStats statsByQueue(String queue)
 ```java
 WorkflowRun submitWorkflow(
     Workflow workflow,
+    Map<String, Object> payloads,
+    Map<String, String> traceContext
+)
+WorkflowRun submitWorkflow(
+    Workflow workflow,
     Map<String, Object> payloads
 )
 WorkflowRun submitWorkflow(Workflow workflow)

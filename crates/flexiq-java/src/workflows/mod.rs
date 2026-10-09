@@ -16,8 +16,10 @@
 use std::collections::{HashMap, HashSet};
 
 use flexiq_core::job::{now_millis, NewJob};
+use flexiq_core::trace::TraceContext;
 use flexiq_core::Storage;
 use flexiq_workflows::dagron_core::DAG;
+use flexiq_workflows::lifecycle::{build_metadata_json, carry_trace, run_trace_context};
 use flexiq_workflows::{
     topological_order, StepMetadata, WorkflowDefinition, WorkflowNode, WorkflowNodeStatus,
     WorkflowRun, WorkflowState, WorkflowStorage, WorkflowStorageBackend,
@@ -185,6 +187,8 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorkflows_submitW
     deferred_names: JObjectArray<'local>,
     parent_run_id: JString<'local>,
     parent_node_name: JString<'local>,
+    traceparent: JString<'local>,
+    tracestate: JString<'local>,
 ) -> jstring {
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
@@ -197,6 +201,10 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorkflows_submitW
         let deferred = read_string_array(env, &deferred_names)?;
         let parent_run = read_optional_string(env, &parent_run_id)?;
         let parent_node = read_optional_string(env, &parent_node_name)?;
+        let trace = TraceContext::from_headers(
+            read_optional_string(env, &traceparent)?.as_deref(),
+            read_optional_string(env, &tracestate)?.as_deref(),
+        );
         let run_id = submit(
             queue,
             name,
@@ -209,6 +217,7 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorkflows_submitW
             deferred,
             parent_run,
             parent_node,
+            trace,
         )?;
         new_string(env, run_id)
     })
@@ -227,6 +236,7 @@ fn submit(
     deferred_names: Vec<String>,
     parent_run_id: Option<String>,
     parent_node_name: Option<String>,
+    trace: Option<TraceContext>,
 ) -> Result<String, BindingError> {
     if payload_names.len() != payloads.len() {
         return Err(BindingError::new(
@@ -314,9 +324,10 @@ fn submit(
         }
     };
 
+    let trace = run_trace_context(&wf, trace, parent_run_id.as_deref())?;
     let run_id = Uuid::now_v7().to_string();
     let now = now_millis();
-    wf.create_workflow_run(&WorkflowRun {
+    let run = WorkflowRun {
         id: run_id.clone(),
         definition_id,
         params: params_json,
@@ -327,7 +338,11 @@ fn submit(
         parent_run_id,
         parent_node_name,
         created_at: now,
-    })?;
+        traceparent: None,
+        tracestate: None,
+    }
+    .with_trace_context(trace.as_ref());
+    wf.create_workflow_run(&run)?;
 
     let mut job_ids: HashMap<String, String> = HashMap::new();
     for topo in &ordered {
@@ -368,7 +383,7 @@ fn submit(
             max_retries: meta.max_retries.unwrap_or(DEFAULT_MAX_RETRIES),
             timeout_ms: meta.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS),
             unique_key: None,
-            metadata: Some(workflow_metadata_json(&run_id, &topo.name)),
+            metadata: Some(build_metadata_json(&run_id, &topo.name, trace.as_ref())),
             notes: None,
             depends_on,
             expires_at: None,
@@ -741,18 +756,18 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorkflows_expandF
     })
 }
 
-/// Refuse a `run_id` this queue's namespace cannot see.
+/// The run behind `run_id`, refusing one this queue's namespace cannot see.
 ///
 /// The fan-out and deferred paths enqueue the job *before* binding it to its
 /// node. A scoped bind against a foreign run has no effect, which would leave
-/// the job running untracked — so refuse before anything is enqueued.
-fn require_visible_run(wf: &WorkflowStorageBackend, run_id: &str) -> Result<(), BindingError> {
-    match wf.get_workflow_run(run_id)? {
-        Some(_) => Ok(()),
-        None => Err(BindingError::new(format!(
-            "workflow run not found: {run_id}"
-        ))),
-    }
+/// the job running untracked — so refuse before anything is enqueued. The row
+/// is returned because those jobs carry its trace context.
+fn require_visible_run(
+    wf: &WorkflowStorageBackend,
+    run_id: &str,
+) -> Result<WorkflowRun, BindingError> {
+    wf.get_workflow_run(run_id)?
+        .ok_or_else(|| BindingError::new(format!("workflow run not found: {run_id}")))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -780,7 +795,7 @@ fn expand_fan_out(
         )));
     }
     let wf = queue.workflow_store()?;
-    require_visible_run(&wf, run_id)?;
+    let trace = require_visible_run(&wf, run_id)?.trace_context();
     let now = now_millis();
     let count = child_names.len() as i32;
     if count == 0 {
@@ -803,7 +818,7 @@ fn expand_fan_out(
             max_retries,
             timeout_ms,
             unique_key: None,
-            metadata: Some(workflow_metadata_json(run_id, child_name)),
+            metadata: Some(build_metadata_json(run_id, child_name, trace.as_ref())),
             notes: None,
             depends_on: vec![],
             expires_at: None,
@@ -910,7 +925,7 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorkflows_createD
         let task = read_string(env, &task_name)?;
         let queue_name = read_string(env, &queue)?;
         let wf = q.workflow_store()?;
-        require_visible_run(&wf, &run_id)?;
+        let trace = require_visible_run(&wf, &run_id)?.trace_context();
         let job = q.storage.enqueue(NewJob {
             queue: queue_name,
             task_name: task,
@@ -920,7 +935,7 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorkflows_createD
             max_retries,
             timeout_ms,
             unique_key: None,
-            metadata: Some(workflow_metadata_json(&run_id, &node_name)),
+            metadata: Some(build_metadata_json(&run_id, &node_name, trace.as_ref())),
             notes: None,
             depends_on: vec![],
             expires_at: None,
@@ -1351,15 +1366,6 @@ fn new_node(run_id: &str, node_name: &str, job_id: Option<String>) -> WorkflowNo
     }
 }
 
-/// Job-metadata blob linking a job back to its workflow node.
-fn workflow_metadata_json(run_id: &str, node_name: &str) -> String {
-    serde_json::json!({
-        "workflow_run_id": run_id,
-        "workflow_node_name": node_name,
-    })
-    .to_string()
-}
-
 /// Item index `i` parsed from a fan-out child name `parent[i]`. Unparseable names
 /// sort last so they never silently reorder valid children.
 fn fan_out_child_index(name: &str) -> u64 {
@@ -1465,6 +1471,29 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorkflows_getWork
             Some(run) => new_string(env, to_json(&WorkflowRunView::from(&run))?),
             None => Ok(std::ptr::null_mut()),
         }
+    })
+}
+
+/// `String carryWorkflowTrace(long, String runId, String metadata)` — a job's
+/// metadata with the run's stored trace context merged in, for a job the tracker
+/// enqueues on the run's behalf (a compensation). Unchanged for a run with none.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorkflows_carryWorkflowTrace<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    run_id: JString<'local>,
+    metadata: JString<'local>,
+) -> jstring {
+    guard(&mut env, std::ptr::null_mut(), |env| {
+        let queue = unsafe { borrow_queue(handle) };
+        let run_id = read_string(env, &run_id)?;
+        let metadata = read_string(env, &metadata)?;
+        let wf = queue.workflow_store()?;
+        let trace = require_visible_run(&wf, &run_id)?.trace_context();
+        new_string(env, carry_trace(metadata, trace.as_ref()))
     })
 }
 

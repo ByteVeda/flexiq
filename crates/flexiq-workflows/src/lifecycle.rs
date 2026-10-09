@@ -12,6 +12,7 @@ use std::fmt;
 use flexiq_core::error::{QueueError, Result};
 use flexiq_core::job::{now_millis, NewJob};
 use flexiq_core::storage::{Storage, StorageBackend};
+use flexiq_core::trace::TraceContext;
 
 use crate::error::WorkflowError;
 use crate::{
@@ -114,6 +115,9 @@ pub struct SubmitStaticWorkflowRequest {
     /// Public id of the token that submitted the run, stamped on every step
     /// job. `None` for an in-process submission.
     pub enqueued_by: Option<String>,
+    /// The submitter's W3C trace context. Stored on the run and carried by
+    /// every node job, so each step joins the submitter's trace.
+    pub trace: Option<TraceContext>,
 }
 
 /// What a successful submission produced.
@@ -132,16 +136,44 @@ pub fn parse_step_metadata(json: &str) -> Result<HashMap<String, StepMetadata>> 
         .map_err(|e| WorkflowError::InvalidStepMetadata(format!("invalid JSON: {e}")).into())
 }
 
-/// Build a job-metadata JSON blob carrying workflow routing info.
+/// Build a job-metadata JSON blob carrying workflow routing info, plus the
+/// run's trace carrier when it has one (see [`carry_trace`]).
 ///
 /// `serde_json` guarantees proper escaping of node names containing
 /// backslashes, control characters or Unicode.
-pub fn build_metadata_json(run_id: &str, node_name: &str) -> String {
-    serde_json::json!({
+pub fn build_metadata_json(run_id: &str, node_name: &str, trace: Option<&TraceContext>) -> String {
+    let routing = serde_json::json!({
         "workflow_run_id": run_id,
         "workflow_node_name": node_name,
     })
-    .to_string()
+    .to_string();
+    carry_trace(routing, trace)
+}
+
+/// `metadata` with the run's trace carrier merged in by the cross-SDK rule
+/// in [`flexiq_core::trace`]. The merge only adds keys, so the routing keys a
+/// node job is matched back to its run by are never displaced.
+pub fn carry_trace(metadata: String, trace: Option<&TraceContext>) -> String {
+    let Some(trace) = trace else {
+        return metadata;
+    };
+    trace.merge_into(Some(metadata.clone())).unwrap_or(metadata)
+}
+
+/// The trace context a new run records: the submitter's own, else — for a
+/// sub-workflow — its parent run's, so the whole tree reads as one trace.
+pub fn run_trace_context(
+    wf_storage: &WorkflowStorageBackend,
+    trace: Option<TraceContext>,
+    parent_run_id: Option<&str>,
+) -> Result<Option<TraceContext>> {
+    match (trace, parent_run_id) {
+        (Some(trace), _) => Ok(Some(trace)),
+        (None, Some(parent)) => Ok(wf_storage
+            .get_workflow_run(parent)?
+            .and_then(|run| run.trace_context())),
+        (None, None) => Ok(None),
+    }
 }
 
 /// Submit a workflow for static execution.
@@ -163,7 +195,7 @@ pub fn build_metadata_json(run_id: &str, node_name: &str) -> String {
 pub fn submit_workflow(
     storage: &StorageBackend,
     wf_storage: &WorkflowStorageBackend,
-    request: SubmitStaticWorkflowRequest,
+    mut request: SubmitStaticWorkflowRequest,
 ) -> std::result::Result<WorkflowRunHandle, SubmitWorkflowError> {
     let ordered = topological_order(&request.dag_bytes)?;
 
@@ -221,6 +253,12 @@ pub fn submit_workflow(
             }
         };
 
+    request.trace = run_trace_context(
+        wf_storage,
+        request.trace.take(),
+        request.parent_run_id.as_deref(),
+    )?;
+
     let run_id = uuid::Uuid::now_v7().to_string();
     let now = now_millis();
     let run = WorkflowRun {
@@ -234,7 +272,10 @@ pub fn submit_workflow(
         parent_run_id: request.parent_run_id.clone(),
         parent_node_name: request.parent_node_name.clone(),
         created_at: now,
-    };
+        traceparent: None,
+        tracestate: None,
+    }
+    .with_trace_context(request.trace.as_ref());
     wf_storage.create_workflow_run(&run)?;
 
     if let Err(err) = submit_nodes(storage, wf_storage, &request, &run_id, &ordered, now) {
@@ -372,7 +413,11 @@ fn submit_nodes(
             max_retries: meta.max_retries.unwrap_or(request.default_max_retries),
             timeout_ms,
             unique_key: None,
-            metadata: Some(build_metadata_json(run_id, &topo.name)),
+            metadata: Some(build_metadata_json(
+                run_id,
+                &topo.name,
+                request.trace.as_ref(),
+            )),
             notes: None,
             depends_on,
             expires_at: None,
@@ -414,7 +459,7 @@ mod tests {
 
     #[test]
     fn build_metadata_json_round_trips_special_characters() {
-        let json = build_metadata_json("run-1", "node\\with\"quotes\nand\ttabs");
+        let json = build_metadata_json("run-1", "node\\with\"quotes\nand\ttabs", None);
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["workflow_run_id"], "run-1");
         assert_eq!(v["workflow_node_name"], "node\\with\"quotes\nand\ttabs");
@@ -422,9 +467,97 @@ mod tests {
 
     #[test]
     fn build_metadata_json_preserves_unicode_node_names() {
-        let json = build_metadata_json("run-2", "ノード/ステップ");
+        let json = build_metadata_json("run-2", "ノード/ステップ", None);
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["workflow_node_name"], "ノード/ステップ");
+    }
+
+    const TRACEPARENT: &str = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+
+    fn trace() -> TraceContext {
+        TraceContext::from_headers(Some(TRACEPARENT), Some("vendor=a")).unwrap()
+    }
+
+    #[test]
+    fn build_metadata_json_without_a_trace_is_routing_only() {
+        let json = build_metadata_json("run-3", "a", None);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn build_metadata_json_carries_the_trace_beside_the_routing_keys() {
+        let json = build_metadata_json("run-4", "a", Some(&trace()));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["workflow_run_id"], "run-4");
+        assert_eq!(v["workflow_node_name"], "a");
+        assert_eq!(v["traceparent"], TRACEPARENT);
+        assert_eq!(v["tracestate"], "vendor=a");
+    }
+
+    #[test]
+    fn carry_trace_keeps_extra_keys_and_an_existing_carrier() {
+        let compensation = r#"{"workflow_run_id":"r","compensation":true}"#.to_string();
+        let v: serde_json::Value =
+            serde_json::from_str(&carry_trace(compensation, Some(&trace()))).unwrap();
+        assert_eq!(v["compensation"], true);
+        assert_eq!(v["traceparent"], TRACEPARENT);
+
+        let own = r#"{"traceparent":"mine"}"#.to_string();
+        assert_eq!(carry_trace(own.clone(), Some(&trace())), own);
+    }
+
+    /// Every pre-enqueued node job carries the submitter's trace, and the run
+    /// row keeps it for nodes a tracker releases later.
+    #[test]
+    fn submit_workflow_stamps_the_trace_on_the_run_and_every_node_job() {
+        let (storage, wf) = make_storages();
+        let dag = dag_bytes(&["a", "b"], &[("a", "b")]);
+        let metadata = step_metadata_json(&[("a", "task_a"), ("b", "task_b")]);
+        let mut request = base_request("traced", dag, &metadata, node_payloads(&["a", "b"]));
+        request.trace = Some(trace());
+
+        let handle = submit_workflow(&storage, &wf, request).unwrap();
+
+        let run = wf.get_workflow_run(&handle.run_id).unwrap().unwrap();
+        assert_eq!(run.trace_context(), Some(trace()));
+        for node in wf.get_workflow_nodes(&handle.run_id).unwrap() {
+            let job_id = node.job_id.expect("static node has a job");
+            let job = storage.get_job(&job_id, None).unwrap().unwrap();
+            let v: serde_json::Value =
+                serde_json::from_str(job.metadata.as_deref().unwrap()).unwrap();
+            assert_eq!(v["workflow_run_id"], handle.run_id.as_str());
+            assert_eq!(v["workflow_node_name"], node.node_name.as_str());
+            assert_eq!(v["traceparent"], TRACEPARENT);
+        }
+    }
+
+    /// A sub-workflow submitted without a context continues its parent's.
+    #[test]
+    fn a_sub_workflow_inherits_its_parents_trace() {
+        let (storage, wf) = make_storages();
+        let metadata = step_metadata_json(&[("a", "task_a")]);
+        let mut parent = base_request(
+            "parent",
+            dag_bytes(&["a"], &[]),
+            &metadata,
+            node_payloads(&["a"]),
+        );
+        parent.trace = Some(trace());
+        let parent = submit_workflow(&storage, &wf, parent).unwrap();
+
+        let mut child = base_request(
+            "child",
+            dag_bytes(&["a"], &[]),
+            &metadata,
+            node_payloads(&["a"]),
+        );
+        child.parent_run_id = Some(parent.run_id);
+        child.parent_node_name = Some("a".to_string());
+        let child = submit_workflow(&storage, &wf, child).unwrap();
+
+        let run = wf.get_workflow_run(&child.run_id).unwrap().unwrap();
+        assert_eq!(run.trace_context(), Some(trace()));
     }
 
     #[test]
@@ -526,6 +659,7 @@ mod tests {
             result_ttl_ms: None,
             namespace: None,
             enqueued_by: None,
+            trace: None,
         }
     }
 

@@ -23,8 +23,8 @@ use flexiq_workflows::WorkflowPostgresStorage;
 #[cfg(feature = "redis")]
 use flexiq_workflows::WorkflowRedisStorage;
 use flexiq_workflows::{
-    WorkflowNode, WorkflowNodeStatus, WorkflowSqliteStorage, WorkflowState, WorkflowStorage,
-    WorkflowStorageBackend,
+    WorkflowNode, WorkflowNodeStatus, WorkflowRun, WorkflowSqliteStorage, WorkflowState,
+    WorkflowStorage, WorkflowStorageBackend,
 };
 
 use crate::py_queue::PyQueue;
@@ -97,18 +97,19 @@ pub(crate) fn migrate_workflow_storage(queue: &PyQueue, py: Python<'_>) -> PyRes
     Ok(applied)
 }
 
-/// Refuse a `run_id` this queue's namespace cannot see.
+/// The run behind `run_id`, refusing one this queue's namespace cannot see.
 ///
 /// The fan-out and deferred paths enqueue the job *before* binding it to its
 /// node. A scoped bind against a foreign run has no effect, which would leave
-/// the job running untracked — so refuse before anything is enqueued.
-pub(super) fn require_visible_run(wf: &WorkflowStorageBackend, run_id: &str) -> CoreResult<()> {
-    if wf.get_workflow_run(run_id)?.is_none() {
-        return Err(flexiq_core::error::QueueError::Other(format!(
-            "workflow run not found: {run_id}"
-        )));
-    }
-    Ok(())
+/// the job running untracked — so refuse before anything is enqueued. The row
+/// is returned because those jobs carry its trace context.
+pub(super) fn require_visible_run(
+    wf: &WorkflowStorageBackend,
+    run_id: &str,
+) -> CoreResult<WorkflowRun> {
+    wf.get_workflow_run(run_id)?.ok_or_else(|| {
+        flexiq_core::error::QueueError::Other(format!("workflow run not found: {run_id}"))
+    })
 }
 
 /// Re-exported rather than duplicated: `flexiq-workflows` is the one place

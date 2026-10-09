@@ -188,6 +188,12 @@ export interface WorkflowSubmitOptions {
   queueDefault?: string;
   /** Arbitrary params recorded on the run (JSON-encoded). */
   params?: unknown;
+  /**
+   * W3C carrier (`traceparent`, `tracestate`) every node job carries, so each
+   * step's span joins this trace. When omitted, middleware `onWorkflowSubmit`
+   * hooks may supply one — the OpenTelemetry middleware passes the active context.
+   */
+  traceContext?: Record<string, string>;
 }
 
 /** Options for {@link WorkflowHandle.wait}. */

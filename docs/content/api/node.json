@@ -1990,7 +1990,7 @@
       "owner": "JsQueue",
       "name": "submitWorkflow",
       "kind": "method",
-      "signature": "submitWorkflow(name: string, version: number, dagBytes: Buffer, stepMetadataJson: string, nodePayloads: Record<string, Buffer>, queueDefault?: string | undefined | null, paramsJson?: string | undefined | null, deferredNodeNames?: Array<string> | undefined | null, parentRunId?: string | undefined | null, parentNodeName?: string | undefined | null): string",
+      "signature": "submitWorkflow(name: string, version: number, dagBytes: Buffer, stepMetadataJson: string, nodePayloads: Record<string, Buffer>, queueDefault?: string | undefined | null, paramsJson?: string | undefined | null, deferredNodeNames?: Array<string> | undefined | null, parentRunId?: string | undefined | null, parentNodeName?: string | undefined | null, traceparent?: string | undefined | null, tracestate?: string | undefined | null): string",
       "params": [
         {
           "name": "name",
@@ -2039,6 +2039,16 @@
         },
         {
           "name": "parentNodeName",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "traceparent",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "tracestate",
           "type": "string | undefined | null",
           "default": "optional"
         }

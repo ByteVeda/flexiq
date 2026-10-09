@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 
 use flexiq_core::job::now_millis;
+use flexiq_core::trace::TraceContext;
 use flexiq_workflows::{
     StepMetadata, WorkflowDefinition, WorkflowNode, WorkflowNodeStatus, WorkflowRun, WorkflowState,
     WorkflowStorage,
@@ -66,8 +67,12 @@ fn make_run(definition_id: &str) -> WorkflowRun {
         parent_run_id: None,
         parent_node_name: None,
         created_at: now_millis(),
+        traceparent: None,
+        tracestate: None,
     }
 }
+
+const TRACEPARENT: &str = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 
 fn make_node(run_id: &str, name: &str) -> WorkflowNode {
     WorkflowNode {
@@ -153,6 +158,25 @@ fn case_create_and_get_run(s: &impl WorkflowStorage) {
     assert_eq!(fetched.id, run_id);
     assert_eq!(fetched.state, WorkflowState::Pending);
     assert_eq!(fetched.params, Some(r#"{"region":"eu"}"#.to_string()));
+    assert_eq!(fetched.trace_context(), None);
+}
+
+fn case_run_trace_context_round_trips(s: &impl WorkflowStorage) {
+    let def = make_definition("trace_test");
+    s.create_workflow_definition(&def).unwrap();
+
+    let trace = TraceContext::from_headers(Some(TRACEPARENT), Some("vendor=a")).unwrap();
+    let run = make_run(&def.id).with_trace_context(Some(&trace));
+    let run_id = run.id.clone();
+    s.create_workflow_run(&run).unwrap();
+
+    let fetched = s.get_workflow_run(&run_id).unwrap().unwrap();
+    assert_eq!(fetched.trace_context(), Some(trace.clone()));
+    // Listings read the same columns, so a tracker resuming from a list sees it too.
+    let listed = s
+        .list_workflow_runs(Some("trace_test"), None, 10, 0)
+        .unwrap();
+    assert_eq!(listed[0].trace_context(), Some(trace));
 }
 
 fn case_update_run_state(s: &impl WorkflowStorage) {
@@ -722,6 +746,7 @@ fn run_contract(s: &impl WorkflowStorage) {
     case_get_definition_by_id(s);
     case_definition_not_found(s);
     case_create_and_get_run(s);
+    case_run_trace_context_round_trips(s);
     case_update_run_state(s);
     case_set_run_started_and_completed(s);
     case_list_runs(s);

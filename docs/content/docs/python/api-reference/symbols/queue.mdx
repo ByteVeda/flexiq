@@ -389,6 +389,12 @@ queue.get_workflow_run_detail(
 queue.get_workflow_run_status(run_id: str) -> PyWorkflowRunStatus
 ```
 
+### `queue.get_workflow_trace_carrier()`
+
+```python
+queue.get_workflow_trace_carrier(run_id: str) -> dict[str, str]
+```
+
 ### `queue.inherited_worker_steps()`
 
 ```python
@@ -972,7 +978,9 @@ queue.submit_workflow(
     deferred_node_names: list[str] | None = None,
     parent_run_id: str | None = None,
     parent_node_name: str | None = None,
-    cache_hit_nodes: dict[str, str] | None = None
+    cache_hit_nodes: dict[str, str] | None = None,
+    traceparent: str | None = None,
+    tracestate: str | None = None
 ) -> PyWorkflowHandle
 ```
 
