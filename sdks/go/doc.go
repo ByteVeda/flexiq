@@ -14,8 +14,13 @@
 // credential of its own — a token scoped to produce cannot attach, and a token
 // scoped to execute cannot enqueue.
 //
-// Middleware, the admin surface, settings, migrations and pub/sub are absent
-// from both, because they are on neither door.
+// The operator door, flexiq.admin.v1, is a third package behind a third
+// credential: [github.com/ByteVeda/flexiq/sdks/go/v2/admin] pauses queues and
+// manages overrides, periodic tasks, the namespace quota and tokens. It dials
+// from this package's options and fails with this package's [*Error].
+//
+// Middleware, settings, migrations and pub/sub are absent from all three,
+// because they are on no door.
 //
 // Task registration is absent for a different reason: the server holds no task
 // registry at all. Enqueuing a name nobody implements succeeds, and the job

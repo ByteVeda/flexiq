@@ -26,12 +26,14 @@ token scoped to `produce` cannot attach while a token scoped to `execute` cannot
 | --- | --- | --- | --- |
 | `sdks/go/v2` | `flexiq.v1` | `produce` | Enqueue, read, cancel, count, submit workflows |
 | `sdks/go/v2/executor` | `flexiq.executor.v1` | `execute` | Attach, run tasks, report results |
+| `sdks/go/v2/admin` | `flexiq.admin.v1` | `admin`, `inspect`, `tokens` | Queues, overrides, periodic tasks, quota, tokens |
 
 A task that fans out to a second stage holds one of each: it runs on the executor door and goes
 back through the producer door as an ordinary client.
 
-What neither door has, all of it deliberate rather than missing: middleware, the admin surface,
-settings, migrations, pub/sub and the worker registry. See
+What no door has, all of it deliberate rather than missing: middleware, settings, migrations,
+pub/sub and the worker registry. The [admin client](#operating-the-admin-door) covers the
+operator calls infrastructure-as-code needs, not the whole admin door. See
 [the delta from an embedded SDK](../../contracts/REMOTE_SDK_CONTRACT.md#the-delta-from-an-embedded-sdk).
 
 Task registration is absent for a different reason: the server holds no task registry at all.
@@ -323,6 +325,47 @@ task that fans out goes back through the producer door as an ordinary client, ho
 Nothing an executor sends names a namespace, an owner, an attempt or a resource cap. Anything a
 client could name is something a client could forge, so the scheduler applies every one of those
 from the dispatch it recorded.
+
+## Operating the admin door
+
+```go
+import "github.com/ByteVeda/flexiq/sdks/go/v2/admin"
+```
+
+`admin.New` takes the root package's options — the same token, TLS and message caps — and every
+failure is a `*flexiq.Error`. It needs an operator token: `inspect` for the reads, `admin` for the
+writes, and `tokens` for the token methods, which neither of the others implies.
+
+| Area | Methods |
+| --- | --- |
+| Queues | `ListQueues`, `GetQueue`, `PauseQueue`, `ResumeQueue` |
+| Queue overrides | `ListQueueOverrides`, `GetQueueOverride`, `SetQueueOverride`, `ClearQueueOverride` |
+| Periodic tasks | `ListPeriodicTasks`, `GetPeriodicTask`, `PutPeriodicTask`, `DeletePeriodicTask`, `PausePeriodicTask`, `ResumePeriodicTask` |
+| Namespace quota | `GetNamespaceQuota`, `SetNamespaceQuota`, `ClearNamespaceQuota` |
+| Tokens | `CreateToken`, `GetToken`, `ListTokens`, `RevokeToken` |
+
+```go
+client, err := admin.New("queue.internal:50051", flexiq.WithToken(os.Getenv("FLEXIQ_ADMIN_TOKEN")))
+if err != nil {
+    return err
+}
+defer client.Close()
+
+limit := int32(4)
+_, err = client.SetQueueOverride(ctx, "payments", admin.QueueOverride{RateLimit: "100/m", MaxConcurrent: &limit})
+```
+
+- **Set is a replace.** `SetQueueOverride` and `SetNamespaceQuota` write the whole value: a field left
+  unset is no longer overridden. An unset optional is a `nil` pointer or an empty string; zero is a
+  real limit.
+- **Not found is a reason.** A missing periodic task is `flexiq.ReasonPeriodicTaskNotFound`, a
+  missing token `flexiq.ReasonTokenNotFound`. A queue, an override or a quota has no not-found:
+  `GetQueue` and `GetQueueOverride` answer a `found` flag.
+- **Periodic arguments are encoded as an enqueue's.** `PeriodicTaskSpec.Args` and `Kwargs` go
+  through `EncodeCall`, so `GetPeriodicTask` with `IncludePayload` hands back the same bytes, and
+  `PeriodicTask.DecodePayload` reads them.
+- **Never retry `CreateToken` blindly.** The server takes no idempotency key; a call that lost its
+  answer may have minted a token whose secret nobody holds. Find it with `ListTokens` and revoke it.
 
 ## Credentials
 
