@@ -39,7 +39,7 @@ Changelog = "https://docs.byteveda.org/flexiq/more/changelog"
 Issues = "https://github.com/ByteVeda/flexiq/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-cov>=5.0", "ruff>=0.11", "mypy>=1.15"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-cov>=5.0", "ruff>=0.11", "mypy>=1.15", "opentelemetry-sdk>=1.20"]
 fastapi = ["fastapi>=0.110.0", "pydantic>=2.5"]
 django = ["django>=4.2"]
 postgres = []  # PG driver is bundled in the Rust binary; extra exists for discoverability

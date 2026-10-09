@@ -23,12 +23,14 @@ if TYPE_CHECKING:
     from flexiq.context import JobContext
     from flexiq.predicates import Predicate
 
+# Kept rather than replaced with ``None`` stand-ins, so the names stay typed as
+# what they are when the extra is installed.
+_otel_missing: ImportError | None = None
 try:
     from opentelemetry import trace
     from opentelemetry.trace import StatusCode
-except ImportError:
-    trace = None
-    StatusCode = None
+except ImportError as error:
+    _otel_missing = error
 
 _TRACER_NAME = "flexiq"
 
@@ -56,6 +58,8 @@ class OpenTelemetryMiddleware(TaskMiddleware):
         predicate: Optional :class:`~flexiq.predicates.Predicate` (or
             callable taking a :class:`~flexiq.predicates.PredicateContext`)
             controlling which tasks this middleware applies to.
+        tracer_provider: Provider to take the tracer from. Defaults to the
+            globally registered one.
     """
 
     def __init__(
@@ -67,14 +71,15 @@ class OpenTelemetryMiddleware(TaskMiddleware):
         extra_attributes_fn: Callable[[JobContext], dict[str, Any]] | None = None,
         task_filter: Callable[[str], bool] | None = None,
         predicate: Predicate | Callable[..., Any] | None = None,
+        tracer_provider: Any | None = None,
     ):
-        if trace is None:
+        if _otel_missing is not None:
             raise ImportError(
                 "opentelemetry-api is required for OpenTelemetryMiddleware. "
                 "Install it with: pip install flexiq[otel]"
-            )
+            ) from _otel_missing
         super().__init__(predicate=legacy_task_filter_to_predicate(task_filter, predicate))
-        self._tracer = trace.get_tracer(tracer_name)
+        self._tracer = trace.get_tracer(tracer_name, tracer_provider=tracer_provider)
         self._span_name_fn = span_name_fn
         self._attr_prefix = attribute_prefix
         self._extra_attributes_fn = extra_attributes_fn
