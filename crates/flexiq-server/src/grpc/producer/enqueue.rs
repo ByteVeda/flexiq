@@ -320,7 +320,7 @@ fn prepare(request: pb::EnqueueRequest, scoped: &Scoped<'_>) -> Result<Prepared,
         None => Dispatch::Plain,
     };
 
-    let job = convert::new_job(
+    let mut job = convert::new_job(
         request.task_name,
         payload,
         Some(options),
@@ -328,6 +328,11 @@ fn prepare(request: pb::EnqueueRequest, scoped: &Scoped<'_>) -> Result<Prepared,
         scoped.token_id(),
         now_millis(),
     )?;
+    // A header context continues the caller's trace exactly as one in
+    // `metadata` would; keys the caller put in `metadata` win.
+    if let Some(trace) = scoped.trace() {
+        job.metadata = trace.merge_into(job.metadata.take());
+    }
 
     Ok(Prepared { job, dispatch })
 }
