@@ -74,10 +74,13 @@ jobs:
           go-version: "1.27.x"
           cache-dependency-path: deploy/terraform/provider/go.sum
 
+      # Built with this job's Go: a prebuilt binary cannot read export data
+      # from a newer Go patch release.
       - name: Lint
         uses: golangci/golangci-lint-action@v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
+          install-mode: goinstall
           working-directory: deploy/terraform/provider
 
       - name: go.mod and go.sum are tidy
