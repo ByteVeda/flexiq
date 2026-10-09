@@ -198,6 +198,11 @@ reason `WORKFLOW_CONSTRUCT_UNSUPPORTED`, carrying `node` and `field`. The
 message can carry all five; nothing outside a live SDK process can advance a run
 that uses them.
 
+`SubmitWorkflow` takes `traceparent`/`tracestate` request headers the way
+`Enqueue` does. The run keeps them, and every node job's metadata carries them
+beside its `workflow_run_id`/`workflow_node_name` routing keys, so each step is
+a child of the submit span, not of the step before it.
+
 `WatchJobs` follows jobs as they change state. A client that waits for a job
 **SHOULD** watch it rather than poll `GetJob`. It watches either a set of ids or
 a queue:

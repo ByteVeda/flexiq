@@ -271,6 +271,61 @@ async fn an_empty_node_queue_lands_in_default() {
     harness.stop().await;
 }
 
+/// Trace headers on `SubmitWorkflow` reach every node job beside its routing
+/// keys, the same merge `Enqueue` applies, and the run keeps them.
+#[tokio::test]
+async fn trace_headers_reach_every_node_job() {
+    const PARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    let harness = Harness::start("traced-workflow").await;
+
+    let mut request = tonic::Request::new(SubmitWorkflowRequest {
+        name: "traced".to_string(),
+        graph: Some(linear_graph()),
+        params_json: None,
+    });
+    request
+        .metadata_mut()
+        .insert("traceparent", PARENT.parse().expect("ASCII"));
+    request
+        .metadata_mut()
+        .insert("tracestate", "vendor=1".parse().expect("ASCII"));
+    let run_id = harness
+        .client
+        .clone()
+        .submit_workflow(request)
+        .await
+        .expect("submit_workflow")
+        .into_inner()
+        .run_id;
+
+    let nodes = harness
+        .workflows
+        .get_workflow_nodes(&run_id)
+        .expect("nodes");
+    assert_eq!(nodes.len(), 2);
+    for node in &nodes {
+        let job = harness
+            .storage
+            .get_job(node.job_id.as_deref().expect("enqueued"), Some(NAMESPACE))
+            .expect("read")
+            .expect("the job exists");
+        let metadata: serde_json::Value =
+            serde_json::from_str(job.metadata.as_deref().expect("metadata")).expect("JSON");
+        assert_eq!(metadata["workflow_run_id"], run_id.as_str());
+        assert_eq!(metadata["workflow_node_name"], node.node_name.as_str());
+        assert_eq!(metadata["traceparent"], PARENT);
+        assert_eq!(metadata["tracestate"], "vendor=1");
+    }
+    let run = harness
+        .workflows
+        .get_workflow_run(&run_id)
+        .expect("read")
+        .expect("the run exists");
+    assert_eq!(run.traceparent.as_deref(), Some(PARENT));
+
+    harness.stop().await;
+}
+
 #[tokio::test]
 async fn a_dynamic_construct_is_refused_before_anything_is_written() {
     let harness = Harness::start("dynamic-refusal").await;
