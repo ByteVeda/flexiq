@@ -10,7 +10,7 @@
 # Pinned rather than @latest: a linter that changes its rule set on a Tuesday
 # turns a green branch red on a morning nobody touched Go. Keep in step with
 # GOLANGCI_LINT_VERSION in .github/workflows/ci-go.yml.
-GOLANGCI_LINT_VERSION ?= v2.13.2
+GOLANGCI_LINT_VERSION ?= v2.14.0
 GOLANGCI_LINT ?= golangci-lint
 
 GO ?= go
