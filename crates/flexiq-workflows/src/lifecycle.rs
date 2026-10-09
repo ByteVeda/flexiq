@@ -179,7 +179,7 @@ pub fn carry_trace(metadata: String, trace: Option<&TraceContext>) -> String {
 pub fn submit_workflow(
     storage: &StorageBackend,
     wf_storage: &WorkflowStorageBackend,
-    request: SubmitStaticWorkflowRequest,
+    mut request: SubmitStaticWorkflowRequest,
 ) -> std::result::Result<WorkflowRunHandle, SubmitWorkflowError> {
     let ordered = topological_order(&request.dag_bytes)?;
 
@@ -236,6 +236,16 @@ pub fn submit_workflow(
                 def_id
             }
         };
+
+    // A sub-workflow submitted with no context of its own stays in its parent
+    // run's trace, so the whole tree reads as one.
+    if request.trace.is_none() {
+        if let Some(parent) = &request.parent_run_id {
+            request.trace = wf_storage
+                .get_workflow_run(parent)?
+                .and_then(|run| run.trace_context());
+        }
+    }
 
     let run_id = uuid::Uuid::now_v7().to_string();
     let now = now_millis();
@@ -508,6 +518,34 @@ mod tests {
             assert_eq!(v["workflow_node_name"], node.node_name.as_str());
             assert_eq!(v["traceparent"], TRACEPARENT);
         }
+    }
+
+    /// A sub-workflow submitted without a context continues its parent's.
+    #[test]
+    fn a_sub_workflow_inherits_its_parents_trace() {
+        let (storage, wf) = make_storages();
+        let metadata = step_metadata_json(&[("a", "task_a")]);
+        let mut parent = base_request(
+            "parent",
+            dag_bytes(&["a"], &[]),
+            &metadata,
+            node_payloads(&["a"]),
+        );
+        parent.trace = Some(trace());
+        let parent = submit_workflow(&storage, &wf, parent).unwrap();
+
+        let mut child = base_request(
+            "child",
+            dag_bytes(&["a"], &[]),
+            &metadata,
+            node_payloads(&["a"]),
+        );
+        child.parent_run_id = Some(parent.run_id);
+        child.parent_node_name = Some("a".to_string());
+        let child = submit_workflow(&storage, &wf, child).unwrap();
+
+        let run = wf.get_workflow_run(&child.run_id).unwrap().unwrap();
+        assert_eq!(run.trace_context(), Some(trace()));
     }
 
     #[test]
