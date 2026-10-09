@@ -183,7 +183,8 @@ jobs:
           password: ${{ github.token }}
 
       # Loaded into the local daemon first so the smoke test runs before
-      # anything reaches the registry.
+      # anything reaches the registry. No gha layer cache, for the reason in
+      # ci-server-image.yml.
       - name: Build ${{ matrix.platform }}
         uses: docker/build-push-action@v7
         with:
@@ -193,15 +194,6 @@ jobs:
           build-args: VERSION=${{ env.VERSION }}
           tags: ${{ env.IMAGE }}:${{ env.TAG }}
           load: true
-          cache-from: type=gha,scope=server-image-${{ matrix.arch }}
-          # Same master-only rule as ci-server-image.yml. A release runs on a
-          # tag, and a cache written on a tag ref is readable from nowhere else
-          # — so `mode=max` there only mints blobs that evict the master
-          # entries this build restores from. Reads still hit master's cache.
-          cache-to: >-
-            ${{ github.ref == 'refs/heads/master'
-                && format('type=gha,mode=max,scope=server-image-{0}', matrix.arch)
-                || '' }}
 
       # The binary derives its version from the workspace Cargo.toml, so this
       # catches an image built from the wrong commit as well as a bad --build-arg.
@@ -223,8 +215,8 @@ jobs:
       # daemon: a daemon push rewrites the manifest to Docker media types, and
       # `imagetools create` then drops the index annotations GHCR reads a
       # multiarch description from — silently, since a Docker manifest list has
-      # no annotations field. Everything is already built, so this is a cache
-      # hit plus the upload.
+      # no annotations field. The job's buildx builder already holds every
+      # layer from the step above, so this is a cache hit plus the upload.
       - name: Push the per-architecture tag
         if: ${{ !inputs.dry-run }}
         uses: docker/build-push-action@v7
@@ -239,7 +231,6 @@ jobs:
           provenance: false
           sbom: false
           outputs: type=image,push=true,oci-mediatypes=true
-          cache-from: type=gha,scope=server-image-${{ matrix.arch }}
 
   manifest:
     name: Publish multiarch manifest
