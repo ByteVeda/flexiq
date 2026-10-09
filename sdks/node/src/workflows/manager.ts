@@ -4,6 +4,7 @@ import type { Middleware, WorkflowSubmitContext } from "../middleware";
 import type { NativeQueue } from "../native";
 import { type Serializer, serializeCall } from "../serializers";
 import { TRACEPARENT, TRACESTATE } from "../trace-context";
+import { createLogger } from "../utils";
 import { WorkflowAnalysis, type WorkflowGraph } from "./analysis";
 import { WorkflowBuilder } from "./builder";
 import { WorkflowCacheStore } from "./cache";
@@ -18,6 +19,8 @@ import type {
   WorkflowSubmitOptions,
   WorkflowWaitOptions,
 } from "./types";
+
+const log = createLogger("workflows");
 
 /** Run states with no further transitions. */
 const TERMINAL_STATES = new Set([
@@ -190,7 +193,12 @@ export class WorkflowManager {
   ): Record<string, string> | undefined {
     const ctx: WorkflowSubmitContext = { workflowName, traceContext };
     for (const mw of this.middleware) {
-      mw.onWorkflowSubmit?.(ctx);
+      // Tracing must never cost the submit: a failing hook is logged and skipped.
+      try {
+        mw.onWorkflowSubmit?.(ctx);
+      } catch (error) {
+        log.error(() => `middleware onWorkflowSubmit failed for workflow ${workflowName}`, error);
+      }
     }
     return ctx.traceContext;
   }

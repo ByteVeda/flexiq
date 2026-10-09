@@ -198,6 +198,21 @@ it("lets an explicit trace context win over the middleware", () => {
   expect(nodeMetadata(queue, handle.nodes()).a?.traceparent).toBe(TRACEPARENT);
 });
 
+it("submits the run even when an onWorkflowSubmit hook throws", () => {
+  const queue = newQueue(false);
+  queue.use({
+    onWorkflowSubmit() {
+      throw new Error("hook failed");
+    },
+  });
+  queue.task("noop", () => undefined);
+  const builder = queue.workflows.define("hook-throws").step("a", "noop");
+
+  const handle = queue.workflows.submit(builder, { traceContext: { traceparent: TRACEPARENT } });
+
+  expect(nodeMetadata(queue, handle.nodes()).a?.traceparent).toBe(TRACEPARENT);
+});
+
 it("carries only the routing keys outside any span", () => {
   const queue = newQueue();
   queue.task("noop", () => undefined);

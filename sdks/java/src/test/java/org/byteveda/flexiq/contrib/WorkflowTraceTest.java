@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.middleware.Middleware;
+import org.byteveda.flexiq.middleware.WorkflowSubmitContext;
 import org.byteveda.flexiq.task.Task;
 import org.byteveda.flexiq.worker.Worker;
 import org.byteveda.flexiq.workflows.Step;
@@ -198,6 +200,26 @@ class WorkflowTraceTest {
                     inSubmit(() -> queue.submitWorkflow(wf, Map.of(), Map.of("traceparent", TRACEPARENT)));
 
             String jobId = submitted.run().status().orElseThrow().node("a").orElseThrow().jobId;
+            Map<?, ?> metadata = JSON.readValue(queue.getJob(jobId).orElseThrow().metadata, Map.class);
+            assertEquals(TRACEPARENT, metadata.get("traceparent"));
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void aThrowingHookDoesNotBlockTheSubmit(@TempDir Path dir) throws Exception {
+        try (FlexiQ queue =
+                FlexiQ.builder().url(dir.resolve("wt.db").toString()).open()) {
+            queue.use(new Middleware() {
+                @Override
+                public void onWorkflowSubmit(WorkflowSubmitContext context) {
+                    throw new IllegalStateException("hook failed");
+                }
+            });
+            Workflow wf = Workflow.named("hook-throws").step("a", FIRST, 1);
+            WorkflowRun run = queue.submitWorkflow(wf, Map.of(), Map.of("traceparent", TRACEPARENT));
+
+            String jobId = run.status().orElseThrow().node("a").orElseThrow().jobId;
             Map<?, ?> metadata = JSON.readValue(queue.getJob(jobId).orElseThrow().metadata, Map.class);
             assertEquals(TRACEPARENT, metadata.get("traceparent"));
         }

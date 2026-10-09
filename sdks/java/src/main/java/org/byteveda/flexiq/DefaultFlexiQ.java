@@ -49,6 +49,7 @@ import org.byteveda.flexiq.internal.MiddlewareDisables;
 import org.byteveda.flexiq.internal.SettingsDocument;
 import org.byteveda.flexiq.locks.Lock;
 import org.byteveda.flexiq.locks.LockInfo;
+import org.byteveda.flexiq.logging.FlexiQLogger;
 import org.byteveda.flexiq.middleware.EnqueueContext;
 import org.byteveda.flexiq.middleware.Middleware;
 import org.byteveda.flexiq.middleware.WorkflowSubmitContext;
@@ -126,6 +127,8 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
             CALLER_METADATA.getTypeFactory().constructMapType(LinkedHashMap.class, String.class, Object.class);
 
     private static final long DEFAULT_LOCK_TTL_MS = 30_000;
+
+    private static final FlexiQLogger LOG = FlexiQLogger.create("queue");
 
     private final QueueBackend backend;
     private final CoreFacade facade;
@@ -1421,7 +1424,12 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     private Map<String, String> workflowTraceCarrier(String workflowName, Map<String, String> traceContext) {
         WorkflowSubmitContext context = new WorkflowSubmitContext(workflowName, traceContext);
         for (Middleware m : middleware) {
-            m.onWorkflowSubmit(context);
+            // Tracing must never cost the submit: a failing hook is logged and skipped.
+            try {
+                m.onWorkflowSubmit(context);
+            } catch (RuntimeException e) {
+                LOG.warn("middleware onWorkflowSubmit failed for workflow '" + workflowName + "'", e);
+            }
         }
         return context.traceContext();
     }
