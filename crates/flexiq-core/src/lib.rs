@@ -99,7 +99,7 @@ pub use storage::redis_backend::{RedisConnection, RedisStorage};
 pub use storage::sqlite::SqliteStorage;
 pub use storage::Storage;
 pub use storage::StorageBackend;
-pub use storage::{DeadJob, QueueStats, SubscriptionBacklogStats};
+pub use storage::{DeadJob, LiveCounts, QueueStats, SubscriptionBacklogStats};
 #[cfg(feature = "http-target")]
 pub use worker::http_target::{
     HttpDispatchTarget, HttpTargetConfig, HttpTargetError, SettleRefused, SettledOutcome,

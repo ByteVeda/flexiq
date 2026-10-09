@@ -1,5 +1,8 @@
 # KEDA ScaledObject using flexiq's HTTP scaler endpoint.
 #
+# Running flexiq-server? Its gRPC listener serves a native KEDA scaler; see
+# scaled-object-external.yaml and skip the separate scaler Deployment.
+#
 # Prerequisites:
 #   1. Deploy `flexiq scaler --app myapp:queue --port 9091` as a Service
 #   2. Install KEDA with the http-add-on or external scaler support

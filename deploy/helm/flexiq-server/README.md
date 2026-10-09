@@ -21,4 +21,11 @@ KEDA manifests:
 
 **[Deploy FlexiQ on Kubernetes](https://docs.byteveda.org/flexiq/python/operate/kubernetes)**
 
+With `grpc.enabled=true` the server also serves a native KEDA external scaler
+on the chart's `<fullname>-grpc` Service (port `grpc.port`), authenticated with an `inspect` token. The manifests are
+[`deploy/keda/scaled-object-external.yaml`](../../keda/scaled-object-external.yaml)
+and its `-stream` variant, and
+**[Scaling](https://docs.byteveda.org/flexiq/server/operate/scaling#external-scaler)**
+covers the token and trigger metadata.
+
 Chart defaults and source-level value comments live in [`values.yaml`](values.yaml).
