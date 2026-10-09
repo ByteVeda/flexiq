@@ -1852,6 +1852,30 @@
       "owner": "FlexiQ",
       "name": "submitWorkflow",
       "kind": "method",
+      "signature": "WorkflowRun submitWorkflow(Workflow workflow, Map<String, Object> payloads, Map<String, String> traceContext)",
+      "params": [
+        {
+          "name": "workflow",
+          "type": "Workflow",
+          "default": null
+        },
+        {
+          "name": "payloads",
+          "type": "Map<String, Object>",
+          "default": null
+        },
+        {
+          "name": "traceContext",
+          "type": "Map<String, String>",
+          "default": null
+        }
+      ],
+      "returns": "WorkflowRun"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "submitWorkflow",
+      "kind": "method",
       "signature": "WorkflowRun submitWorkflow(Workflow workflow, Map<String, Object> payloads)",
       "params": [
         {

@@ -1184,6 +1184,20 @@
     },
     {
       "owner": "PyQueue",
+      "name": "get_workflow_trace_carrier",
+      "kind": "method",
+      "signature": "get_workflow_trace_carrier(run_id: str) -> dict[str, str]",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "dict[str, str]"
+    },
+    {
+      "owner": "PyQueue",
       "name": "inherited_worker_steps",
       "kind": "method",
       "signature": "inherited_worker_steps() -> WorkerSteps | None",
@@ -2635,7 +2649,7 @@
       "owner": "PyQueue",
       "name": "submit_workflow",
       "kind": "method",
-      "signature": "submit_workflow(name: str, version: int, dag_bytes: bytes, step_metadata_json: str, node_payloads: dict[str, bytes], queue_default: str = \"default\", params_json: str | None = None, deferred_node_names: list[str] | None = None, parent_run_id: str | None = None, parent_node_name: str | None = None, cache_hit_nodes: dict[str, str] | None = None) -> PyWorkflowHandle",
+      "signature": "submit_workflow(name: str, version: int, dag_bytes: bytes, step_metadata_json: str, node_payloads: dict[str, bytes], queue_default: str = \"default\", params_json: str | None = None, deferred_node_names: list[str] | None = None, parent_run_id: str | None = None, parent_node_name: str | None = None, cache_hit_nodes: dict[str, str] | None = None, traceparent: str | None = None, tracestate: str | None = None) -> PyWorkflowHandle",
       "params": [
         {
           "name": "name",
@@ -2690,6 +2704,16 @@
         {
           "name": "cache_hit_nodes",
           "type": "dict[str, str] | None",
+          "default": "None"
+        },
+        {
+          "name": "traceparent",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "tracestate",
+          "type": "str | None",
           "default": "None"
         }
       ],

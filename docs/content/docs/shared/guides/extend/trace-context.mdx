@@ -61,12 +61,70 @@ execute span, so a chain of jobs stays one trace.
 | Attached executor and gRPC executor door | Metadata rides the dispatch frame |
 | gRPC producer door and JSON facade | Put `traceparent` / `tracestate` in `EnqueueOptions.metadata`, or send them as `traceparent` / `tracestate` request headers (see below) |
 | Periodic jobs | A new trace per firing — there is no caller to continue |
-| Workflow node jobs | **Not yet carried.** Node metadata holds the run's routing keys; tracked in [issue #1047](https://github.com/ByteVeda/flexiq/issues/1047) |
+| Workflow node jobs | Carried from the submit — see [Workflows](#workflows) below |
+
+### Workflows
+
+A workflow submit stores the submitter's context on the run. Every node job
+carries it beside the run's routing keys (`workflow_run_id`,
+`workflow_node_name`), which it never displaces:
+
+```json
+{
+  "workflow_run_id": "0199…",
+  "workflow_node_name": "charge",
+  "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+}
+```
+
+Every step's execute span is a child of the **submit** span, not of the step
+before it — flat, the way pub/sub fan-out already is. That holds for steps
+enqueued at submit and for those the tracker enqueues later: fan-out children,
+fan-in collectors, successors of a condition or gate, and compensation jobs. A
+sub-workflow continues its parent run's trace.
+
+With the OpenTelemetry integration registered, the submit picks up the current
+context on its own. You can also pass a carrier explicitly; it wins over the
+middleware's.
+
+<SdkOnly sdk="python">
+
+```python
+run = queue.submit_workflow(wf, trace_context={"traceparent": traceparent})
+```
+
+The integration fills it through the `on_workflow_submit` middleware hook,
+which any middleware can implement.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+```ts
+const handle = queue.workflows.submit(builder, { traceContext: { traceparent } });
+```
+
+The integration fills it through the `onWorkflowSubmit` middleware hook, which
+any middleware can implement.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+```java
+WorkflowRun run = flexiq.submitWorkflow(wf, Map.of(), Map.of("traceparent", traceparent));
+```
+
+The integration fills it through `Middleware.onWorkflowSubmit`, which any
+middleware can implement.
+
+</SdkOnly>
 
 ### Request headers on the server doors
 
 The server merges `traceparent` / `tracestate` request headers into the job's
-metadata by the same rule as above:
+metadata by the same rule as above. `SubmitWorkflow` takes the same headers
+and stores them on the run, as described in [Workflows](#workflows).
 
 - A `traceparent` or `tracestate` already in the metadata wins over the headers.
 - A malformed `traceparent` header is ignored, together with its `tracestate`.
