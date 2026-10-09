@@ -136,3 +136,14 @@ enqueues are its children.
 Details and options: [OpenTelemetry Integration](/java/guides/extend/otel).
 
 </SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The Rust SDK ships no OpenTelemetry integration and has no middleware to hang
+one on. A Rust producer can still start a trace that another SDK's worker
+continues: inject your context into a map with your OpenTelemetry crate's
+propagator and pass it, JSON-encoded, to the enqueue options' `metadata`. A
+Rust task does not see its job's metadata, so a job a Rust worker runs starts a
+trace of its own.
+
+</SdkOnly>

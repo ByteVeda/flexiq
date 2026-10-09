@@ -102,6 +102,7 @@ export const SECTION_SKELETON = [
       "notes",
       "testing",
       "otel",
+      "trace-context",
       "micrometer",
       "prometheus",
       "sentry",

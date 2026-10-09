@@ -10,6 +10,7 @@
     "logging",
     "notes",
     "testing",
+    "trace-context",
     "prometheus",
     "sentry"
   ]
