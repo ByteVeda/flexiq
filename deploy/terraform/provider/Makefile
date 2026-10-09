@@ -1,7 +1,7 @@
 # Task entrypoints for the Terraform provider, one name per thing CI does.
 
 # Pinned, and kept in step with sdks/go/Makefile, so both modules lint alike.
-GOLANGCI_LINT_VERSION ?= v2.13.2
+GOLANGCI_LINT_VERSION ?= v2.14.0
 GOLANGCI_LINT ?= golangci-lint
 
 GO ?= go
