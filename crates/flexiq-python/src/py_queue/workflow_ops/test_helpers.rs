@@ -163,6 +163,8 @@ pub(crate) fn seed_run(wf_storage: &WorkflowStorageBackend) -> String {
         parent_run_id: None,
         parent_node_name: None,
         created_at: now,
+        traceparent: None,
+        tracestate: None,
     };
     let run_id = run.id.clone();
     wf_storage.create_workflow_run(&run).unwrap();

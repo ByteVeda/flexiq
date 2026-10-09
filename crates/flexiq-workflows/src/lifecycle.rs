@@ -234,6 +234,8 @@ pub fn submit_workflow(
         parent_run_id: request.parent_run_id.clone(),
         parent_node_name: request.parent_node_name.clone(),
         created_at: now,
+        traceparent: None,
+        tracestate: None,
     };
     wf_storage.create_workflow_run(&run)?;
 

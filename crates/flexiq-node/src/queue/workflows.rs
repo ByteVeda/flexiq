@@ -114,6 +114,8 @@ impl JsQueue {
             parent_run_id,
             parent_node_name,
             created_at: now,
+            traceparent: None,
+            tracestate: None,
         };
         wf.create_workflow_run(&run).map_err(to_napi_err)?;
 

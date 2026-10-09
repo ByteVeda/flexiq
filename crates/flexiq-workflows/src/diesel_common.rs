@@ -133,6 +133,10 @@ pub(crate) struct RunRow {
     pub parent_node_name: Option<String>,
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     pub created_at: i64,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    pub traceparent: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    pub tracestate: Option<String>,
 }
 
 #[derive(QueryableByName)]
@@ -194,6 +198,8 @@ pub(crate) fn run_from_row(row: RunRow) -> WorkflowRun {
         parent_run_id: row.parent_run_id,
         parent_node_name: row.parent_node_name,
         created_at: row.created_at,
+        traceparent: row.traceparent,
+        tracestate: row.tracestate,
     }
 }
 
@@ -347,8 +353,9 @@ macro_rules! impl_workflow_diesel_ops {
                 ::diesel::sql_query(
                     &$prep_sql("INSERT INTO workflow_runs
                         (id, definition_id, params, state, started_at, completed_at, error,
-                         parent_run_id, parent_node_name, created_at, namespace)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+                         parent_run_id, parent_node_name, created_at, namespace,
+                         traceparent, tracestate)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
                 )
                 .bind::<::diesel::sql_types::Text, _>(&run.id)
                 .bind::<::diesel::sql_types::Text, _>(&run.definition_id)
@@ -361,6 +368,8 @@ macro_rules! impl_workflow_diesel_ops {
                 .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::Text>, _>(&run.parent_node_name)
                 .bind::<::diesel::sql_types::BigInt, _>(run.created_at)
                 .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::Text>, _>(self.namespace.as_deref())
+                .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::Text>, _>(&run.traceparent)
+                .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::Text>, _>(&run.tracestate)
                 .execute(&mut *conn)?;
 
                 Ok(())
@@ -373,7 +382,7 @@ macro_rules! impl_workflow_diesel_ops {
                 let mut conn = self.inner.conn()?;
                 let rows: Vec<$crate::diesel_common::RunRow> = ::diesel::sql_query(
                     &$prep_sql(&format!("SELECT id, definition_id, params, state, started_at, completed_at, error,
-                            parent_run_id, parent_node_name, created_at
+                            parent_run_id, parent_node_name, created_at, traceparent, tracestate
                      FROM workflow_runs WHERE id = ? AND {}", $crate::diesel_common::RUN_IN_NAMESPACE)),
                 )
                 .bind::<::diesel::sql_types::Text, _>(run_id)
@@ -459,7 +468,7 @@ macro_rules! impl_workflow_diesel_ops {
                     (Some(name), Some(st)) => ::diesel::sql_query(
                         &$prep_sql(&format!("SELECT r.id, r.definition_id, r.params, r.state, r.started_at,
                                 r.completed_at, r.error, r.parent_run_id, r.parent_node_name,
-                                r.created_at
+                                r.created_at, r.traceparent, r.tracestate
                          FROM workflow_runs r
                          JOIN workflow_definitions d ON r.definition_id = d.id
                          WHERE d.name = ? AND r.state = ? AND {}
@@ -475,7 +484,7 @@ macro_rules! impl_workflow_diesel_ops {
                     (Some(name), None) => ::diesel::sql_query(
                         &$prep_sql(&format!("SELECT r.id, r.definition_id, r.params, r.state, r.started_at,
                                 r.completed_at, r.error, r.parent_run_id, r.parent_node_name,
-                                r.created_at
+                                r.created_at, r.traceparent, r.tracestate
                          FROM workflow_runs r
                          JOIN workflow_definitions d ON r.definition_id = d.id
                          WHERE d.name = ? AND {}
@@ -489,7 +498,7 @@ macro_rules! impl_workflow_diesel_ops {
                     .load(&mut *conn)?,
                     (None, Some(st)) => ::diesel::sql_query(
                         &$prep_sql(&format!("SELECT id, definition_id, params, state, started_at, completed_at,
-                                error, parent_run_id, parent_node_name, created_at
+                                error, parent_run_id, parent_node_name, created_at, traceparent, tracestate
                          FROM workflow_runs WHERE state = ? AND {}
                          ORDER BY created_at DESC LIMIT ? OFFSET ?", $crate::diesel_common::RUN_IN_NAMESPACE)),
                     )
@@ -501,7 +510,7 @@ macro_rules! impl_workflow_diesel_ops {
                     .load(&mut *conn)?,
                     (None, None) => ::diesel::sql_query(
                         &$prep_sql(&format!("SELECT id, definition_id, params, state, started_at, completed_at,
-                                error, parent_run_id, parent_node_name, created_at
+                                error, parent_run_id, parent_node_name, created_at, traceparent, tracestate
                          FROM workflow_runs WHERE {}
                          ORDER BY created_at DESC LIMIT ? OFFSET ?", $crate::diesel_common::RUN_IN_NAMESPACE)),
                     )
@@ -536,7 +545,7 @@ macro_rules! impl_workflow_diesel_ops {
                     (Some(name), Some(st)) => ::diesel::sql_query(
                         &$prep_sql(&format!("SELECT r.id, r.definition_id, r.params, r.state, r.started_at,
                                 r.completed_at, r.error, r.parent_run_id, r.parent_node_name,
-                                r.created_at
+                                r.created_at, r.traceparent, r.tracestate
                          FROM workflow_runs r
                          JOIN workflow_definitions d ON r.definition_id = d.id
                          WHERE d.name = ? AND r.state = ? AND {}
@@ -555,7 +564,7 @@ macro_rules! impl_workflow_diesel_ops {
                     (Some(name), None) => ::diesel::sql_query(
                         &$prep_sql(&format!("SELECT r.id, r.definition_id, r.params, r.state, r.started_at,
                                 r.completed_at, r.error, r.parent_run_id, r.parent_node_name,
-                                r.created_at
+                                r.created_at, r.traceparent, r.tracestate
                          FROM workflow_runs r
                          JOIN workflow_definitions d ON r.definition_id = d.id
                          WHERE d.name = ? AND {}
@@ -572,7 +581,7 @@ macro_rules! impl_workflow_diesel_ops {
                     .load(&mut *conn)?,
                     (None, Some(st)) => ::diesel::sql_query(
                         &$prep_sql(&format!("SELECT id, definition_id, params, state, started_at, completed_at,
-                                error, parent_run_id, parent_node_name, created_at
+                                error, parent_run_id, parent_node_name, created_at, traceparent, tracestate
                          FROM workflow_runs WHERE state = ? AND {}
                            AND (created_at < ? OR (created_at = ? AND id < ?))
                          ORDER BY created_at DESC, id DESC LIMIT ?", $crate::diesel_common::RUN_IN_NAMESPACE)),
@@ -587,7 +596,7 @@ macro_rules! impl_workflow_diesel_ops {
                     .load(&mut *conn)?,
                     (None, None) => ::diesel::sql_query(
                         &$prep_sql(&format!("SELECT id, definition_id, params, state, started_at, completed_at,
-                                error, parent_run_id, parent_node_name, created_at
+                                error, parent_run_id, parent_node_name, created_at, traceparent, tracestate
                          FROM workflow_runs
                          WHERE {} AND (created_at < ? OR (created_at = ? AND id < ?))
                          ORDER BY created_at DESC, id DESC LIMIT ?", $crate::diesel_common::RUN_IN_NAMESPACE)),
@@ -971,7 +980,7 @@ macro_rules! impl_workflow_diesel_ops {
                 let mut conn = self.inner.conn()?;
                 let rows: Vec<$crate::diesel_common::RunRow> = ::diesel::sql_query(
                     &$prep_sql(&format!("SELECT id, definition_id, params, state, started_at, completed_at,
-                            error, parent_run_id, parent_node_name, created_at
+                            error, parent_run_id, parent_node_name, created_at, traceparent, tracestate
                      FROM workflow_runs WHERE parent_run_id = ? AND {}",
                         $crate::diesel_common::RUN_IN_NAMESPACE
                     )),

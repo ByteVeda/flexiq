@@ -327,6 +327,8 @@ fn submit(
         parent_run_id,
         parent_node_name,
         created_at: now,
+        traceparent: None,
+        tracestate: None,
     })?;
 
     let mut job_ids: HashMap<String, String> = HashMap::new();

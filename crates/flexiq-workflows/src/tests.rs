@@ -47,6 +47,8 @@ fn make_run(definition_id: &str) -> WorkflowRun {
         parent_run_id: None,
         parent_node_name: None,
         created_at: now_millis(),
+        traceparent: None,
+        tracestate: None,
     }
 }
 

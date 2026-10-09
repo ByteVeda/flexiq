@@ -1,3 +1,4 @@
+use flexiq_core::trace::TraceContext;
 use serde::{Deserialize, Serialize};
 
 use crate::state::WorkflowState;
@@ -28,4 +29,26 @@ pub struct WorkflowRun {
     /// Epoch-ms the run row was written. Together with `id` it forms the
     /// keyset cursor `list_workflow_runs_after` seeks on.
     pub created_at: i64,
+    /// W3C `traceparent` of whoever submitted the run. Every node job carries
+    /// it, so each step's execute span joins the submitter's trace.
+    #[serde(default)]
+    pub traceparent: Option<String>,
+    /// W3C `tracestate` paired with `traceparent`.
+    #[serde(default)]
+    pub tracestate: Option<String>,
+}
+
+impl WorkflowRun {
+    /// The submitter's trace context, or `None` when absent or not valid —
+    /// a stored value is re-validated so a bad row never propagates.
+    pub fn trace_context(&self) -> Option<TraceContext> {
+        TraceContext::from_headers(self.traceparent.as_deref(), self.tracestate.as_deref())
+    }
+
+    /// Record `trace` as this run's carrier.
+    pub fn with_trace_context(mut self, trace: Option<&TraceContext>) -> Self {
+        self.traceparent = trace.map(|t| t.traceparent().to_string());
+        self.tracestate = trace.and_then(|t| t.tracestate().map(str::to_string));
+        self
+    }
 }

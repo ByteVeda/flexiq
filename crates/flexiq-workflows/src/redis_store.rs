@@ -350,6 +350,8 @@ fn map_to_run(map: HashMap<String, Value>) -> Result<WorkflowRun> {
     let parent_run_id = val_to_opt_string(map.get("parent_run_id").unwrap_or(&Value::Nil))?;
     let parent_node_name = val_to_opt_string(map.get("parent_node_name").unwrap_or(&Value::Nil))?;
     let created_at = parse_i64(&val_to_string(hash_get(&map, "created_at")?)?)?;
+    let traceparent = val_to_opt_string(map.get("traceparent").unwrap_or(&Value::Nil))?;
+    let tracestate = val_to_opt_string(map.get("tracestate").unwrap_or(&Value::Nil))?;
     Ok(WorkflowRun {
         id,
         definition_id,
@@ -361,6 +363,8 @@ fn map_to_run(map: HashMap<String, Value>) -> Result<WorkflowRun> {
         parent_run_id,
         parent_node_name,
         created_at,
+        traceparent,
+        tracestate,
     })
 }
 
@@ -528,6 +532,12 @@ impl WorkflowStorage for WorkflowRedisStorage {
         }
         if let Some(n) = &run.parent_node_name {
             pipe.hset(&key, "parent_node_name", n);
+        }
+        if let Some(t) = &run.traceparent {
+            pipe.hset(&key, "traceparent", t);
+        }
+        if let Some(t) = &run.tracestate {
+            pipe.hset(&key, "tracestate", t);
         }
         // Stamped from the store, not the caller: a run must land in the
         // tenant whose queue created it.
