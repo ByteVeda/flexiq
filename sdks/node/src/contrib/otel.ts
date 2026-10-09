@@ -8,7 +8,9 @@
 // the job's metadata (`traceparent`/`tracestate`, merged, never replacing the
 // caller's keys) through the registered propagator, and the execute span is a
 // child of it — whichever SDK enqueued the job. An enqueue made inside a task
-// with no active span of its own continues that task's execute span.
+// with no active span of its own continues that task's execute span. A workflow
+// submit stores the same context on the run, so every step's execute span is a
+// child of the submit.
 
 import {
   type Attributes,
@@ -80,6 +82,18 @@ export function otelMiddleware(options: OtelMiddlewareOptions = {}): Middleware 
       const merged = mergeTraceCarrier(ctx.options.metadata ?? undefined, carrier);
       if (merged !== undefined) {
         ctx.options.metadata = merged;
+      }
+    },
+
+    onWorkflowSubmit(ctx) {
+      // A carrier the caller passed explicitly wins, as metadata keys do.
+      if (ctx.traceContext && Object.keys(ctx.traceContext).length > 0) {
+        return;
+      }
+      const carrier: Record<string, string> = {};
+      propagation.inject(enqueueContext(), carrier);
+      if (Object.keys(carrier).length > 0) {
+        ctx.traceContext = carrier;
       }
     },
 

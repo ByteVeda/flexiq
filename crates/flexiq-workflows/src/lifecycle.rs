@@ -160,6 +160,22 @@ pub fn carry_trace(metadata: String, trace: Option<&TraceContext>) -> String {
     trace.merge_into(Some(metadata.clone())).unwrap_or(metadata)
 }
 
+/// The trace context a new run records: the submitter's own, else — for a
+/// sub-workflow — its parent run's, so the whole tree reads as one trace.
+pub fn run_trace_context(
+    wf_storage: &WorkflowStorageBackend,
+    trace: Option<TraceContext>,
+    parent_run_id: Option<&str>,
+) -> Result<Option<TraceContext>> {
+    match (trace, parent_run_id) {
+        (Some(trace), _) => Ok(Some(trace)),
+        (None, Some(parent)) => Ok(wf_storage
+            .get_workflow_run(parent)?
+            .and_then(|run| run.trace_context())),
+        (None, None) => Ok(None),
+    }
+}
+
 /// Submit a workflow for static execution.
 ///
 /// Creates (or reuses) a `WorkflowDefinition` with the given name + version,
@@ -237,15 +253,11 @@ pub fn submit_workflow(
             }
         };
 
-    // A sub-workflow submitted with no context of its own stays in its parent
-    // run's trace, so the whole tree reads as one.
-    if request.trace.is_none() {
-        if let Some(parent) = &request.parent_run_id {
-            request.trace = wf_storage
-                .get_workflow_run(parent)?
-                .and_then(|run| run.trace_context());
-        }
-    }
+    request.trace = run_trace_context(
+        wf_storage,
+        request.trace.take(),
+        request.parent_run_id.as_deref(),
+    )?;
 
     let run_id = uuid::Uuid::now_v7().to_string();
     let now = now_millis();

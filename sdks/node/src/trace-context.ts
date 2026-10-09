@@ -13,8 +13,10 @@
 // An object's own bytes are kept: the keys are spliced in after its opening
 // brace instead of the document being re-serialized.
 
-const TRACEPARENT = "traceparent";
-const TRACESTATE = "tracestate";
+/** @internal */
+export const TRACEPARENT = "traceparent";
+/** @internal */
+export const TRACESTATE = "tracestate";
 
 function parseObject(metadata: string): Record<string, unknown> | undefined {
   let value: unknown;

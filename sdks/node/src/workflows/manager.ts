@@ -1,7 +1,9 @@
 import { WorkflowError } from "../errors";
 import type { Emitter } from "../events";
+import type { Middleware, WorkflowSubmitContext } from "../middleware";
 import type { NativeQueue } from "../native";
 import { type Serializer, serializeCall } from "../serializers";
+import { TRACEPARENT, TRACESTATE } from "../trace-context";
 import { WorkflowAnalysis, type WorkflowGraph } from "./analysis";
 import { WorkflowBuilder } from "./builder";
 import { WorkflowCacheStore } from "./cache";
@@ -51,6 +53,8 @@ export class WorkflowManager {
     ) => serializeCall(this.serializer, value as unknown[]),
     /** Emits workflow lifecycle events; absent when constructed standalone. */
     private readonly emitter?: Emitter,
+    /** The queue's middleware, live: `onWorkflowSubmit` hooks run on each submit. */
+    private readonly middleware: readonly Middleware[] = [],
   ) {
     if (typeof this.native.submitWorkflow !== "function") {
       throw new WorkflowError("the native addon was built without the 'workflows' feature");
@@ -157,6 +161,7 @@ export class WorkflowManager {
       nodePayloads[name] = Buffer.from(b64, "base64");
     }
     const paramsJson = options?.params === undefined ? null : JSON.stringify(options.params);
+    const carrier = this.traceCarrier(transport.name, options?.traceContext);
     const runId = this.native.submitWorkflow(
       transport.name,
       transport.version,
@@ -168,9 +173,26 @@ export class WorkflowManager {
       transport.deferredNodeNames,
       null,
       null,
+      carrier?.[TRACEPARENT] ?? null,
+      carrier?.[TRACESTATE] ?? null,
     );
     this.emitter?.emit("workflow.submitted", { runId, name: transport.name });
     return this.makeHandle(runId);
+  }
+
+  /**
+   * The carrier a submit stores on its run: the caller's own, else whatever the
+   * middleware `onWorkflowSubmit` hooks supply.
+   */
+  private traceCarrier(
+    workflowName: string,
+    traceContext: Record<string, string> | undefined,
+  ): Record<string, string> | undefined {
+    const ctx: WorkflowSubmitContext = { workflowName, traceContext };
+    for (const mw of this.middleware) {
+      mw.onWorkflowSubmit?.(ctx);
+    }
+    return ctx.traceContext;
   }
 
   /**

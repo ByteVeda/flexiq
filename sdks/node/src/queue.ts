@@ -265,6 +265,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
         this.trackerIfSupported(),
         (taskName, value) => this.encodeTaskPayload(taskName, value),
         this.emitter,
+        this.middleware,
       );
     }
     return this.workflowManager;

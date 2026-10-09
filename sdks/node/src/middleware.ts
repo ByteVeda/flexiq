@@ -24,6 +24,17 @@ export interface EnqueueContext {
 }
 
 /**
+ * Context for a workflow being submitted, passed to
+ * {@link Middleware.onWorkflowSubmit}. `traceContext` is the W3C carrier
+ * (`traceparent`, `tracestate`) every node job of the run will carry; set it to
+ * supply one when the caller passed none.
+ */
+export interface WorkflowSubmitContext {
+  readonly workflowName: string;
+  traceContext?: Record<string, string>;
+}
+
+/**
  * Cross-cutting hooks around task execution and job outcomes. Register with
  * {@link Queue.use}. `onEnqueue` runs (sync) on the enqueuing side before
  * serialization; `before`/`after`/`onError`/`onSleep` wrap execution (awaited,
@@ -37,6 +48,8 @@ export interface Middleware {
    */
   name?: string;
   onEnqueue?(ctx: EnqueueContext): void;
+  /** Runs (sync) before a workflow is submitted; see {@link WorkflowSubmitContext}. */
+  onWorkflowSubmit?(ctx: WorkflowSubmitContext): void;
   before?(ctx: TaskContext): void | Promise<void>;
   after?(ctx: TaskContext, result: unknown): void | Promise<void>;
   /**

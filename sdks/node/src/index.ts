@@ -105,7 +105,12 @@ export {
   type Interceptor,
 } from "./interception";
 export { Lock, type LockInfo, type LockOptions } from "./locks";
-export type { EnqueueContext, Middleware, TaskContext } from "./middleware";
+export type {
+  EnqueueContext,
+  Middleware,
+  TaskContext,
+  WorkflowSubmitContext,
+} from "./middleware";
 export {
   after,
   allOf,
