@@ -4,6 +4,9 @@
 # ScaledJob creates short-lived Kubernetes Jobs — one pod per N
 # pending tasks. Use this for batch/ETL workloads.
 #
+# Running flexiq-server? Its gRPC listener serves a native KEDA scaler; see
+# scaled-object-external.yaml for the trigger.
+#
 # Prerequisites:
 #   1. Deploy `flexiq scaler --app myapp:queue --port 9091` as a Service
 #   2. Install KEDA

@@ -74,7 +74,7 @@ also opens everything `read` does, because it always has.
 | `produce` | `flexiq.v1` | Submit, read and cancel work |
 | `read` | `flexiq.v1`, read-only methods | See jobs, queue stats and workflow runs, and watch jobs; never submit or cancel |
 | `execute` | `flexiq.executor.v1` | Claim work and report on it |
-| `inspect` | `flexiq.admin.v1`, read-only methods | Look at queues, dead letters, workers, schedules and overrides |
+| `inspect` | `flexiq.admin.v1`, read-only methods; `externalscaler` | Look at queues, dead letters, workers, schedules and overrides; answer the KEDA external scaler, which carries the token in-band ([External scaler](/server/operate/scaling#external-scaler)) |
 | `admin` | `flexiq.admin.v1`, every other method | Pause queues, replay and purge dead letters, manage schedules and overrides |
 
 A producer and an executor need opposite permissions, so **a token that can poll
@@ -337,10 +337,13 @@ and the same message.
 
 That is deliberate on both counts: a distinguishable answer tells a client
 guessing tokens which guess was closer, and a path answered before
-authentication tells it which services the build carries. The two
-`grpc.health.v1` RPCs are the only exception — see
+authentication tells it which services the build carries. There are two
+exceptions. The two `grpc.health.v1` RPCs answer without a credential — see
 [The gRPC door](/server/operate/grpc) for why a probe cannot
-carry a credential.
+carry a credential. And the KEDA external scaler reads its token from the
+request body, so a tokenless body over its 64 KiB cap is refused with
+`OUT_OF_RANGE`, and one that does not decode with a decode error, before that
+token is checked; every scaler request that decodes is authenticated first.
 
 <Callout type="warn" title="A bearer token is one factor">
 It proves the peer holds a string. It does not encrypt the connection on its

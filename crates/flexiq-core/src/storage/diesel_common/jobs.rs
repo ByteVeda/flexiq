@@ -2797,6 +2797,34 @@ macro_rules! impl_diesel_job_ops {
                 Ok(count)
             }
 
+            /// Pending and running jobs (the autoscaler's read): two indexed
+            /// counts over `jobs`, never `archived_jobs`. `None` namespace is
+            /// every namespace, like `stats`.
+            pub fn live_counts(
+                &self,
+                queue: Option<&str>,
+                namespace: Option<&str>,
+            ) -> Result<$crate::storage::LiveCounts> {
+                let mut conn = self.conn()?;
+                let mut count = |status: JobStatus| -> Result<i64> {
+                    let mut query = jobs::table
+                        .filter(jobs::status.eq(status as i32))
+                        .into_boxed();
+                    if let Some(queue) = queue {
+                        query = query.filter(jobs::queue.eq(queue));
+                    }
+                    if let Some(ns) = namespace {
+                        query = query.filter(jobs::namespace.eq(ns));
+                    }
+                    Ok(query.count().get_result(&mut conn)?)
+                };
+                // Pending first: a claim landing between the reads counts
+                // twice, an over-read the next poll corrects.
+                let pending = count(JobStatus::Pending)?;
+                let running = count(JobStatus::Running)?;
+                Ok($crate::storage::LiveCounts { pending, running })
+            }
+
             /// Purge job errors older than the given timestamp.
             ///
             /// Deletes in bounded batches, each its own txn — see
