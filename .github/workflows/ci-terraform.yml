@@ -81,6 +81,8 @@ jobs:
           working-directory: deploy/terraform/provider
 
       - name: go.mod and go.sum are tidy
+        # Intentionally fails when sdks/go gains a dependency until this
+        # module's go.sum is updated.
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
