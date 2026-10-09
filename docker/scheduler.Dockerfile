@@ -10,12 +10,15 @@
 # --current)` for the OCI label, and build one architecture per native runner
 # before merging the two into a manifest list — see publish-server.yml. The
 # binary's own `--version` always comes from the workspace Cargo.toml.
+#
+# Bases come from Docker's own ECR Public mirror of the Official Images (same
+# digests): BuildKit pulls anonymously, and Docker Hub rate-limits CI runners.
 
 # --- dashboard ---------------------------------------------------------------
 # The SPA is embedded into the binary at compile time
 # (crates/flexiq-server/build.rs), so it has to exist before cargo runs.
 # Keep in step with dashboard/.nvmrc — Docker cannot read it from here.
-FROM node:24-alpine AS dashboard
+FROM public.ecr.aws/docker/library/node:24-alpine AS dashboard
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /src/dashboard
 # Manifest first: dependency installs then survive every source-only edit.
@@ -27,7 +30,7 @@ RUN pnpm exec tsr generate && pnpm exec vite build --outDir dist --emptyOutDir
 # --- binary ------------------------------------------------------------------
 # Alpine builds musl natively on both architectures, so the static binary needs
 # no cross toolchain — each publish runner compiles for its own platform.
-FROM rust:1-alpine AS builder
+FROM public.ecr.aws/docker/library/rust:1-alpine AS builder
 # build-base: the C toolchain the bundled SQLite, libpq and OpenSSL sources
 # need. perl + linux-headers: OpenSSL's configure. git: the dagron-core git
 # dependency of flexiq-workflows.
