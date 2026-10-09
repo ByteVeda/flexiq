@@ -13,6 +13,16 @@
 import { pathToFileURL } from "node:url";
 
 import { CborSerializer, Queue } from "@byteveda/flexiq";
+import { otelMiddleware } from "@byteveda/flexiq/contrib/otel";
+import { propagation, trace } from "@opentelemetry/api";
+import { W3CTraceContextPropagator } from "@opentelemetry/core";
+import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
+
+// The trace the producer started continues here and on into Java. Node's API
+// registers nothing by default, so the propagator is named outright; no
+// exporter, as in the producer — point one at a collector to see the trace.
+trace.setGlobalTracerProvider(new BasicTracerProvider());
+propagation.setGlobalPropagator(new W3CTraceContextPropagator());
 
 const dbPath = process.env.FLEXIQ_DB ?? "../flexiq.db";
 // Set by the gRPC variant only: a job enqueued through the producer door
@@ -42,6 +52,9 @@ const PRODUCER_TIMEOUT_MS = 10_000;
 // here stands in for the scheduler's storage rather than opening any of its
 // own, which is the whole point of running detached.
 const queue = new Queue({ dbPath, serializer: new CborSerializer(), namespace });
+// Continues the producer's trace into `orders.process`, and carries it on into
+// the `orders.notify` job the handler enqueues.
+queue.use(otelMiddleware());
 
 /**
  * Hand one processed order to the `orders.notify` stage.

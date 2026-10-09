@@ -19,7 +19,7 @@ producer — jobs wait in storage either way.
 
 ```bash
 # 1. Python producer
-pip install flexiq==2.0.0
+pip install "flexiq[otel]==2.0.0"
 python producer.py --db flexiq.db --orders 3
 
 # 2. Node worker — processes orders, enqueues notifications
@@ -32,10 +32,24 @@ cd java-worker && FLEXIQ_DB=../flexiq.db ./gradlew run
 Expected output:
 
 ```text
-enqueued orders.process ord-0001 job=019fd561-...
+enqueued orders.process ord-0001 job=019fd561-... trace=4bf92f3577b34da6a3ce929d0e0e4736
 [node] processing ord-0001 — 10.00 EUR
 [java] notifying ada@example.com about ord-0001 — 10.00 EUR (processed by node)
 ```
+
+## One order, one trace
+
+Each runtime registers its SDK's OpenTelemetry middleware, so the `checkout`
+span the producer opens for an order is the root of one trace through all three:
+
+```text
+checkout (Python) ──▶ flexiq.execute.orders.process (Node) ──▶ flexiq.execute.orders.notify (Java)
+```
+
+The trace context rides in the job's metadata as W3C `traceparent`/`tracestate`.
+An enqueue injects it, an execution continues it, and a job the Node handler
+enqueues is a child of the Node execution. None of the three exports spans —
+configure an exporter in each to see the trace in a backend.
 
 ## The two things that actually matter
 
@@ -251,10 +265,15 @@ this one: `node_modules/@byteveda`, five levels below the repository root, and
 (cd ../../sdks/python && uv run maturin develop)
 
 # Node — build the workspace SDK, then link it into the example. The second
-# link is the CLI `npm run executor` resolves from node_modules/.bin.
+# link is the CLI `npm run executor` resolves from node_modules/.bin. The
+# OpenTelemetry packages are the SDK's own dev dependencies, linked so the
+# worker and the SDK's middleware share one API instance.
 (cd ../../sdks/node && pnpm build)
-(cd node-worker && mkdir -p node_modules/@byteveda node_modules/.bin \
+(cd node-worker && mkdir -p node_modules/@byteveda node_modules/@opentelemetry node_modules/.bin \
   && ln -s ../../../../../sdks/node node_modules/@byteveda/flexiq \
+  && for p in api core sdk-trace-base; do \
+       ln -s "../../../../../sdks/node/node_modules/@opentelemetry/$p" "node_modules/@opentelemetry/$p"; \
+     done \
   && ln -s ../@byteveda/flexiq/dist/cli.js node_modules/.bin/flexiq)
 
 # Java — publish locally, then Gradle resolves it from mavenLocal()

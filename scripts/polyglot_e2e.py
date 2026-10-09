@@ -17,6 +17,7 @@ be the one the Python SDK is installed into.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import subprocess
@@ -192,6 +193,51 @@ def assert_results_round_trip(queue: Queue, orders: int) -> None:
             )
 
 
+def traceparent(job: JobResult) -> tuple[str, str]:
+    """The trace id and parent span id a job's metadata carries."""
+    try:
+        value = json.loads(job.metadata or "")["traceparent"]
+        _version, trace_id, parent_id, _flags = value.split("-")
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        raise PipelineError(
+            f"job {job.id} ({job.task_name}) carries no trace context: {job.metadata!r}"
+        ) from error
+    return trace_id, parent_id
+
+
+def assert_trace_continues(queue: Queue, orders: int) -> None:
+    """One order, one trace, three languages.
+
+    The producer enqueues each order under its own span. Node's execute span
+    must be a child of it, and the notify job Node enqueues a child of *that* —
+    so the notify job shares the order's trace id but not the producer's span.
+    Java reports the trace its own execute span ran in, which closes the hop.
+    """
+    traces: dict[str, tuple[str, str]] = {}
+    for job in completed(queue, PROCESS_TASK, orders * 2):
+        traces[job.result(timeout=5)["order_id"]] = traceparent(job)
+    if len({trace_id for trace_id, _ in traces.values()}) != orders:
+        raise PipelineError(f"expected one trace per order, got {traces}")
+
+    for job in completed(queue, NOTIFY_TASK, orders * 2):
+        result = job.result(timeout=5)
+        trace_id, parent_id = traceparent(job)
+        order_trace, producer_span = traces[result["order_id"]]
+        if trace_id != order_trace:
+            raise PipelineError(
+                f"notify job {job.id} is in trace {trace_id}, not its order's {order_trace}"
+            )
+        if parent_id == producer_span:
+            raise PipelineError(
+                f"notify job {job.id} is parented to the producer's span, not Node's execute span"
+            )
+        if result.get("trace_id") != order_trace:
+            raise PipelineError(
+                f"the Java worker ran job {job.id} in trace {result.get('trace_id')!r}, "
+                f"not {order_trace}"
+            )
+
+
 def dump_worker_logs(workers: list[Worker]) -> None:
     """Print what each worker said. The reason for the failure is printed by the
     caller — this is the context that explains it."""
@@ -211,6 +257,7 @@ def run(db: Path, orders: int, timeout: float, workdir: Path) -> None:
             queue = Queue(str(db), serializer=CborSerializer())
             wait_for_drain(queue, orders, workers, timeout)
             assert_results_round_trip(queue, orders)
+            assert_trace_continues(queue, orders)
         except Exception:
             dump_worker_logs(workers)
             raise
@@ -245,7 +292,10 @@ def main() -> int:
         print(f"polyglot pipeline failed: {error}", file=sys.stderr)
         return 1
 
-    print(f"polyglot pipeline OK — {args.orders} order(s) through Python, Node and Java")
+    print(
+        f"polyglot pipeline OK — {args.orders} order(s) through Python, Node and Java, "
+        "one trace each"
+    )
     return 0
 
 

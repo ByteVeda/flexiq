@@ -17,6 +17,10 @@ dependencies {
     runtimeOnly("org.byteveda:flexiq:2.0.0:linux-x86_64")
     // CborSerializer needs Jackson's CBOR dataformat, which the SDK leaves optional.
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.20.0")
+    // FlexiQOtel needs the OpenTelemetry API, which the SDK leaves optional; the
+    // SDK proper is what this worker configures it with.
+    implementation("io.opentelemetry:opentelemetry-api:1.66.0")
+    implementation("io.opentelemetry:opentelemetry-sdk:1.66.0")
     // Compile-time @TaskHandler bindings — what makes notifyCustomer discoverable
     // by `flexiq executor` via META-INF/services.
     annotationProcessor("org.byteveda:flexiq-processor:2.0.0")
