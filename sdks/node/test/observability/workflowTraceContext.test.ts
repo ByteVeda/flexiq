@@ -44,8 +44,9 @@ beforeEach(() => {
   exporter.reset();
 });
 
-afterEach(() => {
-  worker?.stop();
+afterEach(async () => {
+  // Teardown must finish before the next test resets the exporter.
+  await worker?.stop();
   worker = undefined;
 });
 
