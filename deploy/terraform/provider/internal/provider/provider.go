@@ -70,7 +70,7 @@ func (p *flexiqProvider) Schema(_ context.Context, _ tfprovider.SchemaRequest, r
 				Optional:    true,
 			},
 			"token": schema.StringAttribute{
-				Description: "Bearer token with the admin scope, plus tokens to manage flexiq_token. " +
+				Description: "Bearer token with the admin and inspect scopes, plus tokens to manage flexiq_token. " +
 					"Falls back to " + tokenEnv + ".",
 				Optional:  true,
 				Sensitive: true,
@@ -114,7 +114,7 @@ func (p *flexiqProvider) Configure(ctx context.Context, req tfprovider.Configure
 	token, known := setting(cfg.Token, tokenEnv)
 	if !known || token == "" {
 		resp.Diagnostics.AddAttributeError(path.Root("token"), "Missing flexiq token",
-			"Set token, or "+tokenEnv+", to a token with the admin scope.")
+			"Set token, or "+tokenEnv+", to a token with the admin and inspect scopes.")
 	}
 	if resp.Diagnostics.HasError() {
 		return
