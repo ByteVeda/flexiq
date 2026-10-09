@@ -342,7 +342,9 @@ impl RedisStorage {
     /// Pending and running jobs (the autoscaler's read): one `SINTERCARD` per
     /// status over the status set and whichever of `jobs:by_queue` /
     /// `jobs:by_ns` the filter names — server-side, no job loaded, no archive.
-    /// `None` namespace is every namespace, like `stats`.
+    /// `None` namespace is every namespace, like `stats`. A scoped count shares
+    /// the quota counts' blind spot: a job a pre-#841 process enqueues after the
+    /// `jobs:by_ns` backfill is uncounted until it finishes.
     pub fn live_counts(&self, queue: Option<&str>, namespace: Option<&str>) -> Result<LiveCounts> {
         let mut conn = self.conn()?;
         let mut keys = Vec::with_capacity(3);
