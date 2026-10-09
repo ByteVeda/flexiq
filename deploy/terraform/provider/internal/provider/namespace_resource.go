@@ -94,7 +94,7 @@ func (r *namespaceResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Validators: []validator.String{stringvalidator.OneOf(onExcessReject, onExcessDrop)},
 			},
 			"enqueue_rate": schema.StringAttribute{
-				Description: "Enqueues per interval, <count>/<s|m|h>, e.g. 100/s. Unset is unlimited.",
+				Description: "Enqueues per interval, <count>/<unit>, e.g. 100/s, with a unit of s, sec, second, m, min, minute, h, hr or hour. Unset is unlimited.",
 				Optional:    true,
 				Validators:  []validator.String{rateValidator{}},
 			},

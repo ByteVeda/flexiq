@@ -67,7 +67,7 @@ func (r *queueResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 				Validators:  []validator.Int32{int32validator.AtLeast(0)},
 			},
 			"rate_limit": schema.StringAttribute{
-				Description: "Dispatch rate, <count>/<s|m|h> with a count of at least one, e.g. 100/m. Unset is not overridden.",
+				Description: "Dispatch rate, <count>/<unit>, e.g. 100/m, with a count of at least one and a unit of s, sec, second, m, min, minute, h, hr or hour. Unset is not overridden.",
 				Optional:    true,
 				Validators:  []validator.String{rateValidator{}},
 			},

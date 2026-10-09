@@ -51,7 +51,7 @@ type rateValidator struct{}
 var _ validator.String = rateValidator{}
 
 func (rateValidator) Description(context.Context) string {
-	return "must be <count>/<s|m|h> with a count of at least one, e.g. 100/m"
+	return "must be <count>/<unit>, e.g. 100/m, with a count of at least one and a unit of s, sec, second, m, min, minute, h, hr or hour"
 }
 
 func (v rateValidator) MarkdownDescription(ctx context.Context) string {
