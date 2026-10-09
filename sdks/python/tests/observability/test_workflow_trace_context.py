@@ -115,8 +115,16 @@ def test_every_step_is_a_child_of_the_submit_span(
         with provider.get_tracer("test").start_as_current_span("submit") as submit:
             run = traced.submit_workflow(wf)
         assert run.wait(timeout=20).state == WorkflowState.COMPLETED
-        poll_until(lambda: _executions(exporter, "second"), message="no execute span")
+        poll_until(
+            lambda: (
+                len(_executions(exporter, "first")) == 1
+                and len(_executions(exporter, "second")) == 1
+            ),
+            message="missing linear execute span",
+        )
 
+    assert len(_executions(exporter, "first")) == 1
+    assert len(_executions(exporter, "second")) == 1
     _assert_children_of(_executions(exporter, "first") + _executions(exporter, "second"), submit)
 
 

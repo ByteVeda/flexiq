@@ -117,7 +117,9 @@ it("makes every step a child of the submit span", async () => {
   worker = queue.runWorker({ queues: ["default"] });
 
   expect((await handle.wait({ timeoutMs: 10_000 })).state).toBe("completed");
-  await waitFor(() => executions("second").length === 1);
+  await waitFor(() => executions("first").length === 1 && executions("second").length === 1);
+  expect(executions("first")).toHaveLength(1);
+  expect(executions("second")).toHaveLength(1);
   expectChildrenOf([...executions("first"), ...executions("second")], submit);
 });
 
