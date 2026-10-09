@@ -38,7 +38,9 @@ which are gated on a capability, and what a lease is required on.
   Cancellation and timeouts are cooperative: a handler calls `job.check!`.
   The `grpc` gem is not fork-safe, so construct the worker after any fork.
   On a [push](/server/operate/push) deployment there is nothing to attach to;
-  the target there is an ordinary HTTP handler and needs no gRPC gem.
+  without callback settlement the target is an ordinary HTTP handler and needs
+  no gRPC gem. With `FLEXIQ_PUSH_TARGET_SETTLE=grpc` it calls `Settle` over
+  gRPC, so it does.
   Moving off Sidekiq? See [From Sidekiq](/server/migrate-sidekiq).
 </Callout>
 
