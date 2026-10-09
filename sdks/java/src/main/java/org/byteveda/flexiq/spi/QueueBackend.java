@@ -922,6 +922,49 @@ public interface QueueBackend extends AutoCloseable, ConditionalSettings {
             @Nullable String parentNodeName,
             @Nullable String traceparent,
             @Nullable String tracestate) {
+        // Falls back to the pre-trace overload so a backend written against it keeps working.
+        return submitWorkflow(
+                name,
+                version,
+                stepsJson,
+                payloadNames,
+                payloads,
+                queueDefault,
+                paramsJson,
+                deferredNames,
+                parentRunId,
+                parentNodeName);
+    }
+
+    /**
+     * Record a run without trace context. Kept so a backend overriding this signature still
+     * works; the SDK calls the overload taking {@code traceparent} and {@code tracestate}.
+     *
+     * @param name the definition's name
+     * @param version the definition's version
+     * @param stepsJson the DAG's steps as JSON
+     * @param payloadNames the node names {@code payloads} lines up with
+     * @param payloads one encoded payload per named node
+     * @param queueDefault the queue steps fall back to, or {@code null}
+     * @param paramsJson the run's input parameters as JSON, or {@code null}
+     * @param deferredNames nodes whose job is created later, not at submit
+     * @param parentRunId the run spawning this one as a child, or {@code null} at the top level
+     * @param parentNodeName the parent's node that spawned it, or {@code null}
+     * @return the new run's id
+     * @deprecated override the overload taking trace context instead
+     */
+    @Deprecated
+    default String submitWorkflow(
+            String name,
+            int version,
+            String stepsJson,
+            String[] payloadNames,
+            byte[][] payloads,
+            @Nullable String queueDefault,
+            @Nullable String paramsJson,
+            String[] deferredNames,
+            @Nullable String parentRunId,
+            @Nullable String parentNodeName) {
         throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
     }
 
