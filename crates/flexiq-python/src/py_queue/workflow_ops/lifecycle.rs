@@ -76,6 +76,7 @@ impl PyQueue {
                 result_ttl_ms: self.result_ttl_ms,
                 namespace: self.namespace.clone(),
                 enqueued_by: None,
+                trace: None,
             },
         )
         .map_err(|e| match e {
