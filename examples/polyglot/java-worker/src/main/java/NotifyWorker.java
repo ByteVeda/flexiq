@@ -1,7 +1,15 @@
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
+import io.opentelemetry.context.propagation.ContextPropagators;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import org.byteveda.flexiq.FlexiQ;
 import org.byteveda.flexiq.annotation.TaskHandler;
+import org.byteveda.flexiq.contrib.FlexiQOtel;
 import org.byteveda.flexiq.serialization.CborSerializer;
 import org.byteveda.flexiq.worker.Worker;
 
@@ -28,7 +36,16 @@ public final class NotifyWorker {
                 notification.get("total"),
                 notification.get("currency"),
                 notification.get("processed_by"));
-        return Map.of("order_id", String.valueOf(notification.get("order_id")), "notified", true);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("order_id", String.valueOf(notification.get("order_id")));
+        result.put("notified", true);
+        // The execute span is current for the handler, so this is the trace the
+        // producer started — reported back so the hop can be checked end to end.
+        SpanContext span = Span.current().getSpanContext();
+        if (span.isValid()) {
+            result.put("trace_id", span.getTraceId());
+        }
+        return result;
     }
 
     public static void main(String[] args) throws Exception {
@@ -60,8 +77,14 @@ public final class NotifyWorker {
         if (namespace != null) {
             builder = builder.namespace(namespace);
         }
+        // Continues the trace the producer started and Node carried on. No
+        // exporter, as in the other two runtimes — add one to see the trace.
+        OpenTelemetrySdk otel = OpenTelemetrySdk.builder()
+                .setTracerProvider(SdkTracerProvider.builder().build())
+                .setPropagators(ContextPropagators.create(W3CTraceContextPropagator.getInstance()))
+                .build();
         try (FlexiQ flexiq = builder.open();
-                Worker worker = flexiq.worker()
+                Worker worker = flexiq.use(new FlexiQOtel(otel)).worker()
                         .apply(b -> NotifyWorkerTasks.bind(b, new NotifyWorker()))
                         // Poll only this stage's queue. A worker claims whatever is in
                         // the queues it polls, so sharing one queue would let this

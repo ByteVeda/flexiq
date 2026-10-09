@@ -296,6 +296,7 @@ def _execute_job(
         job.get("queue", "default"),
         job.get("namespace"),
         worker_steps,
+        job.get("metadata"),
     )
     # Resolved by the scheduler and carried on the frame, because an executor
     # has no settings store of its own to read the toggle list from. Empty from

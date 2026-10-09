@@ -153,14 +153,21 @@ jobs:
           PYTHON: ${{ matrix.python }}
         run: |
           wheel=$(ls sdks/python/dist/*cp"${PYTHON/./}"-*.whl)
-          python -m pip install "$wheel"
+          python -m pip install "${wheel}[otel]"
 
       # Same wiring the README documents for a local build, with an absolute
-      # link target because the workspace path is known here.
+      # link target because the workspace path is known here. The OpenTelemetry
+      # packages are the SDK's own dev dependencies, linked rather than installed
+      # so the worker and the SDK's middleware share one API instance.
       - name: Link the workspace Node SDK into the example
         run: |
-          mkdir -p examples/polyglot/node-worker/node_modules/@byteveda
-          ln -sfn "$GITHUB_WORKSPACE/sdks/node" examples/polyglot/node-worker/node_modules/@byteveda/flexiq
+          modules=examples/polyglot/node-worker/node_modules
+          mkdir -p "$modules/@byteveda" "$modules/@opentelemetry"
+          ln -sfn "$GITHUB_WORKSPACE/sdks/node" "$modules/@byteveda/flexiq"
+          for package in api core sdk-trace-base; do
+            ln -sfn "$GITHUB_WORKSPACE/sdks/node/node_modules/@opentelemetry/$package" \
+              "$modules/@opentelemetry/$package"
+          done
 
       - name: Unpack the local Maven repository
         run: |

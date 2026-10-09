@@ -168,8 +168,9 @@ function degraded(warnOnce: (what: string) => void, holder: SinkHolder): Record<
  * vanished would be worse than one that failed.
  *
  * The same split shows up in the job a handler receives. A dispatch frame
- * carries what running the task needs, so `createdAt`, `scheduledAt`,
- * `priority`, `metadata`, `uniqueKey` and `notes` arrive as zeros and nulls on
+ * carries what running the task needs — `metadata` included, for its trace
+ * context — so `createdAt`, `scheduledAt`, `priority`, `uniqueKey` and `notes`
+ * arrive as zeros and nulls on
  * an executor where an in-process worker would show the stored values. A task
  * that needs them wants a worker, not an executor.
  */

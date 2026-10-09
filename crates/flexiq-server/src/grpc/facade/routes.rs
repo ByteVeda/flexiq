@@ -41,15 +41,19 @@
 //! `/v1/admin/queues/{queue}/override:clear`) is no wart at all: to matchit it
 //! is just a static segment with a colon in it.
 
+use std::str::FromStr;
+
 use axum::body::{to_bytes, Body as AxumBody, Bytes};
 use axum::extract::rejection::PathRejection;
 use axum::extract::{FromRef, Path, Request, State};
 use axum::response::Response;
 use axum::routing::{get, post, MethodRouter};
 use axum::Router;
+use flexiq_core::trace::{TRACEPARENT, TRACESTATE};
 use http::request::Parts;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use tonic::metadata::MetadataValue;
 use tonic::Status;
 
 use super::admin as operator;
@@ -1090,6 +1094,17 @@ pub(super) fn scoped<T>(parts: &Parts, message: T) -> Result<tonic::Request<T>, 
     };
     let mut request = tonic::Request::new(message);
     request.extensions_mut().insert(principal.clone());
+    // Trace headers are the one part of an HTTP request a handler reads, so
+    // a facade call propagates a trace exactly as a gRPC call does.
+    for name in [TRACEPARENT, TRACESTATE] {
+        let value = parts
+            .headers
+            .get(name)
+            .and_then(|value| value.to_str().ok());
+        if let Some(Ok(value)) = value.map(MetadataValue::from_str) {
+            request.metadata_mut().insert(name, value);
+        }
+    }
     // The audit slot rides along too, so a handler names its targets on the
     // record this facade call leaves, exactly as over gRPC.
     if let Some(audit) = AuditContext::of(&parts.extensions) {

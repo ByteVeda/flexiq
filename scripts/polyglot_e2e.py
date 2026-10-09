@@ -17,6 +17,7 @@ be the one the Python SDK is installed into.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import subprocess
@@ -79,7 +80,7 @@ class Worker:
         self.name = name
         self.log_path = log_path
         self._log = log_path.open("w")
-        env = {**os.environ, "FLEXIQ_DB": str(db)}
+        env = {**os.environ, "FLEXIQ_DB": str(db), "FLEXIQ_SPAN_LOG": str(span_log(db))}
         try:
             # Own session so the whole tree (Gradle's JVM, node's threads) can be
             # signalled as one group at teardown.
@@ -192,6 +193,83 @@ def assert_results_round_trip(queue: Queue, orders: int) -> None:
             )
 
 
+def traceparent(job: JobResult) -> tuple[str, str]:
+    """The trace id and parent span id a job's metadata carries."""
+    try:
+        value = json.loads(job.metadata or "")["traceparent"]
+        _version, trace_id, parent_id, _flags = value.split("-")
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        raise PipelineError(
+            f"job {job.id} ({job.task_name}) carries no trace context: {job.metadata!r}"
+        ) from error
+    return trace_id, parent_id
+
+
+def span_log(db: Path) -> Path:
+    """Where the Node worker writes the ids of the spans it ends."""
+    return db.parent / "node-spans.jsonl"
+
+
+def node_execute_spans(db: Path) -> dict[str, tuple[str, str, str | None]]:
+    """The Node worker's `orders.process` execute spans: job id → (trace, span,
+    parent span)."""
+    spans: dict[str, tuple[str, str, str | None]] = {}
+    path = span_log(db)
+    if not path.is_file():
+        raise PipelineError(f"the Node worker wrote no span log at {path}")
+    for line in path.read_text().splitlines():
+        span = json.loads(line)
+        if span["name"] == f"flexiq.execute.{PROCESS_TASK}":
+            spans[span["jobId"]] = (span["traceId"], span["spanId"], span.get("parentSpanId"))
+    return spans
+
+
+def assert_trace_continues(queue: Queue, orders: int, db: Path) -> None:
+    """One order, one trace, three languages.
+
+    The producer enqueues each order under its own span. Node's execute span
+    must be a child of it, and the notify job Node enqueues a child of exactly
+    that execute span. Java reports the trace its own execute span ran in,
+    which closes the hop.
+    """
+    executed = node_execute_spans(db)
+    traces: dict[str, tuple[str, str]] = {}
+    for job in completed(queue, PROCESS_TASK, orders * 2):
+        order_trace, producer_span = traceparent(job)
+        node_trace, node_span, node_parent = executed.get(job.id, ("", "", None))
+        if node_trace != order_trace:
+            raise PipelineError(
+                f"Node ran process job {job.id} in trace {node_trace!r}, not {order_trace}"
+            )
+        if node_parent != producer_span:
+            raise PipelineError(
+                f"Node's execute span for job {job.id} is parented to {node_parent!r}, not "
+                f"the producer's span {producer_span}"
+            )
+        traces[job.result(timeout=5)["order_id"]] = (order_trace, node_span)
+    if len({trace_id for trace_id, _ in traces.values()}) != orders:
+        raise PipelineError(f"expected one trace per order, got {traces}")
+
+    for job in completed(queue, NOTIFY_TASK, orders * 2):
+        result = job.result(timeout=5)
+        trace_id, parent_id = traceparent(job)
+        order_trace, node_span = traces[result["order_id"]]
+        if trace_id != order_trace:
+            raise PipelineError(
+                f"notify job {job.id} is in trace {trace_id}, not its order's {order_trace}"
+            )
+        if parent_id != node_span:
+            raise PipelineError(
+                f"notify job {job.id} is parented to span {parent_id}, not Node's execute "
+                f"span {node_span}"
+            )
+        if result.get("trace_id") != order_trace:
+            raise PipelineError(
+                f"the Java worker ran job {job.id} in trace {result.get('trace_id')!r}, "
+                f"not {order_trace}"
+            )
+
+
 def dump_worker_logs(workers: list[Worker]) -> None:
     """Print what each worker said. The reason for the failure is printed by the
     caller — this is the context that explains it."""
@@ -211,6 +289,7 @@ def run(db: Path, orders: int, timeout: float, workdir: Path) -> None:
             queue = Queue(str(db), serializer=CborSerializer())
             wait_for_drain(queue, orders, workers, timeout)
             assert_results_round_trip(queue, orders)
+            assert_trace_continues(queue, orders, db)
         except Exception:
             dump_worker_logs(workers)
             raise
@@ -245,7 +324,10 @@ def main() -> int:
         print(f"polyglot pipeline failed: {error}", file=sys.stderr)
         return 1
 
-    print(f"polyglot pipeline OK — {args.orders} order(s) through Python, Node and Java")
+    print(
+        f"polyglot pipeline OK — {args.orders} order(s) through Python, Node and Java, "
+        "one trace each"
+    )
     return 0
 
 

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 class _ActiveContext:
     __slots__ = (
         "job_id",
+        "metadata",
         "namespace",
         "queue_name",
         "retry_count",
@@ -39,12 +40,16 @@ class _ActiveContext:
         queue_name: str,
         namespace: str | None = None,
         worker_steps: WorkerSteps | AttachedSteps | None = None,
+        metadata: str | None = None,
     ):
         self.job_id = job_id
         self.task_name = task_name
         self.retry_count = retry_count
         self.queue_name = queue_name
         self.namespace = namespace
+        # Carried on the dispatch so a middleware can read the job's trace
+        # context without a storage read.
+        self.metadata = metadata
         # How this attempt's durable steps are written: the running worker's
         # own handle, fenced on the claim it won, or an attached executor's
         # channel to the scheduler that holds one. It travels with the dispatch

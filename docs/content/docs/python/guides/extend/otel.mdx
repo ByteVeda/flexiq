@@ -45,6 +45,23 @@ Each task execution produces a span (a timed unit of work in a distributed trace
 - **Status**: `OK` on success, `ERROR` on failure (with exception recorded)
 - **Events**: a `retry` event is added when a task is about to be retried
 
+## Trace propagation
+
+Trace context travels with the job, so a trace that crosses an enqueue stays
+one trace:
+
+- **Enqueue**: `on_enqueue` injects the current context into the job's
+  metadata as `traceparent` / `tracestate`.
+- **Execution**: the worker extracts that context, and the execute span
+  (kind `CONSUMER`) becomes a child of the enqueuer's span.
+- **Enqueue inside a task** continues that task's execute span.
+
+Python's OpenTelemetry API uses the W3C propagator by default, so no extra
+setup is needed. The job's raw metadata is available in a task as
+`current_job.metadata` (a JSON string, or `None`). The merge rule, coverage
+table and cross-SDK behaviour are on
+[Trace context across SDKs](/python/guides/extend/trace-context).
+
 ## Configuration with exporters
 
 `OpenTelemetryMiddleware` uses the standard OpenTelemetry API, so configure
@@ -87,6 +104,7 @@ OpenTelemetryMiddleware(
 |---|---|---|---|
 | `tracer_name` | `str` | `"flexiq"` | OpenTelemetry tracer name. |
 | `span_name_fn` | `Callable[[JobContext], str] \| None` | `None` | Custom span name builder. Receives `JobContext`, returns a string. Defaults to `<prefix>.execute.<task_name>`. |
+| `tracer_provider` | `TracerProvider \| None` | `None` | Provider to take the tracer from. `None` uses the global provider. |
 | `attribute_prefix` | `str` | `"flexiq"` | Prefix for all span attribute keys. |
 | `extra_attributes_fn` | `Callable[[JobContext], dict] \| None` | `None` | Returns extra attributes to add to each span. Receives `JobContext`. |
 | `task_filter` | `Callable[[str], bool] \| None` | `None` | Predicate that receives a task name. Return `True` to trace, `False` to skip. `None` traces all tasks. |

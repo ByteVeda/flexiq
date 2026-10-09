@@ -1,0 +1,87 @@
+---
+title: OpenTelemetry Integration
+description: "A span per task execution with W3C trace context carried across enqueue and execution."
+---
+
+Optional dependency: `io.opentelemetry:opentelemetry-api` (the SDK compiles
+against it as `compileOnly`; add it to your build). `FlexiQOtel` is a
+[middleware](/java/guides/extend/middleware) that creates one OpenTelemetry
+span per execution attempt and propagates trace context through the job, so a
+trace that crosses an enqueue stays one trace.
+
+```java
+import org.byteveda.flexiq.contrib.FlexiQOtel;
+
+flexiq.use(new FlexiQOtel(openTelemetry));
+```
+
+## Spans
+
+Each execution attempt starts a span from the tracer `org.byteveda.flexiq`:
+
+- **Name**: `flexiq.execute.<task>`, kind `CONSUMER`
+- **Attributes**: `flexiq.job_id`, `flexiq.task_name`
+- **Success**: the span ends with status `OK`
+- **Failure**: it ends with status `ERROR` and the exception recorded
+- **Sleep**: a `step.sleep` ends the attempt with no status, the attribute
+  `flexiq.slept=true`, and a `sleep` event carrying `flexiq.wake_at`
+
+The span is **current** while the handler runs, so spans and enqueues the
+handler makes are its children.
+
+## Trace propagation
+
+On enqueue, `onEnqueue` injects the current context into
+`EnqueueOptions.metadata` as `traceparent` / `tracestate`, following the
+merge rule on [Trace context across SDKs](/java/guides/extend/trace-context).
+At execution the context is extracted from the job's metadata, so the execute
+span is a child of the enqueuer's span, whichever SDK enqueued it.
+
+## Configuration
+
+`FlexiQOtel` never configures an exporter or a tracer provider. Build the
+`OpenTelemetry` instance the standard way, with a W3C propagator:
+
+```java
+import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
+import io.opentelemetry.context.propagation.ContextPropagators;
+import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
+import org.byteveda.flexiq.contrib.FlexiQOtel;
+
+OpenTelemetrySdk otel = OpenTelemetrySdk.builder()
+        .setTracerProvider(SdkTracerProvider.builder()
+                .addSpanProcessor(BatchSpanProcessor.builder(OtlpGrpcSpanExporter.getDefault()).build())
+                .build())
+        .setPropagators(ContextPropagators.create(W3CTraceContextPropagator.getInstance()))
+        .build();
+flexiq.use(new FlexiQOtel(otel));
+```
+
+The two-argument constructor adds a task filter:
+
+```java
+flexiq.use(new FlexiQOtel(
+        otel,
+        task -> !task.startsWith("internal.")));  // Predicate<String> task filter
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `openTelemetry` | `OpenTelemetry` | — | The instance your app configures; supplies the tracer and propagators |
+| `taskFilter` | `Predicate<String>` | all tasks | Return `false` to skip a task — applies to both enqueue injection and execute spans |
+
+<Callout type="info">
+  `FlexiQObservation` (see [Micrometer](/java/guides/extend/micrometer))
+  remains the choice for metrics plus spans from one Micrometer
+  instrumentation. It does not propagate trace context across SDKs; use
+  `FlexiQOtel` for that.
+</Callout>
+
+## Metadata in hooks and options
+
+`EnqueueOptions` has a public `metadata()` getter. In a middleware's
+`onEnqueue`, `EnqueueContext.metadata()` is layered over the options metadata
+when that is a JSON object (hook keys win) rather than replacing it.

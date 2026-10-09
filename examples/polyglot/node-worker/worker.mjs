@@ -10,9 +10,46 @@
 // polls storage sits behind the `runDirectly` guard at the bottom, and the
 // registration above it runs either way.
 
+import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { CborSerializer, Queue } from "@byteveda/flexiq";
+import { otelMiddleware } from "@byteveda/flexiq/contrib/otel";
+import { propagation, trace } from "@opentelemetry/api";
+import { ExportResultCode, W3CTraceContextPropagator } from "@opentelemetry/core";
+import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+
+/**
+ * An exporter that appends each span's job id and ids as one JSON line — set
+ * by the end-to-end check, which reads it to pin the exact parent of this
+ * worker's span and of the job it enqueues. A real deployment exports to a collector instead.
+ */
+function spanLogExporter(path) {
+  return {
+    export(spans, done) {
+      for (const span of spans) {
+        const { traceId, spanId } = span.spanContext();
+        const parentSpanId = span.parentSpanContext?.spanId;
+        const jobId = span.attributes["flexiq.job_id"];
+        const entry = { name: span.name, jobId, traceId, spanId, parentSpanId };
+        appendFileSync(path, `${JSON.stringify(entry)}\n`);
+      }
+      done({ code: ExportResultCode.SUCCESS });
+    },
+    shutdown: () => Promise.resolve(),
+  };
+}
+
+// The trace the producer started continues here and on into Java. Node's API
+// registers nothing by default, so the propagator is named outright; no
+// exporter, as in the producer — point one at a collector to see the trace.
+const spanLog = process.env.FLEXIQ_SPAN_LOG;
+trace.setGlobalTracerProvider(
+  new BasicTracerProvider({
+    spanProcessors: spanLog ? [new SimpleSpanProcessor(spanLogExporter(spanLog))] : [],
+  }),
+);
+propagation.setGlobalPropagator(new W3CTraceContextPropagator());
 
 const dbPath = process.env.FLEXIQ_DB ?? "../flexiq.db";
 // Set by the gRPC variant only: a job enqueued through the producer door
@@ -42,6 +79,9 @@ const PRODUCER_TIMEOUT_MS = 10_000;
 // here stands in for the scheduler's storage rather than opening any of its
 // own, which is the whole point of running detached.
 const queue = new Queue({ dbPath, serializer: new CborSerializer(), namespace });
+// Continues the producer's trace into `orders.process`, and carries it on into
+// the `orders.notify` job the handler enqueues.
+queue.use(otelMiddleware());
 
 /**
  * Hand one processed order to the `orders.notify` stage.

@@ -9,6 +9,8 @@ import type { TaskLogLevel } from "./types";
 export interface JobContext {
   /** The running job's id. */
   readonly jobId: string;
+  /** The job's metadata JSON as enqueued, if any. */
+  readonly metadata?: string;
   /** Aborts when cancellation is requested — check `signal.aborted` or listen. */
   readonly signal: AbortSignal;
   /** Report progress (0–100) for observability. */
@@ -44,7 +46,13 @@ export interface JobContext {
  */
 export type TaskLogWriteLevel = Exclude<TaskLogLevel, "result">;
 
-const store = new AsyncLocalStorage<JobContext>();
+// One store per process, however many bundles carry this module: the CJS build
+// bundles each entry on its own, and `contrib/otel` reading a second store would
+// never see the job a handler runs in.
+const STORE_KEY = Symbol.for("@byteveda/flexiq.jobContext");
+const holder = globalThis as { [STORE_KEY]?: AsyncLocalStorage<JobContext> };
+holder[STORE_KEY] ??= new AsyncLocalStorage<JobContext>();
+const store: AsyncLocalStorage<JobContext> = holder[STORE_KEY];
 
 /** The context of the task running on this async stack, or `undefined`. */
 export function currentJob(): JobContext | undefined {

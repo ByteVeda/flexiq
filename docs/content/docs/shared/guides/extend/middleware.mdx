@@ -340,7 +340,9 @@ which run first and can convert, redirect, or reject the call outright before
 
 `EnqueueContext` also exposes `payload()`/`payload(...)` to replace the job's
 payload outright, and a mutable `metadata()` map that travels with the job
-(readable at execution via `context.job().metadata()`). Throwing from
+(readable at execution via `context.job().metadata()`). When the options
+already carry metadata that is a JSON object, the hook's map is layered over
+it (hook keys win) instead of replacing it. Throwing from
 `onEnqueue` aborts the enqueue. For typed convert/redirect/reject decisions,
 use an <SdkLink to="modules/injection/interception">interceptor</SdkLink>
 instead — interceptors run before middleware `onEnqueue`.

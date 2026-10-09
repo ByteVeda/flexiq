@@ -116,6 +116,9 @@ pub struct JsTaskInvocation {
     /// Queue the job was dispatched from, so a lifecycle event raised while the
     /// task is still running can name it without a storage read.
     pub queue: String,
+    /// The job's metadata JSON, which carries its W3C trace context. Rides the
+    /// dispatch on both transports, so an executor sees it without a read.
+    pub metadata: Option<String>,
 }
 
 /// What the JS task callback resolves with: either a result or an error, never

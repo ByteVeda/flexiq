@@ -6,6 +6,8 @@ import types
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+from flexiq.contrib import otel as otel_contrib
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -20,6 +22,7 @@ def _make_ctx(
     ctx.task_name = task_name
     ctx.queue_name = queue_name
     ctx.retry_count = retry_count
+    ctx.metadata = None
     return ctx
 
 
@@ -103,32 +106,9 @@ class TestOpenTelemetryMiddleware:
 
 
 def _try_import_otel() -> types.ModuleType | None:
-    """Import otel module with mocked opentelemetry if not installed."""
-    try:
-        import sys
-
-        # Provide mock opentelemetry modules if not installed
-        mock_trace = MagicMock()
-        mock_trace.StatusCode.OK = "OK"
-        mock_trace.StatusCode.ERROR = "ERROR"
-
-        with patch.dict(
-            sys.modules,
-            {
-                "opentelemetry": MagicMock(),
-                "opentelemetry.trace": mock_trace,
-            },
-        ):
-            if "flexiq.contrib.otel" in sys.modules:
-                del sys.modules["flexiq.contrib.otel"]
-            from flexiq.contrib import otel
-
-            # Patch module-level references
-            otel.trace = mock_trace
-            otel.StatusCode = mock_trace.StatusCode
-            return otel
-    except Exception:
-        return None
+    """The otel contrib module — ``opentelemetry-sdk`` is a dev dependency, so
+    these tests drive the real API with only the tracer mocked."""
+    return otel_contrib
 
 
 # ── Sentry ───────────────────────────────────────────────────────────

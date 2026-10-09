@@ -165,6 +165,16 @@ only, so once the original completes or dead-letters the key is released and the
 same request enqueues a second job. A client's total retry deadline **MUST** be
 shorter than the job's own life.
 
+A client that traces **MAY** propagate W3C Trace Context either way the SDKs
+do: as `traceparent`/`tracestate` keys at the top level of
+`EnqueueOptions.metadata`, or as request headers of the same names, which
+`Enqueue` and `EnqueueBatch` merge into each job's metadata — over gRPC and the
+JSON facade alike. Keys already in the metadata win, a header `traceparent` that
+is not valid W3C is ignored with its `tracestate`, and metadata that is not a
+JSON object is never rewritten to hold one. An executor client that traces
+**SHOULD** continue the trace from the same two keys of the dispatched job's
+`metadata`.
+
 `EnqueueBatch` promises no atomicity, and it fails in two shapes a client
 **MUST** handle separately. Where the batch could not partially apply, **the RPC
 itself fails** and the error carries the failing item's `index` — returning the

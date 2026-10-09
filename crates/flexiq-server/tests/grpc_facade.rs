@@ -209,6 +209,42 @@ async fn a_raw_body_reaches_storage_untouched() {
     harness.stop().await;
 }
 
+/// An HTTP caller propagates a trace the way it would to any other service,
+/// and the job carries it exactly as one sent over gRPC does.
+#[tokio::test]
+async fn trace_headers_reach_the_jobs_metadata() {
+    let harness = Harness::start("grpc-facade-trace").await;
+    let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+    let answer = harness
+        .send(
+            harness
+                .client
+                .post(format!("{}/v1/jobs", harness.base))
+                .bearer_auth(&harness.token)
+                .header("traceparent", traceparent)
+                .header("tracestate", "vendor=1")
+                .json(&json!({"taskName": "t", "raw": ""})),
+        )
+        .await;
+    assert_eq!(answer.status, StatusCode::OK, "body: {}", answer.body);
+    let id = answer.body["job"]["id"].as_str().expect("a job id");
+
+    let stored = harness
+        .storage
+        .get_job(id, Some(NAMESPACE))
+        .expect("read")
+        .expect("the job exists");
+    let metadata: Value =
+        serde_json::from_str(stored.metadata.as_deref().expect("metadata")).expect("JSON");
+    assert_eq!(
+        metadata,
+        json!({"traceparent": traceparent, "tracestate": "vendor=1"})
+    );
+
+    harness.stop().await;
+}
+
 #[tokio::test]
 async fn a_job_reads_back_and_its_blobs_are_opt_in() {
     let harness = Harness::start("grpc-facade-read").await;

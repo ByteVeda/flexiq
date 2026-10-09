@@ -173,6 +173,9 @@ dependencies {
     testImplementation("io.micrometer:micrometer-observation-test:1.13.6")
     compileOnly("io.sentry:sentry:7.14.0")
     testImplementation("io.sentry:sentry:7.14.0")
+    compileOnly("io.opentelemetry:opentelemetry-api:1.66.0")
+    testImplementation("io.opentelemetry:opentelemetry-api:1.66.0")
+    testImplementation("io.opentelemetry:opentelemetry-sdk-testing:1.66.0")
 
     // Optional: OIDC id_token validation for dashboard OAuth (Google / generic
     // OIDC). Zero transitive deps. The dashboard degrades to password-only auth

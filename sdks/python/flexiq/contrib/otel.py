@@ -17,18 +17,22 @@ import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from flexiq.context import JobContext
 from flexiq.middleware import TaskMiddleware, legacy_task_filter_to_predicate
+from flexiq.trace_context import merge_trace_carrier, trace_carrier
 
 if TYPE_CHECKING:
-    from flexiq.context import JobContext
     from flexiq.predicates import Predicate
 
+# Kept rather than replaced with ``None`` stand-ins, so the names stay typed as
+# what they are when the extra is installed.
+_otel_missing: ImportError | None = None
 try:
-    from opentelemetry import trace
-    from opentelemetry.trace import StatusCode
-except ImportError:
-    trace = None
-    StatusCode = None
+    from opentelemetry import context as otel_context
+    from opentelemetry import propagate, trace
+    from opentelemetry.trace import SpanKind, StatusCode
+except ImportError as error:
+    _otel_missing = error
 
 _TRACER_NAME = "flexiq"
 
@@ -43,6 +47,12 @@ class OpenTelemetryMiddleware(TaskMiddleware):
       ``attribute_prefix``)
     - Status: OK on success, ERROR on failure with exception recorded
 
+    Trace context crosses the queue: an enqueue injects the caller's context into
+    the job's metadata (``traceparent``/``tracestate``, merged, never replacing
+    the caller's keys), and the execute span is a child of it — whichever SDK
+    enqueued the job. An enqueue made inside a task with no span of its own
+    continues that task's execute span.
+
     Args:
         tracer_name: OpenTelemetry tracer name.
         span_name_fn: Custom span name builder. Receives a
@@ -56,6 +66,8 @@ class OpenTelemetryMiddleware(TaskMiddleware):
         predicate: Optional :class:`~flexiq.predicates.Predicate` (or
             callable taking a :class:`~flexiq.predicates.PredicateContext`)
             controlling which tasks this middleware applies to.
+        tracer_provider: Provider to take the tracer from. Defaults to the
+            globally registered one.
     """
 
     def __init__(
@@ -67,14 +79,15 @@ class OpenTelemetryMiddleware(TaskMiddleware):
         extra_attributes_fn: Callable[[JobContext], dict[str, Any]] | None = None,
         task_filter: Callable[[str], bool] | None = None,
         predicate: Predicate | Callable[..., Any] | None = None,
+        tracer_provider: Any | None = None,
     ):
-        if trace is None:
+        if _otel_missing is not None:
             raise ImportError(
                 "opentelemetry-api is required for OpenTelemetryMiddleware. "
                 "Install it with: pip install flexiq[otel]"
-            )
+            ) from _otel_missing
         super().__init__(predicate=legacy_task_filter_to_predicate(task_filter, predicate))
-        self._tracer = trace.get_tracer(tracer_name)
+        self._tracer = trace.get_tracer(tracer_name, tracer_provider=tracer_provider)
         self._span_name_fn = span_name_fn
         self._attr_prefix = attribute_prefix
         self._extra_attributes_fn = extra_attributes_fn
@@ -97,9 +110,33 @@ class OpenTelemetryMiddleware(TaskMiddleware):
         if self._extra_attributes_fn is not None:
             attributes.update(self._extra_attributes_fn(ctx))
 
-        span = self._tracer.start_span(self._span_name(ctx), attributes=attributes)
+        parent = propagate.extract(trace_carrier(ctx.metadata))
+        span = self._tracer.start_span(
+            self._span_name(ctx),
+            context=parent,
+            kind=SpanKind.CONSUMER,
+            attributes=attributes,
+        )
         with self._lock:
             self._spans[ctx.id] = span
+
+    def on_enqueue(self, task_name: str, args: tuple, kwargs: dict, options: dict) -> None:
+        carrier: dict[str, str] = {}
+        propagate.inject(carrier, context=self._enqueue_context())
+        options["metadata"] = merge_trace_carrier(options.get("metadata"), carrier)
+
+    def _enqueue_context(self) -> Any:
+        """The context an enqueue propagates: the caller's own span if it has
+        one, else the execute span of the task it runs inside, if any."""
+        current = otel_context.get_current()
+        if trace.get_current_span(current).get_span_context().is_valid:
+            return current
+        job = JobContext._active_context()
+        if job is None:
+            return current
+        with self._lock:
+            span = self._spans.get(job.job_id)
+        return current if span is None else trace.set_span_in_context(span, current)
 
     def after(self, ctx: JobContext, result: Any, error: Exception | None) -> None:
         with self._lock:

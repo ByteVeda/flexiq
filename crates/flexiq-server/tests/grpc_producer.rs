@@ -733,3 +733,103 @@ async fn a_namespace_at_its_depth_quota_refuses_enqueues() {
 
     harness.stop().await;
 }
+
+/// A W3C trace context sent as request headers lands in each job's metadata
+/// by the merge rule in `flexiq_core::trace`, over a single enqueue and a
+/// batch alike.
+#[tokio::test]
+async fn trace_headers_are_merged_into_job_metadata() {
+    const PARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    const OWN: &str = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    let mut harness = Harness::start("grpc-producer-trace").await;
+
+    let with_metadata = |metadata: Option<&str>| EnqueueOptions {
+        metadata: metadata.map(str::to_string),
+        ..in_queue("traced")
+    };
+
+    let batch = harness
+        .client
+        .enqueue_batch(traced(
+            EnqueueBatchRequest {
+                items: vec![
+                    request("t", Vec::new(), with_metadata(None)),
+                    request("t", Vec::new(), with_metadata(Some(r#"{"user":1}"#))),
+                    request(
+                        "t",
+                        Vec::new(),
+                        with_metadata(Some(&format!(r#"{{"traceparent":"{OWN}"}}"#))),
+                    ),
+                    request("t", Vec::new(), with_metadata(Some("[1]"))),
+                ],
+            },
+            PARENT,
+        ))
+        .await
+        .expect("enqueue_batch")
+        .into_inner();
+    let ids: Vec<String> = batch
+        .results
+        .into_iter()
+        .map(|result| match result.outcome {
+            Some(enqueue_batch_item_result::Outcome::Enqueued(enqueued)) => {
+                enqueued.job.expect("a job").id
+            }
+            other => panic!("an item did not land: {other:?}"),
+        })
+        .collect();
+    let stored = |id: &str| stored_metadata(&harness.storage, id);
+
+    assert_eq!(
+        stored(&ids[0]).as_deref(),
+        Some(format!(r#"{{"traceparent":"{PARENT}","tracestate":"vendor=1"}}"#).as_str()),
+        "absent metadata becomes the carrier"
+    );
+    assert_eq!(
+        stored(&ids[1]).as_deref(),
+        Some(format!(r#"{{"traceparent":"{PARENT}","tracestate":"vendor=1","user":1}}"#).as_str()),
+        "an object keeps its own keys and bytes"
+    );
+    assert_eq!(
+        stored(&ids[2]).as_deref(),
+        Some(format!(r#"{{"traceparent":"{OWN}"}}"#).as_str()),
+        "the caller's own context wins"
+    );
+    assert_eq!(
+        stored(&ids[3]).as_deref(),
+        Some("[1]"),
+        "metadata that is not an object is never rewritten"
+    );
+
+    // A malformed header is no context at all, and its tracestate goes with it.
+    let untraced = harness
+        .client
+        .enqueue(traced(
+            request("t", Vec::new(), with_metadata(None)),
+            "not-a-traceparent",
+        ))
+        .await
+        .expect("enqueue")
+        .into_inner()
+        .job
+        .expect("a job");
+    assert_eq!(stored_metadata(&harness.storage, &untraced.id), None);
+
+    harness.stop().await;
+}
+
+fn traced<T>(message: T, traceparent: &str) -> tonic::Request<T> {
+    let mut request = tonic::Request::new(message);
+    let metadata = request.metadata_mut();
+    metadata.insert("traceparent", traceparent.parse().expect("ASCII"));
+    metadata.insert("tracestate", "vendor=1".parse().expect("ASCII"));
+    request
+}
+
+fn stored_metadata(storage: &TempStorage, id: &str) -> Option<String> {
+    storage
+        .get_job(id, Some(NAMESPACE))
+        .expect("read")
+        .expect("the job exists")
+        .metadata
+}

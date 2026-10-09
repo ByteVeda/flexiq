@@ -61,6 +61,7 @@ pub fn execute_task(
             &job.queue,
             job.namespace.as_deref(),
             worker_steps.clone_ref(py),
+            job.metadata.as_deref(),
         ),
     )?;
 

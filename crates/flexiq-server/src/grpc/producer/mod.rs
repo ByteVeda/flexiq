@@ -38,8 +38,10 @@ pub mod workflows;
 
 use std::sync::Arc;
 
+use flexiq_core::trace::{TraceContext, TRACEPARENT, TRACESTATE};
 use flexiq_core::StorageBackend;
 use flexiq_workflows::WorkflowStorageBackend;
+use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 
 use crate::events::Events;
@@ -130,9 +132,16 @@ impl Producer {
             namespace: Arc::clone(principal.namespace()),
             principal,
             audit: AuditContext::of(request.extensions()),
+            trace: trace_context(request.metadata()),
         };
         Ok((scoped, request.into_inner()))
     }
+}
+
+/// The W3C trace context a caller sent as request headers, if it is valid.
+fn trace_context(metadata: &MetadataMap) -> Option<TraceContext> {
+    let header = |name: &str| metadata.get(name).and_then(|value| value.to_str().ok());
+    TraceContext::from_headers(header(TRACEPARENT), header(TRACESTATE))
 }
 
 /// The caller the auth layer established.
@@ -170,6 +179,8 @@ pub(crate) struct Scoped<'a> {
     principal: Principal,
     /// The audit slot, on a call the audit layer records.
     audit: Option<AuditContext>,
+    /// The caller's trace context, from `traceparent`/`tracestate` headers.
+    trace: Option<TraceContext>,
 }
 
 impl Scoped<'_> {
@@ -227,6 +238,11 @@ impl Scoped<'_> {
     /// as `enqueued_by` — the same id its audit records carry.
     pub(crate) fn token_id(&self) -> &str {
         self.principal.credential()
+    }
+
+    /// The trace context the caller's headers carried, if any.
+    pub(crate) fn trace(&self) -> Option<&TraceContext> {
+        self.trace.as_ref()
     }
 
     pub(crate) fn storage(&self) -> &StorageBackend {

@@ -75,6 +75,7 @@ class AsyncTaskExecutor:
         max_retries: int,
         queue_name: str,
         permit: Any = None,
+        metadata: str | None = None,
     ) -> None:
         """Submit an async job for execution. Called from Rust — brief GIL hold.
 
@@ -86,7 +87,14 @@ class AsyncTaskExecutor:
             raise RuntimeError("AsyncTaskExecutor not started")
         asyncio.run_coroutine_threadsafe(
             self._execute(
-                job_id, task_name, payload, retry_count, max_retries, queue_name, permit
+                job_id,
+                task_name,
+                payload,
+                retry_count,
+                max_retries,
+                queue_name,
+                permit,
+                metadata,
             ),
             self._loop,
         )
@@ -125,12 +133,13 @@ class AsyncTaskExecutor:
         max_retries: int,
         queue_name: str,
         permit: Any = None,
+        metadata: str | None = None,
     ) -> None:
         """Execute a single async task with full lifecycle support."""
         assert self._semaphore is not None
         try:
             await self._run_job(
-                job_id, task_name, payload_bytes, retry_count, max_retries, queue_name
+                job_id, task_name, payload_bytes, retry_count, max_retries, queue_name, metadata
             )
         finally:
             # Hand the dispatch slot back as soon as the job is done rather than
@@ -147,6 +156,7 @@ class AsyncTaskExecutor:
         retry_count: int,
         max_retries: int,
         queue_name: str,
+        metadata: str | None = None,
     ) -> None:
         """Run one job: gate on the concurrency backstop, execute, report.
 
@@ -158,7 +168,7 @@ class AsyncTaskExecutor:
         async with self._semaphore:
             start_ns = time.monotonic_ns()
             token = set_async_context(
-                job_id, task_name, retry_count, queue_name, self._worker_steps
+                job_id, task_name, retry_count, queue_name, self._worker_steps, metadata
             )
             # Set before the hand-off so a raising send can't also fire report_failure
             # for the same job — the scheduler would then see two results for one job.

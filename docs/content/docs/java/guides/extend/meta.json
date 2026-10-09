@@ -11,6 +11,8 @@
     "logging",
     "notes",
     "testing",
+    "otel",
+    "trace-context",
     "micrometer",
     "prometheus",
     "sentry",

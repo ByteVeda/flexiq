@@ -6,6 +6,8 @@ export interface TaskContext {
   jobId: string;
   taskName: string;
   args: unknown[];
+  /** The job's metadata JSON as enqueued, if any — where its trace context rides. */
+  readonly metadata?: string;
 }
 
 /**

@@ -1,6 +1,8 @@
 package org.byteveda.flexiq;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -114,6 +116,13 @@ import org.jspecify.annotations.Nullable;
  */
 final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     private static final ObjectMapper VIEWS = new ObjectMapper();
+    // Decimals as BigDecimal, so a caller's `1.10` or 30-digit value survives
+    // the re-encode a hook's metadata forces; trailing tokens mean not an object.
+    private static final ObjectMapper CALLER_METADATA = new ObjectMapper()
+            .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final JavaType CALLER_METADATA_TYPE =
+            CALLER_METADATA.getTypeFactory().constructMapType(LinkedHashMap.class, String.class, Object.class);
 
     private static final long DEFAULT_LOCK_TTL_MS = 30_000;
 
@@ -433,7 +442,7 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
         }
         if (!context.metadata().isEmpty()) {
             finalOptions = finalOptions.toBuilder()
-                    .metadata(encode(context.metadata()))
+                    .metadata(layerMetadata(finalOptions.metadata(), context.metadata()))
                     .build();
         }
         // Admission cap: reject before serializing/inserting if the target queue is full.
@@ -1641,6 +1650,27 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     }
 
     // ── JSON helpers ────────────────────────────────────────────────
+
+    /**
+     * Hook metadata layered over the caller's. A JSON object keeps its keys — a
+     * trace context among them — with the hooks' winning; anything else cannot
+     * take a key, so the hooks' map replaces it.
+     */
+    private static String layerMetadata(@Nullable String own, Map<String, Object> hooks) {
+        Map<String, Object> layered = new LinkedHashMap<>();
+        if (own != null) {
+            try {
+                Map<String, Object> keys = CALLER_METADATA.readValue(own, CALLER_METADATA_TYPE);
+                if (keys != null) {
+                    layered.putAll(keys);
+                }
+            } catch (JsonProcessingException notAnObject) {
+                // Free-form text, or JSON that is not an object: no keys to keep.
+            }
+        }
+        layered.putAll(hooks);
+        return encode(layered);
+    }
 
     private static String encode(Object value) {
         try {
