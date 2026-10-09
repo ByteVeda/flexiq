@@ -17,7 +17,8 @@ use `structured` arguments, no CBOR library either.
   bearer credential already handled. Its `executor` package runs tasks over the
   [executor door](/server/custom-executors), and its `admin` package drives the
   [admin door](/server/operate/admin).
-  It is a client, not an SDK: it has no task registration or middleware.
+  It is a client, not an SDK: `executor` binds a handler to each task name,
+  but nothing declares task definitions to the core, and no middleware runs.
 </Callout>
 
 <Callout title="So does Ruby">
