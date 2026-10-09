@@ -1,0 +1,76 @@
+# Lint configuration for the Terraform provider, adapted from sdks/go's.
+#
+# Run it with `make lint` from this directory. The linter set is small and all
+# of it is enforced: adding a linter is cheap once its findings are at zero,
+# and a config that suppresses half of what it enables teaches `//nolint`.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errorlint
+    - goconst
+    - gocritic
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - wastedassign
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+    govet:
+      enable-all: true
+      disable:
+        # Field order in the schema models follows the schema, not alignment.
+        - fieldalignment
+    revive:
+      rules:
+        - name: exported
+          severity: error
+          disabled: false
+        - name: package-comments
+        - name: indent-error-flow
+        - name: errorf
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: increment-decrement
+        - name: var-declaration
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: superfluous-else
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+  exclusions:
+    rules:
+      # Tests spell out their HCL and attribute values inline; naming each one
+      # a constant would bury the case the test is about.
+      - path: _test\.go
+        linters:
+          - goconst
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/ByteVeda/flexiq
