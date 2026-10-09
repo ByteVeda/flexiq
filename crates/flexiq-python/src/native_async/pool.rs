@@ -109,6 +109,7 @@ impl WorkerDispatcher for NativeAsyncPool {
                                 job.max_retries,
                                 &job.queue,
                                 handle,
+                                job.metadata.as_deref(),
                             ),
                         )
                         .map(|_| ())

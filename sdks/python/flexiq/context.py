@@ -110,6 +110,11 @@ class JobContext:
         return self._require_context().namespace
 
     @property
+    def metadata(self) -> str | None:
+        """Raw metadata JSON string the job was enqueued with, if any."""
+        return self._require_context().metadata
+
+    @property
     def step(self) -> StepContext:
         """Durable inline steps for this job — see :mod:`flexiq.steps`.
 
@@ -316,6 +321,7 @@ def _set_context(
     queue_name: str,
     namespace: str | None = None,
     worker_steps: WorkerSteps | AttachedSteps | None = None,
+    metadata: str | None = None,
 ) -> None:
     """Set the thread-local job context. Called from Rust worker before each task.
 
@@ -331,6 +337,7 @@ def _set_context(
         queue_name=queue_name,
         namespace=namespace,
         worker_steps=worker_steps,
+        metadata=metadata,
     )
 
 

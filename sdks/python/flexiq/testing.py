@@ -215,6 +215,7 @@ class TestMode:
             task_name=task_name,
             retry_count=0,
             queue_name=queue_name if queue_name else "default",
+            metadata=enqueue_kwargs.get("metadata"),
         )
 
         result = TestResult(
