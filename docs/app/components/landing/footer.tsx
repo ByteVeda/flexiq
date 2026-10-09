@@ -28,7 +28,7 @@ const COLS: { title: string; links: FootLink[] }[] = [
     title: "More",
     links: [
       { label: "Examples", href: "more/examples", sdk: true },
-      { label: "Celery comparison", href: "/about/comparison" },
+      { label: "Comparison", href: "/about/comparison" },
       { label: "FAQ", href: "/about/faq" },
       { label: "Changelog", href: "/about/changelog" },
     ],
