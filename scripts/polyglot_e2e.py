@@ -210,16 +210,17 @@ def span_log(db: Path) -> Path:
     return db.parent / "node-spans.jsonl"
 
 
-def node_execute_spans(db: Path) -> dict[str, tuple[str, str]]:
-    """The Node worker's `orders.process` execute spans: job id → (trace, span)."""
-    spans: dict[str, tuple[str, str]] = {}
+def node_execute_spans(db: Path) -> dict[str, tuple[str, str, str | None]]:
+    """The Node worker's `orders.process` execute spans: job id → (trace, span,
+    parent span)."""
+    spans: dict[str, tuple[str, str, str | None]] = {}
     path = span_log(db)
     if not path.is_file():
         raise PipelineError(f"the Node worker wrote no span log at {path}")
     for line in path.read_text().splitlines():
         span = json.loads(line)
         if span["name"] == f"flexiq.execute.{PROCESS_TASK}":
-            spans[span["jobId"]] = (span["traceId"], span["spanId"])
+            spans[span["jobId"]] = (span["traceId"], span["spanId"], span.get("parentSpanId"))
     return spans
 
 
@@ -234,11 +235,16 @@ def assert_trace_continues(queue: Queue, orders: int, db: Path) -> None:
     executed = node_execute_spans(db)
     traces: dict[str, tuple[str, str]] = {}
     for job in completed(queue, PROCESS_TASK, orders * 2):
-        order_trace, _producer_span = traceparent(job)
-        node_trace, node_span = executed.get(job.id, ("", ""))
+        order_trace, producer_span = traceparent(job)
+        node_trace, node_span, node_parent = executed.get(job.id, ("", "", None))
         if node_trace != order_trace:
             raise PipelineError(
                 f"Node ran process job {job.id} in trace {node_trace!r}, not {order_trace}"
+            )
+        if node_parent != producer_span:
+            raise PipelineError(
+                f"Node's execute span for job {job.id} is parented to {node_parent!r}, not "
+                f"the producer's span {producer_span}"
             )
         traces[job.result(timeout=5)["order_id"]] = (order_trace, node_span)
     if len({trace_id for trace_id, _ in traces.values()}) != orders:

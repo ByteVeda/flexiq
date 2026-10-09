@@ -21,16 +21,18 @@ import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-tra
 
 /**
  * An exporter that appends each span's job id and ids as one JSON line — set
- * by the end-to-end check, which reads it to pin the exact parent of the job
- * this worker enqueues. A real deployment exports to a collector instead.
+ * by the end-to-end check, which reads it to pin the exact parent of this
+ * worker's span and of the job it enqueues. A real deployment exports to a collector instead.
  */
 function spanLogExporter(path) {
   return {
     export(spans, done) {
       for (const span of spans) {
         const { traceId, spanId } = span.spanContext();
+        const parentSpanId = span.parentSpanContext?.spanId;
         const jobId = span.attributes["flexiq.job_id"];
-        appendFileSync(path, `${JSON.stringify({ name: span.name, jobId, traceId, spanId })}\n`);
+        const entry = { name: span.name, jobId, traceId, spanId, parentSpanId };
+        appendFileSync(path, `${JSON.stringify(entry)}\n`);
       }
       done({ code: ExportResultCode.SUCCESS });
     },
