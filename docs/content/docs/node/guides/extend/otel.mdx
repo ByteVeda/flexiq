@@ -17,6 +17,31 @@ per execution attempt, named `flexiq.execute.<taskName>`.
 The span ends with status `OK` on success and `ERROR` (with the exception
 recorded) on throw. A retry is a new attempt, so it produces a new span.
 
+## Trace propagation
+
+Trace context travels with the job, so a trace that crosses an enqueue stays
+one trace:
+
+- **Enqueue**: `onEnqueue` injects the current context into the job's
+  metadata as `traceparent` / `tracestate`, using the registered propagator.
+- **Execution**: `before` extracts that context, and the execute span
+  (kind `CONSUMER`) becomes a child of the enqueuer's span.
+- **Enqueue inside a handler** continues the execute span.
+
+The Node OpenTelemetry API registers **no propagator by default**. Register a
+W3C one, or use the OpenTelemetry Node SDK, which does it for you:
+
+```ts
+import { propagation } from "@opentelemetry/api";
+import { W3CTraceContextPropagator } from "@opentelemetry/core";
+
+propagation.setGlobalPropagator(new W3CTraceContextPropagator());
+```
+
+`TaskContext.metadata` and `currentJob().metadata` expose the job's raw
+metadata string. The merge rule, coverage table and cross-SDK behaviour are on
+[Trace context across SDKs](/node/guides/extend/trace-context).
+
 ## Span attributes
 
 | Attribute | Value |
@@ -29,6 +54,7 @@ recorded) on throw. A retry is a new attempt, so it produces a new span.
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `tracerName` | `string` | `"flexiq"` | Name passed to `trace.getTracer()` |
+| `tracerProvider` | `TracerProvider` | global provider | Provider to take the tracer from |
 | `attributePrefix` | `string` | `"flexiq"` | Prefix applied to span attribute keys |
 | `spanName` | `(ctx) => string` | — | Override the span name per execution |
 | `extraAttributes` | `(ctx) => Attributes` | — | Attach additional attributes to every span |
@@ -49,4 +75,6 @@ queue.use(
 <Callout type="info">
   `otelMiddleware` does not configure an exporter or a tracer provider. Set
   those up with the OpenTelemetry SDK before calling `queue.runWorker()`.
+  Hooks cannot wrap the handler, so the execute span is not made active for
+  the handler's own spans; an enqueue inside the handler still continues it.
 </Callout>

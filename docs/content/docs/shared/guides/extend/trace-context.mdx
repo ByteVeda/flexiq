@@ -1,0 +1,138 @@
+---
+title: Trace context across SDKs
+description: "One trace from the request that enqueues a job to the worker that runs it, even when the two are different SDKs."
+---
+
+A trace that starts in one SDK's request, enqueues a job, and executes in
+another SDK's worker is **one trace**. flexiq carries the
+[W3C Trace Context](https://www.w3.org/TR/trace-context/) in the job itself, so
+the producer and the worker need no shared process, broker or sidecar — only an
+OpenTelemetry integration on each side.
+
+The repo's polyglot example (`examples/polyglot`) runs a Python producer, a Node
+worker and a Java worker; CI asserts that each order yields exactly one trace.
+
+## The carrier
+
+The carrier is the job's **metadata** JSON object. Two keys at its top level
+use the W3C header names:
+
+```json
+{
+  "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+  "tracestate": "vendor=value"
+}
+```
+
+At enqueue, the OpenTelemetry integration injects the current context into
+the job's metadata. At execution, the worker extracts it and starts the
+execute span as a child of the enqueuer's span.
+
+### Merge rule
+
+Injection never clobbers metadata you set yourself:
+
+| Metadata at enqueue | Result |
+|---|---|
+| Absent or empty | Becomes the carrier object |
+| A JSON object | Gains `traceparent` / `tracestate`, unless it already has either key |
+| A JSON object with `traceparent` or `tracestate` | Left as is — the caller's own context wins whole |
+| Not a JSON object (array, string, non-JSON text) | Left untouched; the job starts a new trace |
+
+When keys are added, the existing bytes are kept as they were: the new keys
+are spliced in after the opening brace, and the caller's keys are never
+overwritten.
+
+## Execution
+
+The worker extracts the context from the job's metadata and creates the
+execute span `flexiq.execute.<task>` (span kind `CONSUMER`) as a child of the
+enqueuer's span. A job enqueued from inside a task continues that task's
+execute span, so a chain of jobs stays one trace.
+
+## What is covered
+
+| Path | Behaviour |
+|---|---|
+| Retry | Same job row, so every attempt is a child of the original enqueuer |
+| `step.sleep` resume | Same row; the resumed attempt is again a child of the enqueuer |
+| Pub/sub fan-out | Each subscriber's delivery job copies the message's metadata, so a carrier in the published metadata reaches every subscriber |
+| Dead-letter replay | The replayed job keeps its metadata, continuing the original trace |
+| Attached executor and gRPC executor door | Metadata rides the dispatch frame |
+| gRPC producer door and JSON facade | Put `traceparent` / `tracestate` in `EnqueueOptions.metadata`, or send them as `traceparent` / `tracestate` request headers (see below) |
+| Periodic jobs | A new trace per firing — there is no caller to continue |
+| Workflow node jobs | **Not yet carried.** Node metadata holds the run's routing keys; tracked in [issue #1047](https://github.com/ByteVeda/flexiq/issues/1047) |
+
+### Request headers on the server doors
+
+The server merges `traceparent` / `tracestate` request headers into the job's
+metadata by the same rule as above:
+
+- A `traceparent` or `tracestate` already in the metadata wins over the headers.
+- A malformed `traceparent` header is ignored, together with its `tracestate`.
+- A `tracestate` over 512 bytes is dropped.
+
+## Setup per SDK
+
+Each side needs its own OpenTelemetry integration and a W3C propagator.
+
+<SdkOnly sdk="python">
+
+Add `OpenTelemetryMiddleware` to the queue. Python's OpenTelemetry API uses the
+W3C propagator by default, so nothing else is needed.
+
+```python
+from flexiq import Queue
+from flexiq.contrib.otel import OpenTelemetryMiddleware
+
+queue = Queue(middleware=[OpenTelemetryMiddleware()])
+```
+
+Details and options: [OpenTelemetry Integration](/python/guides/extend/otel).
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+Register the middleware from the `@byteveda/flexiq/contrib/otel` subpath.
+
+```ts
+import { propagation } from "@opentelemetry/api";
+import { W3CTraceContextPropagator } from "@opentelemetry/core";
+import { otelMiddleware } from "@byteveda/flexiq/contrib/otel";
+
+propagation.setGlobalPropagator(new W3CTraceContextPropagator());
+
+queue.use(otelMiddleware());
+```
+
+The Node OpenTelemetry API registers **no propagator by default**, so register
+one as above, or use the OpenTelemetry Node SDK, which does it for you.
+
+<Callout type="info">
+  Middleware hooks cannot wrap the handler, so the execute span is not made
+  active for the handler's own spans. An enqueue inside the handler still
+  continues it.
+</Callout>
+
+Details and options: [OpenTelemetry Integration](/node/guides/extend/otel).
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+Register `FlexiQOtel` with the `OpenTelemetry` instance your app configures.
+Propagators come from that instance.
+
+```java
+import org.byteveda.flexiq.contrib.FlexiQOtel;
+
+flexiq.use(new FlexiQOtel(openTelemetry));
+```
+
+The execute span is current for the handler, so the handler's own spans and
+enqueues are its children.
+
+Details and options: [OpenTelemetry Integration](/java/guides/extend/otel).
+
+</SdkOnly>

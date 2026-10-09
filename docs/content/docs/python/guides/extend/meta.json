@@ -12,6 +12,7 @@
     "notes",
     "testing",
     "otel",
+    "trace-context",
     "prometheus",
     "sentry",
     "flask",

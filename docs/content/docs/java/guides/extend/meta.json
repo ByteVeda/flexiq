@@ -12,6 +12,8 @@
     "notes",
     "testing",
     "micrometer",
+    "otel",
+    "trace-context",
     "prometheus",
     "sentry",
     "spring"

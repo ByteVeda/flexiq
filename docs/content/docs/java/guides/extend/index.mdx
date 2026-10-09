@@ -71,7 +71,7 @@ extra service.
 
 ## Integrations
 
-The Java SDK ships a Spring Boot 3 starter as a separate artifact, and two
+The Java SDK ships a Spring Boot 3 starter as a separate artifact, and
 observability helpers in the `org.byteveda.flexiq.contrib` package of the main
 artifact. The contrib classes compile against their third-party APIs as
 `compileOnly` dependencies — nothing is pulled onto your classpath until you
@@ -81,6 +81,7 @@ add the matching runtime dependency yourself.
 // Only add what you use.
 implementation("org.byteveda:flexiq-spring:2.0.0")        // Spring Boot 3 starter
 implementation("io.micrometer:micrometer-observation:1.13.6") // contrib.FlexiQObservation
+implementation("io.opentelemetry:opentelemetry-api:1.66.0")  // contrib.FlexiQOtel
 implementation("io.sentry:sentry:7.14.0")                     // contrib.SentryMiddleware
 ```
 
@@ -96,6 +97,16 @@ implementation("io.sentry:sentry:7.14.0")                     // contrib.SentryM
     title="Micrometer"
     href="/java/guides/extend/micrometer"
     description="one Observation per execution: a timer plus a trace span."
+  />
+  <Card
+    title="OpenTelemetry"
+    href="/java/guides/extend/otel"
+    description="a span per execution, with trace context carried through the job."
+  />
+  <Card
+    title="Trace context"
+    href="/java/guides/extend/trace-context"
+    description="one trace from enqueue to execution, across SDKs."
   />
   <Card
     title="Prometheus"
