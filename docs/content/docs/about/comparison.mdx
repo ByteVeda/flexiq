@@ -256,7 +256,7 @@ on a remote Redis, RQ also outpaces FlexiQ's Redis backend in the
 | Periodic/cron tasks | **Yes** (6-field with seconds) | Yes (celery-beat) | Yes (built-in `CronScheduler`, beta) | Yes (APScheduler) | Yes | Yes (taskiq-cron) |
 | Async support | **Yes** | No (no native asyncio; eventlet/gevent pools) | No | Yes (`AsyncIO` middleware) | — | Yes (native) |
 | Cancel running tasks | **Yes** (cooperative) | Yes (revoke) | Yes (`send_stop_job_command`) | No | No | No |
-| Soft timeouts | **Yes** | Yes (`soft_time_limit`) | No | No | No | No |
+| Soft timeouts | **Yes** | Yes (`soft_time_limit`; prefork pool, not eventlet or gevent) | No | No | No | No |
 | Custom serializers | **Yes** | Yes | Yes (`serializer=`) | Yes (`set_encoder`) | — | Yes |
 | Per-task middleware | **Yes** | No | No | Yes | No | Yes |
 | Multi-process (prefork) | **Yes** | Yes | No | No | No | No |
