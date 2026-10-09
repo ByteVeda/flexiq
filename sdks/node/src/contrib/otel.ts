@@ -3,9 +3,28 @@
 //
 // Register with `queue.use(otelMiddleware())`. Each execution attempt becomes one
 // span (`flexiq.execute.<task>`); a retry is a fresh attempt and thus a new span.
+//
+// Trace context crosses the queue: an enqueue injects the active context into
+// the job's metadata (`traceparent`/`tracestate`, merged, never replacing the
+// caller's keys) through the registered propagator, and the execute span is a
+// child of it — whichever SDK enqueued the job. An enqueue made inside a task
+// with no active span of its own continues that task's execute span.
 
-import { type Attributes, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
+import {
+  type Attributes,
+  type Context,
+  context,
+  isSpanContextValid,
+  propagation,
+  type Span,
+  SpanKind,
+  SpanStatusCode,
+  type TracerProvider,
+  trace,
+} from "@opentelemetry/api";
+import { currentJob } from "../context";
 import type { Middleware, TaskContext } from "../middleware";
+import { mergeTraceCarrier, traceCarrier } from "../trace-context";
 
 /** Options for {@link otelMiddleware}. */
 export interface OtelMiddlewareOptions {
@@ -19,6 +38,8 @@ export interface OtelMiddlewareOptions {
   extraAttributes?: (ctx: TaskContext) => Attributes;
   /** Only trace tasks for which this returns true (default: all). */
   taskFilter?: (taskName: string) => boolean;
+  /** Provider to take the tracer from (default: the globally registered one). */
+  tracerProvider?: TracerProvider;
 }
 
 /**
@@ -30,18 +51,45 @@ export interface OtelMiddlewareOptions {
 export function otelMiddleware(options: OtelMiddlewareOptions = {}): Middleware {
   const tracerName = options.tracerName ?? "flexiq";
   const prefix = options.attributePrefix ?? "flexiq";
-  const tracer = trace.getTracer(tracerName);
+  const tracer = (options.tracerProvider ?? trace.getTracerProvider()).getTracer(tracerName);
   const spans = new Map<string, Span>();
 
   const tracked = (taskName: string): boolean => options.taskFilter?.(taskName) ?? true;
 
+  // The caller's own span if it has one, else the execute span of the task the
+  // enqueue runs inside: hooks cannot wrap the handler, so that span is never
+  // active there unless the caller made it so.
+  const enqueueContext = (): Context => {
+    const active = context.active();
+    const own = trace.getSpanContext(active);
+    if (own && isSpanContextValid(own)) {
+      return active;
+    }
+    const job = currentJob();
+    const running = job ? spans.get(job.jobId) : undefined;
+    return running ? trace.setSpan(active, running) : active;
+  };
+
   return {
+    onEnqueue(ctx) {
+      if (!tracked(ctx.taskName)) {
+        return;
+      }
+      const carrier: Record<string, string> = {};
+      propagation.inject(enqueueContext(), carrier);
+      const merged = mergeTraceCarrier(ctx.options.metadata ?? undefined, carrier);
+      if (merged !== undefined) {
+        ctx.options.metadata = merged;
+      }
+    },
+
     before(ctx) {
       if (!tracked(ctx.taskName)) {
         return;
       }
       const name = options.spanName?.(ctx) ?? `${prefix}.execute.${ctx.taskName}`;
-      const span = tracer.startSpan(name);
+      const parent = propagation.extract(context.active(), traceCarrier(ctx.metadata));
+      const span = tracer.startSpan(name, { kind: SpanKind.CONSUMER }, parent);
       span.setAttribute(`${prefix}.job_id`, ctx.jobId);
       span.setAttribute(`${prefix}.task_name`, ctx.taskName);
       const extra = options.extraAttributes?.(ctx);
