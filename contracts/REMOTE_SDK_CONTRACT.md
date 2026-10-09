@@ -575,7 +575,7 @@ width and signedness are per key.
 |---|---|---|
 | `queue` | `QUEUE_FULL` | queue name, verbatim |
 | `pending`, `cap` | `QUEUE_FULL` | `int64`, jobs |
-| `scope` | `SCOPE_DENIED` | one of `produce`, `read`, `execute`, `inspect`, `admin` |
+| `scope` | `SCOPE_DENIED` | one of `produce`, `read`, `execute`, `inspect`, `admin`, `tokens` |
 | `queue`, `task` | `SCOPE_DENIED` | the queue / task name a narrowed grant does not reach, verbatim; either may be absent |
 | `node` | `SCOPE_DENIED`, from `SubmitWorkflow` | the first node whose queue or task the grants do not reach |
 | `speaks`, `required` | `CONTRACT_TOO_OLD` | `uint32`, contract level |

@@ -23,7 +23,8 @@ was minted under.
 ## What is recorded
 
 Every call that needs a **write scope** is recorded: `produce` on the producer
-door, `admin` on [the admin door](/server/operate/admin). The same calls over the
+door, `admin` on [the admin door](/server/operate/admin), and `CreateToken` and
+`RevokeToken` under `tokens`. The same calls over the
 [JSON facade](/server/operate/grpc#the-same-door-without-grpc) are recorded the
 same way, under the same operation name.
 
@@ -203,8 +204,8 @@ Jobs enqueued before the server recorded it read back unset.
 
 For a revoked third-party credential, "what did it see" is sometimes the
 question. Set `FLEXIQ_GRPC_AUDIT_READS=on` (Helm: `grpc.auditReads`) and every
-call that needs `read` or `inspect` is recorded too, in the same table, with the
-same fields. `on`, `true`, `yes` or `1` turns it on; `off`, `false`, `no` or
+call that needs `read` or `inspect` is recorded too, as are `GetToken` and
+`ListTokens` under `tokens`, in the same table, with the same fields. `on`, `true`, `yes` or `1` turns it on; `off`, `false`, `no` or
 `0` leaves it off, in any case. Any other value stops the server at startup
 instead of quietly leaving reads unrecorded.
 
