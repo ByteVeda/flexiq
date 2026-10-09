@@ -189,17 +189,18 @@ The trigger then names the variable, not the secret value:
 triggers:
   - type: external
     metadata:
-      scalerAddress: "flexiq-server-grpc:50051"
+      scalerAddress: "flexiq-flexiq-server-grpc:50051"
       tokenFromEnv: FLEXIQ_SCALER_TOKEN
       queue: default
       targetQueueDepth: "10"
 ```
 
-`flexiq-server-grpc` is the gRPC Service the chart names after its release:
-`<release>-flexiq-server-grpc`, shortened to `<release>-grpc` when the release
-name already contains `flexiq-server` (so a release called `flexiq-server`
-gives `flexiq-server-grpc`), or `<fullnameOverride>-grpc` when that is set.
-`50051` is the default `grpc.port`.
+`flexiq-flexiq-server-grpc` is the gRPC Service of the chart installed as
+`helm install flexiq ...`: `<release>-flexiq-server-grpc`, shortened to
+`<release>-grpc` when the release name already contains `flexiq-server` (so a
+release called `flexiq-server` gives `flexiq-server-grpc`), or
+`<fullnameOverride>-grpc` when that is set. `50051` is the default
+`grpc.port`.
 
 KEDA resolves `tokenFromEnv` from the **scale target's** environment and sends
 the value in the trigger metadata. A `token` key puts it in the manifest
@@ -237,6 +238,12 @@ The two doors draw that line differently. gRPC `IsActive` is
 `/api/scaler` is `pending > 0`, so it goes false while the last claimed jobs are
 still running.
 
+On Redis, a namespaced count reads the per-namespace job index. A job enqueued
+by a process older than that index is not in it until the job finishes, so
+during a rolling upgrade from such a version the scaler can under-count and
+let the target scale to zero. Finish the upgrade before relying on
+scale-to-zero; namespace quotas have the same window.
+
 The metric is named `flexiq-<queue>` (or `flexiq-all`), lowercased with every
 character outside `[a-z0-9]` turned into `-`. So `emails_eu` and `emails-eu`
 both become `flexiq-emails-eu`. That is harmless: KEDA prefixes each trigger's
@@ -252,7 +259,7 @@ job wakes the target without waiting for the polling interval:
 triggers:
   - type: external-push
     metadata:
-      scalerAddress: "flexiq-server-grpc:50051"
+      scalerAddress: "flexiq-flexiq-server-grpc:50051"
       tokenFromEnv: FLEXIQ_SCALER_TOKEN
       queue: default
 ```

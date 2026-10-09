@@ -23,7 +23,8 @@ spec:
   triggers:
     - type: external-push
       metadata:
-        scalerAddress: "flexiq-server-grpc:50051"
+        # The gRPC Service of `helm install flexiq ...`: <release>-flexiq-server-grpc
+        scalerAddress: "flexiq-flexiq-server-grpc:50051"
         tokenFromEnv: FLEXIQ_SCALER_TOKEN
         queue: default
         targetQueueDepth: "10"
