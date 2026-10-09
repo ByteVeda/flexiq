@@ -89,5 +89,9 @@ pub async fn run(cli: cli::Cli) -> anyhow::Result<()> {
             let mut client = connect_admin(endpoint, &token, &tls).await?;
             commands::quota::run(&mut client, command, json).await
         }
+        Command::Tokens(command) => {
+            let mut client = connect_admin(endpoint, &token, &tls).await?;
+            commands::tokens::run(&mut client, command, json).await
+        }
     }
 }

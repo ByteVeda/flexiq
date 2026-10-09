@@ -297,6 +297,21 @@ impl WireError {
         }
     }
 
+    /// A token method asked to hand on, or take away, a grant the caller's own
+    /// grants do not cover (#851). `scope` is the uncovered grant's scope.
+    ///
+    /// `SCOPE_DENIED`, like [`Self::beyond_grant`]: the same credential will be
+    /// refused the same request every time.
+    pub fn not_covered(scope: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code: Code::PermissionDenied,
+            reason: reason::SCOPE_DENIED,
+            message: message.into(),
+            metadata: HashMap::from([(reason::KEY_SCOPE.to_string(), scope.to_string())]),
+            retry_after: None,
+        }
+    }
+
     /// A fault of the server's own, with nothing useful to say to the caller.
     ///
     /// The cause is logged by whoever raises this; the response carries only

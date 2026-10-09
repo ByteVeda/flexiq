@@ -150,6 +150,62 @@ func (QuotaOverflow) EnumDescriptor() ([]byte, []int) {
 	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{1}
 }
 
+// What a token is, right now.
+type TokenStatus int32
+
+const (
+	TokenStatus_TOKEN_STATUS_UNSPECIFIED TokenStatus = 0
+	// Usable.
+	TokenStatus_TOKEN_STATUS_ACTIVE TokenStatus = 1
+	// Past its expiry.
+	TokenStatus_TOKEN_STATUS_EXPIRED TokenStatus = 2
+	// Revoked. Wins over expired.
+	TokenStatus_TOKEN_STATUS_REVOKED TokenStatus = 3
+)
+
+// Enum value maps for TokenStatus.
+var (
+	TokenStatus_name = map[int32]string{
+		0: "TOKEN_STATUS_UNSPECIFIED",
+		1: "TOKEN_STATUS_ACTIVE",
+		2: "TOKEN_STATUS_EXPIRED",
+		3: "TOKEN_STATUS_REVOKED",
+	}
+	TokenStatus_value = map[string]int32{
+		"TOKEN_STATUS_UNSPECIFIED": 0,
+		"TOKEN_STATUS_ACTIVE":      1,
+		"TOKEN_STATUS_EXPIRED":     2,
+		"TOKEN_STATUS_REVOKED":     3,
+	}
+)
+
+func (x TokenStatus) Enum() *TokenStatus {
+	p := new(TokenStatus)
+	*p = x
+	return p
+}
+
+func (x TokenStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TokenStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_flexiq_admin_v1_admin_service_proto_enumTypes[2].Descriptor()
+}
+
+func (TokenStatus) Type() protoreflect.EnumType {
+	return &file_flexiq_admin_v1_admin_service_proto_enumTypes[2]
+}
+
+func (x TokenStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TokenStatus.Descriptor instead.
+func (TokenStatus) EnumDescriptor() ([]byte, []int) {
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{2}
+}
+
 // A queue as an operator sees it: whether it dispatches, and what it holds.
 type Queue struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -3803,6 +3859,508 @@ func (x *ListAuditRecordsResponse) GetNextPageToken() string {
 	return ""
 }
 
+// An API token, as a listing shows it. Never carries the secret or its digest.
+type ApiToken struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Public identifier, the handle GetToken and RevokeToken take.
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Label chosen at mint. Two tokens may share it.
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// Grants, spelled `scope` or `scope:queue=<pattern>,task=<pattern>`.
+	Scopes []string `protobuf:"bytes,3,rep,name=scopes,proto3" json:"scopes,omitempty"`
+	// The one namespace every call on the token is scoped to.
+	Namespace string                 `protobuf:"bytes,4,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Absent until first used; written at most once a minute.
+	LastUsedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=last_used_at,json=lastUsedAt,proto3" json:"last_used_at,omitempty"`
+	ExpiresAt  *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	// Absent unless revoked.
+	RevokedAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=revoked_at,json=revokedAt,proto3" json:"revoked_at,omitempty"`
+	// A value this reader does not recognise is not an error; show it as unknown.
+	Status TokenStatus `protobuf:"varint,9,opt,name=status,proto3,enum=flexiq.admin.v1.TokenStatus" json:"status,omitempty"`
+	// Who minted it: a dashboard username, `cli`, or `token:<id>` for a token
+	// minted through CreateToken. Absent when unrecorded.
+	CreatedBy     *string `protobuf:"bytes,16,opt,name=created_by,json=createdBy,proto3,oneof" json:"created_by,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApiToken) Reset() {
+	*x = ApiToken{}
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApiToken) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApiToken) ProtoMessage() {}
+
+func (x *ApiToken) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApiToken.ProtoReflect.Descriptor instead.
+func (*ApiToken) Descriptor() ([]byte, []int) {
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{63}
+}
+
+func (x *ApiToken) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ApiToken) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ApiToken) GetScopes() []string {
+	if x != nil {
+		return x.Scopes
+	}
+	return nil
+}
+
+func (x *ApiToken) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *ApiToken) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *ApiToken) GetLastUsedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastUsedAt
+	}
+	return nil
+}
+
+func (x *ApiToken) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *ApiToken) GetRevokedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.RevokedAt
+	}
+	return nil
+}
+
+func (x *ApiToken) GetStatus() TokenStatus {
+	if x != nil {
+		return x.Status
+	}
+	return TokenStatus_TOKEN_STATUS_UNSPECIFIED
+}
+
+func (x *ApiToken) GetCreatedBy() string {
+	if x != nil && x.CreatedBy != nil {
+		return *x.CreatedBy
+	}
+	return ""
+}
+
+type CreateTokenRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// At most 64 characters, no control characters.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// At least one grant. Each must be covered by one of the caller's own: the
+	// same scope, reaching no queue or task the caller's does not.
+	Scopes []string `protobuf:"bytes,2,rep,name=scopes,proto3" json:"scopes,omitempty"`
+	// Days until it expires, 1 to 365. Unset is 90. Refused, never shortened,
+	// when the token would outlive the caller's.
+	ExpireDays    *int32 `protobuf:"varint,3,opt,name=expire_days,json=expireDays,proto3,oneof" json:"expire_days,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateTokenRequest) Reset() {
+	*x = CreateTokenRequest{}
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateTokenRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateTokenRequest) ProtoMessage() {}
+
+func (x *CreateTokenRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateTokenRequest.ProtoReflect.Descriptor instead.
+func (*CreateTokenRequest) Descriptor() ([]byte, []int) {
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *CreateTokenRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CreateTokenRequest) GetScopes() []string {
+	if x != nil {
+		return x.Scopes
+	}
+	return nil
+}
+
+func (x *CreateTokenRequest) GetExpireDays() int32 {
+	if x != nil && x.ExpireDays != nil {
+		return *x.ExpireDays
+	}
+	return 0
+}
+
+type CreateTokenResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Token *ApiToken              `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	// The credential to present, shown this once. Unrecoverable afterwards.
+	Secret        string `protobuf:"bytes,2,opt,name=secret,proto3" json:"secret,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateTokenResponse) Reset() {
+	*x = CreateTokenResponse{}
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[65]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateTokenResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateTokenResponse) ProtoMessage() {}
+
+func (x *CreateTokenResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[65]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateTokenResponse.ProtoReflect.Descriptor instead.
+func (*CreateTokenResponse) Descriptor() ([]byte, []int) {
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *CreateTokenResponse) GetToken() *ApiToken {
+	if x != nil {
+		return x.Token
+	}
+	return nil
+}
+
+func (x *CreateTokenResponse) GetSecret() string {
+	if x != nil {
+		return x.Secret
+	}
+	return ""
+}
+
+type GetTokenRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TokenId       string                 `protobuf:"bytes,1,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTokenRequest) Reset() {
+	*x = GetTokenRequest{}
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTokenRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTokenRequest) ProtoMessage() {}
+
+func (x *GetTokenRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTokenRequest.ProtoReflect.Descriptor instead.
+func (*GetTokenRequest) Descriptor() ([]byte, []int) {
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *GetTokenRequest) GetTokenId() string {
+	if x != nil {
+		return x.TokenId
+	}
+	return ""
+}
+
+type GetTokenResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Token         *ApiToken              `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTokenResponse) Reset() {
+	*x = GetTokenResponse{}
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[67]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTokenResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTokenResponse) ProtoMessage() {}
+
+func (x *GetTokenResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[67]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTokenResponse.ProtoReflect.Descriptor instead.
+func (*GetTokenResponse) Descriptor() ([]byte, []int) {
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *GetTokenResponse) GetToken() *ApiToken {
+	if x != nil {
+		return x.Token
+	}
+	return nil
+}
+
+type ListTokensRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTokensRequest) Reset() {
+	*x = ListTokensRequest{}
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[68]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTokensRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTokensRequest) ProtoMessage() {}
+
+func (x *ListTokensRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[68]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTokensRequest.ProtoReflect.Descriptor instead.
+func (*ListTokensRequest) Descriptor() ([]byte, []int) {
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{68}
+}
+
+type ListTokensResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Newest first. Not paginated: bounded by the tokens one namespace mints.
+	Tokens        []*ApiToken `protobuf:"bytes,1,rep,name=tokens,proto3" json:"tokens,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTokensResponse) Reset() {
+	*x = ListTokensResponse{}
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[69]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTokensResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTokensResponse) ProtoMessage() {}
+
+func (x *ListTokensResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[69]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTokensResponse.ProtoReflect.Descriptor instead.
+func (*ListTokensResponse) Descriptor() ([]byte, []int) {
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{69}
+}
+
+func (x *ListTokensResponse) GetTokens() []*ApiToken {
+	if x != nil {
+		return x.Tokens
+	}
+	return nil
+}
+
+type RevokeTokenRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TokenId       string                 `protobuf:"bytes,1,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeTokenRequest) Reset() {
+	*x = RevokeTokenRequest{}
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[70]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeTokenRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeTokenRequest) ProtoMessage() {}
+
+func (x *RevokeTokenRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[70]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeTokenRequest.ProtoReflect.Descriptor instead.
+func (*RevokeTokenRequest) Descriptor() ([]byte, []int) {
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{70}
+}
+
+func (x *RevokeTokenRequest) GetTokenId() string {
+	if x != nil {
+		return x.TokenId
+	}
+	return ""
+}
+
+type RevokeTokenResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The token after the call: REVOKED.
+	Token         *ApiToken `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeTokenResponse) Reset() {
+	*x = RevokeTokenResponse{}
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[71]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeTokenResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeTokenResponse) ProtoMessage() {}
+
+func (x *RevokeTokenResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_flexiq_admin_v1_admin_service_proto_msgTypes[71]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeTokenResponse.ProtoReflect.Descriptor instead.
+func (*RevokeTokenResponse) Descriptor() ([]byte, []int) {
+	return file_flexiq_admin_v1_admin_service_proto_rawDescGZIP(), []int{71}
+}
+
+func (x *RevokeTokenResponse) GetToken() *ApiToken {
+	if x != nil {
+		return x.Token
+	}
+	return nil
+}
+
 var File_flexiq_admin_v1_admin_service_proto protoreflect.FileDescriptor
 
 const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
@@ -4082,7 +4640,44 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\x0eprincipal_kind\x18\b \x01(\tR\rprincipalKind\"z\n" +
 	"\x18ListAuditRecordsResponse\x126\n" +
 	"\arecords\x18\x01 \x03(\v2\x1c.flexiq.admin.v1.AuditRecordR\arecords\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken*c\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xbc\x03\n" +
+	"\bApiToken\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
+	"\x06scopes\x18\x03 \x03(\tR\x06scopes\x12\x1c\n" +
+	"\tnamespace\x18\x04 \x01(\tR\tnamespace\x129\n" +
+	"\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12<\n" +
+	"\flast_used_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"lastUsedAt\x129\n" +
+	"\n" +
+	"expires_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x129\n" +
+	"\n" +
+	"revoked_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\trevokedAt\x124\n" +
+	"\x06status\x18\t \x01(\x0e2\x1c.flexiq.admin.v1.TokenStatusR\x06status\x12\"\n" +
+	"\n" +
+	"created_by\x18\x10 \x01(\tH\x00R\tcreatedBy\x88\x01\x01B\r\n" +
+	"\v_created_by\"v\n" +
+	"\x12CreateTokenRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06scopes\x18\x02 \x03(\tR\x06scopes\x12$\n" +
+	"\vexpire_days\x18\x03 \x01(\x05H\x00R\n" +
+	"expireDays\x88\x01\x01B\x0e\n" +
+	"\f_expire_days\"^\n" +
+	"\x13CreateTokenResponse\x12/\n" +
+	"\x05token\x18\x01 \x01(\v2\x19.flexiq.admin.v1.ApiTokenR\x05token\x12\x16\n" +
+	"\x06secret\x18\x02 \x01(\tR\x06secret\",\n" +
+	"\x0fGetTokenRequest\x12\x19\n" +
+	"\btoken_id\x18\x01 \x01(\tR\atokenId\"C\n" +
+	"\x10GetTokenResponse\x12/\n" +
+	"\x05token\x18\x01 \x01(\v2\x19.flexiq.admin.v1.ApiTokenR\x05token\"\x13\n" +
+	"\x11ListTokensRequest\"G\n" +
+	"\x12ListTokensResponse\x121\n" +
+	"\x06tokens\x18\x01 \x03(\v2\x19.flexiq.admin.v1.ApiTokenR\x06tokens\"/\n" +
+	"\x12RevokeTokenRequest\x12\x19\n" +
+	"\btoken_id\x18\x01 \x01(\tR\atokenId\"F\n" +
+	"\x13RevokeTokenResponse\x12/\n" +
+	"\x05token\x18\x01 \x01(\v2\x19.flexiq.admin.v1.ApiTokenR\x05token*c\n" +
 	"\fWorkerStatus\x12\x1d\n" +
 	"\x19WORKER_STATUS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14WORKER_STATUS_ACTIVE\x10\x01\x12\x1a\n" +
@@ -4090,7 +4685,12 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\rQuotaOverflow\x12\x1e\n" +
 	"\x1aQUOTA_OVERFLOW_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15QUOTA_OVERFLOW_REJECT\x10\x01\x12\x17\n" +
-	"\x13QUOTA_OVERFLOW_DROP\x10\x022\x8c\x1f\n" +
+	"\x13QUOTA_OVERFLOW_DROP\x10\x02*x\n" +
+	"\vTokenStatus\x12\x1c\n" +
+	"\x18TOKEN_STATUS_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13TOKEN_STATUS_ACTIVE\x10\x01\x12\x18\n" +
+	"\x14TOKEN_STATUS_EXPIRED\x10\x02\x12\x18\n" +
+	"\x14TOKEN_STATUS_REVOKED\x10\x032\xfa\"\n" +
 	"\fAdminService\x12r\n" +
 	"\n" +
 	"ListQueues\x12\".flexiq.admin.v1.ListQueuesRequest\x1a#.flexiq.admin.v1.ListQueuesResponse\"\x1b\x82\xd3\xe4\x93\x02\x12\x12\x10/v1/admin/queues\x90\x02\x01\x12\x80\x01\n" +
@@ -4120,7 +4720,12 @@ const file_flexiq_admin_v1_admin_service_proto_rawDesc = "" +
 	"\x11GetNamespaceQuota\x12).flexiq.admin.v1.GetNamespaceQuotaRequest\x1a*.flexiq.admin.v1.GetNamespaceQuotaResponse\"\x1a\x82\xd3\xe4\x93\x02\x11\x12\x0f/v1/admin/quota\x90\x02\x01\x12\x8d\x01\n" +
 	"\x11SetNamespaceQuota\x12).flexiq.admin.v1.SetNamespaceQuotaRequest\x1a*.flexiq.admin.v1.SetNamespaceQuotaResponse\"!\x82\xd3\xe4\x93\x02\x18:\x05quota\"\x0f/v1/admin/quota\x90\x02\x02\x12\x92\x01\n" +
 	"\x13ClearNamespaceQuota\x12+.flexiq.admin.v1.ClearNamespaceQuotaRequest\x1a,.flexiq.admin.v1.ClearNamespaceQuotaResponse\" \x82\xd3\xe4\x93\x02\x17\"\x15/v1/admin/quota:clear\x90\x02\x02\x12\x8a\x01\n" +
-	"\x10ListAuditRecords\x12(.flexiq.admin.v1.ListAuditRecordsRequest\x1a).flexiq.admin.v1.ListAuditRecordsResponse\"!\x82\xd3\xe4\x93\x02\x18\x12\x16/v1/admin/auditRecords\x90\x02\x01B\xd1\x01\n" +
+	"\x10ListAuditRecords\x12(.flexiq.admin.v1.ListAuditRecordsRequest\x1a).flexiq.admin.v1.ListAuditRecordsResponse\"!\x82\xd3\xe4\x93\x02\x18\x12\x16/v1/admin/auditRecords\x90\x02\x01\x12u\n" +
+	"\vCreateToken\x12#.flexiq.admin.v1.CreateTokenRequest\x1a$.flexiq.admin.v1.CreateTokenResponse\"\x1b\x82\xd3\xe4\x93\x02\x15:\x01*\"\x10/v1/admin/tokens\x12w\n" +
+	"\bGetToken\x12 .flexiq.admin.v1.GetTokenRequest\x1a!.flexiq.admin.v1.GetTokenResponse\"&\x82\xd3\xe4\x93\x02\x1d\x12\x1b/v1/admin/tokens/{token_id}\x90\x02\x01\x12r\n" +
+	"\n" +
+	"ListTokens\x12\".flexiq.admin.v1.ListTokensRequest\x1a#.flexiq.admin.v1.ListTokensResponse\"\x1b\x82\xd3\xe4\x93\x02\x12\x12\x10/v1/admin/tokens\x90\x02\x01\x12\x87\x01\n" +
+	"\vRevokeToken\x12#.flexiq.admin.v1.RevokeTokenRequest\x1a$.flexiq.admin.v1.RevokeTokenResponse\"-\x82\xd3\xe4\x93\x02$\"\"/v1/admin/tokens/{token_id}:revoke\x90\x02\x02B\xd1\x01\n" +
 	"\x13com.flexiq.admin.v1B\x11AdminServiceProtoP\x01ZIgithub.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/admin/v1;adminv1\xa2\x02\x03FAX\xaa\x02\x0fFlexiq.Admin.V1\xca\x02\x0fFlexiq\\Admin\\V1\xe2\x02\x1bFlexiq\\Admin\\V1\\GPBMetadata\xea\x02\x11Flexiq::Admin::V1b\x06proto3"
 
 var (
@@ -4135,187 +4740,214 @@ func file_flexiq_admin_v1_admin_service_proto_rawDescGZIP() []byte {
 	return file_flexiq_admin_v1_admin_service_proto_rawDescData
 }
 
-var file_flexiq_admin_v1_admin_service_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_flexiq_admin_v1_admin_service_proto_msgTypes = make([]protoimpl.MessageInfo, 65)
+var file_flexiq_admin_v1_admin_service_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_flexiq_admin_v1_admin_service_proto_msgTypes = make([]protoimpl.MessageInfo, 74)
 var file_flexiq_admin_v1_admin_service_proto_goTypes = []any{
 	(WorkerStatus)(0),                   // 0: flexiq.admin.v1.WorkerStatus
 	(QuotaOverflow)(0),                  // 1: flexiq.admin.v1.QuotaOverflow
-	(*Queue)(nil),                       // 2: flexiq.admin.v1.Queue
-	(*ListQueuesRequest)(nil),           // 3: flexiq.admin.v1.ListQueuesRequest
-	(*ListQueuesResponse)(nil),          // 4: flexiq.admin.v1.ListQueuesResponse
-	(*PauseQueueRequest)(nil),           // 5: flexiq.admin.v1.PauseQueueRequest
-	(*PauseQueueResponse)(nil),          // 6: flexiq.admin.v1.PauseQueueResponse
-	(*ResumeQueueRequest)(nil),          // 7: flexiq.admin.v1.ResumeQueueRequest
-	(*ResumeQueueResponse)(nil),         // 8: flexiq.admin.v1.ResumeQueueResponse
-	(*GetThroughputRequest)(nil),        // 9: flexiq.admin.v1.GetThroughputRequest
-	(*QueueThroughput)(nil),             // 10: flexiq.admin.v1.QueueThroughput
-	(*GetThroughputResponse)(nil),       // 11: flexiq.admin.v1.GetThroughputResponse
-	(*DeadLetter)(nil),                  // 12: flexiq.admin.v1.DeadLetter
-	(*ListDeadLettersRequest)(nil),      // 13: flexiq.admin.v1.ListDeadLettersRequest
-	(*ListDeadLettersResponse)(nil),     // 14: flexiq.admin.v1.ListDeadLettersResponse
-	(*GetDeadLetterRequest)(nil),        // 15: flexiq.admin.v1.GetDeadLetterRequest
-	(*GetDeadLetterResponse)(nil),       // 16: flexiq.admin.v1.GetDeadLetterResponse
-	(*ReplayDeadLetterRequest)(nil),     // 17: flexiq.admin.v1.ReplayDeadLetterRequest
-	(*ReplayDeadLetterResponse)(nil),    // 18: flexiq.admin.v1.ReplayDeadLetterResponse
-	(*DeleteDeadLetterRequest)(nil),     // 19: flexiq.admin.v1.DeleteDeadLetterRequest
-	(*DeleteDeadLetterResponse)(nil),    // 20: flexiq.admin.v1.DeleteDeadLetterResponse
-	(*PurgeDeadLettersRequest)(nil),     // 21: flexiq.admin.v1.PurgeDeadLettersRequest
-	(*PurgeDeadLettersResponse)(nil),    // 22: flexiq.admin.v1.PurgeDeadLettersResponse
-	(*Worker)(nil),                      // 23: flexiq.admin.v1.Worker
-	(*ListWorkersRequest)(nil),          // 24: flexiq.admin.v1.ListWorkersRequest
-	(*ListWorkersResponse)(nil),         // 25: flexiq.admin.v1.ListWorkersResponse
-	(*DrainWorkerRequest)(nil),          // 26: flexiq.admin.v1.DrainWorkerRequest
-	(*DrainWorkerResponse)(nil),         // 27: flexiq.admin.v1.DrainWorkerResponse
-	(*PeriodicTask)(nil),                // 28: flexiq.admin.v1.PeriodicTask
-	(*ListPeriodicTasksRequest)(nil),    // 29: flexiq.admin.v1.ListPeriodicTasksRequest
-	(*ListPeriodicTasksResponse)(nil),   // 30: flexiq.admin.v1.ListPeriodicTasksResponse
-	(*GetPeriodicTaskRequest)(nil),      // 31: flexiq.admin.v1.GetPeriodicTaskRequest
-	(*GetPeriodicTaskResponse)(nil),     // 32: flexiq.admin.v1.GetPeriodicTaskResponse
-	(*PutPeriodicTaskRequest)(nil),      // 33: flexiq.admin.v1.PutPeriodicTaskRequest
-	(*PutPeriodicTaskResponse)(nil),     // 34: flexiq.admin.v1.PutPeriodicTaskResponse
-	(*DeletePeriodicTaskRequest)(nil),   // 35: flexiq.admin.v1.DeletePeriodicTaskRequest
-	(*DeletePeriodicTaskResponse)(nil),  // 36: flexiq.admin.v1.DeletePeriodicTaskResponse
-	(*PausePeriodicTaskRequest)(nil),    // 37: flexiq.admin.v1.PausePeriodicTaskRequest
-	(*PausePeriodicTaskResponse)(nil),   // 38: flexiq.admin.v1.PausePeriodicTaskResponse
-	(*ResumePeriodicTaskRequest)(nil),   // 39: flexiq.admin.v1.ResumePeriodicTaskRequest
-	(*ResumePeriodicTaskResponse)(nil),  // 40: flexiq.admin.v1.ResumePeriodicTaskResponse
-	(*TriggerPeriodicTaskRequest)(nil),  // 41: flexiq.admin.v1.TriggerPeriodicTaskRequest
-	(*TriggerPeriodicTaskResponse)(nil), // 42: flexiq.admin.v1.TriggerPeriodicTaskResponse
-	(*TaskOverride)(nil),                // 43: flexiq.admin.v1.TaskOverride
-	(*QueueOverride)(nil),               // 44: flexiq.admin.v1.QueueOverride
-	(*ListOverridesRequest)(nil),        // 45: flexiq.admin.v1.ListOverridesRequest
-	(*ListOverridesResponse)(nil),       // 46: flexiq.admin.v1.ListOverridesResponse
-	(*SetTaskOverrideRequest)(nil),      // 47: flexiq.admin.v1.SetTaskOverrideRequest
-	(*SetTaskOverrideResponse)(nil),     // 48: flexiq.admin.v1.SetTaskOverrideResponse
-	(*ClearTaskOverrideRequest)(nil),    // 49: flexiq.admin.v1.ClearTaskOverrideRequest
-	(*ClearTaskOverrideResponse)(nil),   // 50: flexiq.admin.v1.ClearTaskOverrideResponse
-	(*SetQueueOverrideRequest)(nil),     // 51: flexiq.admin.v1.SetQueueOverrideRequest
-	(*SetQueueOverrideResponse)(nil),    // 52: flexiq.admin.v1.SetQueueOverrideResponse
-	(*ClearQueueOverrideRequest)(nil),   // 53: flexiq.admin.v1.ClearQueueOverrideRequest
-	(*ClearQueueOverrideResponse)(nil),  // 54: flexiq.admin.v1.ClearQueueOverrideResponse
-	(*NamespaceQuota)(nil),              // 55: flexiq.admin.v1.NamespaceQuota
-	(*GetNamespaceQuotaRequest)(nil),    // 56: flexiq.admin.v1.GetNamespaceQuotaRequest
-	(*GetNamespaceQuotaResponse)(nil),   // 57: flexiq.admin.v1.GetNamespaceQuotaResponse
-	(*SetNamespaceQuotaRequest)(nil),    // 58: flexiq.admin.v1.SetNamespaceQuotaRequest
-	(*SetNamespaceQuotaResponse)(nil),   // 59: flexiq.admin.v1.SetNamespaceQuotaResponse
-	(*ClearNamespaceQuotaRequest)(nil),  // 60: flexiq.admin.v1.ClearNamespaceQuotaRequest
-	(*ClearNamespaceQuotaResponse)(nil), // 61: flexiq.admin.v1.ClearNamespaceQuotaResponse
-	(*AuditRecord)(nil),                 // 62: flexiq.admin.v1.AuditRecord
-	(*ListAuditRecordsRequest)(nil),     // 63: flexiq.admin.v1.ListAuditRecordsRequest
-	(*ListAuditRecordsResponse)(nil),    // 64: flexiq.admin.v1.ListAuditRecordsResponse
-	nil,                                 // 65: flexiq.admin.v1.ListOverridesResponse.TasksEntry
-	nil,                                 // 66: flexiq.admin.v1.ListOverridesResponse.QueuesEntry
-	(*durationpb.Duration)(nil),         // 67: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),       // 68: google.protobuf.Timestamp
-	(*v1.Job)(nil),                      // 69: flexiq.v1.Job
-	(*v1.StructuredArgs)(nil),           // 70: flexiq.v1.StructuredArgs
+	(TokenStatus)(0),                    // 2: flexiq.admin.v1.TokenStatus
+	(*Queue)(nil),                       // 3: flexiq.admin.v1.Queue
+	(*ListQueuesRequest)(nil),           // 4: flexiq.admin.v1.ListQueuesRequest
+	(*ListQueuesResponse)(nil),          // 5: flexiq.admin.v1.ListQueuesResponse
+	(*PauseQueueRequest)(nil),           // 6: flexiq.admin.v1.PauseQueueRequest
+	(*PauseQueueResponse)(nil),          // 7: flexiq.admin.v1.PauseQueueResponse
+	(*ResumeQueueRequest)(nil),          // 8: flexiq.admin.v1.ResumeQueueRequest
+	(*ResumeQueueResponse)(nil),         // 9: flexiq.admin.v1.ResumeQueueResponse
+	(*GetThroughputRequest)(nil),        // 10: flexiq.admin.v1.GetThroughputRequest
+	(*QueueThroughput)(nil),             // 11: flexiq.admin.v1.QueueThroughput
+	(*GetThroughputResponse)(nil),       // 12: flexiq.admin.v1.GetThroughputResponse
+	(*DeadLetter)(nil),                  // 13: flexiq.admin.v1.DeadLetter
+	(*ListDeadLettersRequest)(nil),      // 14: flexiq.admin.v1.ListDeadLettersRequest
+	(*ListDeadLettersResponse)(nil),     // 15: flexiq.admin.v1.ListDeadLettersResponse
+	(*GetDeadLetterRequest)(nil),        // 16: flexiq.admin.v1.GetDeadLetterRequest
+	(*GetDeadLetterResponse)(nil),       // 17: flexiq.admin.v1.GetDeadLetterResponse
+	(*ReplayDeadLetterRequest)(nil),     // 18: flexiq.admin.v1.ReplayDeadLetterRequest
+	(*ReplayDeadLetterResponse)(nil),    // 19: flexiq.admin.v1.ReplayDeadLetterResponse
+	(*DeleteDeadLetterRequest)(nil),     // 20: flexiq.admin.v1.DeleteDeadLetterRequest
+	(*DeleteDeadLetterResponse)(nil),    // 21: flexiq.admin.v1.DeleteDeadLetterResponse
+	(*PurgeDeadLettersRequest)(nil),     // 22: flexiq.admin.v1.PurgeDeadLettersRequest
+	(*PurgeDeadLettersResponse)(nil),    // 23: flexiq.admin.v1.PurgeDeadLettersResponse
+	(*Worker)(nil),                      // 24: flexiq.admin.v1.Worker
+	(*ListWorkersRequest)(nil),          // 25: flexiq.admin.v1.ListWorkersRequest
+	(*ListWorkersResponse)(nil),         // 26: flexiq.admin.v1.ListWorkersResponse
+	(*DrainWorkerRequest)(nil),          // 27: flexiq.admin.v1.DrainWorkerRequest
+	(*DrainWorkerResponse)(nil),         // 28: flexiq.admin.v1.DrainWorkerResponse
+	(*PeriodicTask)(nil),                // 29: flexiq.admin.v1.PeriodicTask
+	(*ListPeriodicTasksRequest)(nil),    // 30: flexiq.admin.v1.ListPeriodicTasksRequest
+	(*ListPeriodicTasksResponse)(nil),   // 31: flexiq.admin.v1.ListPeriodicTasksResponse
+	(*GetPeriodicTaskRequest)(nil),      // 32: flexiq.admin.v1.GetPeriodicTaskRequest
+	(*GetPeriodicTaskResponse)(nil),     // 33: flexiq.admin.v1.GetPeriodicTaskResponse
+	(*PutPeriodicTaskRequest)(nil),      // 34: flexiq.admin.v1.PutPeriodicTaskRequest
+	(*PutPeriodicTaskResponse)(nil),     // 35: flexiq.admin.v1.PutPeriodicTaskResponse
+	(*DeletePeriodicTaskRequest)(nil),   // 36: flexiq.admin.v1.DeletePeriodicTaskRequest
+	(*DeletePeriodicTaskResponse)(nil),  // 37: flexiq.admin.v1.DeletePeriodicTaskResponse
+	(*PausePeriodicTaskRequest)(nil),    // 38: flexiq.admin.v1.PausePeriodicTaskRequest
+	(*PausePeriodicTaskResponse)(nil),   // 39: flexiq.admin.v1.PausePeriodicTaskResponse
+	(*ResumePeriodicTaskRequest)(nil),   // 40: flexiq.admin.v1.ResumePeriodicTaskRequest
+	(*ResumePeriodicTaskResponse)(nil),  // 41: flexiq.admin.v1.ResumePeriodicTaskResponse
+	(*TriggerPeriodicTaskRequest)(nil),  // 42: flexiq.admin.v1.TriggerPeriodicTaskRequest
+	(*TriggerPeriodicTaskResponse)(nil), // 43: flexiq.admin.v1.TriggerPeriodicTaskResponse
+	(*TaskOverride)(nil),                // 44: flexiq.admin.v1.TaskOverride
+	(*QueueOverride)(nil),               // 45: flexiq.admin.v1.QueueOverride
+	(*ListOverridesRequest)(nil),        // 46: flexiq.admin.v1.ListOverridesRequest
+	(*ListOverridesResponse)(nil),       // 47: flexiq.admin.v1.ListOverridesResponse
+	(*SetTaskOverrideRequest)(nil),      // 48: flexiq.admin.v1.SetTaskOverrideRequest
+	(*SetTaskOverrideResponse)(nil),     // 49: flexiq.admin.v1.SetTaskOverrideResponse
+	(*ClearTaskOverrideRequest)(nil),    // 50: flexiq.admin.v1.ClearTaskOverrideRequest
+	(*ClearTaskOverrideResponse)(nil),   // 51: flexiq.admin.v1.ClearTaskOverrideResponse
+	(*SetQueueOverrideRequest)(nil),     // 52: flexiq.admin.v1.SetQueueOverrideRequest
+	(*SetQueueOverrideResponse)(nil),    // 53: flexiq.admin.v1.SetQueueOverrideResponse
+	(*ClearQueueOverrideRequest)(nil),   // 54: flexiq.admin.v1.ClearQueueOverrideRequest
+	(*ClearQueueOverrideResponse)(nil),  // 55: flexiq.admin.v1.ClearQueueOverrideResponse
+	(*NamespaceQuota)(nil),              // 56: flexiq.admin.v1.NamespaceQuota
+	(*GetNamespaceQuotaRequest)(nil),    // 57: flexiq.admin.v1.GetNamespaceQuotaRequest
+	(*GetNamespaceQuotaResponse)(nil),   // 58: flexiq.admin.v1.GetNamespaceQuotaResponse
+	(*SetNamespaceQuotaRequest)(nil),    // 59: flexiq.admin.v1.SetNamespaceQuotaRequest
+	(*SetNamespaceQuotaResponse)(nil),   // 60: flexiq.admin.v1.SetNamespaceQuotaResponse
+	(*ClearNamespaceQuotaRequest)(nil),  // 61: flexiq.admin.v1.ClearNamespaceQuotaRequest
+	(*ClearNamespaceQuotaResponse)(nil), // 62: flexiq.admin.v1.ClearNamespaceQuotaResponse
+	(*AuditRecord)(nil),                 // 63: flexiq.admin.v1.AuditRecord
+	(*ListAuditRecordsRequest)(nil),     // 64: flexiq.admin.v1.ListAuditRecordsRequest
+	(*ListAuditRecordsResponse)(nil),    // 65: flexiq.admin.v1.ListAuditRecordsResponse
+	(*ApiToken)(nil),                    // 66: flexiq.admin.v1.ApiToken
+	(*CreateTokenRequest)(nil),          // 67: flexiq.admin.v1.CreateTokenRequest
+	(*CreateTokenResponse)(nil),         // 68: flexiq.admin.v1.CreateTokenResponse
+	(*GetTokenRequest)(nil),             // 69: flexiq.admin.v1.GetTokenRequest
+	(*GetTokenResponse)(nil),            // 70: flexiq.admin.v1.GetTokenResponse
+	(*ListTokensRequest)(nil),           // 71: flexiq.admin.v1.ListTokensRequest
+	(*ListTokensResponse)(nil),          // 72: flexiq.admin.v1.ListTokensResponse
+	(*RevokeTokenRequest)(nil),          // 73: flexiq.admin.v1.RevokeTokenRequest
+	(*RevokeTokenResponse)(nil),         // 74: flexiq.admin.v1.RevokeTokenResponse
+	nil,                                 // 75: flexiq.admin.v1.ListOverridesResponse.TasksEntry
+	nil,                                 // 76: flexiq.admin.v1.ListOverridesResponse.QueuesEntry
+	(*durationpb.Duration)(nil),         // 77: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),       // 78: google.protobuf.Timestamp
+	(*v1.Job)(nil),                      // 79: flexiq.v1.Job
+	(*v1.StructuredArgs)(nil),           // 80: flexiq.v1.StructuredArgs
 }
 var file_flexiq_admin_v1_admin_service_proto_depIdxs = []int32{
-	2,  // 0: flexiq.admin.v1.ListQueuesResponse.queues:type_name -> flexiq.admin.v1.Queue
-	2,  // 1: flexiq.admin.v1.PauseQueueResponse.queue:type_name -> flexiq.admin.v1.Queue
-	2,  // 2: flexiq.admin.v1.ResumeQueueResponse.queue:type_name -> flexiq.admin.v1.Queue
-	67, // 3: flexiq.admin.v1.GetThroughputRequest.window:type_name -> google.protobuf.Duration
-	67, // 4: flexiq.admin.v1.GetThroughputResponse.window:type_name -> google.protobuf.Duration
-	68, // 5: flexiq.admin.v1.GetThroughputResponse.since:type_name -> google.protobuf.Timestamp
-	10, // 6: flexiq.admin.v1.GetThroughputResponse.queues:type_name -> flexiq.admin.v1.QueueThroughput
-	68, // 7: flexiq.admin.v1.DeadLetter.failed_at:type_name -> google.protobuf.Timestamp
-	12, // 8: flexiq.admin.v1.ListDeadLettersResponse.dead_letters:type_name -> flexiq.admin.v1.DeadLetter
-	12, // 9: flexiq.admin.v1.GetDeadLetterResponse.dead_letter:type_name -> flexiq.admin.v1.DeadLetter
-	69, // 10: flexiq.admin.v1.ReplayDeadLetterResponse.job:type_name -> flexiq.v1.Job
-	68, // 11: flexiq.admin.v1.PurgeDeadLettersRequest.failed_before:type_name -> google.protobuf.Timestamp
+	3,  // 0: flexiq.admin.v1.ListQueuesResponse.queues:type_name -> flexiq.admin.v1.Queue
+	3,  // 1: flexiq.admin.v1.PauseQueueResponse.queue:type_name -> flexiq.admin.v1.Queue
+	3,  // 2: flexiq.admin.v1.ResumeQueueResponse.queue:type_name -> flexiq.admin.v1.Queue
+	77, // 3: flexiq.admin.v1.GetThroughputRequest.window:type_name -> google.protobuf.Duration
+	77, // 4: flexiq.admin.v1.GetThroughputResponse.window:type_name -> google.protobuf.Duration
+	78, // 5: flexiq.admin.v1.GetThroughputResponse.since:type_name -> google.protobuf.Timestamp
+	11, // 6: flexiq.admin.v1.GetThroughputResponse.queues:type_name -> flexiq.admin.v1.QueueThroughput
+	78, // 7: flexiq.admin.v1.DeadLetter.failed_at:type_name -> google.protobuf.Timestamp
+	13, // 8: flexiq.admin.v1.ListDeadLettersResponse.dead_letters:type_name -> flexiq.admin.v1.DeadLetter
+	13, // 9: flexiq.admin.v1.GetDeadLetterResponse.dead_letter:type_name -> flexiq.admin.v1.DeadLetter
+	79, // 10: flexiq.admin.v1.ReplayDeadLetterResponse.job:type_name -> flexiq.v1.Job
+	78, // 11: flexiq.admin.v1.PurgeDeadLettersRequest.failed_before:type_name -> google.protobuf.Timestamp
 	0,  // 12: flexiq.admin.v1.Worker.status:type_name -> flexiq.admin.v1.WorkerStatus
-	68, // 13: flexiq.admin.v1.Worker.last_heartbeat:type_name -> google.protobuf.Timestamp
-	68, // 14: flexiq.admin.v1.Worker.started_at:type_name -> google.protobuf.Timestamp
-	23, // 15: flexiq.admin.v1.ListWorkersResponse.workers:type_name -> flexiq.admin.v1.Worker
-	23, // 16: flexiq.admin.v1.DrainWorkerResponse.worker:type_name -> flexiq.admin.v1.Worker
-	68, // 17: flexiq.admin.v1.PeriodicTask.next_run:type_name -> google.protobuf.Timestamp
-	68, // 18: flexiq.admin.v1.PeriodicTask.last_run:type_name -> google.protobuf.Timestamp
-	28, // 19: flexiq.admin.v1.ListPeriodicTasksResponse.periodic_tasks:type_name -> flexiq.admin.v1.PeriodicTask
-	28, // 20: flexiq.admin.v1.GetPeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
-	70, // 21: flexiq.admin.v1.PutPeriodicTaskRequest.structured:type_name -> flexiq.v1.StructuredArgs
-	28, // 22: flexiq.admin.v1.PutPeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
-	28, // 23: flexiq.admin.v1.PausePeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
-	28, // 24: flexiq.admin.v1.ResumePeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
-	69, // 25: flexiq.admin.v1.TriggerPeriodicTaskResponse.job:type_name -> flexiq.v1.Job
-	67, // 26: flexiq.admin.v1.TaskOverride.retry_backoff:type_name -> google.protobuf.Duration
-	67, // 27: flexiq.admin.v1.TaskOverride.timeout:type_name -> google.protobuf.Duration
-	68, // 28: flexiq.admin.v1.TaskOverride.update_time:type_name -> google.protobuf.Timestamp
-	68, // 29: flexiq.admin.v1.QueueOverride.update_time:type_name -> google.protobuf.Timestamp
-	65, // 30: flexiq.admin.v1.ListOverridesResponse.tasks:type_name -> flexiq.admin.v1.ListOverridesResponse.TasksEntry
-	66, // 31: flexiq.admin.v1.ListOverridesResponse.queues:type_name -> flexiq.admin.v1.ListOverridesResponse.QueuesEntry
-	43, // 32: flexiq.admin.v1.SetTaskOverrideRequest.task_override:type_name -> flexiq.admin.v1.TaskOverride
-	43, // 33: flexiq.admin.v1.SetTaskOverrideResponse.task_override:type_name -> flexiq.admin.v1.TaskOverride
-	44, // 34: flexiq.admin.v1.SetQueueOverrideRequest.queue_override:type_name -> flexiq.admin.v1.QueueOverride
-	44, // 35: flexiq.admin.v1.SetQueueOverrideResponse.queue_override:type_name -> flexiq.admin.v1.QueueOverride
+	78, // 13: flexiq.admin.v1.Worker.last_heartbeat:type_name -> google.protobuf.Timestamp
+	78, // 14: flexiq.admin.v1.Worker.started_at:type_name -> google.protobuf.Timestamp
+	24, // 15: flexiq.admin.v1.ListWorkersResponse.workers:type_name -> flexiq.admin.v1.Worker
+	24, // 16: flexiq.admin.v1.DrainWorkerResponse.worker:type_name -> flexiq.admin.v1.Worker
+	78, // 17: flexiq.admin.v1.PeriodicTask.next_run:type_name -> google.protobuf.Timestamp
+	78, // 18: flexiq.admin.v1.PeriodicTask.last_run:type_name -> google.protobuf.Timestamp
+	29, // 19: flexiq.admin.v1.ListPeriodicTasksResponse.periodic_tasks:type_name -> flexiq.admin.v1.PeriodicTask
+	29, // 20: flexiq.admin.v1.GetPeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
+	80, // 21: flexiq.admin.v1.PutPeriodicTaskRequest.structured:type_name -> flexiq.v1.StructuredArgs
+	29, // 22: flexiq.admin.v1.PutPeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
+	29, // 23: flexiq.admin.v1.PausePeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
+	29, // 24: flexiq.admin.v1.ResumePeriodicTaskResponse.periodic_task:type_name -> flexiq.admin.v1.PeriodicTask
+	79, // 25: flexiq.admin.v1.TriggerPeriodicTaskResponse.job:type_name -> flexiq.v1.Job
+	77, // 26: flexiq.admin.v1.TaskOverride.retry_backoff:type_name -> google.protobuf.Duration
+	77, // 27: flexiq.admin.v1.TaskOverride.timeout:type_name -> google.protobuf.Duration
+	78, // 28: flexiq.admin.v1.TaskOverride.update_time:type_name -> google.protobuf.Timestamp
+	78, // 29: flexiq.admin.v1.QueueOverride.update_time:type_name -> google.protobuf.Timestamp
+	75, // 30: flexiq.admin.v1.ListOverridesResponse.tasks:type_name -> flexiq.admin.v1.ListOverridesResponse.TasksEntry
+	76, // 31: flexiq.admin.v1.ListOverridesResponse.queues:type_name -> flexiq.admin.v1.ListOverridesResponse.QueuesEntry
+	44, // 32: flexiq.admin.v1.SetTaskOverrideRequest.task_override:type_name -> flexiq.admin.v1.TaskOverride
+	44, // 33: flexiq.admin.v1.SetTaskOverrideResponse.task_override:type_name -> flexiq.admin.v1.TaskOverride
+	45, // 34: flexiq.admin.v1.SetQueueOverrideRequest.queue_override:type_name -> flexiq.admin.v1.QueueOverride
+	45, // 35: flexiq.admin.v1.SetQueueOverrideResponse.queue_override:type_name -> flexiq.admin.v1.QueueOverride
 	1,  // 36: flexiq.admin.v1.NamespaceQuota.on_excess:type_name -> flexiq.admin.v1.QuotaOverflow
-	55, // 37: flexiq.admin.v1.GetNamespaceQuotaResponse.quota:type_name -> flexiq.admin.v1.NamespaceQuota
-	55, // 38: flexiq.admin.v1.SetNamespaceQuotaRequest.quota:type_name -> flexiq.admin.v1.NamespaceQuota
-	55, // 39: flexiq.admin.v1.SetNamespaceQuotaResponse.quota:type_name -> flexiq.admin.v1.NamespaceQuota
-	68, // 40: flexiq.admin.v1.AuditRecord.time:type_name -> google.protobuf.Timestamp
-	68, // 41: flexiq.admin.v1.ListAuditRecordsRequest.since:type_name -> google.protobuf.Timestamp
-	68, // 42: flexiq.admin.v1.ListAuditRecordsRequest.until:type_name -> google.protobuf.Timestamp
-	62, // 43: flexiq.admin.v1.ListAuditRecordsResponse.records:type_name -> flexiq.admin.v1.AuditRecord
-	43, // 44: flexiq.admin.v1.ListOverridesResponse.TasksEntry.value:type_name -> flexiq.admin.v1.TaskOverride
-	44, // 45: flexiq.admin.v1.ListOverridesResponse.QueuesEntry.value:type_name -> flexiq.admin.v1.QueueOverride
-	3,  // 46: flexiq.admin.v1.AdminService.ListQueues:input_type -> flexiq.admin.v1.ListQueuesRequest
-	5,  // 47: flexiq.admin.v1.AdminService.PauseQueue:input_type -> flexiq.admin.v1.PauseQueueRequest
-	7,  // 48: flexiq.admin.v1.AdminService.ResumeQueue:input_type -> flexiq.admin.v1.ResumeQueueRequest
-	9,  // 49: flexiq.admin.v1.AdminService.GetThroughput:input_type -> flexiq.admin.v1.GetThroughputRequest
-	13, // 50: flexiq.admin.v1.AdminService.ListDeadLetters:input_type -> flexiq.admin.v1.ListDeadLettersRequest
-	15, // 51: flexiq.admin.v1.AdminService.GetDeadLetter:input_type -> flexiq.admin.v1.GetDeadLetterRequest
-	17, // 52: flexiq.admin.v1.AdminService.ReplayDeadLetter:input_type -> flexiq.admin.v1.ReplayDeadLetterRequest
-	19, // 53: flexiq.admin.v1.AdminService.DeleteDeadLetter:input_type -> flexiq.admin.v1.DeleteDeadLetterRequest
-	21, // 54: flexiq.admin.v1.AdminService.PurgeDeadLetters:input_type -> flexiq.admin.v1.PurgeDeadLettersRequest
-	24, // 55: flexiq.admin.v1.AdminService.ListWorkers:input_type -> flexiq.admin.v1.ListWorkersRequest
-	26, // 56: flexiq.admin.v1.AdminService.DrainWorker:input_type -> flexiq.admin.v1.DrainWorkerRequest
-	29, // 57: flexiq.admin.v1.AdminService.ListPeriodicTasks:input_type -> flexiq.admin.v1.ListPeriodicTasksRequest
-	31, // 58: flexiq.admin.v1.AdminService.GetPeriodicTask:input_type -> flexiq.admin.v1.GetPeriodicTaskRequest
-	33, // 59: flexiq.admin.v1.AdminService.PutPeriodicTask:input_type -> flexiq.admin.v1.PutPeriodicTaskRequest
-	35, // 60: flexiq.admin.v1.AdminService.DeletePeriodicTask:input_type -> flexiq.admin.v1.DeletePeriodicTaskRequest
-	37, // 61: flexiq.admin.v1.AdminService.PausePeriodicTask:input_type -> flexiq.admin.v1.PausePeriodicTaskRequest
-	39, // 62: flexiq.admin.v1.AdminService.ResumePeriodicTask:input_type -> flexiq.admin.v1.ResumePeriodicTaskRequest
-	41, // 63: flexiq.admin.v1.AdminService.TriggerPeriodicTask:input_type -> flexiq.admin.v1.TriggerPeriodicTaskRequest
-	45, // 64: flexiq.admin.v1.AdminService.ListOverrides:input_type -> flexiq.admin.v1.ListOverridesRequest
-	47, // 65: flexiq.admin.v1.AdminService.SetTaskOverride:input_type -> flexiq.admin.v1.SetTaskOverrideRequest
-	49, // 66: flexiq.admin.v1.AdminService.ClearTaskOverride:input_type -> flexiq.admin.v1.ClearTaskOverrideRequest
-	51, // 67: flexiq.admin.v1.AdminService.SetQueueOverride:input_type -> flexiq.admin.v1.SetQueueOverrideRequest
-	53, // 68: flexiq.admin.v1.AdminService.ClearQueueOverride:input_type -> flexiq.admin.v1.ClearQueueOverrideRequest
-	56, // 69: flexiq.admin.v1.AdminService.GetNamespaceQuota:input_type -> flexiq.admin.v1.GetNamespaceQuotaRequest
-	58, // 70: flexiq.admin.v1.AdminService.SetNamespaceQuota:input_type -> flexiq.admin.v1.SetNamespaceQuotaRequest
-	60, // 71: flexiq.admin.v1.AdminService.ClearNamespaceQuota:input_type -> flexiq.admin.v1.ClearNamespaceQuotaRequest
-	63, // 72: flexiq.admin.v1.AdminService.ListAuditRecords:input_type -> flexiq.admin.v1.ListAuditRecordsRequest
-	4,  // 73: flexiq.admin.v1.AdminService.ListQueues:output_type -> flexiq.admin.v1.ListQueuesResponse
-	6,  // 74: flexiq.admin.v1.AdminService.PauseQueue:output_type -> flexiq.admin.v1.PauseQueueResponse
-	8,  // 75: flexiq.admin.v1.AdminService.ResumeQueue:output_type -> flexiq.admin.v1.ResumeQueueResponse
-	11, // 76: flexiq.admin.v1.AdminService.GetThroughput:output_type -> flexiq.admin.v1.GetThroughputResponse
-	14, // 77: flexiq.admin.v1.AdminService.ListDeadLetters:output_type -> flexiq.admin.v1.ListDeadLettersResponse
-	16, // 78: flexiq.admin.v1.AdminService.GetDeadLetter:output_type -> flexiq.admin.v1.GetDeadLetterResponse
-	18, // 79: flexiq.admin.v1.AdminService.ReplayDeadLetter:output_type -> flexiq.admin.v1.ReplayDeadLetterResponse
-	20, // 80: flexiq.admin.v1.AdminService.DeleteDeadLetter:output_type -> flexiq.admin.v1.DeleteDeadLetterResponse
-	22, // 81: flexiq.admin.v1.AdminService.PurgeDeadLetters:output_type -> flexiq.admin.v1.PurgeDeadLettersResponse
-	25, // 82: flexiq.admin.v1.AdminService.ListWorkers:output_type -> flexiq.admin.v1.ListWorkersResponse
-	27, // 83: flexiq.admin.v1.AdminService.DrainWorker:output_type -> flexiq.admin.v1.DrainWorkerResponse
-	30, // 84: flexiq.admin.v1.AdminService.ListPeriodicTasks:output_type -> flexiq.admin.v1.ListPeriodicTasksResponse
-	32, // 85: flexiq.admin.v1.AdminService.GetPeriodicTask:output_type -> flexiq.admin.v1.GetPeriodicTaskResponse
-	34, // 86: flexiq.admin.v1.AdminService.PutPeriodicTask:output_type -> flexiq.admin.v1.PutPeriodicTaskResponse
-	36, // 87: flexiq.admin.v1.AdminService.DeletePeriodicTask:output_type -> flexiq.admin.v1.DeletePeriodicTaskResponse
-	38, // 88: flexiq.admin.v1.AdminService.PausePeriodicTask:output_type -> flexiq.admin.v1.PausePeriodicTaskResponse
-	40, // 89: flexiq.admin.v1.AdminService.ResumePeriodicTask:output_type -> flexiq.admin.v1.ResumePeriodicTaskResponse
-	42, // 90: flexiq.admin.v1.AdminService.TriggerPeriodicTask:output_type -> flexiq.admin.v1.TriggerPeriodicTaskResponse
-	46, // 91: flexiq.admin.v1.AdminService.ListOverrides:output_type -> flexiq.admin.v1.ListOverridesResponse
-	48, // 92: flexiq.admin.v1.AdminService.SetTaskOverride:output_type -> flexiq.admin.v1.SetTaskOverrideResponse
-	50, // 93: flexiq.admin.v1.AdminService.ClearTaskOverride:output_type -> flexiq.admin.v1.ClearTaskOverrideResponse
-	52, // 94: flexiq.admin.v1.AdminService.SetQueueOverride:output_type -> flexiq.admin.v1.SetQueueOverrideResponse
-	54, // 95: flexiq.admin.v1.AdminService.ClearQueueOverride:output_type -> flexiq.admin.v1.ClearQueueOverrideResponse
-	57, // 96: flexiq.admin.v1.AdminService.GetNamespaceQuota:output_type -> flexiq.admin.v1.GetNamespaceQuotaResponse
-	59, // 97: flexiq.admin.v1.AdminService.SetNamespaceQuota:output_type -> flexiq.admin.v1.SetNamespaceQuotaResponse
-	61, // 98: flexiq.admin.v1.AdminService.ClearNamespaceQuota:output_type -> flexiq.admin.v1.ClearNamespaceQuotaResponse
-	64, // 99: flexiq.admin.v1.AdminService.ListAuditRecords:output_type -> flexiq.admin.v1.ListAuditRecordsResponse
-	73, // [73:100] is the sub-list for method output_type
-	46, // [46:73] is the sub-list for method input_type
-	46, // [46:46] is the sub-list for extension type_name
-	46, // [46:46] is the sub-list for extension extendee
-	0,  // [0:46] is the sub-list for field type_name
+	56, // 37: flexiq.admin.v1.GetNamespaceQuotaResponse.quota:type_name -> flexiq.admin.v1.NamespaceQuota
+	56, // 38: flexiq.admin.v1.SetNamespaceQuotaRequest.quota:type_name -> flexiq.admin.v1.NamespaceQuota
+	56, // 39: flexiq.admin.v1.SetNamespaceQuotaResponse.quota:type_name -> flexiq.admin.v1.NamespaceQuota
+	78, // 40: flexiq.admin.v1.AuditRecord.time:type_name -> google.protobuf.Timestamp
+	78, // 41: flexiq.admin.v1.ListAuditRecordsRequest.since:type_name -> google.protobuf.Timestamp
+	78, // 42: flexiq.admin.v1.ListAuditRecordsRequest.until:type_name -> google.protobuf.Timestamp
+	63, // 43: flexiq.admin.v1.ListAuditRecordsResponse.records:type_name -> flexiq.admin.v1.AuditRecord
+	78, // 44: flexiq.admin.v1.ApiToken.created_at:type_name -> google.protobuf.Timestamp
+	78, // 45: flexiq.admin.v1.ApiToken.last_used_at:type_name -> google.protobuf.Timestamp
+	78, // 46: flexiq.admin.v1.ApiToken.expires_at:type_name -> google.protobuf.Timestamp
+	78, // 47: flexiq.admin.v1.ApiToken.revoked_at:type_name -> google.protobuf.Timestamp
+	2,  // 48: flexiq.admin.v1.ApiToken.status:type_name -> flexiq.admin.v1.TokenStatus
+	66, // 49: flexiq.admin.v1.CreateTokenResponse.token:type_name -> flexiq.admin.v1.ApiToken
+	66, // 50: flexiq.admin.v1.GetTokenResponse.token:type_name -> flexiq.admin.v1.ApiToken
+	66, // 51: flexiq.admin.v1.ListTokensResponse.tokens:type_name -> flexiq.admin.v1.ApiToken
+	66, // 52: flexiq.admin.v1.RevokeTokenResponse.token:type_name -> flexiq.admin.v1.ApiToken
+	44, // 53: flexiq.admin.v1.ListOverridesResponse.TasksEntry.value:type_name -> flexiq.admin.v1.TaskOverride
+	45, // 54: flexiq.admin.v1.ListOverridesResponse.QueuesEntry.value:type_name -> flexiq.admin.v1.QueueOverride
+	4,  // 55: flexiq.admin.v1.AdminService.ListQueues:input_type -> flexiq.admin.v1.ListQueuesRequest
+	6,  // 56: flexiq.admin.v1.AdminService.PauseQueue:input_type -> flexiq.admin.v1.PauseQueueRequest
+	8,  // 57: flexiq.admin.v1.AdminService.ResumeQueue:input_type -> flexiq.admin.v1.ResumeQueueRequest
+	10, // 58: flexiq.admin.v1.AdminService.GetThroughput:input_type -> flexiq.admin.v1.GetThroughputRequest
+	14, // 59: flexiq.admin.v1.AdminService.ListDeadLetters:input_type -> flexiq.admin.v1.ListDeadLettersRequest
+	16, // 60: flexiq.admin.v1.AdminService.GetDeadLetter:input_type -> flexiq.admin.v1.GetDeadLetterRequest
+	18, // 61: flexiq.admin.v1.AdminService.ReplayDeadLetter:input_type -> flexiq.admin.v1.ReplayDeadLetterRequest
+	20, // 62: flexiq.admin.v1.AdminService.DeleteDeadLetter:input_type -> flexiq.admin.v1.DeleteDeadLetterRequest
+	22, // 63: flexiq.admin.v1.AdminService.PurgeDeadLetters:input_type -> flexiq.admin.v1.PurgeDeadLettersRequest
+	25, // 64: flexiq.admin.v1.AdminService.ListWorkers:input_type -> flexiq.admin.v1.ListWorkersRequest
+	27, // 65: flexiq.admin.v1.AdminService.DrainWorker:input_type -> flexiq.admin.v1.DrainWorkerRequest
+	30, // 66: flexiq.admin.v1.AdminService.ListPeriodicTasks:input_type -> flexiq.admin.v1.ListPeriodicTasksRequest
+	32, // 67: flexiq.admin.v1.AdminService.GetPeriodicTask:input_type -> flexiq.admin.v1.GetPeriodicTaskRequest
+	34, // 68: flexiq.admin.v1.AdminService.PutPeriodicTask:input_type -> flexiq.admin.v1.PutPeriodicTaskRequest
+	36, // 69: flexiq.admin.v1.AdminService.DeletePeriodicTask:input_type -> flexiq.admin.v1.DeletePeriodicTaskRequest
+	38, // 70: flexiq.admin.v1.AdminService.PausePeriodicTask:input_type -> flexiq.admin.v1.PausePeriodicTaskRequest
+	40, // 71: flexiq.admin.v1.AdminService.ResumePeriodicTask:input_type -> flexiq.admin.v1.ResumePeriodicTaskRequest
+	42, // 72: flexiq.admin.v1.AdminService.TriggerPeriodicTask:input_type -> flexiq.admin.v1.TriggerPeriodicTaskRequest
+	46, // 73: flexiq.admin.v1.AdminService.ListOverrides:input_type -> flexiq.admin.v1.ListOverridesRequest
+	48, // 74: flexiq.admin.v1.AdminService.SetTaskOverride:input_type -> flexiq.admin.v1.SetTaskOverrideRequest
+	50, // 75: flexiq.admin.v1.AdminService.ClearTaskOverride:input_type -> flexiq.admin.v1.ClearTaskOverrideRequest
+	52, // 76: flexiq.admin.v1.AdminService.SetQueueOverride:input_type -> flexiq.admin.v1.SetQueueOverrideRequest
+	54, // 77: flexiq.admin.v1.AdminService.ClearQueueOverride:input_type -> flexiq.admin.v1.ClearQueueOverrideRequest
+	57, // 78: flexiq.admin.v1.AdminService.GetNamespaceQuota:input_type -> flexiq.admin.v1.GetNamespaceQuotaRequest
+	59, // 79: flexiq.admin.v1.AdminService.SetNamespaceQuota:input_type -> flexiq.admin.v1.SetNamespaceQuotaRequest
+	61, // 80: flexiq.admin.v1.AdminService.ClearNamespaceQuota:input_type -> flexiq.admin.v1.ClearNamespaceQuotaRequest
+	64, // 81: flexiq.admin.v1.AdminService.ListAuditRecords:input_type -> flexiq.admin.v1.ListAuditRecordsRequest
+	67, // 82: flexiq.admin.v1.AdminService.CreateToken:input_type -> flexiq.admin.v1.CreateTokenRequest
+	69, // 83: flexiq.admin.v1.AdminService.GetToken:input_type -> flexiq.admin.v1.GetTokenRequest
+	71, // 84: flexiq.admin.v1.AdminService.ListTokens:input_type -> flexiq.admin.v1.ListTokensRequest
+	73, // 85: flexiq.admin.v1.AdminService.RevokeToken:input_type -> flexiq.admin.v1.RevokeTokenRequest
+	5,  // 86: flexiq.admin.v1.AdminService.ListQueues:output_type -> flexiq.admin.v1.ListQueuesResponse
+	7,  // 87: flexiq.admin.v1.AdminService.PauseQueue:output_type -> flexiq.admin.v1.PauseQueueResponse
+	9,  // 88: flexiq.admin.v1.AdminService.ResumeQueue:output_type -> flexiq.admin.v1.ResumeQueueResponse
+	12, // 89: flexiq.admin.v1.AdminService.GetThroughput:output_type -> flexiq.admin.v1.GetThroughputResponse
+	15, // 90: flexiq.admin.v1.AdminService.ListDeadLetters:output_type -> flexiq.admin.v1.ListDeadLettersResponse
+	17, // 91: flexiq.admin.v1.AdminService.GetDeadLetter:output_type -> flexiq.admin.v1.GetDeadLetterResponse
+	19, // 92: flexiq.admin.v1.AdminService.ReplayDeadLetter:output_type -> flexiq.admin.v1.ReplayDeadLetterResponse
+	21, // 93: flexiq.admin.v1.AdminService.DeleteDeadLetter:output_type -> flexiq.admin.v1.DeleteDeadLetterResponse
+	23, // 94: flexiq.admin.v1.AdminService.PurgeDeadLetters:output_type -> flexiq.admin.v1.PurgeDeadLettersResponse
+	26, // 95: flexiq.admin.v1.AdminService.ListWorkers:output_type -> flexiq.admin.v1.ListWorkersResponse
+	28, // 96: flexiq.admin.v1.AdminService.DrainWorker:output_type -> flexiq.admin.v1.DrainWorkerResponse
+	31, // 97: flexiq.admin.v1.AdminService.ListPeriodicTasks:output_type -> flexiq.admin.v1.ListPeriodicTasksResponse
+	33, // 98: flexiq.admin.v1.AdminService.GetPeriodicTask:output_type -> flexiq.admin.v1.GetPeriodicTaskResponse
+	35, // 99: flexiq.admin.v1.AdminService.PutPeriodicTask:output_type -> flexiq.admin.v1.PutPeriodicTaskResponse
+	37, // 100: flexiq.admin.v1.AdminService.DeletePeriodicTask:output_type -> flexiq.admin.v1.DeletePeriodicTaskResponse
+	39, // 101: flexiq.admin.v1.AdminService.PausePeriodicTask:output_type -> flexiq.admin.v1.PausePeriodicTaskResponse
+	41, // 102: flexiq.admin.v1.AdminService.ResumePeriodicTask:output_type -> flexiq.admin.v1.ResumePeriodicTaskResponse
+	43, // 103: flexiq.admin.v1.AdminService.TriggerPeriodicTask:output_type -> flexiq.admin.v1.TriggerPeriodicTaskResponse
+	47, // 104: flexiq.admin.v1.AdminService.ListOverrides:output_type -> flexiq.admin.v1.ListOverridesResponse
+	49, // 105: flexiq.admin.v1.AdminService.SetTaskOverride:output_type -> flexiq.admin.v1.SetTaskOverrideResponse
+	51, // 106: flexiq.admin.v1.AdminService.ClearTaskOverride:output_type -> flexiq.admin.v1.ClearTaskOverrideResponse
+	53, // 107: flexiq.admin.v1.AdminService.SetQueueOverride:output_type -> flexiq.admin.v1.SetQueueOverrideResponse
+	55, // 108: flexiq.admin.v1.AdminService.ClearQueueOverride:output_type -> flexiq.admin.v1.ClearQueueOverrideResponse
+	58, // 109: flexiq.admin.v1.AdminService.GetNamespaceQuota:output_type -> flexiq.admin.v1.GetNamespaceQuotaResponse
+	60, // 110: flexiq.admin.v1.AdminService.SetNamespaceQuota:output_type -> flexiq.admin.v1.SetNamespaceQuotaResponse
+	62, // 111: flexiq.admin.v1.AdminService.ClearNamespaceQuota:output_type -> flexiq.admin.v1.ClearNamespaceQuotaResponse
+	65, // 112: flexiq.admin.v1.AdminService.ListAuditRecords:output_type -> flexiq.admin.v1.ListAuditRecordsResponse
+	68, // 113: flexiq.admin.v1.AdminService.CreateToken:output_type -> flexiq.admin.v1.CreateTokenResponse
+	70, // 114: flexiq.admin.v1.AdminService.GetToken:output_type -> flexiq.admin.v1.GetTokenResponse
+	72, // 115: flexiq.admin.v1.AdminService.ListTokens:output_type -> flexiq.admin.v1.ListTokensResponse
+	74, // 116: flexiq.admin.v1.AdminService.RevokeToken:output_type -> flexiq.admin.v1.RevokeTokenResponse
+	86, // [86:117] is the sub-list for method output_type
+	55, // [55:86] is the sub-list for method input_type
+	55, // [55:55] is the sub-list for extension type_name
+	55, // [55:55] is the sub-list for extension extendee
+	0,  // [0:55] is the sub-list for field type_name
 }
 
 func init() { file_flexiq_admin_v1_admin_service_proto_init() }
@@ -4342,13 +4974,15 @@ func file_flexiq_admin_v1_admin_service_proto_init() {
 	file_flexiq_admin_v1_admin_service_proto_msgTypes[42].OneofWrappers = []any{}
 	file_flexiq_admin_v1_admin_service_proto_msgTypes[43].OneofWrappers = []any{}
 	file_flexiq_admin_v1_admin_service_proto_msgTypes[53].OneofWrappers = []any{}
+	file_flexiq_admin_v1_admin_service_proto_msgTypes[63].OneofWrappers = []any{}
+	file_flexiq_admin_v1_admin_service_proto_msgTypes[64].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flexiq_admin_v1_admin_service_proto_rawDesc), len(file_flexiq_admin_v1_admin_service_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   65,
+			NumEnums:      3,
+			NumMessages:   74,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

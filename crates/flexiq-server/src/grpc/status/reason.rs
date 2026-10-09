@@ -63,6 +63,8 @@ pub const DEAD_LETTER_NOT_FOUND: &str = "DEAD_LETTER_NOT_FOUND";
 pub const PERIODIC_TASK_NOT_FOUND: &str = "PERIODIC_TASK_NOT_FOUND";
 /// No such registered worker in this namespace. `flexiq.admin.v1`.
 pub const WORKER_NOT_FOUND: &str = "WORKER_NOT_FOUND";
+/// No such API token in this namespace. `flexiq.admin.v1`.
+pub const TOKEN_NOT_FOUND: &str = "TOKEN_NOT_FOUND";
 /// A `depends_on` id names nothing this caller may depend on.
 pub const DEPENDENCY_NOT_FOUND: &str = "DEPENDENCY_NOT_FOUND";
 /// The queue is at its admission cap. Carries `queue`, `pending` and `cap`.
@@ -146,7 +148,7 @@ pub const KEY_ACTUAL: &str = "actual";
 /// The permitted value, `uint64`, in `limit`'s unit. `STEP_LIMIT_EXCEEDED`.
 pub const KEY_ALLOWED: &str = "allowed";
 /// The scope the credential lacks — one of `produce`, `read`, `execute`,
-/// `inspect`, `admin`. `SCOPE_DENIED`.
+/// `inspect`, `admin`, `tokens`. `SCOPE_DENIED`.
 pub const KEY_SCOPE: &str = "scope";
 /// 0-based position in an `EnqueueBatch` request, `int32`.
 ///

@@ -50,7 +50,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub type Client = ProducerServiceClient<InterceptedService<Channel, Bearer>>;
 
 /// The operator door's client, with the credential attached. Same listener and
-/// same token header; the scopes it needs are `inspect` and `admin`.
+/// same token header; the scopes it needs are `inspect`, `admin` and, for token commands, `tokens`.
 pub type AdminClient = AdminServiceClient<InterceptedService<Channel, Bearer>>;
 
 /// Where the door is, and how to reach it.

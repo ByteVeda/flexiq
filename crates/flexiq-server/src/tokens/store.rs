@@ -44,8 +44,18 @@ fn key(id: &str) -> String {
 /// The plaintext is the second element rather than a field on the row so that
 /// no code path can pass it along by accident: a caller has to name it.
 pub fn create(storage: &impl Storage, request: NewToken) -> Result<(ApiToken, String)> {
+    create_at(storage, request, now_millis())
+}
+
+/// [`create`], minted at `created_at` — for a caller that has already held the
+/// resulting expiry to a bound and must store exactly that one.
+pub fn create_at(
+    storage: &impl Storage,
+    request: NewToken,
+    created_at: i64,
+) -> Result<(ApiToken, String)> {
     let minted = secret::mint();
-    let row = request.into_row(minted.id.clone(), minted.hash);
+    let row = request.into_row_at(minted.id.clone(), minted.hash, created_at);
     let encoded = serde_json::to_string(&row)?;
     // Conditional on the key being absent. An id collision is a 2^64 event, but
     // the difference between "unlikely" and "impossible" here is one argument,

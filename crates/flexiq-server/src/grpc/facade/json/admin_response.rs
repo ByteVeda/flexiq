@@ -441,6 +441,56 @@ pub fn set_namespace_quota(response: &pb::SetNamespaceQuotaResponse) -> Value {
     wrapping("quota", response.quota.as_ref(), namespace_quota)
 }
 
+// ── Tokens ───────────────────────────────────────────────────────────
+
+/// One `ApiToken`. There is no secret or digest on the message to write.
+fn api_token(token: &pb::ApiToken) -> Value {
+    let mut object = Map::new();
+    object.insert("id".to_string(), token.id.clone().into());
+    object.insert("name".to_string(), token.name.clone().into());
+    object.insert("scopes".to_string(), token.scopes.clone().into());
+    object.insert("namespace".to_string(), token.namespace.clone().into());
+    insert_timestamp(&mut object, "createdAt", token.created_at.as_ref());
+    insert_timestamp(&mut object, "lastUsedAt", token.last_used_at.as_ref());
+    insert_timestamp(&mut object, "expiresAt", token.expires_at.as_ref());
+    insert_timestamp(&mut object, "revokedAt", token.revoked_at.as_ref());
+    let status = match pb::TokenStatus::try_from(token.status) {
+        Ok(known) => known.as_str_name().into(),
+        Err(_) => token.status.into(),
+    };
+    object.insert("status".to_string(), status);
+    if let Some(created_by) = token.created_by.as_ref() {
+        object.insert("createdBy".to_string(), created_by.clone().into());
+    }
+    Value::Object(object)
+}
+
+/// `CreateTokenResponse` — the one response that carries the secret.
+pub fn create_token(response: &pb::CreateTokenResponse) -> Value {
+    let mut object = Map::new();
+    insert_message(&mut object, "token", response.token.as_ref(), api_token);
+    object.insert("secret".to_string(), response.secret.clone().into());
+    Value::Object(object)
+}
+
+/// `GetTokenResponse`.
+pub fn get_token(response: &pb::GetTokenResponse) -> Value {
+    wrapping("token", response.token.as_ref(), api_token)
+}
+
+/// `ListTokensResponse`.
+pub fn list_tokens(response: &pb::ListTokensResponse) -> Value {
+    Value::Object(Map::from_iter([(
+        "tokens".to_string(),
+        response.tokens.iter().map(api_token).collect::<Value>(),
+    )]))
+}
+
+/// `RevokeTokenResponse`.
+pub fn revoke_token(response: &pb::RevokeTokenResponse) -> Value {
+    wrapping("token", response.token.as_ref(), api_token)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -719,6 +769,43 @@ mod tests {
         assert_names(
             "ClearNamespaceQuotaResponse",
             &empty(&pb::ClearNamespaceQuotaResponse {}),
+        );
+
+        let token = pb::ApiToken {
+            id: "t1".to_string(),
+            name: "ci".to_string(),
+            scopes: vec!["read".to_string()],
+            namespace: "prod".to_string(),
+            created_at: Some(timestamp(1_756_800_000_000)),
+            last_used_at: Some(timestamp(1_756_850_000_000)),
+            expires_at: Some(timestamp(1_756_900_000_000)),
+            revoked_at: Some(timestamp(1_756_860_000_000)),
+            status: pb::TokenStatus::Revoked as i32,
+            created_by: Some("token:t0".to_string()),
+        };
+        assert_names("ApiToken", &api_token(&token));
+        assert_names(
+            "CreateTokenResponse",
+            &create_token(&pb::CreateTokenResponse {
+                token: Some(token.clone()),
+                secret: "fqt_t1.s".to_string(),
+            }),
+        );
+        assert_names(
+            "GetTokenResponse",
+            &get_token(&pb::GetTokenResponse {
+                token: Some(token.clone()),
+            }),
+        );
+        assert_names(
+            "ListTokensResponse",
+            &list_tokens(&pb::ListTokensResponse {
+                tokens: vec![token.clone()],
+            }),
+        );
+        assert_names(
+            "RevokeTokenResponse",
+            &revoke_token(&pb::RevokeTokenResponse { token: Some(token) }),
         );
     }
 

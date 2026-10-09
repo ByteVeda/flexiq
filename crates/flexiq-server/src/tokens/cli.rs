@@ -42,8 +42,8 @@ enum Action {
         /// Label shown in listings, so a credential can be told from another.
         #[arg(long)]
         name: String,
-        /// A door this token may open: produce, read, execute, inspect or
-        /// admin. Narrow produce, read or execute to queues and tasks with
+        /// A door this token may open: produce, read, execute, inspect, admin
+        /// or tokens. Narrow produce, read or execute to queues and tasks with
         /// `produce:queue=emails-*,task=send_receipt` (a trailing `*` is a
         /// prefix). Repeat for more than one.
         #[arg(long = "scope", value_parser = Grant::parse, required = true)]
@@ -281,7 +281,7 @@ mod tests {
     fn scopes_repeat_and_are_spelled_as_the_wire_spells_them() {
         let cli = parse(&[
             "token", "create", "--name", "ci", "--scope", "produce", "--scope", "read", "--scope",
-            "execute", "--scope", "inspect", "--scope", "admin",
+            "execute", "--scope", "inspect", "--scope", "admin", "--scope", "tokens",
         ])
         .expect("every scope");
         let Wrapper::Token(TokenCommand {

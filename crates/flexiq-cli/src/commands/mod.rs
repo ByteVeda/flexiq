@@ -14,6 +14,7 @@ pub mod queues;
 pub mod quota;
 pub mod tail;
 pub mod throughput;
+pub mod tokens;
 pub mod workers;
 
 use anyhow::{anyhow, Result};

@@ -21,7 +21,7 @@ use flexiq_cli::cli::{
     EnqueueArgs, JobsCancelArgs, JobsCommand, JobsGetArgs, JobsListArgs, ListFilterArgs,
     OverridesCommand, PeriodicCommand, PeriodicNameArgs, PeriodicPutArgs, PeriodicShowArgs,
     QueueNameArgs, QueuesArgs, SetQueueOverrideArgs, SetQuotaArgs, SetTaskOverrideArgs,
-    TaskNameArgs, ThroughputArgs, WorkerIdArgs,
+    TaskNameArgs, ThroughputArgs, TokenCreateArgs, TokenIdArgs, TokensCommand, WorkerIdArgs,
 };
 use flexiq_cli::commands;
 use flexiq_cli::connect::ClientTls;
@@ -41,7 +41,7 @@ use flexiq_server::tokens::{Scope, ScopeSet};
 use prost::Message;
 use serde_json::Value;
 
-use support::{mint_token, temp_storage, temp_workflows, TempStorage};
+use support::{mint_token, temp_storage, temp_workflows, token_id, TempStorage};
 
 /// The one namespace this door serves.
 const NAMESPACE: &str = "grpc-cli-tests";
@@ -862,6 +862,79 @@ async fn a_task_override_set_through_the_cli_is_listed_and_replaced() {
     harness.stop().await;
 }
 
+/// A token minted through the CLI is listed without its secret, works on its
+/// own scope, and is dead once revoked. An escalating mint is refused.
+#[tokio::test]
+async fn a_token_minted_through_the_cli_is_listed_and_revoked() {
+    let mut harness = Harness::start("admin-tokens").await;
+    let minted = harness
+        .admin
+        .create_token(commands::tokens::create_request(&TokenCreateArgs {
+            name: "ci".to_string(),
+            scopes: vec!["inspect".to_string()],
+            expire_days: Some(7),
+        }))
+        .await
+        .expect("create")
+        .into_inner();
+    let token = minted.token.expect("the stored token");
+    assert_eq!(token.scopes, ["inspect"]);
+    assert_eq!(token_id(&minted.secret), token.id);
+
+    let mut reader = flexiq_cli::connect::connect_admin(
+        &harness.endpoint,
+        &minted.secret,
+        &ClientTls::default(),
+    )
+    .await
+    .expect("connect");
+    reader
+        .list_queues(cli_pb::ListQueuesRequest::default())
+        .await
+        .expect("the minted token reads");
+
+    let listed = harness
+        .admin
+        .list_tokens(cli_pb::ListTokensRequest {})
+        .await
+        .expect("list")
+        .into_inner();
+    assert!(listed.tokens.iter().any(|row| row.id == token.id));
+    assert!(!cli_render::list_tokens_json(&listed)
+        .to_string()
+        .contains(&minted.secret));
+
+    let revoked = harness
+        .admin
+        .revoke_token(cli_pb::RevokeTokenRequest {
+            token_id: token.id.clone(),
+        })
+        .await
+        .expect("revoke")
+        .into_inner();
+    assert_eq!(
+        revoked.token.expect("as stored").status,
+        cli_pb::TokenStatus::Revoked as i32
+    );
+    reader
+        .list_queues(cli_pb::ListQueuesRequest::default())
+        .await
+        .expect_err("a revoked token is refused");
+
+    // A token holding only `tokens` cannot mint what it does not hold.
+    let mut narrow = harness.admin_with(ScopeSet::of(&[Scope::Tokens])).await;
+    let refusal = narrow
+        .create_token(commands::tokens::create_request(&TokenCreateArgs {
+            name: "wide".to_string(),
+            scopes: vec!["admin".to_string()],
+            expire_days: Some(1),
+        }))
+        .await
+        .expect_err("an uncovered grant");
+    assert_eq!(refusal.code(), tonic::Code::PermissionDenied);
+    harness.stop().await;
+}
+
 /// A producer's token on an admin verb names the scope it lacked.
 #[tokio::test]
 async fn a_produce_only_token_is_told_it_lacks_inspect() {
@@ -1199,6 +1272,54 @@ async fn the_admin_json_render_matches_the_facade() {
         server_render::get_namespace_quota,
     );
 
+    let created = admin
+        .create_token(commands::tokens::create_request(&TokenCreateArgs {
+            name: "parity".to_string(),
+            scopes: vec!["inspect".to_string()],
+            expire_days: Some(3),
+        }))
+        .await
+        .expect("create token")
+        .into_inner();
+    assert_same_render(
+        &created,
+        cli_render::create_token_json,
+        server_render::create_token,
+    );
+    let token_id = created.token.expect("stored").id;
+    let got_token = admin
+        .get_token(cli_pb::GetTokenRequest {
+            token_id: token_id.clone(),
+        })
+        .await
+        .expect("get token")
+        .into_inner();
+    assert_same_render(
+        &got_token,
+        |r: &cli_pb::GetTokenResponse| cli_render::token_envelope_json(r.token.as_ref()),
+        server_render::get_token,
+    );
+    let listed_tokens = admin
+        .list_tokens(cli_pb::ListTokensRequest {})
+        .await
+        .expect("list tokens")
+        .into_inner();
+    assert_same_render(
+        &listed_tokens,
+        cli_render::list_tokens_json,
+        server_render::list_tokens,
+    );
+    let revoked_token = admin
+        .revoke_token(cli_pb::RevokeTokenRequest { token_id })
+        .await
+        .expect("revoke token")
+        .into_inner();
+    assert_same_render(
+        &revoked_token,
+        |r: &cli_pb::RevokeTokenResponse| cli_render::token_envelope_json(r.token.as_ref()),
+        server_render::revoke_token,
+    );
+
     // The empty responses, which both sides must write as `{}`.
     assert_same_render(
         &cli_pb::DeleteDeadLetterResponse {},
@@ -1233,6 +1354,34 @@ fn fully_populated_admin_messages_render_alike() {
         &worker,
         cli_render::list_workers_json,
         server_render::list_workers,
+    );
+
+    // A used, revoked token with every optional field, and one status this
+    // reader does not know.
+    let tokens = cli_pb::ListTokensResponse {
+        tokens: vec![
+            cli_pb::ApiToken {
+                id: "abc".into(),
+                name: "ci".into(),
+                scopes: vec!["read".into(), "produce:queue=mail-*".into()],
+                namespace: "prod".into(),
+                created_at: Some(at(1_756_800_000)),
+                last_used_at: Some(at(1_756_850_000)),
+                expires_at: Some(at(1_764_576_000)),
+                revoked_at: Some(at(1_756_900_000)),
+                status: cli_pb::TokenStatus::Revoked as i32,
+                created_by: Some("token:xyz".into()),
+            },
+            cli_pb::ApiToken {
+                status: 99,
+                ..Default::default()
+            },
+        ],
+    };
+    assert_same_render(
+        &tokens,
+        cli_render::list_tokens_json,
+        server_render::list_tokens,
     );
 
     let unknown = cli_pb::ListWorkersResponse {
@@ -1426,6 +1575,42 @@ async fn every_admin_command_runs_against_a_real_door() {
                 .await
                 .expect("overrides");
         }
+    }
+
+    // Create prints a secret once, so it runs without --json only here.
+    commands::tokens::run(
+        admin,
+        &TokensCommand::Create(TokenCreateArgs {
+            name: "print".to_string(),
+            scopes: vec!["read".to_string()],
+            expire_days: Some(2),
+        }),
+        false,
+    )
+    .await
+    .expect("tokens create");
+    let minted = admin
+        .list_tokens(cli_pb::ListTokensRequest {})
+        .await
+        .expect("list tokens")
+        .into_inner()
+        .tokens
+        .into_iter()
+        .find(|token| token.name == "print")
+        .expect("the minted token");
+    let by_id = || TokenIdArgs {
+        id: minted.id.clone(),
+    };
+    for json in [false, true] {
+        commands::tokens::run(admin, &TokensCommand::List, json)
+            .await
+            .expect("tokens list");
+        commands::tokens::run(admin, &TokensCommand::Show(by_id()), json)
+            .await
+            .expect("tokens show");
+        commands::tokens::run(admin, &TokensCommand::Revoke(by_id()), json)
+            .await
+            .expect("tokens revoke");
     }
 
     // The verbs that consume what they act on, once each.

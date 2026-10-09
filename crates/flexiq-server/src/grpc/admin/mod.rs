@@ -1,10 +1,10 @@
 //! `flexiq.admin.v1.AdminService`: the operator door (#836).
 //!
 //! The dashboard's operations — pause a queue, work the dead-letter queue, look
-//! at workers, manage periodic tasks, change an override — as RPCs, grouped by
-//! what they act on: [`queues`], [`dead_letters`], [`workers`], [`periodic`],
-//! [`overrides`], [`quota`]. The trait implementation below is the only place
-//! they are joined.
+//! at workers, manage periodic tasks, change an override, mint a token — as
+//! RPCs, grouped by what they act on: [`queues`], [`dead_letters`],
+//! [`workers`], [`periodic`], [`overrides`], [`quota`], [`tokens`]. The trait
+//! implementation below is the only place they are joined.
 //!
 //! Every handler acts on the credential's namespace, read off the request's
 //! [`Principal`] exactly as the producer door reads it, and on nothing else. A
@@ -19,6 +19,7 @@ pub mod overrides;
 pub mod periodic;
 pub mod queues;
 pub mod quota;
+pub mod tokens;
 pub mod workers;
 
 use std::sync::Arc;
@@ -411,5 +412,37 @@ impl AdminService for Admin {
     ) -> Result<Response<pb::ListAuditRecordsResponse>, Status> {
         let (scoped, message) = self.scope(request)?;
         audit_trail::list(&scoped, message).await
+    }
+
+    async fn create_token(
+        &self,
+        request: Request<pb::CreateTokenRequest>,
+    ) -> Result<Response<pb::CreateTokenResponse>, Status> {
+        let (scoped, message) = self.scope(request)?;
+        tokens::create(&scoped, message).await
+    }
+
+    async fn get_token(
+        &self,
+        request: Request<pb::GetTokenRequest>,
+    ) -> Result<Response<pb::GetTokenResponse>, Status> {
+        let (scoped, message) = self.scope(request)?;
+        tokens::get(&scoped, message).await
+    }
+
+    async fn list_tokens(
+        &self,
+        request: Request<pb::ListTokensRequest>,
+    ) -> Result<Response<pb::ListTokensResponse>, Status> {
+        let (scoped, _) = self.scope(request)?;
+        tokens::list(&scoped).await
+    }
+
+    async fn revoke_token(
+        &self,
+        request: Request<pb::RevokeTokenRequest>,
+    ) -> Result<Response<pb::RevokeTokenResponse>, Status> {
+        let (scoped, message) = self.scope(request)?;
+        tokens::revoke(&scoped, message).await
     }
 }

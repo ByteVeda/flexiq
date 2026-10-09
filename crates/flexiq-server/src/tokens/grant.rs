@@ -205,6 +205,7 @@ impl fmt::Display for Grant {
 /// The scopes a grant may narrow. `execute` is checked at attach, against the
 /// tasks an executor declares, and again on every dispatch (#988); `inspect`
 /// and `admin` by each operator method that names a queue or a task (#989).
+/// `tokens` is not: its methods address credentials, never a queue or a task.
 pub const NARROWABLE: [Scope; 5] = [
     Scope::Produce,
     Scope::Read,
@@ -475,6 +476,8 @@ mod tests {
             "produce:queue=a,queue=b",
             "produce:queue=a*b",
             "admin:colour=red",
+            "tokens:queue=emails",
+            "tokens:task=*",
         ] {
             assert!(Grant::parse(spelled).is_err(), "{spelled:?}");
         }

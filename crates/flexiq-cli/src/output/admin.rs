@@ -711,6 +711,94 @@ pub fn quota_envelope_json(value: Option<&pb::NamespaceQuota>) -> Value {
     wrapping("quota", value, namespace_quota_json)
 }
 
+/// The columns of a token listing.
+pub const TOKEN_COLUMNS: [&str; 7] = [
+    "id",
+    "name",
+    "status",
+    "scopes",
+    "expires",
+    "last used",
+    "created by",
+];
+
+/// A `TokenStatus` as the lowercase word a listing shows.
+fn token_status_name(status: i32) -> String {
+    match pb::TokenStatus::try_from(status) {
+        Ok(pb::TokenStatus::Unspecified) | Err(_) => "unknown".to_string(),
+        Ok(known) => known
+            .as_str_name()
+            .trim_start_matches("TOKEN_STATUS_")
+            .to_ascii_lowercase(),
+    }
+}
+
+/// One token as a row of [`TOKEN_COLUMNS`]. Grants are joined with a space, as
+/// a flag line would repeat them.
+pub fn token_row(token: &pb::ApiToken) -> Vec<String> {
+    vec![
+        token.id.clone(),
+        token.name.clone(),
+        token_status_name(token.status),
+        token.scopes.join(" "),
+        instant_cell(token.expires_at.as_ref()),
+        instant_cell(token.last_used_at.as_ref()),
+        token
+            .created_by
+            .clone()
+            .unwrap_or_else(|| UNSET.to_string()),
+    ]
+}
+
+/// One `ApiToken`. There is no secret or digest on the message to write.
+pub fn api_token_json(token: &pb::ApiToken) -> Value {
+    let mut object = Map::new();
+    object.insert("id".to_string(), token.id.clone().into());
+    object.insert("name".to_string(), token.name.clone().into());
+    object.insert("scopes".to_string(), token.scopes.clone().into());
+    object.insert("namespace".to_string(), token.namespace.clone().into());
+    insert_timestamp(&mut object, "createdAt", token.created_at.as_ref());
+    insert_timestamp(&mut object, "lastUsedAt", token.last_used_at.as_ref());
+    insert_timestamp(&mut object, "expiresAt", token.expires_at.as_ref());
+    insert_timestamp(&mut object, "revokedAt", token.revoked_at.as_ref());
+    let status = match pb::TokenStatus::try_from(token.status) {
+        Ok(known) => known.as_str_name().into(),
+        Err(_) => token.status.into(),
+    };
+    object.insert("status".to_string(), status);
+    if let Some(created_by) = token.created_by.as_ref() {
+        object.insert("createdBy".to_string(), created_by.clone().into());
+    }
+    Value::Object(object)
+}
+
+/// `CreateTokenResponse` — the one response that carries the secret.
+pub fn create_token_json(response: &pb::CreateTokenResponse) -> Value {
+    let mut object = Map::new();
+    if let Some(token) = response.token.as_ref() {
+        object.insert("token".to_string(), api_token_json(token));
+    }
+    object.insert("secret".to_string(), response.secret.clone().into());
+    Value::Object(object)
+}
+
+/// `ListTokensResponse`.
+pub fn list_tokens_json(response: &pb::ListTokensResponse) -> Value {
+    Value::Object(Map::from_iter([(
+        "tokens".to_string(),
+        response
+            .tokens
+            .iter()
+            .map(api_token_json)
+            .collect::<Value>(),
+    )]))
+}
+
+/// `GetTokenResponse` / `RevokeTokenResponse`: both `{token}`.
+pub fn token_envelope_json(token: Option<&pb::ApiToken>) -> Value {
+    wrapping("token", token, api_token_json)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

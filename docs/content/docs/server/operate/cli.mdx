@@ -362,6 +362,38 @@ fq audit list --token-id <TOKEN_ID>   # everything one token did; --all follows 
 fq audit list --target queue:emails   # or --kind, --since, --until
 ```
 
+[API tokens](/server/operate/admin#tokens), which need the `tokens` scope
+instead of `inspect` or `admin` — neither implies it:
+
+```bash
+fq tokens create --name ci --scope read --expire-days 7
+fq tokens list
+fq tokens show <TOKEN_ID>
+fq tokens revoke <TOKEN_ID>
+```
+
+`create` follows `flexiq-server token create`: the secret is the whole of
+stdout, so `FLEXIQ_TOKEN=$(fq tokens create ...)` captures it, and the summary
+with the token's id goes to stderr.
+
+```text
+Minted 'ci' (id a19670679cb5c765). This is the only time the token is shown; only its hash is kept.
+```
+
+`--scope` repeats, and takes the grant spelling `flexiq-server token create`
+takes, including `produce:queue=emails-*`. `--expire-days` is 1 to 365 and
+defaults to 90. A token can only mint what it holds, so a request wider than
+the calling token is refused, and so is one that would outlive it — the refusal
+names how many days are left:
+
+```text
+error: PermissionDenied: this credential cannot grant `admin`: none of its own grants covers it. A token may only hand on, or take away, grants it holds itself. (SCOPE_DENIED, scope=admin)
+error: InvalidArgument: expire_days 90 would outlive this credential, which expires at 2026-11-07T22:29:34Z; a minted token must expire by then — ask for at most 29 days (INVALID_REQUEST)
+```
+
+`list` shows revoked and expired tokens too, with a `status` column. `revoke`
+is idempotent, and revoking a token does not revoke the tokens it minted.
+
 ## Output
 
 Without `--json`, every command prints an aligned table, and an empty result

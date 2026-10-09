@@ -7,7 +7,8 @@
 //! audit trail is asked about.
 //!
 //! Which calls it records is decided from the gate table, not listed here:
-//! every path whose requirement is a write scope — `produce` or `admin`. So a
+//! every path whose requirement is a write scope — `produce` or `admin` — and
+//! the `tokens` methods that change something. So a
 //! mutating RPC added later is recorded without anyone editing this file, the
 //! same fail-closed default the scope check itself has. The executor door and
 //! public paths pass straight through with no slot and no record.
@@ -80,8 +81,8 @@ pub struct Audited<S> {
     reads: Option<Arc<ReadDedup>>,
 }
 
-/// Which kind of auditable call `path` is — a write needs `produce` or
-/// `admin`, a read `read` or `inspect` — or `None` for one the trail never
+/// Which kind of auditable call `path` is — a write needs `produce`, `admin`
+/// or a `tokens` write, a read `read`, `inspect` or a `tokens` read — or `None` for one the trail never
 /// records: the executor door, public paths and the merely-authenticated ones.
 pub fn access(method: &http::Method, path: &str) -> Option<Access> {
     // Every scope named, so a new one is a compile error here, not a silent
@@ -93,6 +94,9 @@ pub fn access(method: &http::Method, path: &str) -> Option<Access> {
     };
     match scope {
         Scope::Produce | Scope::Admin => Some(Access::Write),
+        // One scope for reads and writes alike, so the method decides.
+        Scope::Tokens if gate::reads_tokens(method, path) => Some(Access::Read),
+        Scope::Tokens => Some(Access::Write),
         Scope::Read | Scope::Inspect => Some(Access::Read),
         Scope::Execute => None,
     }
@@ -252,6 +256,20 @@ mod tests {
         assert_eq!(access(&GET, "/v1/jobs/j1"), read);
         assert_eq!(access(&GET, "/v1/jobs:watch"), read);
         assert_eq!(access(&GET, "/v1/admin/queues"), read);
+
+        // The token door splits by method, not by scope.
+        for (method, path, want) in [
+            (&POST, "/flexiq.admin.v1.AdminService/CreateToken", write),
+            (&POST, "/flexiq.admin.v1.AdminService/RevokeToken", write),
+            (&POST, "/flexiq.admin.v1.AdminService/GetToken", read),
+            (&POST, "/flexiq.admin.v1.AdminService/ListTokens", read),
+            (&POST, "/v1/admin/tokens", write),
+            (&POST, "/v1/admin/tokens/t1:revoke", write),
+            (&GET, "/v1/admin/tokens", read),
+            (&GET, "/v1/admin/tokens/t1", read),
+        ] {
+            assert_eq!(access(method, path), want, "{method} {path}");
+        }
     }
 
     #[test]

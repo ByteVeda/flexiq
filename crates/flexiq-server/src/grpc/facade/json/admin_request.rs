@@ -416,9 +416,53 @@ impl NamespaceQuota {
     }
 }
 
+/// `POST /v1/admin/tokens` — a `CreateTokenRequest`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CreateToken {
+    /// The token's label.
+    #[serde(default)]
+    pub name: String,
+    /// Spelled grants, `produce` or `produce:queue=emails`.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// Days until it expires, `expireDays`. Omitting it takes the default.
+    #[serde(default, alias = "expire_days")]
+    pub expire_days: Option<i32>,
+}
+
+impl CreateToken {
+    /// The request message.
+    pub fn into_message(self) -> pb::CreateTokenRequest {
+        pb::CreateTokenRequest {
+            name: self.name,
+            scopes: self.scopes,
+            expire_days: self.expire_days,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_token_request_reads_both_spellings_and_refuses_a_namespace() {
+        let message = serde_json::from_value::<CreateToken>(serde_json::json!({
+            "name": "ci",
+            "scopes": ["read", "produce:queue=emails"],
+            "expire_days": 30
+        }))
+        .expect("parses")
+        .into_message();
+        assert_eq!(message.scopes, ["read", "produce:queue=emails"]);
+        assert_eq!(message.expire_days, Some(30));
+        // The namespace is the credential's; a body cannot name one.
+        assert!(serde_json::from_value::<CreateToken>(
+            serde_json::json!({"name": "ci", "namespace": "other"})
+        )
+        .is_err());
+    }
 
     #[test]
     fn a_quota_reads_both_spellings_and_int64_as_a_string() {

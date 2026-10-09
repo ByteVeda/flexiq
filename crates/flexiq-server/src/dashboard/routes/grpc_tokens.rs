@@ -6,9 +6,11 @@
 //! middleware rather than from a check this file could forget.
 //!
 //! Design doc §10.7 is the boundary in the other direction: this surface is
-//! *not* reachable with a gRPC token. Minting a credential is an admin action
-//! behind a session, and a producer credential must never be able to mint
-//! itself a wider one.
+//! *not* reachable with a gRPC token. Minting here is an admin action behind a
+//! session. A gRPC token mints through `flexiq.admin.v1`'s token RPCs instead,
+//! and only with the `tokens` scope, only grants its own already cover, and
+//! only to expire no later than itself (`grpc/admin/tokens.rs`) — so no
+//! credential can mint itself a wider one.
 
 use axum::extract::{Extension, Path, State};
 use axum::Json;
