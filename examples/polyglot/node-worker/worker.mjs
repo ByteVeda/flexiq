@@ -10,18 +10,43 @@
 // polls storage sits behind the `runDirectly` guard at the bottom, and the
 // registration above it runs either way.
 
+import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { CborSerializer, Queue } from "@byteveda/flexiq";
 import { otelMiddleware } from "@byteveda/flexiq/contrib/otel";
 import { propagation, trace } from "@opentelemetry/api";
-import { W3CTraceContextPropagator } from "@opentelemetry/core";
-import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
+import { ExportResultCode, W3CTraceContextPropagator } from "@opentelemetry/core";
+import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+
+/**
+ * An exporter that appends each span's job id and ids as one JSON line — set
+ * by the end-to-end check, which reads it to pin the exact parent of the job
+ * this worker enqueues. A real deployment exports to a collector instead.
+ */
+function spanLogExporter(path) {
+  return {
+    export(spans, done) {
+      for (const span of spans) {
+        const { traceId, spanId } = span.spanContext();
+        const jobId = span.attributes["flexiq.job_id"];
+        appendFileSync(path, `${JSON.stringify({ name: span.name, jobId, traceId, spanId })}\n`);
+      }
+      done({ code: ExportResultCode.SUCCESS });
+    },
+    shutdown: () => Promise.resolve(),
+  };
+}
 
 // The trace the producer started continues here and on into Java. Node's API
 // registers nothing by default, so the propagator is named outright; no
 // exporter, as in the producer — point one at a collector to see the trace.
-trace.setGlobalTracerProvider(new BasicTracerProvider());
+const spanLog = process.env.FLEXIQ_SPAN_LOG;
+trace.setGlobalTracerProvider(
+  new BasicTracerProvider({
+    spanProcessors: spanLog ? [new SimpleSpanProcessor(spanLogExporter(spanLog))] : [],
+  }),
+);
 propagation.setGlobalPropagator(new W3CTraceContextPropagator());
 
 const dbPath = process.env.FLEXIQ_DB ?? "../flexiq.db";
