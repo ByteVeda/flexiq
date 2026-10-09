@@ -245,6 +245,16 @@ impl QueueStats {
     }
 }
 
+/// Pending and running jobs only — the live half of [`QueueStats`], read
+/// without touching the archive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LiveCounts {
+    /// Jobs waiting to run.
+    pub pending: i64,
+    /// Jobs currently executing.
+    pub running: i64,
+}
+
 /// Per-table cutoffs a retention dry-run counts against. Each is the
 /// `now - ttl` epoch-ms boundary the matching purge deletes below; `None` means
 /// that table has no window (only its per-entry TTL is swept). Built from the
@@ -1490,6 +1500,13 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<i64> {
                 self.count_pending_by_queue(queue_name)
             }
+            fn live_counts(
+                &self,
+                queue: Option<&str>,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<$crate::storage::LiveCounts> {
+                self.live_counts(queue, namespace)
+            }
             fn stats_by_queue(
                 &self,
                 queue_name: &str,
@@ -2653,6 +2670,9 @@ impl Storage for StorageBackend {
     }
     fn count_pending_by_queue(&self, queue_name: &str) -> Result<i64> {
         delegate!(self, count_pending_by_queue, queue_name)
+    }
+    fn live_counts(&self, queue: Option<&str>, namespace: Option<&str>) -> Result<LiveCounts> {
+        delegate!(self, live_counts, queue, namespace)
     }
     fn stats_by_queue(&self, queue_name: &str, namespace: Option<&str>) -> Result<QueueStats> {
         delegate!(self, stats_by_queue, queue_name, namespace)

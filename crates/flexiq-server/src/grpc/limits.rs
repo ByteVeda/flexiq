@@ -21,6 +21,11 @@ const ENVELOPE_HEADROOM_BYTES: usize = 4 * MIB;
 /// "too large" means.
 pub const PRODUCER_MAX_MESSAGE_BYTES: usize = 4 * MIB;
 
+/// Cap on an `externalscaler` message. KEDA sends a name and a few metadata
+/// pairs, and these are decoded before the in-band token check, so unauthenticated
+/// callers get a small cap rather than the producer's.
+pub const SCALER_MAX_MESSAGE_BYTES: usize = 64 * 1024;
+
 /// Cap on a `flexiq.executor.v1` message: the largest payload the worker frame
 /// protocol allows, plus room for the message that carries it. Setting this
 /// *to* [`MAX_PAYLOAD_BYTES`] would reject a maximum-sized payload and make the

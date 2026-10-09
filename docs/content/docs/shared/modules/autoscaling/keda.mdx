@@ -13,6 +13,13 @@ metrics pipeline required.
   installed.
 </Callout>
 
+<Callout type="info">
+  Running `flexiq-server` with its gRPC listener? It serves a native KEDA
+  scaler (`type: external`, or `external-push` to scale from zero on the
+  enqueue), authenticated with an `inspect` token, with no scaler Deployment to
+  run. See [the server's scaling guide](/server/operate/scaling#external-scaler).
+</Callout>
+
 <SdkOnly sdk="python">
 
 <Callout type="info">
@@ -726,6 +733,8 @@ Ready-to-use YAML templates are included in the repository under
 | `scaled-object.yaml` | `ScaledObject` using the HTTP scaler endpoint |
 | `scaled-object-prometheus.yaml` | `ScaledObject` using Prometheus metrics |
 | `scaled-job.yaml` | `ScaledJob` for ephemeral batch workers |
+| `scaled-object-external.yaml` | `ScaledObject` using `flexiq-server`'s external scaler |
+| `scaled-object-external-stream.yaml` | The same over `external-push`, scaling from zero on the enqueue |
 
 ## Multi-replica storage
 

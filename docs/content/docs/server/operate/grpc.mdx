@@ -484,8 +484,8 @@ producer door on the same process as the scheduler, or watch ids.
 
 | Variable | Helm value | Default | Meaning |
 |---|---|---|---|
-| `FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN` | `grpc.watch.maxPerToken` | `16` | Concurrent watches one API token may hold. `0` is unlimited |
-| `FLEXIQ_GRPC_WATCH_RECONCILE` | `grpc.watch.reconcileSeconds` | `5` | Seconds between re-reads of watched ids. `0` turns the re-read off, and with it every transition another process makes |
+| `FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN` | `grpc.watch.maxPerToken` | `16` | Concurrent watches one API token may hold. `0` is unlimited. The KEDA scaler's `StreamIsActive` streams get their own allowance of the same size |
+| `FLEXIQ_GRPC_WATCH_RECONCILE` | `grpc.watch.reconcileSeconds` | `5` | Seconds between re-reads of watched ids, and of each scaler stream's queue depth. `0` turns the re-read off, and with it every transition another process makes |
 | `FLEXIQ_GRPC_WATCH_BUFFER` | `grpc.watch.buffer` | `4096` | Transitions kept in memory for streams to catch up on and resume from. At least `1` |
 | `FLEXIQ_GRPC_WATCH_STALL` | `grpc.watch.stallSeconds` | `30` | Seconds a stream waits on a client that stopped reading. At least `1` |
 
@@ -673,6 +673,9 @@ Same posture as the attach listener:
   credential provisioned is a misconfiguration rather than a permission grant.
   `grpc.health.v1` `Check` and `Watch` are the one exception, by name — see
   [Health, and which probe it belongs in](#health-and-which-probe-it-belongs-in).
+  The KEDA external scaler still needs a token, but reads it from its
+  `scalerMetadata` as well as the header, since KEDA cannot send one — see
+  [External scaler](/server/operate/scaling#external-scaler).
 - **The operator surface is scoped apart.** Pausing queues, dead-letter
   operations, workers, periodic tasks and overrides need `inspect` or `admin`,
   which no producer or executor token carries, so a `produce` token that leaks

@@ -3525,6 +3525,54 @@ fn test_count_by_namespace(s: &impl Storage) {
     assert_eq!(count(a, JobStatus::Pending), 2);
 }
 
+/// #850: `live_counts` agrees with the live half of `stats_by_queue`/`stats`
+/// for every queue × namespace filter, and a terminal job leaves it.
+fn test_live_counts(s: &impl Storage) {
+    let (q, other) = ("q-live-counts", "q-live-counts-other");
+    let (a, b) = (Some("live-ns-a"), Some("live-ns-b"));
+    let enqueue = |queue: &str, ns: Option<&str>| {
+        let mut job = make_job(queue, "live_task");
+        job.namespace = ns.map(str::to_string);
+        s.enqueue(job).unwrap()
+    };
+    let live = |queue: Option<&str>, ns: Option<&str>| s.live_counts(queue, ns).unwrap();
+
+    // Unfiltered and default-namespace counts include other tests' jobs: deltas.
+    let all_before = live(None, None);
+    let queue_before = live(Some(q), None);
+    for _ in 0..3 {
+        enqueue(q, a);
+    }
+    enqueue(other, a);
+    enqueue(q, b);
+    let claimed = s.dequeue(q, due(), a).unwrap().expect("a job");
+
+    let pair = |pending, running| flexiq_core::LiveCounts { pending, running };
+    assert_eq!(live(Some(q), a), pair(2, 1));
+    assert_eq!(live(Some(other), a), pair(1, 0));
+    assert_eq!(live(None, a), pair(3, 1));
+    assert_eq!(live(Some(q), b), pair(1, 0));
+    assert_eq!(live(Some(q), Some("live-ns-none")), pair(0, 0));
+    assert_eq!(
+        live(Some(q), None),
+        pair(queue_before.pending + 3, queue_before.running + 1),
+        "no namespace counts every namespace"
+    );
+    assert_eq!(
+        live(None, None),
+        pair(all_before.pending + 4, all_before.running + 1)
+    );
+    // Same numbers as the full breakdown's live half.
+    let full = s.stats_by_queue(q, a).unwrap();
+    assert_eq!(live(Some(q), a), pair(full.pending, full.running));
+    let full = s.stats(a).unwrap();
+    assert_eq!(live(None, a), pair(full.pending, full.running));
+
+    // A finished job is archived and leaves the live count.
+    s.complete(&claimed.id, None, a).unwrap();
+    assert_eq!(live(Some(q), a), pair(2, 0));
+}
+
 /// #841: a job shed at enqueue goes straight to the DLQ and the archive —
 /// never live, never counted, and its unique key stays with the live job.
 fn test_shed_new_jobs_never_go_live(s: &impl Storage) {
@@ -3664,6 +3712,7 @@ fn test_trim_dead_over(s: &impl Storage) {
 
 fn run_storage_tests(s: &impl Storage) {
     test_count_by_namespace(s);
+    test_live_counts(s);
     test_trim_archived_over(s);
     test_trim_dead_over(s);
     test_shed_new_jobs_never_go_live(s);
