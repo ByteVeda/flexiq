@@ -81,23 +81,24 @@ pub struct Audited<S> {
     reads: Option<Arc<ReadDedup>>,
 }
 
-/// Which kind of auditable call `path` is — a write needs `produce` or
-/// `admin`, a read `read` or `inspect` — or `None` for one the trail never
+/// Which kind of auditable call `path` is — a write needs `produce`, `admin`
+/// or a `tokens` write, a read `read`, `inspect` or a `tokens` read — or `None` for one the trail never
 /// records: the executor door, public paths and the merely-authenticated ones.
 pub fn access(method: &http::Method, path: &str) -> Option<Access> {
     // Every scope named, so a new one is a compile error here, not a silent
     // gap in the trail.
-    match gate::requirement(method, path) {
-        Requirement::Scoped(Scope::Produce | Scope::Admin) => Some(Access::Write),
+    // Where the scope is checked does not change what the call is.
+    let scope = match gate::requirement(method, path) {
+        Requirement::Scoped(scope) | Requirement::InService(scope) => scope,
+        Requirement::Authenticated | Requirement::Public => return None,
+    };
+    match scope {
+        Scope::Produce | Scope::Admin => Some(Access::Write),
         // One scope for reads and writes alike, so the method decides.
-        Requirement::Scoped(Scope::Tokens) if gate::reads_tokens(method, path) => {
-            Some(Access::Read)
-        }
-        Requirement::Scoped(Scope::Tokens) => Some(Access::Write),
-        Requirement::Scoped(Scope::Read | Scope::Inspect) => Some(Access::Read),
-        Requirement::Scoped(Scope::Execute) | Requirement::Authenticated | Requirement::Public => {
-            None
-        }
+        Scope::Tokens if gate::reads_tokens(method, path) => Some(Access::Read),
+        Scope::Tokens => Some(Access::Write),
+        Scope::Read | Scope::Inspect => Some(Access::Read),
+        Scope::Execute => None,
     }
 }
 

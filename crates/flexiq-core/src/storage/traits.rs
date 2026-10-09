@@ -9,7 +9,8 @@ use crate::storage::records::{
     TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
 };
 use crate::storage::{
-    DeadJob, DispatchOrder, QueueStats, RetentionCounts, RetentionCutoffs, SubscriptionBacklogStats,
+    DeadJob, DispatchOrder, LiveCounts, QueueStats, RetentionCounts, RetentionCutoffs,
+    SubscriptionBacklogStats,
 };
 
 /// Trait abstracting the storage backend for the task queue.
@@ -1193,6 +1194,11 @@ pub trait Storage: Send + Sync + Clone {
     /// Cheap count of pending jobs on a queue — the admission-cap primitive.
     /// Single-status, unlike the full-breakdown `stats_by_queue`.
     fn count_pending_by_queue(&self, queue_name: &str) -> Result<i64>;
+
+    /// Pending and running jobs on one queue or (`None`) every queue — the
+    /// autoscaler's read, polled often, so it never scans the archive.
+    /// `namespace` of `None` counts every namespace, like [`Self::stats`].
+    fn live_counts(&self, queue: Option<&str>, namespace: Option<&str>) -> Result<LiveCounts>;
 
     /// Statistics for one queue: live counts from `jobs`, terminal counts
     /// from `archived_jobs`.

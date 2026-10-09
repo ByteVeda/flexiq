@@ -102,11 +102,12 @@ Configuration (environment only):
                                  target and outcome — is folded into the first
                                  record (default: 60; 0 records every read)
   FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN  WatchJobs streams one API token may hold at
-                                 once (default: 16; 0 is unlimited)
+                                 once, and separately scaler StreamIsActive
+                                 streams (default: 16; 0 is unlimited)
   FLEXIQ_GRPC_WATCH_RECONCILE   seconds between re-reads of every watched job
-                                 id, which is how a watch learns of a job
-                                 another process finished (default: 5; 0 turns
-                                 the re-read off)
+                                 id and every scaler stream's depth, which is
+                                 how both learn of work another process changed
+                                 (default: 5; 0 turns the re-read off)
   FLEXIQ_GRPC_WATCH_BUFFER      job transitions kept in memory for streams to
                                  catch up on and resume from (default: 4096)
   FLEXIQ_GRPC_WATCH_STALL       seconds a watch waits on a client that stopped
