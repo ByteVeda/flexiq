@@ -542,7 +542,9 @@ public final class JniQueueBackend implements QueueBackend {
             @Nullable String paramsJson,
             String[] deferredNames,
             @Nullable String parentRunId,
-            @Nullable String parentNodeName) {
+            @Nullable String parentNodeName,
+            @Nullable String traceparent,
+            @Nullable String tracestate) {
         return withOpenHandle(() -> NativeWorkflows.submitWorkflow(
                 handle,
                 name,
@@ -554,7 +556,14 @@ public final class JniQueueBackend implements QueueBackend {
                 paramsJson,
                 deferredNames,
                 parentRunId,
-                parentNodeName));
+                parentNodeName,
+                traceparent,
+                tracestate));
+    }
+
+    @Override
+    public String carryWorkflowTrace(String runId, String metadata) {
+        return withOpenHandle(() -> NativeWorkflows.carryWorkflowTrace(handle, runId, metadata));
     }
 
     @Override

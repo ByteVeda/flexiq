@@ -163,7 +163,8 @@ final class SagaOrchestrator {
         try {
             EnqueueOptions options = EnqueueOptions.builder()
                     .jobId("compensation:" + runId + ":" + node)
-                    .metadata(json.writeValueAsString(metadata))
+                    // Joins the submitter's trace, like every other job of the run.
+                    .metadata(backend.carryWorkflowTrace(runId, json.writeValueAsString(metadata)))
                     .queue(target.queue)
                     .maxRetries(target.retries)
                     .timeoutMs(target.timeout)

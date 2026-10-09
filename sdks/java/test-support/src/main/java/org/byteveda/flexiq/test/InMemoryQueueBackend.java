@@ -959,7 +959,14 @@ public final class InMemoryQueueBackend implements QueueBackend {
             String paramsJson,
             String[] deferredNames,
             String parentRunId,
-            String parentNodeName) {
+            String parentNodeName,
+            String traceparent,
+            String tracestate) {
+        return unsupported();
+    }
+
+    @Override
+    public String carryWorkflowTrace(String runId, String metadata) {
         return unsupported();
     }
 

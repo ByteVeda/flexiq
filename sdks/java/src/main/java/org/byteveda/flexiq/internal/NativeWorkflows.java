@@ -33,6 +33,8 @@ public final class NativeWorkflows {
      * @param deferredNames nodes whose job is created later, not at submit
      * @param parentRunId the run spawning this one as a child, or {@code null} at the top level
      * @param parentNodeName the parent's node that spawned it, or {@code null}
+     * @param traceparent the submitter's W3C {@code traceparent}, or {@code null}
+     * @param tracestate the submitter's W3C {@code tracestate}, or {@code null}
      * @return the new run's id
      */
     public static native String submitWorkflow(
@@ -46,7 +48,9 @@ public final class NativeWorkflows {
             @Nullable String paramsJson,
             String[] deferredNames,
             @Nullable String parentRunId,
-            @Nullable String parentNodeName);
+            @Nullable String parentNodeName,
+            @Nullable String traceparent,
+            @Nullable String tracestate);
 
     /**
      * Record a node's terminal outcome; returns the run's final state, or {@code null}.
@@ -82,6 +86,16 @@ public final class NativeWorkflows {
      */
     public static native String listWorkflowRuns(
             long handle, @Nullable String definitionNameOrNull, @Nullable String stateOrNull, long limit, long offset);
+
+    /**
+     * A job's metadata with the run's stored trace context merged in.
+     *
+     * @param handle the queue handle from {@link NativeQueue#open}
+     * @param runId the workflow run's id
+     * @param metadata the job's metadata JSON
+     * @return the metadata, carrying the run's trace context when it has one
+     */
+    public static native String carryWorkflowTrace(long handle, String runId, String metadata);
 
     /**
      * A run's summary row, without node detail.

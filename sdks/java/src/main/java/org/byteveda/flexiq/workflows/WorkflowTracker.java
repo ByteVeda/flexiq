@@ -489,7 +489,10 @@ public final class WorkflowTracker {
                 null,
                 deferred.toArray(new String[0]),
                 runId,
-                node.name);
+                node.name,
+                // None of its own: the child run inherits the parent run's trace.
+                null,
+                null);
         // Register the child's payloads under its run id so the tracker can promote the
         // child's own deferred nodes — run-scoped, so two same-named child runs can't stomp.
         childRunPayloads.put(childRun, allPayloads);

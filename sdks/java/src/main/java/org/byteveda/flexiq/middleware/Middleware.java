@@ -24,6 +24,13 @@ public interface Middleware {
     default void onEnqueue(EnqueueContext context) {}
 
     /**
+     * On the producer, before a workflow is submitted.
+     *
+     * @param context the workflow being submitted; supply a trace carrier here
+     */
+    default void onWorkflowSubmit(WorkflowSubmitContext context) {}
+
+    /**
      * On the worker, before the handler runs.
      *
      * @param context this execution, whose {@code attributes()} carry state to the

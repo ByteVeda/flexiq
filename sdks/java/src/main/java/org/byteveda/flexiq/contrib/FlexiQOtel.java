@@ -18,6 +18,7 @@ import java.util.function.Predicate;
 import org.byteveda.flexiq.middleware.EnqueueContext;
 import org.byteveda.flexiq.middleware.Middleware;
 import org.byteveda.flexiq.middleware.TaskContext;
+import org.byteveda.flexiq.middleware.WorkflowSubmitContext;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -29,7 +30,8 @@ import org.jspecify.annotations.Nullable;
  * keys) through the instance's propagators. Execution extracts it, so the
  * {@code flexiq.execute.<task>} span is a child of the enqueuer — whichever SDK
  * enqueued the job. The span is current for the handler, so its own spans and
- * any job it enqueues continue the same trace.
+ * any job it enqueues continue the same trace. A workflow submit stores the
+ * same context on the run, so every step's execute span is a child of the submit.
  *
  * <p>Each attempt is one span: it ends {@code OK} in {@code after},
  * {@code ERROR} with the exception recorded in {@code onError}, and with no
@@ -97,6 +99,14 @@ public final class FlexiQOtel implements Middleware {
         String merged = TraceCarrier.merge(metadata, carrier);
         if (merged != null && !merged.equals(metadata)) {
             context.options(context.options().toBuilder().metadata(merged).build());
+        }
+    }
+
+    @Override
+    public void onWorkflowSubmit(WorkflowSubmitContext context) {
+        // A carrier the caller passed explicitly wins, as metadata keys do.
+        if (context.traceContext().isEmpty()) {
+            propagator.inject(Context.current(), context.traceContext(), SETTER);
         }
     }
 

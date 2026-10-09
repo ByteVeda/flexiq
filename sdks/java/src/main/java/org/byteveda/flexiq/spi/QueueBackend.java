@@ -904,6 +904,9 @@ public interface QueueBackend extends AutoCloseable, ConditionalSettings {
      * @param deferredNames nodes whose job is created later, not at submit
      * @param parentRunId the run spawning this one as a child, or {@code null} at the top level
      * @param parentNodeName the parent's node that spawned it, or {@code null}
+     * @param traceparent the submitter's W3C {@code traceparent}, stored on the run and
+     *     carried by every node job, or {@code null}; a child run given none inherits its parent's
+     * @param tracestate the submitter's W3C {@code tracestate}, or {@code null}
      * @return the new run's id
      */
     default String submitWorkflow(
@@ -916,7 +919,21 @@ public interface QueueBackend extends AutoCloseable, ConditionalSettings {
             @Nullable String paramsJson,
             String[] deferredNames,
             @Nullable String parentRunId,
-            @Nullable String parentNodeName) {
+            @Nullable String parentNodeName,
+            @Nullable String traceparent,
+            @Nullable String tracestate) {
+        throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
+    }
+
+    /**
+     * A job's metadata with the run's stored trace context merged in, for a job
+     * enqueued on the run's behalf (a compensation).
+     *
+     * @param runId the workflow run's id
+     * @param metadata the job's metadata JSON
+     * @return the metadata, carrying the run's trace context when it has one
+     */
+    default String carryWorkflowTrace(String runId, String metadata) {
         throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
     }
 

@@ -1359,6 +1359,19 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
     WorkflowRun submitWorkflow(Workflow workflow, Map<String, Object> payloads);
 
     /**
+     * Submit a workflow whose steps join the given trace. Every node job carries
+     * {@code traceContext}, so each step's span is a child of the submitter's.
+     * Without one, middleware {@code onWorkflowSubmit} hooks may supply it — the
+     * OpenTelemetry middleware passes the current context.
+     *
+     * @param workflow the definition to submit
+     * @param payloads one payload per job, as for {@link #submitWorkflow(Workflow, Map)}
+     * @param traceContext the W3C carrier ({@code traceparent}, {@code tracestate})
+     * @return the run handle
+     */
+    WorkflowRun submitWorkflow(Workflow workflow, Map<String, Object> payloads, Map<String, String> traceContext);
+
+    /**
      * Current status of a workflow run, or empty if it no longer exists.
      *
      * @param runId the workflow run's id
