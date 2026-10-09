@@ -33,8 +33,9 @@ public final class EnqueueContext {
 
     /**
      * Mutable metadata that travels with the job (readable at execution via
-     * {@code TaskContext.job().metadata()}). When non-empty it becomes the job's
-     * metadata blob, replacing any set on the options.
+     * {@code TaskContext.job().metadata()}). When non-empty it is layered over
+     * metadata set on the options: a JSON object keeps its keys, with these
+     * winning a collision; anything else is replaced.
      *
      * @return the live map — write into it to attach metadata
      */

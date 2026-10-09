@@ -192,6 +192,15 @@ public final class EnqueueOptions {
     }
 
     /**
+     * The free-form metadata blob, or {@code null} when none was set.
+     *
+     * @return the blob as the caller wrote it, usually JSON
+     */
+    public @Nullable String metadata() {
+        return metadata;
+    }
+
+    /**
      * Tri-state idempotency toggle: {@code TRUE} forces auto-derivation of a {@code uniqueKey},
      * {@code FALSE} opts this enqueue out of a task-level default, {@code null} defers to the task.
      *

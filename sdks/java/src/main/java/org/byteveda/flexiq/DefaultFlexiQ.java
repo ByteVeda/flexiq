@@ -1,7 +1,9 @@
 package org.byteveda.flexiq;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Duration;
@@ -433,7 +435,7 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
         }
         if (!context.metadata().isEmpty()) {
             finalOptions = finalOptions.toBuilder()
-                    .metadata(encode(context.metadata()))
+                    .metadata(layerMetadata(finalOptions.metadata(), context.metadata()))
                     .build();
         }
         // Admission cap: reject before serializing/inserting if the target queue is full.
@@ -1641,6 +1643,30 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     }
 
     // ── JSON helpers ────────────────────────────────────────────────
+
+    /**
+     * Hook metadata layered over the caller's. A JSON object keeps its keys — a
+     * trace context among them — with the hooks' winning; anything else cannot
+     * take a key, so the hooks' map replaces it.
+     */
+    private static String layerMetadata(@Nullable String own, Map<String, Object> hooks) {
+        Map<String, Object> layered = new LinkedHashMap<>();
+        if (own != null) {
+            @Nullable JsonNode node;
+            try {
+                node = VIEWS.readTree(own);
+            } catch (JsonProcessingException notJson) {
+                // Free-form text is valid metadata; it just has no keys to keep.
+                node = null;
+            }
+            if (node != null && node.isObject()) {
+                layered.putAll(VIEWS.convertValue(
+                        node, VIEWS.getTypeFactory().constructMapType(Map.class, String.class, Object.class)));
+            }
+        }
+        layered.putAll(hooks);
+        return encode(layered);
+    }
 
     private static String encode(Object value) {
         try {
