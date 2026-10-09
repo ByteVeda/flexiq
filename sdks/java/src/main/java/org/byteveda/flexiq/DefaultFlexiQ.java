@@ -2,8 +2,8 @@ package org.byteveda.flexiq;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JavaType;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Duration;
@@ -116,6 +116,13 @@ import org.jspecify.annotations.Nullable;
  */
 final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     private static final ObjectMapper VIEWS = new ObjectMapper();
+    // Decimals as BigDecimal, so a caller's `1.10` or 30-digit value survives
+    // the re-encode a hook's metadata forces; trailing tokens mean not an object.
+    private static final ObjectMapper CALLER_METADATA = new ObjectMapper()
+            .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final JavaType CALLER_METADATA_TYPE =
+            CALLER_METADATA.getTypeFactory().constructMapType(LinkedHashMap.class, String.class, Object.class);
 
     private static final long DEFAULT_LOCK_TTL_MS = 30_000;
 
@@ -1652,16 +1659,13 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     private static String layerMetadata(@Nullable String own, Map<String, Object> hooks) {
         Map<String, Object> layered = new LinkedHashMap<>();
         if (own != null) {
-            @Nullable JsonNode node;
             try {
-                node = VIEWS.readTree(own);
-            } catch (JsonProcessingException notJson) {
-                // Free-form text is valid metadata; it just has no keys to keep.
-                node = null;
-            }
-            if (node != null && node.isObject()) {
-                layered.putAll(VIEWS.convertValue(
-                        node, VIEWS.getTypeFactory().constructMapType(Map.class, String.class, Object.class)));
+                Map<String, Object> keys = CALLER_METADATA.readValue(own, CALLER_METADATA_TYPE);
+                if (keys != null) {
+                    layered.putAll(keys);
+                }
+            } catch (JsonProcessingException notAnObject) {
+                // Free-form text, or JSON that is not an object: no keys to keep.
             }
         }
         layered.putAll(hooks);
