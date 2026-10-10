@@ -40,7 +40,7 @@ env:
   CRATES: flexiq-macros flexiq flexiq-core flexiq-workflows flexiq-mesh
   # The one version whose semver gate is waived — see the step that reads it.
   # Empty it, or move it forward, rather than deleting the check.
-  SEMVER_EXEMPT_VERSION: "2.1.0"
+  SEMVER_EXEMPT_VERSION: ""
 
 jobs:
   publish:
@@ -218,12 +218,10 @@ jobs:
       # already on crates.io: a first publish has no baseline, and a version
       # that went up earlier was gated when it did.
       #
-      # `SEMVER_EXEMPT_VERSION` is one release's waiver, not a switch. It names
-      # 2.1.0: namespace scoping added a parameter to `Storage` methods and trace
-      # context added fields to workflow submit types, while the wire contract and
-      # every SDK API stayed compatible. Those breaks are listed in the CHANGELOG's
-      # Breaking (Rust crates) section. Empty it once 2.1.0 is out; set it again
-      # only to name another single version, never to disable the check.
+      # `SEMVER_EXEMPT_VERSION` is one release's waiver, not a switch, and it is
+      # currently empty. It last named 2.1.0, whose Rust-only breaks are in the
+      # CHANGELOG's Breaking (Rust crates) section. Set it again only to name
+      # another single version, never to disable the check.
       - name: Semver check the crates being published
         if: >-
           steps.pending.outputs.baselined != ''
@@ -287,7 +285,9 @@ jobs:
           TAG: crates-v${{ steps.resolve.outputs.version }}
         run: |
           set -euo pipefail
-          existing="$(git ls-remote --tags origin "refs/tags/${TAG}" | awk '{print $1}')"
+          # Checkout keeps no credentials, so the lookup carries the token like the push.
+          existing="$(git -c http.https://github.com/.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
+            ls-remote --tags origin "refs/tags/${TAG}" | awk '{print $1}')"
           if [ -n "$existing" ]; then
             if [ "$existing" = "$(git rev-parse HEAD)" ]; then
               echo "::notice::${TAG} already points at this commit"

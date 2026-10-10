@@ -76,9 +76,14 @@ jobs:
       - name: Check remote tag state
         id: tag
         if: github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="${{ steps.resolve.outputs.version }}"
-          remote_sha="$(git ls-remote --tags origin "refs/tags/node-v${version}" | awk '{print $1}')"
+          # Checkout keeps no credentials; a failed lookup must stop the run, not read as "absent".
+          refs="$(git -c http.https://github.com/.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
+            ls-remote --tags origin "refs/tags/node-v${version}")"
+          remote_sha="$(awk '{print $1}' <<<"$refs")"
           if [ -z "$remote_sha" ]; then
             echo "exists=false" >> "$GITHUB_OUTPUT"
           elif [ "$remote_sha" = "$(git rev-parse HEAD)" ]; then
