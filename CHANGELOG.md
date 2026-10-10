@@ -542,7 +542,10 @@ is why this is a minor: the crates' own semver check is waived for 2.1.0 alone.
 All but `m0018` are expand-only. `m0018` rebuilds `periodic_tasks` inside the migration's own
 transaction — create, copy, drop, rename — so there is no partial state, but its `name` primary
 key is gone: on Postgres a 2.0.0 process's periodic registration upserts on that key, so upgrade
-every process that declares schedules together. `m0023` and `m0024` build indexes over `jobs`,
+every process that declares schedules together. A process with a namespace then registers its
+schedules as new `(namespace, name)` rows beside the migrated default-namespace copies, and a
+scheduler with no namespace fires both; once those processes have re-registered, delete the
+default-namespace copies they replace. `m0023` and `m0024` build indexes over `jobs`,
 `archived_jobs` and `dead_letter`, so a large database pauses on first start while they build.
 Redis runs no migrations; it backfills its per-namespace quota index sets, and during a rolling
 upgrade jobs enqueued by a not-yet-upgraded process are not counted against a quota until they
