@@ -236,7 +236,9 @@ jobs:
         run: |
           # Idempotent: a re-publish (e.g. after fixing the keyserver) reuses the
           # same version, so skip if the tag is already on the remote.
-          if git ls-remote --exit-code --tags origin "java-v${VERSION}" >/dev/null 2>&1; then
+          # Checkout keeps no credentials, so the lookup carries the token like the push.
+          if git -c http.https://github.com/.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
+            ls-remote --exit-code --tags origin "java-v${VERSION}" >/dev/null; then
             echo "::notice::Tag java-v${VERSION} already exists — skipping"
           else
             git tag "java-v${VERSION}"

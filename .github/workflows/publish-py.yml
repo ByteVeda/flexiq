@@ -59,9 +59,14 @@ jobs:
 
       - name: Check tag does not exist
         if: github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="${{ steps.resolve.outputs.version }}"
-          if git ls-remote --tags origin | awk -v tag="refs/tags/${version}" '$2 == tag { found=1 } END { exit !found }'; then
+          # Checkout keeps no credentials; a failed lookup must stop the run, not read as "absent".
+          refs="$(git -c http.https://github.com/.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
+            ls-remote --tags origin)"
+          if awk -v tag="refs/tags/${version}" '$2 == tag { found=1 } END { exit !found }' <<<"$refs"; then
             echo "::error::Tag ${version} already exists on remote"
             exit 1
           fi

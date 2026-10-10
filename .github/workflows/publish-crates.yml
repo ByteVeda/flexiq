@@ -287,7 +287,9 @@ jobs:
           TAG: crates-v${{ steps.resolve.outputs.version }}
         run: |
           set -euo pipefail
-          existing="$(git ls-remote --tags origin "refs/tags/${TAG}" | awk '{print $1}')"
+          # Checkout keeps no credentials, so the lookup carries the token like the push.
+          existing="$(git -c http.https://github.com/.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
+            ls-remote --tags origin "refs/tags/${TAG}" | awk '{print $1}')"
           if [ -n "$existing" ]; then
             if [ "$existing" = "$(git rev-parse HEAD)" ]; then
               echo "::notice::${TAG} already points at this commit"
