@@ -27,10 +27,11 @@ import { collectInventories } from "./api/inventory.mjs";
 /** Gzipped index budget. It ships as a lazy chunk, but a full-text index is
  *  large by nature and a regression here is a real cost to every first search.
  *  Raised from 320 when content alone reached it (322 KB with the BullMQ
- *  guide), from 330 for the event egress pages (333 KB), and from 340 for the
- *  Server-Sent Events watch section (just over 340 KB); raise it again only for pages,
- *  never for a leak in extraction. */
-const MAX_INDEX_GZIP_KB = 350;
+ *  guide), from 330 for the event egress pages (333 KB), from 340 for the
+ *  Server-Sent Events watch section (just over 340 KB), and from 350 for the
+ *  2.1.0 changelog (just over 350 KB); raise it again only for pages, never for
+ *  a leak in extraction. */
+const MAX_INDEX_GZIP_KB = 360;
 
 const docFiles = readDocFiles();
 const corpus = toCorpus(docFiles);

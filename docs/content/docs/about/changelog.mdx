@@ -15,7 +15,30 @@ underlying Rust crates are released together, in lock-step.
 Releases up to and including 0.23.0 were published under the project's former name, Taskito, and
 their entries below keep that name.
 
-## Unreleased
+## 2.1.0
+
+Namespaces become a tenancy boundary with their own quotas, pauses and periodic schedules; tokens
+narrow to queues and tasks, and token-authorised writes leave an audit trail. Two new clients (Go,
+Ruby), a Rust SDK and the `fq` command line, trace context from enqueue to execute, push dispatch,
+triggers and event egress. Read [Upgrading](#upgrading-to-210) before rolling: ten core migrations and one
+workflow migration run on first start.
+
+### Breaking (Rust crates)
+
+Nothing here reaches the wire, the contract level (still **2**), or the Python, Node or Java API.
+It reaches only a Rust program depending on `flexiq-core` or `flexiq-workflows` directly, and that
+is why this is a minor: the crates' own semver check is waived for 2.1.0 alone.
+
+- **`flexiq-core`: `Storage` methods take a namespace.** `pause_queue`, `resume_queue`,
+  `list_paused_queues`, `list_workers`, `purge_dead`, `purge_dead_by_task`, `get_due_periodic`,
+  `update_periodic_schedule`, `list_periodic`, `delete_periodic` and `set_periodic_enabled` gain a
+  `namespace: Option<&str>` parameter, on the trait and on every backend's inherent method
+  (#836, #918). The trait also gains methods for audit, settle, quotas and draining; an
+  out-of-tree `Storage` implementation must add them.
+- **`flexiq-workflows`: submit and run types carry trace context.**
+  `SubmitStaticWorkflowRequest` gains `enqueued_by` and `trace`, `WorkflowRun` gains `traceparent`
+  and `tracestate`, and `lifecycle::build_metadata_json` takes a third argument (#992, #1047). A
+  struct literal of either type must name the new fields.
 
 ### Added
 
@@ -74,6 +97,56 @@ their entries below keep that name.
   Records are written off the request path — a record the buffer or the table cannot take is
   logged as JSON under `flexiq::audit` and counted in `flexiq_audit_records_total` — and pruned
   after `FLEXIQ_GRPC_AUDIT_RETENTION_DAYS` (default 90; Helm `grpc.auditRetentionDays`).
+
+- **Token grants narrowed to queues and tasks** (#839, #988, #989, #990). A new `read` scope
+  opens the producer door's reads — `GetJob`, `ListJobs`, `QueueStats`, `GetWorkflowRun`,
+  `WatchJobs`, and `GET` on the JSON facade; `produce` still implies it. `produce`, `read`,
+  `execute`, `inspect` and `admin` grants take `queue=` / `task=` patterns (an exact name, a
+  prefix ending in `*`, or `*`), e.g. `produce:queue=emails-*,task=send_receipt`, and a token's
+  grants are a union. A job, dead letter, periodic task or workflow run outside them reads as not
+  found; an enqueue, batch or workflow node outside them is refused whole with `SCOPE_DENIED`
+  before anything is written; an executor advertising a task beyond them is refused at `Attach`,
+  and a job on a queue it is not granted goes to a peer that is. Listings must name a reachable
+  queue or task and are never filtered after the page is cut. A narrowed token cannot debounce,
+  and a `unique_key` hit on another queue's job is refused rather than handed back. Workers,
+  quotas and the audit trail take whole grants only. Grants live in the existing `scopes` array,
+  so there is no migration; an older build drops a grant it cannot read, so a rollback only
+  narrows a token.
+
+- **API tokens managed over the admin door** (#1042). A new `tokens` scope — not implied by
+  `admin`, never narrowable — opens `CreateToken`, `GetToken`, `ListTokens` and `RevokeToken` on
+  `flexiq.admin.v1` (JSON under `/v1/admin/tokens`) and `fq tokens create|list|show|revoke`. No
+  call escalates: every requested grant must be covered by one of the caller's, a new token may
+  not outlive the caller's, every call acts on the caller's namespace, and revoking needs grants
+  covering the target's. The secret is returned once by `CreateToken` and never recorded; the
+  calls are audited as target kind `token`.
+
+- **The submitting token is recorded on the job** (#992). `enqueued_by` (migration
+  `0025_job_enqueued_by`, on live, archived and dead-letter rows) holds the public id of the token
+  that authorised an `Enqueue`, `EnqueueBatch`, `SubmitWorkflow` or `TriggerPeriodic` — the id the
+  audit trail stores — so it outlives the audit window. Only the server sets it; it is null when
+  no token was involved, and a dead-letter replay keeps the original. On the wire as
+  `Job.enqueued_by`, in Python as `enqueued_by`, in Node and Java as `enqueuedBy`, and as an
+  "Enqueued by" row on every dashboard.
+
+- **Per-namespace quotas** (#841). Max pending jobs, enqueue rate, max running jobs, and row
+  ceilings on the archive and dead-letter queue, enforced in the core so every producer path
+  shares them. `reject` answers the existing `QueueFull` / `RateLimitExceeded`; `drop`
+  dead-letters the excess without it ever going live. Read and set with `GetNamespaceQuota`,
+  `SetNamespaceQuota` and `ClearNamespaceQuota` on the admin door or `fq quota get|set|clear`.
+  An unset quota is unlimited, one that cannot be read fails closed, and running processes see a
+  change within about 2 seconds. `quota:` is now a reserved settings prefix, so a tenant cannot
+  raise its own limit through the settings API.
+
+- **Watching jobs instead of polling** (#837, #977, #978). `WatchJobs`, a server stream on
+  `flexiq.v1.ProducerService`, follows up to 100 job ids (a snapshot each, then transitions,
+  ending once every one is terminal) or a queue (live transitions, each with a resume cursor).
+  Decide completion by an item's `terminal` field, not its status. Bounded by
+  `FLEXIQ_GRPC_WATCH_MAX_PER_TOKEN` (default 16), `…_STALL`, `…_BUFFER` and `…_RECONCILE`
+  (default 5 s), which the Helm chart exposes as `grpc.watch.*`. The JSON facade serves the same
+  stream as Server-Sent Events at `GET /v1/jobs:watch` (`read` scope, `Last-Event-ID` resume, a
+  final `event: end`). `fq tail` and the Go client's `Wait` / `EnqueueAndWait` are built on it. A
+  queue watch sees only the transitions of the replica serving it.
 
 - **In-process TLS and mTLS on the server's credentialled listeners** (#838). The gRPC door
   (`FLEXIQ_GRPC_TLS_CERT`, `…_KEY`, `…_CLIENT_CA`) and the attach listener
@@ -175,10 +248,17 @@ their entries below keep that name.
   Gateway). The wire contract a target implements against is
   [`contracts/PUSH_DISPATCH_CONTRACT.md`](https://github.com/ByteVeda/flexiq/blob/master/contracts/PUSH_DISPATCH_CONTRACT.md).
   Three limits worth knowing before deploying it: a job has to finish inside one HTTP
-  request — Cloud Run caps that at 60 minutes, Lambda at 15 (#845 tracks lifting this);
+  request — Cloud Run caps that at 60 minutes, Lambda at 15 (#845, below, lifts this);
   `cancel()` abandons the request and fences the target's answer out rather than stopping the
   target's own work (#846, below, lets a target learn of it); and push dispatch does not honour `HTTP_PROXY` /
   `HTTPS_PROXY` / `ALL_PROXY`, since a proxy would resolve the target outside the egress guard.
+- **Push work can outlive the request deadline** (#845). With `FLEXIQ_PUSH_TARGET_SETTLE=grpc`
+  (which requires `FLEXIQ_GRPC_LISTEN`; the Helm chart supports it), a target answers
+  `202 Accepted`, ends the request, and reports afterwards through four new `flexiq.executor.v1`
+  RPCs — `ExtendLease`, `ReportProgress`, `WriteTaskLog` and `Settle` — under the dispatch's
+  lease. Exactly one of a `Settle`, the settle deadline or the stale-job reaper settles the
+  attempt. Migration `0019_claim_settle_deadline` adds the marker, and a claim holding a live one
+  now survives the hourly claim purge. Off by default: without it a `202` still dead-letters.
 - **`DebounceOptions` and `TaskHandler` are reachable from the crate root** (#921). Both belong on
   `flexiq-core`'s curated root re-export — the blessed import path new code is meant to prefer —
   and both were missing: `DebounceOptions` is a parameter of `Storage::enqueue_debounced`, and
@@ -196,6 +276,87 @@ their entries below keep that name.
   meant naming both paths in one file. Purely additive; the module paths still resolve. The list
   has now been declared complete twice while it was not, so a test diffs the root re-export group
   against `records.rs` and fails on the next record that misses it.
+
+- **Trace context carried from enqueue to execute** (#854, #1047). W3C `traceparent` /
+  `tracestate` ride as top-level keys of a job's metadata, merged by one rule in every SDK
+  (`flexiq_core::trace`), and the gRPC door and JSON facade merge the request headers the same
+  way. The Python and Node OpenTelemetry middlewares inject at enqueue and extract at execution,
+  Java gains `contrib.FlexiQOtel`, and Python and Node job contexts now expose the job's
+  metadata. Workflow node jobs — fan-out, fan-in, deferred and compensation included — carry the
+  submitter's context too, stored on the run (workflow migration
+  `0005_workflow_run_trace_context`) and inherited by sub-workflows; each SDK takes an explicit
+  carrier on submit, and a new `on_workflow_submit` / `onWorkflowSubmit` middleware hook lets
+  the OpenTelemetry integration fill it.
+
+- **A Rust SDK** (#830, #920). `flexiq` grows from a re-export into an SDK, additively:
+  `#[flexiq::task]` from the new published `flexiq-macros` crate, a queue handle
+  (`FlexiQ::open`, enqueue, batch, cancel, reads, stats), a worker, durable steps, periodic tasks,
+  and the option surface the other SDKs expose — retries, priority, unique keys, debounce,
+  `on_excess`, concurrency and rate limits, retry budgets, circuit breakers. The engine
+  re-export stays as the escape hatch. The docs site gains a Rust tier.
+
+- **`fq`, a standalone command line** (#832). One binary over the gRPC door, linking no SDK and
+  no storage layer: `fq enqueue`, `fq jobs list|get|cancel` and `fq queues`, plus `fq tail`,
+  `fq quota`, `fq tokens` and `fq audit` as the doors grew. `--endpoint` picks the transport by
+  scheme (`http://`, `https://`, `unix:`); `--json` prints machine-readable output. Arguments are
+  read as JSON, falling back to a string, and sent as the wire's `structured` arm, so keyword
+  arguments encode in sorted key order and integers cap at ±(2⁵³−1) — pass `--unique-key` where
+  deduplication must match an SDK's `auto:` key.
+
+- **A Go client** (#829, #907, #908, #929, #1043). `github.com/ByteVeda/flexiq/sdks/go/v2`
+  links nothing from the Rust crates. The root package covers every producer RPC — `Enqueue`,
+  `EnqueueBatch`, `GetJob`, `ListJobs` / `AllJobs`, `CancelJob`, `QueueStats`, `SubmitWorkflow`,
+  `GetWorkflowRun` — with refusals matched by reason through `errors.Is`; a graph using a
+  construct only a live SDK process can advance is refused by the server with
+  `WORKFLOW_CONSTRUCT_UNSUPPORTED`. `executor` attaches to the executor door and runs handlers,
+  with `lease`, `side_channel` and durable steps (`executor.Step`, `job.Sleep`). `admin` covers
+  queues, overrides, periodic tasks, the namespace quota and tokens; `CreateToken` is never
+  retried automatically.
+
+- **Ruby gems** (#834, #1024, #1025, #1026, #1028, #1027). `flexiq` is a producer client over the
+  JSON facade with no runtime dependency and no native extension: enqueue and batch (through a
+  pure-Ruby CBOR codec that passes every wire vector), read, cancel, queue counts, `list_jobs` /
+  `each_job` with cursor paging, `watch_jobs` / `watch_queue` / `wait` over the SSE stream, and
+  `submit_workflow` / `get_workflow_run` for static graphs. TLS is on by default; plain `http://`
+  needs `insecure: true`, and the client never retries. `flexiq-executor`, a separate gem,
+  attaches to the executor door over gRPC with `side_channel` and `lease` (no durable steps yet).
+  A `ruby-v*` tag publishes both to RubyGems through trusted publishing.
+
+- **An OpenAPI document for the JSON facade** (#831). `contracts/openapi.json` (OpenAPI 3.1) is
+  generated from `google.api.http` annotations on the producer RPCs and gated, beside the
+  descriptor, against the facade's route table, so the two cannot drift.
+
+- **A KEDA external scaler** (#850). `flexiq-server` serves KEDA's `externalscaler.ExternalScaler`
+  on the gRPC listener, so a `ScaledObject` can use `type: external` or `external-push` in place
+  of the `metrics-api` shim, which stays. The token rides in `scalerMetadata` (`token`, or
+  `tokenFromEnv`) and needs `inspect`. `IsActive`, `GetMetricSpec`, `GetMetrics` and
+  `StreamIsActive` count live jobs through a new `Storage::live_counts`, never a full stats scan.
+  Example manifests are in `deploy/keda/`.
+
+- **A Terraform provider** (#851). `deploy/terraform/provider`, built on the admin door alone:
+  `flexiq_queue` (override and pause), `flexiq_namespace` (quota), `flexiq_periodic_task` and
+  `flexiq_token` (secret kept in state as sensitive, rotation through `rotate_before_days`,
+  revoked on destroy). Not yet on the Terraform Registry.
+
+- **The Helm chart is published as an OCI artifact** (#872). `flexiq-server` is pushed to
+  `oci://ghcr.io/byteveda/charts`, version-aligned with the server image, once that image passes
+  verification.
+
+- **The sidecar webhook mounts attach TLS Secrets** (#984). `flexiq.dev/tls-ca-secret` (key from
+  `flexiq.dev/tls-ca-key`, default `ca.crt`) and `flexiq.dev/tls-client-secret` mount Secrets
+  read-only into the injected sidecar and set `FLEXIQ_ATTACH_TLS_*`; the pod is refused unless
+  `flexiq.dev/attach` is a `tls://` address. Mounts are whole directories, so a rotated Secret is
+  read on the next attach.
+
+- **A reproducible benchmark harness** (#824). `bench/` measures enqueue throughput, end-to-end
+  latency and idle cost for the Python and Node SDKs beside Celery, Dramatiq, RQ and BullMQ, every
+  entrant on its own defaults; the docs publish the results, losses included.
+
+- **Documentation.** Migration guides from BullMQ (#863), Cloud Tasks and EventBridge (#974), and
+  Sidekiq (#865); a comparison with Temporal, Cloud Tasks and BullMQ (#866); a Kubernetes Helm
+  guide (#853); the published server image's contract — tags, architectures, digest pinning
+  (#852); an Operate section and a server-and-wire tier for `flexiq-server`; and the contract a
+  gRPC-only client owes.
 
 ### Changed
 
@@ -225,6 +386,26 @@ their entries below keep that name.
   `WorkerDispatcher::own_lease_book`; a pool that owns no book is handed the scheduler's through
   `set_lease_book`, as before — and a `RemoteDispatcher` handed a book that way still uses it. An
   executor that does not advertise `lease` is dispatched none, as before.
+- **Redis claims in one round trip and wakes on enqueue** (#959, #960, #961). One Lua script
+  selects and claims up to N ready jobs, and Redis claims 8 per cycle by default
+  (`SchedulerConfig::batch_size` is now `Option<usize>`; SQLite and Postgres keep 1). Push
+  dispatch is compiled into every shipped artifact and on by default for Redis only, woken by
+  `PUBLISH`/`SUBSCRIBE` per namespace and queue inside each enqueue's existing round trip; opt out
+  with `push_dispatch=False`, `pushDispatch: false`, `pushDispatch(false)`,
+  `Worker::push_dispatch(false)` or `FLEXIQ_PUSH_DISPATCH=false`. Storage calls draw from a
+  connection pool instead of dialling per call. Against a Redis about 33 ms away, enqueue rose
+  from 8.4 to 30.6 jobs/s and p50 latency fell from 195 s to 119 s. Work no wake announces — a
+  delayed job coming due, a resumed queue, a freed slot — can take up to 2 seconds to be picked
+  up, and stopping a Redis worker can take about a second longer. Postgres no longer sends a
+  `pg_notify` per enqueue.
+- **Execute spans are `CONSUMER` spans** (#854). With a `traceparent` on the job, the Python and
+  Node execute span has a remote parent, so a parent-based sampler follows the enqueuer's
+  decision. Java's `EnqueueContext.metadata()` is layered over a JSON-object
+  `EnqueueOptions.metadata` instead of replacing it. The Java SPI's `QueueBackend.submitWorkflow`
+  gains an overload taking trace context (#1047); a backend overriding the old one still works,
+  without trace context, and that overload is deprecated.
+- **`GET /v1/stats?queue=x` honours the filter** (#831). It answered namespace-wide counts and
+  ignored the query; it now means `GET /v1/queues/x/stats`.
 
 ### Fixed
 
@@ -300,6 +481,88 @@ their entries below keep that name.
   runs every step un-memoized — and storing its commit left a memo it would never be handed
   back, so the next attempt re-ran the side effect with a record on file saying it was already
   done. `steps` refuses rather than degrades, so the commit is now refused permanently.
+- **A rate limit that can never release a job is refused** (#917). `"0/s"`, `"-5/s"`, `"0.5/s"`
+  and `"NaN/s"` were accepted, and the task then never dispatched with nothing saying why. A
+  count that is not finite or is below 1 is now rejected, and every SDK turns that into an error
+  at worker start. A Python queue-level rate that fails to parse is an error too, rather than
+  leaving the queue unthrottled.
+- **Periodic tasks are scoped by namespace** (#918). `periodic_tasks` was keyed by name alone, so
+  on a shared database two tenants registering one task name overwrote each other's row, a
+  listing returned every tenant's schedules, and a delete or a pause reached rows the caller did
+  not own. Identity is now `(namespace, name)` (migration `0018_periodic_task_namespace`). A
+  scheduler with no namespace still fires every namespace's due schedules, each job inheriting
+  its row's namespace.
+- **A redeploy no longer undoes a pause or repeats a firing** (#919). Declaring a periodic task
+  from code read the row and then replaced it, so a pause or a scheduler's `next_run` committed
+  in between was written back stale. `Storage::declare_periodic` is a conditional write: it never
+  touches `enabled` or `last_run`, and rewrites `next_run` only when the cron expression or
+  timezone changed.
+- **A periodic task's `kwargs` is refused rather than silently dropped** (#922). Every backend
+  stored it and nothing read it — a fired job's payload comes from `args` alone. Registering or
+  declaring one with `kwargs` set now fails with a configuration error; rows written earlier still
+  load. The Python binding's `register_periodic` loses its unused `kwargs=` parameter.
+- **A swallowed `step.sleep` is reported as a sleep** (#891). A task body that caught the sleep
+  signal could report a late failure under the woken attempt's claim and dead-letter a job that
+  was sleeping correctly. In Python, Node and Java an attempt that committed a sleep now reports
+  the sleep, whatever the body did next; a swallowed divergence or refusal still fails the attempt.
+- **An empty workflow node queue means `default`** (#990). A graph submitted over the gRPC door
+  with no queue on a node put that node's job in a queue literally named `""`.
+- **The JSON facade's error body no longer reads as success** (#831). An error carrying no
+  `ErrorInfo` — only the workflow RPCs produced one — rendered `{"code": 200, "status": "OK"}`
+  under a non-2xx HTTP status.
+- **The Go client reads a task error with a null sibling as structured** (#931). A failure with
+  `"traceback": null`, as a Rust worker wrote one, came back unstructured with its `errtype` lost.
+  Only a string `message` is required now; a missing or null `errtype` or `traceback` takes its
+  default, as every other reader does.
+- **Push dispatch name lookups no longer hold shutdown open** (#945). A wedged DNS lookup ran on
+  the runtime's blocking pool, which shutdown waits for, and could get a pod killed with leases
+  still open. Lookups run on detached threads, at most 32 at once per resolver.
+- **OIDC dashboard login pins `id_token` verification to the issuer's key** (#885). The algorithm
+  came from the token being verified; it now derives from the published JWK and is never HMAC,
+  and the four claims OIDC Core makes mandatory are required. `jsonwebtoken` moves to 10.3, and
+  request-supplied values in the OAuth and scaler logs are escaped against log injection.
+- **The published `flexiq-core` crate's tests compile** (#901). The wire-vector test read a file
+  outside the package, so `cargo test` on the crate from crates.io failed to build; that one test
+  target is now excluded from the package.
+- **The Python worker's startup banner spells `flexiq`** (#1014), not `taskito`.
+
+### Upgrading to 2.1.0
+
+**Eleven migrations run on first start**, across the two ledgers — ten core (`m0018` through
+`m0027`, tracked in `schema_migrations`) and one workflow (`m0005`, tracked in
+`workflow_schema_migrations`). The contract level stays **2**.
+
+| Migration | Does |
+|---|---|
+| `m0018_periodic_task_namespace` | Rebuilds `periodic_tasks` keyed by `(namespace, name)`; existing rows become the default namespace's |
+| `m0019_claim_settle_deadline` | Adds the settle deadline marking a push dispatch accepted with `202` |
+| `m0020_queue_state_namespace` | Scopes queue pauses by namespace |
+| `m0021_worker_namespace` | Adds the namespace a registered worker serves |
+| `m0022_audit_log` | Adds the `audit_log` table |
+| `m0023_jobs_namespace_status` | Indexes live jobs by `(namespace, status)` for quota counts |
+| `m0024_namespace_row_trim` | Indexes the archive and dead-letter queue for per-namespace row trims |
+| `m0025_job_enqueued_by` | Adds `enqueued_by` to jobs, archived jobs and dead letters |
+| `m0026_audit_principal_kind` | Adds the kind of caller an audit record names |
+| `m0027_audit_access` | Adds whether an audit record is a read or a write |
+| `m0005_workflow_run_trace_context` | Adds `traceparent` / `tracestate` to workflow runs |
+
+All but `m0018` are expand-only. `m0018` rebuilds `periodic_tasks` inside the migration's own
+transaction — create, copy, drop, rename — so there is no partial state, but its `name` primary
+key is gone: on Postgres a 2.0.0 process's periodic registration upserts on that key, so upgrade
+every process that declares schedules together. A process with a namespace then registers its
+schedules as new `(namespace, name)` rows beside the migrated default-namespace copies, and a
+scheduler with no namespace fires both; once those processes have re-registered, delete the
+default-namespace copies they replace. `m0023` and `m0024` build indexes over `jobs`,
+`archived_jobs` and `dead_letter`, so a large database pauses on first start while they build.
+Redis runs no migrations; it backfills its per-namespace quota index sets, and during a rolling
+upgrade jobs enqueued by a not-yet-upgraded process are not counted against a quota until they
+finish.
+
+Behaviour to check before rolling: queue pauses, task and queue overrides, dead-letter purges and
+the worker registry are now per namespace (see [Changed](#changed)) — a namespaced deployment
+re-applies a pause or an override set before the upgrade. A periodic task registered with
+`kwargs`, and a rate limit whose count is below 1, are now refused at start rather than ignored,
+and Redis workers wake on enqueue by default.
 
 ## 2.0.0
 

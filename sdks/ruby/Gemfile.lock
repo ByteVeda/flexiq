@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    flexiq (2.0.0)
+    flexiq (2.1.0)
 
 GEM
   remote: https://rubygems.org/
