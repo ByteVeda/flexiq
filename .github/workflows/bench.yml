@@ -30,7 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       redis:
-        image: redis:8-alpine
+        # Docker's ECR Public mirror, not Docker Hub: Hub rate-limits CI runners.
+        image: public.ecr.aws/docker/library/redis:8-alpine
         ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping" --health-interval 5s
