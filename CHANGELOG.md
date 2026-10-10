@@ -11,9 +11,9 @@ their entries below keep that name.
 ## 2.1.0
 
 Namespaces become a tenancy boundary with their own quotas, pauses and periodic schedules; tokens
-narrow to queues and tasks, and every authorised write is audited. Two new clients (Go, Ruby), a
-Rust SDK and the `fq` command line, trace context from enqueue to execute, push dispatch, triggers
-and event egress. Read [Upgrading](#upgrading-to-210) before rolling: ten core migrations and one
+narrow to queues and tasks, and token-authorised writes leave an audit trail. Two new clients (Go,
+Ruby), a Rust SDK and the `fq` command line, trace context from enqueue to execute, push dispatch,
+triggers and event egress. Read [Upgrading](#upgrading-to-210) before rolling: ten core migrations and one
 workflow migration run on first start.
 
 ### Breaking (Rust crates)
