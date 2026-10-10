@@ -92,6 +92,18 @@ that check on their own terms.
 | `backoff_min:` / `backoff_max:` | 0.25 / 30 | reconnect delay bounds, in seconds |
 | `logger:` | `$stderr` at INFO | any `Logger` |
 
+## Forking
+
+Run the worker as a process of its own. The `grpc` gem is not fork-safe: `Worker.new` opens a
+gRPC channel, and once a process has done that, a child it forks cannot open one at all. The
+child's `Worker.new` raises `RuntimeError` ("grpc cannot be used before and after forking...").
+`GRPC_ENABLE_FORK_SUPPORT=1` does not help here, because `GRPC.prefork` refuses while a
+bidirectional stream is open, and the attach stream is one.
+
+Requiring the gem in a parent is fine; constructing the worker is not. Under a preforking host
+(Puma in cluster mode, Unicorn, a forking job runner), build and `run` the worker in each child
+after the fork, never in an initializer that runs before it.
+
 ## What this gem does not do
 
 - **Durable steps.** The `steps` capability is not advertised, so the scheduler sends no step
