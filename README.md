@@ -29,6 +29,8 @@ and Diesel over SQLite in WAL mode — exposed to each language through a thin n
 > (crates.io); the old `taskito` packages receive no further releases. See
 > [Migrating to FlexiQ](https://docs.byteveda.org/flexiq/resources/migrating-to-flexiq).
 
+[![byteveda/flexiq, explained in a one-minute video](https://gitdiagram.com/api/video/file?username=byteveda&repo=flexiq&format=poster)](https://gitdiagram.com/byteveda/flexiq/video)
+
 ## SDKs
 
 | Language | Install | Package | Docs |
