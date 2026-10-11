@@ -1,3 +1,6 @@
+
+
+
 <div align="center">
 
 <p><img src="docs/public/logo.png" alt="" width="150"></p>
@@ -19,17 +22,15 @@ A Rust-powered task queue with native SDKs. One engine — no broker required, j
 
 </div>
 
-Most task queues need a separate broker (Redis, RabbitMQ) even for single-machine workloads.
-flexiq embeds storage, scheduling, and worker management into one install with no external
-services. The engine is a single Rust core — a Tokio async scheduler, an OS-thread worker pool,
-and Diesel over SQLite in WAL mode — exposed to each language through a thin native SDK.
-
 > **Formerly Taskito.** The project was renamed to FlexiQ in 1.0.0. Packages ship as `flexiq`
 > (PyPI), `@byteveda/flexiq` (npm), `org.byteveda:flexiq` (Maven) and `flexiq`/`flexiq-core`
 > (crates.io); the old `taskito` packages receive no further releases. See
 > [Migrating to FlexiQ](https://docs.byteveda.org/flexiq/resources/migrating-to-flexiq).
 
-[![byteveda/flexiq, explained in a one-minute video](https://gitdiagram.com/api/video/file?username=byteveda&repo=flexiq&format=poster)](https://gitdiagram.com/byteveda/flexiq/video)
+
+
+
+[![flexiq-explained](https://gitdiagram.com/api/video/file?username=byteveda&repo=flexiq&format=poster)](https://github.com/user-attachments/assets/9449f923-755c-4714-8b85-10dd6a9131c9)
 
 ## SDKs
 
