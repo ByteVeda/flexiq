@@ -75,10 +75,10 @@ jobs:
             exit 1
           fi
 
-      # publish-server.yml mirrors these labels onto the multiarch index, which
-      # is where GHCR reads the package title and description from. Asserting
-      # them here means a dropped LABEL reds a pull request instead of surfacing
-      # as a blank package page one release later.
+      # publish-server.yml mirrors these labels as annotations onto every
+      # manifest it pushes, which is where GHCR reads titles and descriptions
+      # from. Asserting them here, through the same helper, means a dropped
+      # LABEL reds a pull request instead of a blank package page at release.
       - name: Image carries its OCI labels
         run: |
           set -euo pipefail
@@ -90,3 +90,4 @@ jobs:
               exit 1
             fi
           done
+          .github/scripts/oci-label-annotations.sh manifest "$labels"

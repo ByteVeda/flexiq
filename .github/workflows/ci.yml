@@ -199,6 +199,7 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/ci-server-image.yml'
+              - '.github/scripts/oci-label-annotations.sh'
               # The dispatcher, for the same reason `go_e2e` watches it:
               # ci-server-image.yml has no trigger of its own, so a PR that
               # touches only this file would skip the suite it just edited.
