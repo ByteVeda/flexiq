@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@v1.327.0
+        uses: ruby/setup-ruby@v1.328.0
         with:
           ruby-version: ${{ matrix.ruby }}
           working-directory: sdks/ruby
@@ -55,7 +55,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@v1.327.0
+        uses: ruby/setup-ruby@v1.328.0
         with:
           ruby-version: "3.4"
           working-directory: sdks/ruby
@@ -89,7 +89,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@v1.327.0
+        uses: ruby/setup-ruby@v1.328.0
         with:
           ruby-version: ${{ matrix.ruby }}
           working-directory: sdks/ruby-executor
@@ -112,7 +112,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@v1.327.0
+        uses: ruby/setup-ruby@v1.328.0
         with:
           ruby-version: "3.4"
           working-directory: sdks/ruby-executor
