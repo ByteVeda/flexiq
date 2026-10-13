@@ -216,6 +216,16 @@ jobs:
             exit 1
           fi
 
+      # GHCR renders each per-architecture version page from that manifest's own
+      # annotations, never its config labels.
+      - name: Mirror the labels as manifest annotations
+        id: annotations
+        run: |
+          set -euo pipefail
+          labels="$(docker image inspect --format '{{ json .Config.Labels }}' "${IMAGE}:${TAG}")"
+          list="$(.github/scripts/oci-label-annotations.sh manifest "$labels")"
+          printf 'list<<EOF\n%s\nEOF\n' "$list" >>"$GITHUB_OUTPUT"
+
       # Exported straight to the registry rather than `docker push`ed out of the
       # daemon: a daemon push rewrites the manifest to Docker media types, and
       # `imagetools create` then drops the index annotations GHCR reads a
@@ -231,11 +241,23 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: VERSION=${{ env.VERSION }}
           tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          annotations: ${{ steps.annotations.outputs.list }}
           # Attestations would make each per-architecture tag an index of its
           # own, adding an unknown/unknown entry to every published manifest.
           provenance: false
           sbom: false
           outputs: type=image,push=true,oci-mediatypes=true
+
+      # Checked before the index exists, so a blank child never ships under it.
+      - name: Verify the pushed tag carries its description
+        if: ${{ !inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          if ! docker buildx imagetools inspect --raw "${IMAGE}:${TAG}" \
+            | jq -e '(.annotations["org.opencontainers.image.description"] // "") != ""' >/dev/null; then
+            echo "::error::${IMAGE}:${TAG} carries no image description annotation"
+            exit 1
+          fi
 
   manifest:
     name: Publish multiarch manifest
@@ -265,23 +287,19 @@ jobs:
       # The per-architecture tags stay in the registry as the manifest's
       # members; `:VERSION` and `:latest` are the addresses anyone pulls.
       #
-      # GHCR takes a multiarch package's description from the index annotations
-      # and never looks at the child images' config labels, so every label the
-      # Dockerfile set is mirrored onto the index. Reading them back off the
-      # pushed image keeps the Dockerfile the one place the strings live.
+      # GHCR takes a multiarch package's description from the index annotations,
+      # so every Dockerfile label is mirrored onto the index too.
       - name: Merge the architectures into one manifest
         run: |
           set -euo pipefail
           labels="$(docker buildx imagetools inspect \
             --format '{{ json .Image.Config.Labels }}' "${IMAGE}:${VERSION}-amd64")"
-          if [ -z "$labels" ] || [ "$labels" = "null" ]; then
-            echo "::error::${IMAGE}:${VERSION}-amd64 carries no OCI labels"
-            exit 1
-          fi
+          # Captured first: a failing process substitution would not stop `set -e`.
+          list="$(.github/scripts/oci-label-annotations.sh index "$labels")"
           annotations=()
-          while IFS= read -r label; do
-            annotations+=(--annotation "index:${label}")
-          done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<<"$labels")
+          while IFS= read -r annotation; do
+            annotations+=(--annotation "$annotation")
+          done <<<"$list"
           docker buildx imagetools create "${annotations[@]}" \
             --tag "${IMAGE}:${VERSION}" \
             --tag "${IMAGE}:latest" \
