@@ -25,7 +25,9 @@ export function Segmented<T extends string>({
   return (
     <fieldset
       className={cn(
-        "m-0 inline-flex min-w-0 overflow-hidden rounded-[var(--btn-radius)] border border-[var(--border-strong)] p-0",
+        // `relative` anchors the sr-only legend: left to the nearest positioned
+        // ancestor it escapes the scroll container and stretches the page.
+        "relative m-0 inline-flex min-w-0 overflow-hidden rounded-[var(--btn-radius)] border border-[var(--border-strong)] p-0",
         className,
       )}
     >
