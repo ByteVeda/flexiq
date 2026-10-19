@@ -68,6 +68,19 @@ export function useWhoami() {
   return useQuery(whoamiQuery());
 }
 
+/**
+ * Whether this caller may change things: an admin session, or auth switched
+ * off — never a viewer, and never a public read-only dashboard. UX only; the
+ * server's gate is what refuses the write.
+ */
+export function useCanOperate(): boolean {
+  const status = useAuthStatus();
+  const whoami = useWhoami();
+  if (!status.data || status.data.read_only) return false;
+  if (status.data.auth_enabled === false) return true;
+  return whoami.data?.user.role === "admin";
+}
+
 export function useAuthProviders() {
   return useQuery(providersQuery());
 }
