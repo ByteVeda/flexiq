@@ -618,9 +618,21 @@ the Settings page echoes to explain why rows leave the listings.
     "job_errors_ttl_ms": 604800000,
     "task_metrics_ttl_ms": 604800000,
     "dead_letter_ttl_ms": 2592000000
+  },
+  "source": "code",
+  "code_windows": {
+    "task_logs_ttl_ms": 259200000,
+    "archived_jobs_ttl_ms": 604800000,
+    "job_errors_ttl_ms": 604800000,
+    "task_metrics_ttl_ms": 604800000,
+    "dead_letter_ttl_ms": 2592000000
   }
 }
 ```
+
+`source` says whether `windows` came from the worker's code config or from
+[the dashboard override](#retention-override); `code_windows` is the worker's
+configured windows either way, `null` from a worker that predates overrides.
 
 Retention runs in the worker process, so this is not computed from the
 dashboard's own config: the worker elected to run cleanup publishes its
@@ -664,9 +676,44 @@ against live storage, so it always answers.
 
 `counts` mirror each table's purge exactly; `reference_time` is the Unix-ms
 instant the snapshot was taken. Read-only — nothing is deleted. The preview
-uses this queue's configured windows (falling back to the recommended
-defaults), which may differ from a worker configured differently elsewhere —
-compare against `/api/retention` to see what a worker reported.
+uses the dashboard override when it is switched on, otherwise this queue's
+configured windows (falling back to the recommended defaults), which may
+differ from a worker configured differently elsewhere — compare against
+`/api/retention` to see what a worker reported.
+
+### Retention override
+
+The Settings page can replace the windows a worker was started with, without
+restarting it. One document per namespace; the worker elected to run cleanup
+reads it on every sweep, so a save applies within a few minutes.
+
+`GET /api/retention/override` returns it:
+
+```json
+{
+  "source": "dashboard",
+  "windows": {
+    "task_logs_ttl_ms": 86400000,
+    "archived_jobs_ttl_ms": 172800000,
+    "job_errors_ttl_ms": 172800000,
+    "task_metrics_ttl_ms": 172800000,
+    "dead_letter_ttl_ms": null
+  },
+  "updated_at": 1753200000000
+}
+```
+
+`source` is the toggle: `dashboard` applies these windows, `code` applies the
+worker's own config and keeps these for the next switch. Never saved reads as
+`code` with every window `null` and `updated_at: null`.
+
+`PUT /api/retention/override` takes `{"source": ..., "windows": {...}}` and
+answers the stored document. A table left out keeps forever. It answers `400`,
+writing nothing, for an unknown `source` or table, or a window under one hour —
+a window is "delete rows older than this", so a slip of the unit would empty a
+table on the next sweep. `DELETE /api/retention/override` forgets the windows
+(`{"deleted": true}`). Both need the admin role and are recorded in the audit
+trail.
 
 ## Using the API programmatically
 

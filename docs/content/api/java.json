@@ -128,6 +128,14 @@
     },
     {
       "owner": "FlexiQ",
+      "name": "clearRetentionOverride",
+      "kind": "method",
+      "signature": "boolean clearRetentionOverride()",
+      "params": [],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
       "name": "close",
       "kind": "method",
       "signature": "void close()",
@@ -1732,6 +1740,14 @@
     },
     {
       "owner": "FlexiQ",
+      "name": "retentionOverride",
+      "kind": "method",
+      "signature": "RetentionOverride retentionOverride()",
+      "params": [],
+      "returns": "RetentionOverride"
+    },
+    {
+      "owner": "FlexiQ",
       "name": "retry",
       "kind": "method",
       "signature": "String retry(String deadId)",
@@ -1790,6 +1806,25 @@
         }
       ],
       "returns": "void"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "setRetentionOverride",
+      "kind": "method",
+      "signature": "RetentionOverride setRetentionOverride(RetentionSource source, EffectiveRetention.Windows windows)",
+      "params": [
+        {
+          "name": "source",
+          "type": "RetentionSource",
+          "default": null
+        },
+        {
+          "name": "windows",
+          "type": "EffectiveRetention.Windows",
+          "default": null
+        }
+      ],
+      "returns": "RetentionOverride"
     },
     {
       "owner": "FlexiQ",

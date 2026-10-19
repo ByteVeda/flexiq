@@ -55,6 +55,12 @@ boolean cancel(String jobId)
 void cancelWorkflow(String runId)
 ```
 
+### `flexiq.clearRetentionOverride()`
+
+```java
+boolean clearRetentionOverride()
+```
+
 ### `flexiq.close()`
 
 ```java
@@ -581,6 +587,12 @@ boolean resumePeriodic(String name)
 boolean resumeSubscription(String topic, String name)
 ```
 
+### `flexiq.retentionOverride()`
+
+```java
+RetentionOverride retentionOverride()
+```
+
 ### `flexiq.retry()`
 
 ```java
@@ -603,6 +615,15 @@ void setMinContract(int level)
 
 ```java
 void setProgress(String jobId, int progress)
+```
+
+### `flexiq.setRetentionOverride()`
+
+```java
+RetentionOverride setRetentionOverride(
+    RetentionSource source,
+    EffectiveRetention.Windows windows
+)
 ```
 
 ### `flexiq.setSetting()`

@@ -105,6 +105,12 @@ queue.check_fan_out_completion(
 ) -> tuple[bool, list[str]] | None
 ```
 
+### `queue.clear_retention_override()`
+
+```python
+queue.clear_retention_override() -> bool
+```
+
 ### `queue.close_dashboard_audit()`
 
 ```python
@@ -780,6 +786,12 @@ queue.resume_periodic(name: str) -> bool
 queue.resume_queue(queue_name: str) -> None
 ```
 
+### `queue.retention_override()`
+
+```python
+queue.retention_override() -> str
+```
+
 ### `queue.retry_dead()`
 
 ```python
@@ -816,6 +828,12 @@ queue.run_worker(
 
 ```python
 queue.set_min_contract(level: int) -> None
+```
+
+### `queue.set_retention_override()`
+
+```python
+queue.set_retention_override(body: str) -> str
 ```
 
 ### `queue.set_setting()`
