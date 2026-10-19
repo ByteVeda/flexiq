@@ -25,6 +25,10 @@ export interface AuthStatus {
   setup_required: boolean;
   /** Absent on older servers, which always enforce auth. */
   auth_enabled?: boolean;
+  /** Public read-only dashboard: every write answers 403. */
+  read_only?: boolean;
+  /** Same-origin trigger path the read-only banner's enqueue button posts to. */
+  demo_enqueue?: string | null;
 }
 
 export interface WhoamiResponse {
