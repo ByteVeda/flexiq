@@ -61,7 +61,7 @@ services:
     image: public.ecr.aws/docker/library/caddy:2
     environment:
       # A public host name turns on automatic HTTPS; unset serves :80.
-      FLEXIQ_DEMO_SITE: ${FLEXIQ_DEMO_SITE:-}
+      FLEXIQ_DEMO_SITE: ${FLEXIQ_DEMO_SITE:-:80}
     ports:
       - "80:80"
       - "443:443"
