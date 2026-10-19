@@ -28,3 +28,27 @@ export function spellGrants(
     narrowable.has(scope) && qualifiers.length > 0 ? `${scope}:${qualifiers.join(",")}` : scope,
   );
 }
+
+/** The units an expiry can be typed in. */
+export type ExpiryUnit = "days" | "weeks" | "months";
+
+/** Days per unit. A month is 30 days, so "12 months" stays inside the cap. */
+export const EXPIRY_UNIT_DAYS: Record<ExpiryUnit, number> = { days: 1, weeks: 7, months: 30 };
+
+/** The server's cap on a token's lifetime, so the form cannot ask for a refusal. */
+export const MAX_EXPIRY_DAYS = 365;
+
+export type ParsedExpiry = { ok: true; days: number } | { ok: false; error: string };
+
+/** A typed amount and unit as the `expires_in_days` a mint request sends. */
+export function expiryDays(amount: string, unit: ExpiryUnit): ParsedExpiry {
+  const raw = amount.trim();
+  if (!/^\d+$/.test(raw) || Number(raw) < 1) {
+    return { ok: false, error: "Enter a whole number, 1 or more" };
+  }
+  const days = Number(raw) * EXPIRY_UNIT_DAYS[unit];
+  if (days > MAX_EXPIRY_DAYS) {
+    return { ok: false, error: `At most ${MAX_EXPIRY_DAYS} days — that is ${days}` };
+  }
+  return { ok: true, days };
+}

@@ -11,18 +11,22 @@ import {
   DialogTrigger,
   Input,
   SecretReveal,
-  Stepper,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Switch,
 } from "@/components/ui";
 import { ApiError } from "@/lib/api-client";
 import { useCreateGrpcToken, useGrpcScopes } from "../hooks";
 import type { CreatedGrpcToken } from "../types";
-import { spellGrants } from "../utils";
+import { type ExpiryUnit, expiryDays, MAX_EXPIRY_DAYS, spellGrants } from "../utils";
 
-/** Matches the server's default; the server is still the one that enforces it. */
-const DEFAULT_DAYS = 90;
-/** Matches the server's cap, so the stepper cannot ask for a refusal. */
-const MAX_DAYS = 365;
+/** 90 days, the server's default; the server is still the one that enforces it. */
+const DEFAULT_AMOUNT = "3";
+const DEFAULT_UNIT: ExpiryUnit = "months";
+const UNITS: ExpiryUnit[] = ["days", "weeks", "months"];
 
 /** What each scope opens, in the operator's words rather than the package's. */
 const SCOPE_HELP: Record<string, string> = {
@@ -38,7 +42,9 @@ export function CreateGrpcTokenDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["produce"]);
-  const [days, setDays] = useState(DEFAULT_DAYS);
+  const [amount, setAmount] = useState(DEFAULT_AMOUNT);
+  const [unit, setUnit] = useState<ExpiryUnit>(DEFAULT_UNIT);
+  const expiry = expiryDays(amount, unit);
   const [queue, setQueue] = useState("");
   const [task, setTask] = useState("");
   const [created, setCreated] = useState<CreatedGrpcToken | null>(null);
@@ -54,7 +60,8 @@ export function CreateGrpcTokenDialog() {
   function reset() {
     setName("");
     setScopes(["produce"]);
-    setDays(DEFAULT_DAYS);
+    setAmount(DEFAULT_AMOUNT);
+    setUnit(DEFAULT_UNIT);
     setQueue("");
     setTask("");
     setCreated(null);
@@ -87,11 +94,12 @@ export function CreateGrpcTokenDialog() {
 
   function onSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
+    if (!expiry.ok) return;
     create.mutate(
       {
         name,
         scopes: spellGrants(scopes, available ?? [], { queue, task }),
-        expires_in_days: days,
+        expires_in_days: expiry.days,
       },
       { onSuccess: (token) => setCreated(token) },
     );
@@ -111,7 +119,7 @@ export function CreateGrpcTokenDialog() {
           <Plus aria-hidden /> New token
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className={created ? "sm:max-w-md" : "sm:max-w-2xl"}>
         {created ? (
           <SuccessView token={created} onDone={() => onOpenChange(false)} />
         ) : (
@@ -138,24 +146,27 @@ export function CreateGrpcTokenDialog() {
             </label>
             <div className="flex flex-col gap-2 text-sm">
               <span className="font-medium">Scopes</span>
-              {(available ?? []).map((scope) => (
-                <div
-                  key={scope.name}
-                  className="flex items-center justify-between gap-4 rounded-md border border-[var(--border)] px-3 py-2"
-                >
-                  <div className="flex flex-col gap-0.5">
-                    <span className="font-mono text-xs">{scope.name}</span>
+              {/* Six scopes, so two columns read as three rows at every width. */}
+              <div className="grid grid-cols-2 gap-2">
+                {(available ?? []).map((scope) => (
+                  <div
+                    key={scope.name}
+                    className="flex flex-col gap-1 rounded-md border border-[var(--border)] px-3 py-2"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-mono text-xs">{scope.name}</span>
+                      <Switch
+                        checked={scopes.includes(scope.name)}
+                        onCheckedChange={(on) => toggleScope(scope.name, on)}
+                        aria-label={`Grant ${scope.name}`}
+                      />
+                    </div>
                     <span className="text-xs text-[var(--fg-subtle)]">
                       {SCOPE_HELP[scope.name] ?? " "}
                     </span>
                   </div>
-                  <Switch
-                    checked={scopes.includes(scope.name)}
-                    onCheckedChange={(on) => toggleScope(scope.name, on)}
-                    aria-label={`Grant ${scope.name}`}
-                  />
-                </div>
-              ))}
+                ))}
+              </div>
               <span className="text-xs text-[var(--fg-subtle)]">
                 Grant only what the client needs — a token that submits work should not be able to
                 claim it.
@@ -192,19 +203,39 @@ export function CreateGrpcTokenDialog() {
             ) : null}
             <div className="flex flex-col gap-1.5 text-sm">
               <span className="font-medium">Expires in</span>
-              <Stepper
-                value={days}
-                onChange={setDays}
-                min={1}
-                max={MAX_DAYS}
-                step={30}
-                format={(v) => `${v} days`}
-                aria-label="days until expiry"
-              />
-              <span className="text-xs text-[var(--fg-subtle)]">
-                At most {MAX_DAYS} days. A credential with no end date is a permanent one with extra
-                steps.
-              </span>
+              <div className="grid grid-cols-[8rem_10rem] gap-2">
+                <Input
+                  inputMode="numeric"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  aria-label="Expires in"
+                  aria-invalid={!expiry.ok}
+                  className={expiry.ok ? undefined : "ring-[var(--danger)]"}
+                />
+                <Select value={unit} onValueChange={(next) => setUnit(next as ExpiryUnit)}>
+                  <SelectTrigger aria-label="Expiry unit">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {UNITS.map((option) => (
+                      <SelectItem key={option} value={option}>
+                        {option}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {expiry.ok ? (
+                <span className="text-xs text-[var(--fg-subtle)]">
+                  {expiry.days} {expiry.days === 1 ? "day" : "days"}, at most {MAX_EXPIRY_DAYS}. A
+                  month counts as 30 days. A credential with no end date is a permanent one with
+                  extra steps.
+                </span>
+              ) : (
+                <span role="alert" className="text-xs text-[var(--danger)]">
+                  {expiry.error}
+                </span>
+              )}
             </div>
             {errorMessage ? (
               <div
@@ -224,7 +255,10 @@ export function CreateGrpcTokenDialog() {
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={create.isPending || !name || scopes.length === 0}>
+              <Button
+                type="submit"
+                disabled={create.isPending || !name || scopes.length === 0 || !expiry.ok}
+              >
                 {create.isPending ? "Creating…" : "Create token"}
               </Button>
             </DialogFooter>
