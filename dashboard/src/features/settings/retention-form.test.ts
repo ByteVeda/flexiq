@@ -26,6 +26,16 @@ describe("daysFromWindows / windowsFromDays", () => {
     expect(days.task_logs_ttl_ms).toBe("0.5");
   });
 
+  it("round-trips windows two decimals cannot hold", () => {
+    for (const ms of [3_600_000, 5 * 3_600_000, DAY + 1]) {
+      const current = windows({ task_logs_ttl_ms: ms });
+      expect(windowsFromDays(daysFromWindows(current))).toEqual({ ok: true, windows: current });
+    }
+    expect(daysFromWindows(windows({ task_logs_ttl_ms: 3_600_000 })).task_logs_ttl_ms).toBe(
+      "0.04166667",
+    );
+  });
+
   it("refuses what the server refuses", () => {
     const days = daysFromWindows(windows());
     expect(windowsFromDays({ ...days, task_logs_ttl_ms: "0" })).toMatchObject({

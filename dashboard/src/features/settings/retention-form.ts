@@ -19,14 +19,26 @@ export const RETENTION_KEYS: RetentionKey[] = [
   "dead_letter_ttl_ms",
 ];
 
-/** Windows as editable day counts — at most two decimals, so hours survive. */
+/** Windows as editable day counts that parse back to the same milliseconds. */
 export function daysFromWindows(windows: RetentionWindows): WindowDays {
   const days = {} as WindowDays;
   for (const key of RETENTION_KEYS) {
     const ms = windows[key];
-    days[key] = ms === null ? "" : String(Math.round((ms / DAY_MS) * 100) / 100);
+    days[key] = ms === null ? "" : formatDays(ms);
   }
   return days;
+}
+
+/**
+ * The fewest decimals that still round-trip, so an untouched window saves
+ * unchanged: one hour reads `0.04166667`, not a rounded `0.04` under the floor.
+ */
+function formatDays(ms: number): string {
+  for (let digits = 0; digits < 12; digits++) {
+    const text = String(Number((ms / DAY_MS).toFixed(digits)));
+    if (Math.round(Number(text) * DAY_MS) === ms) return text;
+  }
+  return String(ms / DAY_MS);
 }
 
 export type ParsedWindows =
