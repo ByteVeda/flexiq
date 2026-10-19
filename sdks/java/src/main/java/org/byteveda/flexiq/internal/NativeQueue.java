@@ -458,6 +458,33 @@ public final class NativeQueue {
     public static native String effectiveRetention(long handle);
 
     /**
+     * The dashboard's retention override as JSON — the {@code code} default when
+     * none was saved.
+     *
+     * @param handle the queue handle from {@link #open}
+     * @return the override as JSON
+     */
+    public static native String retentionOverride(long handle);
+
+    /**
+     * Validate a dashboard's override body and store it.
+     *
+     * @param handle the queue handle from {@link #open}
+     * @param bodyJson the {@code {source, windows}} body as JSON
+     * @return the stored override as JSON
+     * @throws IllegalArgumentException when the body is invalid; nothing is written
+     */
+    public static native String setRetentionOverride(long handle, String bodyJson);
+
+    /**
+     * Drop the dashboard's retention override.
+     *
+     * @param handle the queue handle from {@link #open}
+     * @return true when one existed
+     */
+    public static native boolean clearRetentionOverride(long handle);
+
+    /**
      * Preview counts as JSON. {@code retentionJson} is a candidate retention
      * spec (camelCase seconds) to preview those windows; {@code null} previews
      * the policy the elected cleaner reported for this namespace, falling back

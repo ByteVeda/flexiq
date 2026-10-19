@@ -2,12 +2,16 @@ package org.byteveda.flexiq.dashboard;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import org.byteveda.flexiq.FlexiQ;
 import org.byteveda.flexiq.model.EffectiveRetention;
+import org.byteveda.flexiq.model.RetentionOverride;
 import org.byteveda.flexiq.model.RetentionPreview;
+import org.byteveda.flexiq.model.RetentionSource;
 import org.byteveda.flexiq.worker.Retention;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -176,6 +180,79 @@ class DashboardRetentionTest {
                     400,
                     client.put("/api/settings/" + PUBLISHED_KEY, "{\"value\":\"{}\"}")
                             .statusCode());
+        }
+    }
+
+    @Test
+    void anOlderPublishedDocumentReadsAsCode(@TempDir Path dir) {
+        try (FlexiQ queue = queue(dir)) {
+            queue.setSetting(PUBLISHED_KEY, PUBLISHED);
+
+            EffectiveRetention snapshot = queue.effectiveRetention().orElseThrow();
+            assertEquals(RetentionSource.CODE, snapshot.source);
+            assertEquals(null, snapshot.codeWindows);
+        }
+    }
+
+    @Test
+    void theOverrideToggleRoundTripsAndSteersThePreview(@TempDir Path dir) {
+        try (FlexiQ queue = queue(dir)) {
+            assertEquals(RetentionSource.CODE, queue.retentionOverride().source);
+            assertEquals(null, queue.retentionOverride().updatedAt);
+
+            EffectiveRetention.Windows windows = new EffectiveRetention.Windows(null, null, DAY_MS, null, null);
+            RetentionOverride saved = queue.setRetentionOverride(RetentionSource.DASHBOARD, windows);
+            assertEquals(RetentionSource.DASHBOARD, saved.source);
+            assertTrue(saved.updatedAt != null && saved.updatedAt > 0);
+            assertEquals(DAY_MS, queue.dryRunRetention().windows.taskLogsMs);
+
+            // Back to code: the preview drops the windows, the override keeps them.
+            queue.setRetentionOverride(RetentionSource.CODE, windows);
+            assertEquals(3 * DAY_MS, queue.dryRunRetention().windows.taskLogsMs);
+            assertEquals(DAY_MS, queue.retentionOverride().windows.taskLogsMs);
+
+            assertTrue(queue.clearRetentionOverride());
+            assertEquals(null, queue.retentionOverride().updatedAt);
+        }
+    }
+
+    @Test
+    void aWindowUnderAnHourIsRefusedBeforeWriting(@TempDir Path dir) {
+        try (FlexiQ queue = queue(dir)) {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> queue.setRetentionOverride(
+                            RetentionSource.DASHBOARD, new EffectiveRetention.Windows(null, null, 0L, null, null)));
+            assertEquals(null, queue.retentionOverride().updatedAt);
+        }
+    }
+
+    @Test
+    void overrideEndpointsSaveAndRefuse(@TempDir Path dir) throws Exception {
+        try (FlexiQ queue = queue(dir);
+                DashboardServer server = DashboardServer.start(queue, 0)) {
+            DashboardClient client = new DashboardClient(server.port()).as(DashboardClient.seedAdmin(queue));
+
+            String unsaved = client.get("/api/retention/override").body();
+            assertTrue(unsaved.contains("\"source\":\"code\""), unsaved);
+            assertTrue(unsaved.contains("\"updated_at\":null"), unsaved);
+
+            HttpResponse<String> saved = client.put(
+                    "/api/retention/override",
+                    "{\"source\":\"dashboard\",\"windows\":{\"task_logs_ttl_ms\":86400000}}");
+            assertEquals(200, saved.statusCode(), saved.body());
+            assertTrue(saved.body().contains("\"task_logs_ttl_ms\":86400000"), saved.body());
+
+            for (String bad : new String[] {
+                "{\"source\":\"dashboard\",\"windows\":{\"task_logs_ttl_ms\":0}}",
+                "{\"source\":\"dashboard\",\"windows\":{\"task_log_ttl_ms\":86400000}}",
+                "{\"source\":\"always\"}",
+            }) {
+                assertEquals(400, client.put("/api/retention/override", bad).statusCode(), bad);
+            }
+
+            String deleted = client.delete("/api/retention/override").body();
+            assertTrue(deleted.contains("\"deleted\":true"), deleted);
         }
     }
 }

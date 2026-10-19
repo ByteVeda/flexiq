@@ -11,7 +11,9 @@ import org.byteveda.flexiq.model.Job;
 import org.byteveda.flexiq.model.JobDag;
 import org.byteveda.flexiq.model.QueueStats;
 import org.byteveda.flexiq.model.ReplayEntry;
+import org.byteveda.flexiq.model.RetentionOverride;
 import org.byteveda.flexiq.model.RetentionPreview;
+import org.byteveda.flexiq.model.RetentionSource;
 import org.byteveda.flexiq.model.TaskLog;
 import org.byteveda.flexiq.model.WorkerInfo;
 import org.byteveda.flexiq.model.WorkflowRunInfo;
@@ -228,21 +230,36 @@ final class Contract {
      * swept yet, which is not the same as retention being switched off.
      */
     static Map<String, Object> retention(@Nullable EffectiveRetention r) {
-        Map<String, Object> windows = new LinkedHashMap<>();
-        windows.put("task_logs_ttl_ms", r == null ? null : r.windows.taskLogsMs);
-        windows.put("archived_jobs_ttl_ms", r == null ? null : r.windows.archivedJobsMs);
-        windows.put("job_errors_ttl_ms", r == null ? null : r.windows.jobErrorsMs);
-        windows.put("task_metrics_ttl_ms", r == null ? null : r.windows.taskMetricsMs);
-        windows.put("dead_letter_ttl_ms", r == null ? null : r.windows.deadLetterMs);
-
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("reported", r != null);
         m.put("enabled", r != null && r.enabled);
         m.put("defaulted", r != null && r.defaulted);
         m.put("namespace", r == null ? null : r.namespace);
         m.put("reported_at", r == null ? null : r.reportedAt);
-        m.put("windows", windows);
+        m.put("windows", windows(r == null ? null : r.windows));
+        m.put("source", r == null ? RetentionSource.CODE.wire() : r.source.wire());
+        m.put("code_windows", r == null || r.codeWindows == null ? null : windows(r.codeWindows));
         return m;
+    }
+
+    /** The stored retention override, in the core's document shape. */
+    static Map<String, Object> retentionOverride(RetentionOverride o) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("source", o.source.wire());
+        m.put("windows", windows(o.windows));
+        m.put("updated_at", o.updatedAt);
+        return m;
+    }
+
+    /** Per-table windows as the core's {@code <table>_ttl_ms} fields; all null for none. */
+    private static Map<String, Object> windows(EffectiveRetention.@Nullable Windows w) {
+        Map<String, Object> windows = new LinkedHashMap<>();
+        windows.put("task_logs_ttl_ms", w == null ? null : w.taskLogsMs);
+        windows.put("archived_jobs_ttl_ms", w == null ? null : w.archivedJobsMs);
+        windows.put("job_errors_ttl_ms", w == null ? null : w.jobErrorsMs);
+        windows.put("task_metrics_ttl_ms", w == null ? null : w.taskMetricsMs);
+        windows.put("dead_letter_ttl_ms", w == null ? null : w.deadLetterMs);
+        return windows;
     }
 
     /** The dry-run preview: per-table counts a purge would remove, plus the

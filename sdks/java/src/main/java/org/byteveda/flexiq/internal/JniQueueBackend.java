@@ -287,6 +287,21 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
+    public String retentionOverrideJson() {
+        return withOpenHandle(() -> NativeQueue.retentionOverride(handle));
+    }
+
+    @Override
+    public String setRetentionOverrideJson(String bodyJson) {
+        return withOpenHandle(() -> NativeQueue.setRetentionOverride(handle, bodyJson));
+    }
+
+    @Override
+    public boolean clearRetentionOverride() {
+        return withOpenHandle(() -> NativeQueue.clearRetentionOverride(handle));
+    }
+
+    @Override
     public String listSettingsJson() {
         return withOpenHandle(() -> NativeQueue.listSettings(handle));
     }

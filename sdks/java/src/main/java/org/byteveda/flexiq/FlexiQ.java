@@ -40,7 +40,9 @@ import org.byteveda.flexiq.model.Page;
 import org.byteveda.flexiq.model.PeriodicInfo;
 import org.byteveda.flexiq.model.QueueStats;
 import org.byteveda.flexiq.model.ReplayEntry;
+import org.byteveda.flexiq.model.RetentionOverride;
 import org.byteveda.flexiq.model.RetentionPreview;
+import org.byteveda.flexiq.model.RetentionSource;
 import org.byteveda.flexiq.model.StorageBackend;
 import org.byteveda.flexiq.model.Subscription;
 import org.byteveda.flexiq.model.TaskLog;
@@ -852,6 +854,33 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
      * @return the per-table counts a purge would remove
      */
     RetentionPreview dryRunRetention(@Nullable Retention retention);
+
+    /**
+     * The retention windows set from a dashboard for this namespace, and
+     * whether they or the worker's own config apply. Never saved reads as
+     * {@link RetentionSource#CODE} with every window {@code null}.
+     *
+     * @return the stored override
+     */
+    RetentionOverride retentionOverride();
+
+    /**
+     * Save dashboard retention windows and pick which source the cleaner
+     * applies; the elected cleaner picks it up on its next sweep.
+     *
+     * @param source which windows the cleaner applies
+     * @param windows the dashboard's windows in milliseconds; {@code null} keeps a table forever
+     * @return the stored override
+     * @throws IllegalArgumentException when a window is under one hour; nothing is written
+     */
+    RetentionOverride setRetentionOverride(RetentionSource source, EffectiveRetention.Windows windows);
+
+    /**
+     * Forget the dashboard's retention windows; the worker's config applies.
+     *
+     * @return true when an override existed
+     */
+    boolean clearRetentionOverride();
 
     // ── Middleware toggles ──────────────────────────────────────────
 
