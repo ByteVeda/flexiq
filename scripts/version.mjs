@@ -162,6 +162,8 @@ const SNIPPETS = [
   "examples/polyglot/node-worker/package.json",
   "examples/polyglot/java-worker/build.gradle.kts",
   "docker/README.md",
+  "deploy/demo/app/Dockerfile",
+  "deploy/demo/README.md",
   "docs/content/docs/shared/operate/deployment.mdx",
   "docs/content/docs/server/operate/index.mdx",
 ];

@@ -64,7 +64,7 @@ in `.env` and point DNS at the host. Caddy then obtains a certificate itself.
 
 The server image builds from this checkout. Public mode is newer than the
 latest release, and the musl build takes several minutes. The Python side
-installs `flexiq` from PyPI; pin it with `--build-arg FLEXIQ_PIP_SPEC===2.1.0`.
+installs `flexiq==2.1.0` from PyPI; override it with `--build-arg FLEXIQ_PIP=...`.
 
 ## Reset on a timer
 
