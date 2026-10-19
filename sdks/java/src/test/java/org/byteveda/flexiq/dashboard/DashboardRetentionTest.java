@@ -246,6 +246,8 @@ class DashboardRetentionTest {
             for (String bad : new String[] {
                 "{\"source\":\"dashboard\",\"windows\":{\"task_logs_ttl_ms\":0}}",
                 "{\"source\":\"dashboard\",\"windows\":{\"task_log_ttl_ms\":86400000}}",
+                "{\"source\":\"dashboard\",\"windows\":{\"task_logs_ttl_ms\":3600000.9}}",
+                "{\"source\":\"dashboard\",\"windows\":{\"task_logs_ttl_ms\":18446744073709551616}}",
                 "{\"source\":\"always\"}",
             }) {
                 assertEquals(400, client.put("/api/retention/override", bad).statusCode(), bad);

@@ -87,8 +87,10 @@ public final class RetentionHandlers {
                 throw DashboardError.badRequest("unknown retention table '" + name + "'");
             }
             Object value = field.getValue();
-            if (value != null && !(value instanceof Number)) {
-                throw DashboardError.badRequest(name + " must be a number of milliseconds or null");
+            // Jackson decodes fractions as Double and oversized integers as BigInteger;
+            // longValue() would truncate or wrap them where the core refuses both.
+            if (value != null && !(value instanceof Integer || value instanceof Long)) {
+                throw DashboardError.badRequest(name + " must be a whole number of milliseconds or null");
             }
             windows.put(name, value == null ? null : ((Number) value).longValue());
         }
