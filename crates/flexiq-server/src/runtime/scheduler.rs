@@ -262,6 +262,8 @@ impl SchedulerSupervisor {
             // switch; dead-worker reaping stays on because in-flight recovery
             // depends on it.
             scheduler_config.retention = Some(RetentionConfig::default());
+            // Nor may a dashboard override turn this lane into a deleter.
+            scheduler_config.honor_retention_override = false;
         }
 
         let mut worker = Worker::new(self.storage.clone())

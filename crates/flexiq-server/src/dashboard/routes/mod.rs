@@ -71,6 +71,12 @@ pub fn router() -> Router<SharedState> {
         )
         .route("/api/retention", get(retention::published))
         .route("/api/retention/dry-run", get(retention::preview))
+        .route(
+            "/api/retention/override",
+            get(retention::get_override)
+                .put(retention::put_override)
+                .delete(retention::delete_override),
+        )
         // ── Settings ────────────────────────────────────────────────
         .route("/api/settings", get(settings::list))
         // Keys may contain slashes, so the tail is captured whole.
