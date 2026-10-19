@@ -21,6 +21,8 @@ pub async fn status(State(state): State<SharedState>) -> ApiResult<Json<Value>> 
     Ok(Json(json!({
         "auth_enabled": enabled,
         "setup_required": setup_required,
+        "read_only": state.config.auth == AuthMode::Public,
+        "demo_enqueue": state.config.demo_enqueue,
     })))
 }
 

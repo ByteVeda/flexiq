@@ -29,11 +29,16 @@ pub async fn gate_request(state: SharedState, request: Request, next: Next) -> R
     let path = request.uri().path().to_string();
     let method = request.method().as_str().to_string();
 
-    if state.config.auth == AuthMode::Open {
+    if state.config.auth != AuthMode::Session {
         // With auth off the session endpoints do not exist, so the SPA hides
         // its login affordances instead of offering a form that cannot work.
         if path.starts_with("/api/auth/") && path != "/api/auth/status" {
             return ApiError::AuthDisabled.into_response();
+        }
+        // Refused before the audit opens, so anonymous callers cannot grow
+        // the trail just by being turned away.
+        if state.config.auth == AuthMode::Public && gate::requires_admin(&path, &method) {
+            return ApiError::Forbidden("read_only").into_response();
         }
         let (mut request, pending) = audit::open(&state, request, Actor::anonymous()).await;
         request.extensions_mut().insert(RequestContext::default());
