@@ -1,0 +1,81 @@
+# The public FlexiQ demo: a read-only dashboard, a fixed task set, and one
+# rate-limited trigger behind an enqueue button. See README.md.
+#
+#   FLEXIQ_ATTACH_TOKEN=$(openssl rand -base64 32) docker compose up -d --build
+#
+# Only Caddy publishes a port. The attach listener, the trigger port and the
+# dashboard's own port stay on the compose network.
+
+services:
+  # Creates the schema, enqueues one job per state, then hands the volume to
+  # the server's nonroot user. Runs to completion before anything else starts.
+  seed:
+    build: ./app
+    command: python seed.py
+    user: root
+    environment:
+      FLEXIQ_DEMO_DB: /data/flexiq.db
+      FLEXIQ_NAMESPACE: demo
+    volumes:
+      - demo-data:/data
+
+  server:
+    # Built from this checkout: the read-only dashboard mode ships with it.
+    build:
+      context: ../..
+      dockerfile: docker/scheduler.Dockerfile
+    environment:
+      FLEXIQ_DSN: /data/flexiq.db
+      FLEXIQ_NAMESPACE: demo
+      FLEXIQ_LISTEN: 0.0.0.0:7777
+      FLEXIQ_ATTACH_TOKEN: ${FLEXIQ_ATTACH_TOKEN:?generate with openssl rand -base64 32}
+      FLEXIQ_DASHBOARD: 0.0.0.0:8080
+      FLEXIQ_DASHBOARD_AUTH: public
+      FLEXIQ_DASHBOARD_DEMO_ENQUEUE: /t/demo?token=flexiq-public-demo
+      FLEXIQ_TRIGGER_LISTEN: 0.0.0.0:9090
+      FLEXIQ_TRIGGERS_FILE: /etc/flexiq/triggers.json
+      # Deliberately public: the button carries it in its URL. The guard is
+      # the fixed task and the shared rate bucket, not this value.
+      FLEXIQ_DEMO_TRIGGER_SECRET: flexiq-public-demo
+    volumes:
+      - demo-data:/data
+      - ./triggers.json:/etc/flexiq/triggers.json:ro
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  executor:
+    build: ./app
+    command: flexiq executor --app demo_app:queue
+    environment:
+      FLEXIQ_ATTACH: server:7777
+      FLEXIQ_ATTACH_TOKEN: ${FLEXIQ_ATTACH_TOKEN:?}
+      FLEXIQ_NAMESPACE: demo
+      FLEXIQ_SLOTS: "2"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  caddy:
+    image: public.ecr.aws/docker/library/caddy:2
+    environment:
+      # A public host name turns on automatic HTTPS; unset serves :80.
+      FLEXIQ_DEMO_SITE: ${FLEXIQ_DEMO_SITE:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - server
+    restart: unless-stopped
+
+# Fixed names so reset.sh can drop the jobs without dropping Caddy's
+# certificates — an hourly reissue would hit the CA's rate limits.
+volumes:
+  demo-data:
+    name: flexiq-demo-data
+  caddy-data:
+    name: flexiq-demo-caddy

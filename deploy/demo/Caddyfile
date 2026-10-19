@@ -1,0 +1,15 @@
+# One origin for the dashboard and the demo trigger, so the SPA's enqueue
+# button posts same-origin and the trigger needs no CORS. Only the demo path
+# is routed: the trigger port's /healthz stays on the compose network.
+{
+	admin off
+}
+
+{$FLEXIQ_DEMO_SITE::80} {
+	handle /t/demo {
+		reverse_proxy server:9090
+	}
+	handle {
+		reverse_proxy server:8080
+	}
+}

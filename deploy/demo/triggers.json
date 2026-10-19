@@ -1,0 +1,19 @@
+{
+  "triggers": [
+    {
+      "name": "demo",
+      "path": "/t/demo",
+      "task": "demo.hello",
+      "rate_limit": "20/m",
+      "auth": {
+        "kind": "shared_secret",
+        "secret_env": "FLEXIQ_DEMO_TRIGGER_SECRET",
+        "query": "token"
+      },
+      "args": [],
+      "max_retries": 0,
+      "timeout_secs": 30,
+      "max_body_bytes": 1024
+    }
+  ]
+}
