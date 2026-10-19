@@ -97,6 +97,21 @@ export const routes: Route[] = [
   },
   {
     method: "GET",
+    pattern: /^\/api\/retention\/override$/,
+    handle: (q) => h.getRetentionOverride(q),
+  },
+  {
+    method: "PUT",
+    pattern: /^\/api\/retention\/override$/,
+    handle: (q, _url, _p, body) => h.putRetentionOverride(q, body),
+  },
+  {
+    method: "DELETE",
+    pattern: /^\/api\/retention\/override$/,
+    handle: (q) => h.deleteRetentionOverride(q),
+  },
+  {
+    method: "GET",
     pattern: /^\/api\/settings\/(.+)$/,
     handle: (q, _url, p) => h.getSetting(q, id(p)),
   },
