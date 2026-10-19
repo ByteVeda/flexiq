@@ -47,6 +47,14 @@ async fn status_reports_read_only_without_a_login() {
     assert_eq!(body["setup_required"], json!(false));
     assert_eq!(body["read_only"], json!(true));
     assert_eq!(body["demo_enqueue"], json!(null));
+
+    // The other modes answer exactly as the SDK dashboards do.
+    let open = dashboard_state(&storage, AuthMode::Open);
+    let (_, _, body) = call(&open, get("/api/auth/status")).await;
+    assert_eq!(
+        body,
+        json!({ "auth_enabled": false, "setup_required": false })
+    );
 }
 
 /// The SPA learns where its enqueue button posts from the status probe.
