@@ -8,8 +8,10 @@ unreported policy is reported as such rather than guessed at.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
+from flexiq.dashboard.errors import _BadRequest
 from flexiq.retention import RETENTION_TABLES, EffectiveRetention
 
 if TYPE_CHECKING:
@@ -25,6 +27,7 @@ def _windows(snapshot: EffectiveRetention | None) -> dict[str, int | None]:
 def _handle_retention(queue: Queue, _qs: dict) -> dict[str, Any]:
     """Return the published retention policy for this queue's namespace."""
     snapshot = queue.effective_retention()
+    code = snapshot.code_windows if snapshot else None
     return {
         # Distinct from `enabled`: no worker has swept yet, so nothing is known
         # about the policy — not the same as retention being switched off.
@@ -34,7 +37,39 @@ def _handle_retention(queue: Queue, _qs: dict) -> dict[str, Any]:
         "namespace": snapshot.namespace if snapshot else None,
         "reported_at": snapshot.reported_at if snapshot else None,
         "windows": _windows(snapshot),
+        "source": snapshot.source if snapshot else "code",
+        "code_windows": (
+            {f"{table}_ttl_ms": code.get(table) for table in RETENTION_TABLES}
+            if code is not None
+            else None
+        ),
     }
+
+
+# The override document is the core's, forwarded as parsed JSON, so its shape
+# cannot drift from the other dashboards'. Through the native handle rather
+# than a ``Queue`` method: it is a dashboard concern, not SDK surface.
+
+
+def _handle_get_retention_override(queue: Queue, _qs: dict) -> dict[str, Any]:
+    """The stored override, or the ``code`` default when none was saved."""
+    document: dict[str, Any] = json.loads(queue._inner.retention_override())
+    return document
+
+
+def _handle_put_retention_override(queue: Queue, body: dict) -> dict[str, Any]:
+    """Store the dashboard's windows and which source applies."""
+    try:
+        stored = queue._inner.set_retention_override(json.dumps(body))
+    except ValueError as e:
+        raise _BadRequest(str(e)) from None
+    document: dict[str, Any] = json.loads(stored)
+    return document
+
+
+def _handle_delete_retention_override(queue: Queue) -> dict[str, bool]:
+    """Forget the override; the code config applies from the next sweep."""
+    return {"deleted": queue._inner.clear_retention_override()}
 
 
 def _handle_retention_dry_run(queue: Queue, _qs: dict) -> dict[str, Any]:

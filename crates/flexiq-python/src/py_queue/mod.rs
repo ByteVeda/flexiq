@@ -899,12 +899,47 @@ impl PyQueue {
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// The dashboard's retention override as a JSON document — the ``code``
+    /// default when none was saved. See ``BINDING_CONTRACT.md``.
+    pub fn retention_override(&self) -> PyResult<String> {
+        flexiq_core::scheduler::retention_override::read_retention_override_json(
+            &self.storage,
+            self.namespace.as_deref(),
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Validate a dashboard's override ``PUT`` body and store it. Returns the
+    /// stored document as JSON; raises ``ValueError`` for an invalid body,
+    /// before anything is written.
+    pub fn set_retention_override(&self, body: &str) -> PyResult<String> {
+        use flexiq_core::scheduler::retention_override::{
+            write_retention_override, RetentionOverride,
+        };
+        let document = RetentionOverride::from_request_json(body, flexiq_core::job::now_millis())
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        write_retention_override(&self.storage, self.namespace.as_deref(), &document)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        serde_json::to_string(&document)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Drop the dashboard's retention override. Returns ``True`` if one existed.
+    pub fn clear_retention_override(&self) -> PyResult<bool> {
+        flexiq_core::scheduler::retention_override::clear_retention_override(
+            &self.storage,
+            self.namespace.as_deref(),
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Count what a retention purge would delete right now, without deleting
     /// anything. Returns the preview as a JSON document. See
     /// ``BINDING_CONTRACT.md``.
     ///
-    /// With no `retention` argument the preview uses this queue's configured (or
-    /// default-recommended) windows. Passing candidate windows previews those
+    /// With no `retention` argument the preview uses what the next sweep
+    /// applies: the dashboard's override when switched on, else this queue's
+    /// configured (or default-recommended) windows. Passing candidate windows previews those
     /// instead — so an operator can size a window before setting it, without
     /// reconfiguring a worker. An explicit empty map previews a disabled policy.
     #[pyo3(signature = (retention=None))]
@@ -916,21 +951,22 @@ impl PyQueue {
         // Candidate windows override the queue's own config and the legacy TTL,
         // so the preview reflects exactly what was asked about; `None` falls back
         // to what a worker would actually apply for this queue.
+        let candidate = retention.is_some();
         let (config, result_ttl_ms) = match retention {
             Some(map) => (build_retention_config(Some(map))?, None),
             None => (self.retention.clone(), self.result_ttl_ms),
         };
         let storage = &self.storage;
         let namespace = self.namespace.as_deref();
+        let now = flexiq_core::job::now_millis();
         // Release the GIL: the counts scan every history table.
         py.detach(|| {
-            flexiq_core::scheduler::retention::dry_run_json(
-                storage,
-                config.as_ref(),
-                result_ttl_ms,
-                namespace,
-                flexiq_core::job::now_millis(),
-            )
+            use flexiq_core::scheduler::retention::{dry_run_applied_json, dry_run_json};
+            if candidate {
+                dry_run_json(storage, config.as_ref(), result_ttl_ms, namespace, now)
+            } else {
+                dry_run_applied_json(storage, config.as_ref(), result_ttl_ms, namespace, now)
+            }
         })
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }

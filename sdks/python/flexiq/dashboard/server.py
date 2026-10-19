@@ -48,6 +48,7 @@ from flexiq.dashboard.routes import (
     AUTH_CONTEXT_POST_PATHS,
     DELETE_PARAM2_ROUTES,
     DELETE_PARAM_ROUTES,
+    DELETE_ROUTES,
     GET_CTX_ROUTES,
     GET_PARAM2_ROUTES,
     GET_PARAM_ROUTES,
@@ -60,6 +61,7 @@ from flexiq.dashboard.routes import (
     POST_ROUTES,
     PUT_PARAM2_ROUTES,
     PUT_PARAM_ROUTES,
+    PUT_ROUTES,
     is_csrf_exempt,
     is_public_path,
     is_state_changing_method,
@@ -486,6 +488,13 @@ def _make_handler(
             if denied:
                 return
 
+            put_handler = PUT_ROUTES.get(path)
+            if put_handler is not None:
+                body = self._read_json_body()
+                if body is None:
+                    return
+                self._dispatch_with_handler(put_handler, lambda h, body=body: h(queue, body))
+                return
             for pattern, param_handler in PUT_PARAM_ROUTES:
                 m = pattern.match(path)
                 if m:
@@ -517,6 +526,10 @@ def _make_handler(
             if denied:
                 return
 
+            delete_handler = DELETE_ROUTES.get(path)
+            if delete_handler is not None:
+                self._dispatch_with_handler(delete_handler, lambda h: h(queue))
+                return
             for pattern, param_handler in DELETE_PARAM_ROUTES:
                 m = pattern.match(path)
                 if m:

@@ -280,9 +280,11 @@ class QueueInspectionMixin:
         """Preview what a retention purge would delete, without deleting anything.
 
         Counts the rows each history table's purge would remove right now. With
-        no argument the preview uses **this queue's** configured (or
-        default-recommended) windows; pass candidate ``retention`` windows to
-        size a window before committing to it — no worker reconfiguration needed.
+        no argument the preview uses what the next sweep applies: windows set
+        from a dashboard when that override is switched on, otherwise **this
+        queue's** configured (or default-recommended) windows. Pass candidate
+        ``retention`` windows to size a window before committing to it — no
+        worker reconfiguration needed.
         The counts are a point-in-time snapshot; nothing is deleted. Unlike
         :meth:`effective_retention`, this runs in-process against the live data,
         so it never returns ``None``.

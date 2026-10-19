@@ -195,6 +195,85 @@ def test_retention_dry_run_endpoint_reports_counts(
     assert body["windows"]["task_logs_ttl_ms"] == 3 * DAY_MS
 
 
+# ── Dashboard override ──────────────────────────────────
+
+OVERRIDE_WINDOWS = {
+    "task_logs_ttl_ms": DAY_MS,
+    "archived_jobs_ttl_ms": 2 * DAY_MS,
+    "job_errors_ttl_ms": 2 * DAY_MS,
+    "task_metrics_ttl_ms": 2 * DAY_MS,
+    "dead_letter_ttl_ms": None,
+}
+
+
+def test_an_unsaved_override_reads_as_code(dashboard_server: tuple[AuthedClient, Queue]) -> None:
+    client, _ = dashboard_server
+    body = client.get("/api/retention/override")
+    assert body["source"] == "code"
+    assert body["updated_at"] is None
+    assert client.get("/api/retention")["source"] == "code"
+
+
+def test_the_override_toggle_round_trips_and_steers_the_preview(
+    dashboard_server: tuple[AuthedClient, Queue],
+) -> None:
+    client, _ = dashboard_server
+    saved = client.put(
+        "/api/retention/override", {"source": "dashboard", "windows": OVERRIDE_WINDOWS}
+    )
+    assert saved["source"] == "dashboard"
+    assert saved["updated_at"] > 0
+
+    preview = client.get("/api/retention/dry-run")
+    assert preview["windows"]["task_logs_ttl_ms"] == DAY_MS
+    assert preview["windows"]["dead_letter_ttl_ms"] is None
+    assert preview["defaulted"] is False
+
+    # Back to code: the preview drops the windows, the editor keeps them.
+    client.put("/api/retention/override", {"source": "code", "windows": OVERRIDE_WINDOWS})
+    assert client.get("/api/retention/dry-run")["windows"]["task_logs_ttl_ms"] == 3 * DAY_MS
+    assert client.get("/api/retention/override")["windows"] == OVERRIDE_WINDOWS
+
+    assert client.delete("/api/retention/override") == {"deleted": True}
+    assert client.get("/api/retention/override")["updated_at"] is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"source": "dashboard", "windows": {"task_logs_ttl_ms": 0}},
+        {"source": "dashboard", "windows": {"task_log_ttl_ms": DAY_MS}},
+        {"source": "always"},
+    ],
+)
+def test_an_override_that_would_empty_a_table_is_refused(
+    dashboard_server: tuple[AuthedClient, Queue], body: dict
+) -> None:
+    client, _ = dashboard_server
+    with pytest.raises(urllib.error.HTTPError) as refused:
+        client.put("/api/retention/override", body)
+    assert refused.value.code == 400
+    assert client.get("/api/retention/override")["updated_at"] is None
+
+
+def test_the_worker_applies_and_reports_the_override(
+    dashboard_server: tuple[AuthedClient, Queue], poll_until: PollUntil
+) -> None:
+    client, queue = dashboard_server
+    client.put("/api/retention/override", {"source": "dashboard", "windows": OVERRIDE_WINDOWS})
+    with _worker_that_published(queue, poll_until):
+        snapshot = queue.effective_retention()
+        assert snapshot is not None
+        assert snapshot.source == "dashboard"
+        assert snapshot.windows["task_logs"] == DAY_MS
+        assert snapshot.code_windows is not None
+        assert snapshot.code_windows["task_logs"] == 3 * DAY_MS
+
+        body = client.get("/api/retention")
+        assert body["source"] == "dashboard"
+        assert body["code_windows"]["task_logs_ttl_ms"] == 3 * DAY_MS
+
+
 # ── Reserved settings namespace ─────────────────────────
 
 
