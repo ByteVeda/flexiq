@@ -508,7 +508,10 @@ dashboard echoes that document instead of guessing at the defaults.
 - **Document** (snake_case; windows in **milliseconds**, `null` = keep forever):
   `enabled`, `defaulted`, `namespace`, `reported_at` (Unix ms), and `windows` with
   `archived_jobs_ttl_ms`, `dead_letter_ttl_ms`, `task_logs_ttl_ms`,
-  `task_metrics_ttl_ms`, `job_errors_ttl_ms`.
+  `task_metrics_ttl_ms`, `job_errors_ttl_ms`; then `source` (`code` or
+  `dashboard`, which windows apply — see the override below) and `code_windows`
+  (the leader's configured windows, same fields). A document from a leader that
+  predates overrides lacks both: read it as `source: "code"`, `code_windows: null`.
 - **Only the leader writes it** — a peer's config does not govern the deletes.
   `reported_at` is rewritten every sweep, so it doubles as proof a leader is
   still enforcing the policy.
@@ -517,15 +520,39 @@ dashboard echoes that document instead of guessing at the defaults.
 - Shells read it through `scheduler::retention::read_effective_retention_json`
   rather than parsing the key themselves.
 
+## Retention override (cross-SDK)
+A dashboard can replace the windows a worker was started with, without a
+restart. The elected leader reads the override on every sweep.
+
+- **Key** `retention:override:<namespace>`, under the reserved `retention:`
+  prefix — the generic settings routes can neither list nor write it.
+- **Document**: `source` (`code` | `dashboard`), `windows` (the five
+  `*_ttl_ms` fields, `null` = keep forever) and `updated_at` (Unix ms, `null`
+  when never saved). `source` is the toggle: under `code` the stored windows are
+  kept but not applied, so switching back restores them. No document reads as
+  `code`, every window `null`, `updated_at: null`.
+- **Who applies it**: the leader, when its `SchedulerConfig.honor_retention_override`
+  is set (the default). A process told to keep everything (the server with
+  `FLEXIQ_MAINTENANCE=off`) clears it, so an override cannot make it a deleter.
+  An unreadable document is logged and the code config applies.
+- **Routes** every dashboard serves: `GET /api/retention/override` (the document),
+  `PUT` with `{source, windows}` (answers the stored document; `400` for an
+  unknown `source` or table, or a window under one hour — nothing is written),
+  and `DELETE` (`{deleted}`). Shells validate through
+  `RetentionOverride::from_request_json` and write with `write_retention_override`;
+  both mutations are audited as `dashboard PUT|DELETE /api/retention/override`.
+
 ## Retention dry-run (cross-SDK)
 A read-only preview of what a purge would delete *now*, so an operator can size a
 window without deleting anything. Computed in-process against live storage
 (unlike the echo above, which is published by a worker), so it always answers.
 
 - Shells call `scheduler::retention::dry_run_json(storage, retention, result_ttl_ms,
-  namespace, now)` for explicit windows, or `dry_run_reported_json(storage,
-  namespace, now)` to follow the policy the elected cleaner published (falling
-  back to the recommended defaults when unreported). The public surface is
+  namespace, now)` for explicit windows, `dry_run_applied_json` for a handle's
+  own config, or `dry_run_reported_json(storage, namespace, now)` to follow the
+  policy the elected cleaner published (falling back to the recommended defaults
+  when unreported). Both of the latter preview a switched-on override first, so a
+  save shows in the preview before the next sweep. The public surface is
   `dry_run_retention()` (Python) / `dryRunRetention()` (Node/Java), each
   accepting optional candidate windows (an empty config = a disabled policy).
   **No-candidate semantics**: a shell whose queue handle carries retention

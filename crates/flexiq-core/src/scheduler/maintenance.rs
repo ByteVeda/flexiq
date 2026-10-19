@@ -8,6 +8,7 @@ use crate::quota::{namespace_of_quota_key, NamespaceQuota};
 use crate::scheduler::retention::{
     publish_effective_retention, EffectiveRetention, RetentionConfig, DEFAULT_NAMESPACE,
 };
+use crate::scheduler::retention_override::{read_retention_override, RetentionSource};
 use crate::storage::records::{PeriodicTask, SettleClaimant, SettleGrant};
 use crate::storage::{
     dead_worker_cutoff, try_lead, Storage, RETENTION_LOCK, RETENTION_LOCK_TTL_MS,
@@ -300,16 +301,45 @@ impl Scheduler {
     /// dashboard in any process can echo the live policy rather than guess at
     /// the defaults. Rewritten every sweep: `reported_at` then doubles as proof
     /// a leader is still enforcing it.
-    fn publish_retention(&self, windows: &RetentionConfig, now: i64) -> Result<()> {
+    fn publish_retention(
+        &self,
+        windows: &RetentionConfig,
+        source: RetentionSource,
+        code_windows: &RetentionConfig,
+        now: i64,
+    ) -> Result<()> {
         let namespace = self.namespace.as_deref().unwrap_or(DEFAULT_NAMESPACE);
         let snapshot = EffectiveRetention {
             enabled: !windows.is_empty(),
-            defaulted: self.config.retention_is_defaulted(),
+            defaulted: source == RetentionSource::Code && self.config.retention_is_defaulted(),
             namespace: namespace.to_string(),
             reported_at: now,
             windows: windows.clone(),
+            source,
+            code_windows: Some(code_windows.clone()),
         };
         publish_effective_retention(&self.storage, self.namespace.as_deref(), &snapshot)
+    }
+
+    /// The windows this sweep applies: a dashboard override when one is
+    /// switched on and this scheduler honours it, the code config otherwise.
+    ///
+    /// An unreadable override falls back to the code config — the windows the
+    /// operator deployed — and says so, rather than skipping the sweep.
+    fn sweep_windows(&self, code: &RetentionConfig) -> (RetentionConfig, RetentionSource) {
+        if !self.config.honor_retention_override {
+            return (code.clone(), RetentionSource::Code);
+        }
+        match read_retention_override(&self.storage, self.namespace.as_deref()) {
+            Ok(document) => match document.and_then(|document| document.active_windows()) {
+                Some(windows) => (windows, RetentionSource::Dashboard),
+                None => (code.clone(), RetentionSource::Code),
+            },
+            Err(e) => {
+                warn!("reading the retention override failed, applying the code config: {e}");
+                (code.clone(), RetentionSource::Code)
+            }
+        }
     }
 
     /// Purge expired rows in each history table per its retention window. The
@@ -340,13 +370,14 @@ impl Scheduler {
         }
 
         let now = now_millis();
-        let windows = self.config.effective_retention();
+        let code_windows = self.config.effective_retention();
+        let (windows, source) = self.sweep_windows(&code_windows);
 
         // The one moment we tell an operator their history will be auto-deleted
         // on a policy they did not choose. Before the first delete, once per
-        // process (the election means that's the leader). Skipped for an explicit
-        // or legacy config — that is the operator's own choice.
-        if self.config.retention_is_defaulted() {
+        // process (the election means that's the leader). Skipped for an explicit,
+        // legacy or dashboard config — that is the operator's own choice.
+        if source == RetentionSource::Code && self.config.retention_is_defaulted() {
             let namespace = self.namespace.as_deref().unwrap_or(DEFAULT_NAMESPACE);
             self.retention_announced
                 .call_once(|| announce_default_retention(namespace, &windows, now));
@@ -355,7 +386,7 @@ impl Scheduler {
         // Publish before deleting: a dashboard that shows the windows only after
         // the rows are gone explains nothing. Log-and-continue — an unreported
         // policy must never stop the sweeps.
-        if let Err(e) = self.publish_retention(&windows, now) {
+        if let Err(e) = self.publish_retention(&windows, source, &code_windows, now) {
             warn!("publishing the retention windows failed: {e}");
         }
 

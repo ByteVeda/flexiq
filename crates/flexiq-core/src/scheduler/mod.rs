@@ -5,6 +5,7 @@ pub use maintenance::ACCEPTED_NOT_SETTLED;
 mod poller;
 pub(crate) mod result_handler;
 pub mod retention;
+pub mod retention_override;
 pub mod shed;
 #[cfg(feature = "push-dispatch")]
 #[doc(hidden)]
@@ -55,6 +56,10 @@ pub struct SchedulerConfig {
     /// Per-table retention windows. When set, wins over `result_ttl_ms`. `None`
     /// falls back to the legacy `result_ttl_ms` mapping.
     pub retention: Option<retention::RetentionConfig>,
+    /// Whether a dashboard's retention override may replace `retention` when
+    /// this scheduler leads cleanup. Off for a process told to keep everything
+    /// (maintenance off), which an override must not turn into a deleter.
+    pub honor_retention_override: bool,
     /// Maximum number of jobs claimed per dispatch round. `None` (the
     /// default) lets the backend pick: [`REDIS_DEFAULT_BATCH_SIZE`] on Redis,
     /// `1` (unchanged behavior) on SQLite/Postgres. `Some(n)` is always
@@ -86,6 +91,7 @@ impl Default for SchedulerConfig {
             cleanup_interval: 1200,
             result_ttl_ms: None,
             retention: None,
+            honor_retention_override: true,
             batch_size: None,
             max_in_flight: None,
             dlq_auto_retry_delay_ms: None,
@@ -3915,6 +3921,107 @@ mod tests {
         // Job should be purged
         let fetched = scheduler.storage.get_job(&job.id, None).unwrap();
         assert!(fetched.is_none());
+    }
+
+    /// A completed job, archived `age_ms` ago.
+    fn archived_job(scheduler: &Scheduler, age_ms: i64) -> String {
+        let job = scheduler.storage.enqueue(make_job("cleanup_task")).unwrap();
+        scheduler
+            .storage
+            .dequeue("default", now_millis() + 1000, None)
+            .unwrap();
+        scheduler
+            .storage
+            .complete(&job.id, Some(vec![1]), None)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(age_ms as u64));
+        job.id
+    }
+
+    fn set_override(storage: &StorageBackend, source: retention_override::RetentionSource) {
+        retention_override::write_retention_override(
+            storage,
+            None,
+            &retention_override::RetentionOverride {
+                source,
+                // Keep everything: the opposite of the code config below.
+                windows: retention::RetentionConfig::default(),
+                updated_at: Some(1),
+            },
+        )
+        .unwrap();
+    }
+
+    /// The dashboard toggle: `dashboard` replaces the code windows on the next
+    /// sweep, `code` puts them back — and the report names which applied.
+    #[test]
+    fn test_auto_cleanup_follows_the_retention_override_toggle() {
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let config = SchedulerConfig {
+            result_ttl_ms: Some(1),
+            ..SchedulerConfig::default()
+        };
+        let scheduler = Scheduler::new(storage.clone(), vec!["default".to_string()], config, None);
+
+        set_override(&storage, retention_override::RetentionSource::Dashboard);
+        let kept = archived_job(&scheduler, 10);
+        scheduler.auto_cleanup().unwrap();
+        assert!(
+            scheduler.storage.get_job(&kept, None).unwrap().is_some(),
+            "the override keeps everything"
+        );
+        let report = retention::read_effective_retention(&storage, None)
+            .unwrap()
+            .expect("published");
+        assert_eq!(
+            report.source,
+            retention_override::RetentionSource::Dashboard
+        );
+        assert!(!report.enabled);
+        assert_eq!(
+            report.code_windows,
+            Some(retention::RetentionConfig::uniform(1))
+        );
+
+        set_override(&storage, retention_override::RetentionSource::Code);
+        scheduler.auto_cleanup().unwrap();
+        assert!(
+            scheduler.storage.get_job(&kept, None).unwrap().is_none(),
+            "back on code, the 1 ms window applies"
+        );
+        let report = retention::read_effective_retention(&storage, None)
+            .unwrap()
+            .expect("published");
+        assert_eq!(report.source, retention_override::RetentionSource::Code);
+    }
+
+    /// A process told to keep everything must not become a deleter because a
+    /// dashboard switched an override on.
+    #[test]
+    fn test_auto_cleanup_ignores_the_override_when_told_to() {
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let config = SchedulerConfig {
+            retention: Some(retention::RetentionConfig::default()),
+            honor_retention_override: false,
+            ..SchedulerConfig::default()
+        };
+        let scheduler = Scheduler::new(storage.clone(), vec!["default".to_string()], config, None);
+        retention_override::write_retention_override(
+            &storage,
+            None,
+            &retention_override::RetentionOverride {
+                source: retention_override::RetentionSource::Dashboard,
+                windows: retention::RetentionConfig::uniform(1),
+                updated_at: Some(1),
+            },
+        )
+        .unwrap();
+
+        let kept = archived_job(&scheduler, 10);
+        scheduler.auto_cleanup().unwrap();
+        assert!(scheduler.storage.get_job(&kept, None).unwrap().is_some());
     }
 
     #[test]
