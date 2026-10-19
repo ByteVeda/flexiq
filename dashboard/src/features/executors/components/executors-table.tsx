@@ -56,7 +56,9 @@ export function ExecutorsTable({ executors, loading, error, onRetry }: Executors
           const shown = tasks.slice(0, TASKS_SHOWN);
           const hidden = tasks.length - shown.length;
           return (
-            <div className="flex flex-wrap gap-1">
+            // The padding keeps a wrapped stack clear of the row borders; the
+            // min width fits two badges per line instead of one.
+            <div className="flex min-w-[14rem] flex-wrap gap-1.5 py-2">
               {shown.map((task) => (
                 <Badge key={task} tone="neutral">
                   {task}
