@@ -485,13 +485,40 @@ export interface EffectiveRetention {
   /** When the cleaner last published this, in Unix milliseconds. */
   reportedAt: number;
   /** Per-table windows in milliseconds. */
-  windows: {
-    archivedJobs: number | null;
-    deadLetter: number | null;
-    taskLogs: number | null;
-    taskMetrics: number | null;
-    jobErrors: number | null;
-  };
+  windows: RetentionWindows;
+  /** Whether `windows` came from the worker's config or a dashboard override. */
+  source: RetentionSource;
+  /** The worker's configured windows; `null` from workers that predate overrides. */
+  codeWindows: RetentionWindows | null;
+}
+
+/** Per-table retention windows in milliseconds; `null` keeps a table forever. */
+export interface RetentionWindows {
+  archivedJobs: number | null;
+  deadLetter: number | null;
+  taskLogs: number | null;
+  taskMetrics: number | null;
+  jobErrors: number | null;
+}
+
+/** Which windows the cleaner applies: the worker's config, or a dashboard's. */
+export type RetentionSource = "code" | "dashboard";
+
+/** What {@link RetentionOverride} is saved from. Absent tables keep forever. */
+export interface RetentionOverrideInput {
+  source: RetentionSource;
+  windows?: Partial<RetentionWindows>;
+}
+
+/**
+ * Retention windows set from a dashboard. `source` is the toggle; the windows
+ * are kept while it is `"code"`, so switching back restores them.
+ */
+export interface RetentionOverride {
+  source: RetentionSource;
+  windows: RetentionWindows;
+  /** When it was last saved, in Unix milliseconds; `null` when never saved. */
+  updatedAt: number | null;
 }
 
 /**

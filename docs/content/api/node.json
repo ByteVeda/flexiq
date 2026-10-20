@@ -324,6 +324,14 @@
     },
     {
       "owner": "JsQueue",
+      "name": "clearRetentionOverride",
+      "kind": "method",
+      "signature": "clearRetentionOverride(): boolean",
+      "params": [],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
       "name": "closeDashboardAudit",
       "kind": "method",
       "signature": "closeDashboardAudit(): Promise<void>",
@@ -1667,6 +1675,14 @@
     },
     {
       "owner": "JsQueue",
+      "name": "retentionOverride",
+      "kind": "method",
+      "signature": "retentionOverride(): string",
+      "params": [],
+      "returns": "string"
+    },
+    {
+      "owner": "JsQueue",
       "name": "retryDead",
       "kind": "method",
       "signature": "retryDead(deadId: string): string",
@@ -1735,6 +1751,20 @@
         }
       ],
       "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "setRetentionOverride",
+      "kind": "method",
+      "signature": "setRetentionOverride(body: string): string",
+      "params": [
+        {
+          "name": "body",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "string"
     },
     {
       "owner": "JsQueue",

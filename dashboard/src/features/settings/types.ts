@@ -64,6 +64,29 @@ export interface RetentionSnapshot {
   namespace: string | null;
   reported_at: number | null;
   windows: RetentionWindows;
+  /** Absent from servers that predate overrides, which always apply code. */
+  source?: RetentionSource;
+  /** The reporter's code-configured windows; `null` when unknown. */
+  code_windows?: RetentionWindows | null;
+}
+
+/** Which windows the cleaner applies: the worker's code config or the dashboard's. */
+export type RetentionSource = "code" | "dashboard";
+
+/**
+ * ``GET /api/retention/override``: the dashboard's stored windows and which
+ * source is switched on. ``updated_at: null`` means never saved.
+ */
+export interface RetentionOverride {
+  source: RetentionSource;
+  windows: RetentionWindows;
+  updated_at: number | null;
+}
+
+/** ``PUT /api/retention/override`` body. */
+export interface RetentionOverrideInput {
+  source: RetentionSource;
+  windows: RetentionWindows;
 }
 
 /** Rows a purge would remove per table, from ``GET /api/retention/dry-run``. */

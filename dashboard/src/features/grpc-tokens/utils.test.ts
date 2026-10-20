@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GrpcScope } from "./types";
-import { spellGrants } from "./utils";
+import { expiryDays, spellGrants } from "./utils";
 
 const AVAILABLE: GrpcScope[] = [
   { name: "produce", narrowable: true },
@@ -33,5 +33,22 @@ describe("spellGrants", () => {
     expect(spellGrants(["read"], AVAILABLE, { queue: "", task: "charge" })).toEqual([
       "read:task=charge",
     ]);
+  });
+});
+
+describe("expiryDays", () => {
+  it("converts weeks and months to days", () => {
+    expect(expiryDays("90", "days")).toEqual({ ok: true, days: 90 });
+    expect(expiryDays("2", "weeks")).toEqual({ ok: true, days: 14 });
+    expect(expiryDays(" 12 ", "months")).toEqual({ ok: true, days: 360 });
+  });
+
+  it("refuses what the server would", () => {
+    for (const amount of ["", "0", "-3", "1.5", "two"]) {
+      expect(expiryDays(amount, "days").ok, amount).toBe(false);
+    }
+    expect(expiryDays("366", "days").ok).toBe(false);
+    expect(expiryDays("53", "weeks").ok).toBe(false);
+    expect(expiryDays("13", "months").ok).toBe(false);
   });
 });

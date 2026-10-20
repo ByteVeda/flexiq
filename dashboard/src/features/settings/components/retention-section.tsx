@@ -17,10 +17,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui";
+import { useCanOperate } from "@/features/auth";
 import { formatRelative } from "@/lib/time";
 import { formatRetentionWindow, RETENTION_TABLES } from "../derived";
-import { useRetention, useRetentionDryRun } from "../hooks";
+import { useRetention, useRetentionDryRun, useRetentionOverride } from "../hooks";
 import type { RetentionCounts, RetentionSnapshot } from "../types";
+import { RetentionOverrideEditor } from "./retention-override-editor";
 
 /** On / off / unreported — the three states an operator has to tell apart. */
 function RetentionStatus({ snapshot }: { snapshot: RetentionSnapshot }) {
@@ -118,14 +120,26 @@ function PurgePreview() {
   );
 }
 
+/** Where the applied windows came from; absent on servers without overrides. */
+function SourceBadge({ snapshot }: { snapshot: RetentionSnapshot }) {
+  if (!snapshot.reported || !snapshot.source) return null;
+  return (
+    <Badge tone={snapshot.source === "dashboard" ? "info" : "neutral"}>
+      {snapshot.source === "dashboard" ? "Set from the dashboard" : "From code config"}
+    </Badge>
+  );
+}
+
 /**
  * Why rows vanish from the job, log, and dead-letter listings. Retention runs
- * in the worker process, so these are the windows the elected cleaner reported
- * — not this dashboard's configuration. Read-only: the windows are set where
- * the worker is started.
+ * in the worker process, so these are the windows the elected cleaner reported.
+ * An operator can switch them to windows set here; the cleaner picks that up on
+ * its next sweep.
  */
 export function RetentionSection() {
   const { data, isLoading, error, refetch } = useRetention();
+  const stored = useRetentionOverride();
+  const canOperate = useCanOperate();
 
   return (
     <Card>
@@ -134,11 +148,16 @@ export function RetentionSection() {
           <div>
             <CardTitle>Retention</CardTitle>
             <CardDescription>
-              How long each history table keeps a row before auto-cleanup deletes it. Set where the
-              worker is started; reported here by the worker that enforces it.
+              How long each history table keeps a row before auto-cleanup deletes it. Set in the
+              worker's code config or here; reported by the worker that enforces it.
             </CardDescription>
           </div>
-          {data ? <RetentionStatus snapshot={data} /> : null}
+          {data ? (
+            <div className="flex flex-wrap justify-end gap-2">
+              <SourceBadge snapshot={data} />
+              <RetentionStatus snapshot={data} />
+            </div>
+          ) : null}
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-[var(--gap)]">
@@ -180,6 +199,14 @@ export function RetentionSection() {
             </div>
           </>
         )}
+        {data && canOperate && stored.data ? (
+          // Remounted per save, so the form reopens on what the server stored.
+          <RetentionOverrideEditor
+            key={stored.data.updated_at ?? "unsaved"}
+            snapshot={data}
+            stored={stored.data}
+          />
+        ) : null}
         {/* Independent of the echo above: computed in-process, so it renders
             even before a worker has reported its windows. */}
         {!isLoading && !error ? <PurgePreview /> : null}

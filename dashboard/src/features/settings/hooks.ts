@@ -2,17 +2,23 @@ import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/r
 import { toast } from "sonner";
 import { ApiError } from "@/lib/api-client";
 import {
+  clearRetentionOverride,
   deleteSetting,
   fetchRetention,
   fetchRetentionDryRun,
+  fetchRetentionOverride,
   fetchSettings,
+  saveRetentionOverride,
   setSetting,
 } from "./api";
-import type { SettingsSnapshot } from "./types";
+import type { RetentionOverride, RetentionOverrideInput, SettingsSnapshot } from "./types";
 
 const KEY = ["settings"] as const;
+// Every retention query sits under this prefix, so one invalidation after a
+// save refreshes the echo, the preview and the editor together.
 const RETENTION_KEY = ["retention"] as const;
 const RETENTION_DRY_RUN_KEY = ["retention", "dry-run"] as const;
+const RETENTION_OVERRIDE_KEY = ["retention", "override"] as const;
 
 /**
  * Return a user-friendly error description.
@@ -59,6 +65,53 @@ export function retentionDryRunQuery() {
 
 export function useRetentionDryRun() {
   return useQuery(retentionDryRunQuery());
+}
+
+/**
+ * The stored retention override. ``data`` is ``null`` on a backend that has
+ * no override route (404), so the card stays read-only there instead of
+ * offering an editor whose save cannot work.
+ */
+export function useRetentionOverride() {
+  return useQuery({
+    queryKey: RETENTION_OVERRIDE_KEY,
+    queryFn: async ({ signal }): Promise<RetentionOverride | null> => {
+      try {
+        return await fetchRetentionOverride(signal);
+      } catch (e) {
+        if (e instanceof ApiError && (e.status === 404 || e.status === 405)) return null;
+        throw e;
+      }
+    },
+    retry: false,
+  });
+}
+
+export function useSaveRetentionOverride() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RetentionOverrideInput) => saveRetentionOverride(input),
+    onError: (error) =>
+      toast.error("Couldn't save retention", { description: describeError(error) }),
+    onSuccess: (saved) =>
+      toast.success(
+        saved.source === "dashboard"
+          ? "Dashboard windows saved — applied on the next cleanup sweep"
+          : "Switched to the code config — applied on the next cleanup sweep",
+      ),
+    onSettled: () => qc.invalidateQueries({ queryKey: RETENTION_KEY }),
+  });
+}
+
+export function useClearRetentionOverride() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: clearRetentionOverride,
+    onError: (error) =>
+      toast.error("Couldn't clear retention", { description: describeError(error) }),
+    onSuccess: () => toast.success("Dashboard windows cleared — the code config applies"),
+    onSettled: () => qc.invalidateQueries({ queryKey: RETENTION_KEY }),
+  });
 }
 
 interface UpdateInput {

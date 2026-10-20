@@ -56,6 +56,9 @@ from flexiq.dashboard.handlers.overrides import (
 )
 from flexiq.dashboard.handlers.queues import _handle_stats_queues
 from flexiq.dashboard.handlers.retention import (
+    _handle_delete_retention_override,
+    _handle_get_retention_override,
+    _handle_put_retention_override,
     _handle_retention,
     _handle_retention_dry_run,
 )
@@ -151,6 +154,7 @@ GET_ROUTES: dict[str, Any] = {
     "/api/settings": _handle_list_settings,
     "/api/retention": _handle_retention,
     "/api/retention/dry-run": _handle_retention_dry_run,
+    "/api/retention/override": _handle_get_retention_override,
     "/api/webhooks": handle_list_webhooks,
     "/api/event-types": handle_list_event_types,
     "/api/tasks": handle_list_tasks,
@@ -259,6 +263,16 @@ POST_PARAM2_ROUTES: list[tuple[re.Pattern, Any]] = [
         _handle_resume_subscription,
     ),
 ]
+
+# ── Exact-match PUT routes: path → handler(queue, body) ──
+PUT_ROUTES: dict[str, Any] = {
+    "/api/retention/override": _handle_put_retention_override,
+}
+
+# ── Exact-match DELETE routes: path → handler(queue) ──
+DELETE_ROUTES: dict[str, Any] = {
+    "/api/retention/override": _handle_delete_retention_override,
+}
 
 # ── Parameterized PUT routes: regex → handler(queue, body, captured_id) ──
 PUT_PARAM_ROUTES: list[tuple[re.Pattern, Any]] = [

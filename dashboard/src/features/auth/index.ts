@@ -8,6 +8,7 @@ export {
   providersQuery,
   useAuthProviders,
   useAuthStatus,
+  useCanOperate,
   useChangePassword,
   useLogin,
   useLogout,

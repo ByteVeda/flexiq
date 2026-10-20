@@ -337,6 +337,42 @@ impl JsQueue {
         .map_err(to_napi_err)
     }
 
+    /// The dashboard's retention override as a JSON document — the `code`
+    /// default when none was saved. See `BINDING_CONTRACT.md`.
+    #[napi]
+    pub fn retention_override(&self) -> Result<String> {
+        flexiq_core::scheduler::retention_override::read_retention_override_json(
+            &self.storage,
+            self.namespace.as_deref(),
+        )
+        .map_err(to_napi_err)
+    }
+
+    /// Validate a dashboard's override `PUT` body (JSON) and store it. Returns
+    /// the stored document; an invalid body is an `InvalidArg` error, raised
+    /// before anything is written.
+    #[napi]
+    pub fn set_retention_override(&self, body: String) -> Result<String> {
+        use flexiq_core::scheduler::retention_override::{
+            write_retention_override, RetentionOverride,
+        };
+        let document =
+            RetentionOverride::from_request_json(&body, now_millis()).map_err(invalid_arg)?;
+        write_retention_override(&self.storage, self.namespace.as_deref(), &document)
+            .map_err(to_napi_err)?;
+        serde_json::to_string(&document).map_err(|e| to_napi_err(e.into()))
+    }
+
+    /// Drop the dashboard's retention override. True when one existed.
+    #[napi]
+    pub fn clear_retention_override(&self) -> Result<bool> {
+        flexiq_core::scheduler::retention_override::clear_retention_override(
+            &self.storage,
+            self.namespace.as_deref(),
+        )
+        .map_err(to_napi_err)
+    }
+
     /// Count what a retention purge would delete right now, without deleting
     /// anything. Returns the preview as a JSON document. See
     /// `BINDING_CONTRACT.md`.

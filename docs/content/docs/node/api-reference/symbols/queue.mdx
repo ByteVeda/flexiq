@@ -68,6 +68,12 @@ queue.checkFanOutCompletion(
 ): JsFanOutCompletion | null
 ```
 
+### `queue.clearRetentionOverride()`
+
+```typescript
+queue.clearRetentionOverride(): boolean
+```
+
 ### `queue.closeDashboardAudit()`
 
 ```typescript
@@ -638,6 +644,12 @@ queue.resolveWorkflowGate(
 queue.resumeQueue(queue: string): void
 ```
 
+### `queue.retentionOverride()`
+
+```typescript
+queue.retentionOverride(): string
+```
+
 ### `queue.retryDead()`
 
 ```typescript
@@ -664,6 +676,12 @@ queue.setMinContract(level: number): void
 
 ```typescript
 queue.setPeriodicEnabled(name: string, enabled: boolean): boolean
+```
+
+### `queue.setRetentionOverride()`
+
+```typescript
+queue.setRetentionOverride(body: string): string
 ```
 
 ### `queue.setSetting()`

@@ -462,6 +462,14 @@
     },
     {
       "owner": "PyQueue",
+      "name": "clear_retention_override",
+      "kind": "method",
+      "signature": "clear_retention_override() -> bool",
+      "params": [],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
       "name": "close_dashboard_audit",
       "kind": "method",
       "signature": "close_dashboard_audit() -> None",
@@ -2167,6 +2175,14 @@
     },
     {
       "owner": "PyQueue",
+      "name": "retention_override",
+      "kind": "method",
+      "signature": "retention_override() -> str",
+      "params": [],
+      "returns": "str"
+    },
+    {
+      "owner": "PyQueue",
       "name": "retry_dead",
       "kind": "method",
       "signature": "retry_dead(dead_id: str) -> str",
@@ -2280,6 +2296,20 @@
         }
       ],
       "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_retention_override",
+      "kind": "method",
+      "signature": "set_retention_override(body: str) -> str",
+      "params": [
+        {
+          "name": "body",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "str"
     },
     {
       "owner": "PyQueue",

@@ -23,7 +23,8 @@ directly too. All timestamps are Unix milliseconds.
 | `GET /api/event-types` | Known job event names. |
 | `GET /api/workflows/runs` · `/:id` | Workflow runs, and one run. |
 | `GET /api/workflows/runs/:id/dag` · `/children` | A run's DAG graph and child runs. |
-| `GET /api/retention` | Retention windows the worker running cleanup reported. |
+| `GET /api/retention` | Retention windows the worker running cleanup reported, and whether they came from code or the dashboard. |
+| `GET` · `PUT` · `DELETE /api/retention/override` | The dashboard's retention windows and the code/dashboard toggle. `PUT` refuses a window under one hour. |
 | `GET /api/webhooks` · `/:id` | Webhook config. |
 | `GET /api/webhooks/:id/deliveries` | Paged delivery log — see below. |
 

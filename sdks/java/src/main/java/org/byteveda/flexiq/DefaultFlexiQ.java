@@ -66,7 +66,9 @@ import org.byteveda.flexiq.model.Page;
 import org.byteveda.flexiq.model.PeriodicInfo;
 import org.byteveda.flexiq.model.QueueStats;
 import org.byteveda.flexiq.model.ReplayEntry;
+import org.byteveda.flexiq.model.RetentionOverride;
 import org.byteveda.flexiq.model.RetentionPreview;
+import org.byteveda.flexiq.model.RetentionSource;
 import org.byteveda.flexiq.model.Subscription;
 import org.byteveda.flexiq.model.TaskLog;
 import org.byteveda.flexiq.model.TaskLogLevel;
@@ -952,6 +954,30 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     public RetentionPreview dryRunRetention(@Nullable Retention retention) {
         String spec = retention == null ? null : encode(retention.toMap());
         return decode(backend.dryRunRetentionJson(spec), RetentionPreview.class);
+    }
+
+    @Override
+    public RetentionOverride retentionOverride() {
+        return decode(backend.retentionOverrideJson(), RetentionOverride.class);
+    }
+
+    @Override
+    public RetentionOverride setRetentionOverride(RetentionSource source, EffectiveRetention.Windows windows) {
+        Map<String, @Nullable Long> wire = new LinkedHashMap<>();
+        wire.put("task_logs_ttl_ms", windows.taskLogsMs);
+        wire.put("archived_jobs_ttl_ms", windows.archivedJobsMs);
+        wire.put("job_errors_ttl_ms", windows.jobErrorsMs);
+        wire.put("task_metrics_ttl_ms", windows.taskMetricsMs);
+        wire.put("dead_letter_ttl_ms", windows.deadLetterMs);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("source", source.wire());
+        body.put("windows", wire);
+        return decode(backend.setRetentionOverrideJson(encode(body)), RetentionOverride.class);
+    }
+
+    @Override
+    public boolean clearRetentionOverride() {
+        return backend.clearRetentionOverride();
     }
 
     @Override

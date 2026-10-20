@@ -228,7 +228,7 @@ the same contract the bundled SPA consumes. All paths below are relative to
 | Webhooks | `webhooks` (+ `/{id}`, `/{id}/test`, `/{id}/rotate-secret`, `/{id}/deliveries`, `/{id}/deliveries/{deliveryId}`, `/{id}/deliveries/{deliveryId}/replay`) — see [Webhooks: Dashboard management](/java/guides/extend/webhooks#dashboard-management) |
 | Workflows | `workflows/runs` (+ `/{id}`, `/{id}/dag`, `/{id}/children`) |
 | Settings | `settings`, `settings/{key}` |
-| Retention | `retention` — the windows the worker running cleanup reported, read-only |
+| Retention | `retention` — the windows the worker running cleanup reported; `retention/dry-run`; `retention/override` — windows set from the dashboard and the code/dashboard toggle, applied on the next sweep without a restart |
 
 <Callout type="warning">
   Gating depends on the [auth mode](#auth): open mode (the default) serves

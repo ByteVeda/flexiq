@@ -29,6 +29,27 @@ public final class EffectiveRetention {
     /** Per-table windows in milliseconds. */
     public final Windows windows;
 
+    /** Whether {@link #windows} came from the worker's config or a dashboard override. */
+    public final RetentionSource source;
+
+    /** The worker's configured windows; {@code null} from workers that predate overrides. */
+    public final @Nullable Windows codeWindows;
+
+    /**
+     * A document from a worker that predates dashboard overrides, which applied
+     * its code config.
+     *
+     * @param enabled false when no table has a window — only per-entry TTLs are swept
+     * @param defaulted true when the windows are the recommended defaults, set by no one
+     * @param namespace the namespace the windows cover
+     * @param reportedAt when the cleaner last published this, in Unix milliseconds
+     * @param windows the per-table windows, or {@code null} for none at all
+     */
+    public EffectiveRetention(
+            boolean enabled, boolean defaulted, String namespace, long reportedAt, @Nullable Windows windows) {
+        this(enabled, defaulted, namespace, reportedAt, windows, null, null);
+    }
+
     /**
      * Decoded from the document the elected cleaner publishes.
      *
@@ -37,6 +58,8 @@ public final class EffectiveRetention {
      * @param namespace the namespace the windows cover
      * @param reportedAt when the cleaner last published this, in Unix milliseconds
      * @param windows the per-table windows, or {@code null} for none at all
+     * @param source which windows apply, or {@code null} for the code config
+     * @param codeWindows the worker's configured windows, or {@code null} when unknown
      */
     @JsonCreator
     public EffectiveRetention(
@@ -44,12 +67,16 @@ public final class EffectiveRetention {
             @JsonProperty("defaulted") boolean defaulted,
             @JsonProperty("namespace") String namespace,
             @JsonProperty("reported_at") long reportedAt,
-            @JsonProperty("windows") @Nullable Windows windows) {
+            @JsonProperty("windows") @Nullable Windows windows,
+            @JsonProperty("source") @Nullable RetentionSource source,
+            @JsonProperty("code_windows") @Nullable Windows codeWindows) {
         this.enabled = enabled;
         this.defaulted = defaulted;
         this.namespace = namespace;
         this.reportedAt = reportedAt;
         this.windows = windows == null ? Windows.EMPTY : windows;
+        this.source = source == null ? RetentionSource.CODE : source;
+        this.codeWindows = codeWindows;
     }
 
     /** How long each history table keeps a row, in milliseconds. */

@@ -86,19 +86,33 @@ class EffectiveRetention:
     """When the cleaner last published this, in Unix milliseconds."""
     windows: dict[str, int | None]
     """``{table: window_ms}`` for every table in :data:`RETENTION_TABLES`."""
+    source: str = "code"
+    """``"code"`` or ``"dashboard"``: whether :attr:`windows` came from the
+    worker's configuration or an override set from a dashboard."""
+    code_windows: dict[str, int | None] | None = None
+    """The worker's configured windows, shaped like :attr:`windows`. ``None``
+    when reported by a worker that predates dashboard overrides."""
 
     @classmethod
     def _from_json(cls, raw: str) -> EffectiveRetention:
         """Parse the document the core publishes. See ``BINDING_CONTRACT.md``."""
         doc: dict[str, Any] = json.loads(raw)
         published: dict[str, Any] = doc.get("windows") or {}
+        code: dict[str, Any] | None = doc.get("code_windows")
         return cls(
             enabled=bool(doc.get("enabled", False)),
             defaulted=bool(doc.get("defaulted", False)),
             namespace=str(doc.get("namespace", "default")),
             reported_at=int(doc.get("reported_at", 0)),
-            windows={table: published.get(f"{table}_ttl_ms") for table in RETENTION_TABLES},
+            windows=_by_table(published),
+            source=str(doc.get("source", "code")),
+            code_windows=_by_table(code) if code is not None else None,
         )
+
+
+def _by_table(windows: dict[str, Any]) -> dict[str, int | None]:
+    """``{table: window_ms}`` from the core's ``{<table>_ttl_ms: window_ms}``."""
+    return {table: windows.get(f"{table}_ttl_ms") for table in RETENTION_TABLES}
 
 
 @dataclass(frozen=True)

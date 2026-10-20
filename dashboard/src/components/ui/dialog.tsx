@@ -33,6 +33,9 @@ const DialogContent = forwardRef<
       ref={ref}
       className={cn(
         "fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] p-6 shadow-2xl duration-200",
+        // Centred by translate, so a dialog taller than the viewport would be
+        // clipped at both ends with no way to reach them: cap it and scroll.
+        "max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain",
         "data-[state=open]:animate-slide-up",
         className,
       )}

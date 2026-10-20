@@ -66,7 +66,12 @@ import {
   ResourceRuntime,
   type ResourceScope,
 } from "./resources";
-import { parseEffectiveRetention, parseRetentionPreview } from "./retention";
+import {
+  parseEffectiveRetention,
+  parseRetentionOverride,
+  parseRetentionPreview,
+  windowsToContract,
+} from "./retention";
 import {
   CodecSerializer,
   deserializeCall,
@@ -101,6 +106,8 @@ import type {
   ReplayEntry,
   ResultOptions,
   RetentionOptions,
+  RetentionOverride,
+  RetentionOverrideInput,
   RetentionPreview,
   Stats,
   StreamOptions,
@@ -1701,6 +1708,40 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
    */
   async dryRunRetention(retention?: RetentionOptions): Promise<RetentionPreview> {
     return parseRetentionPreview(await this.native.dryRunRetention(retention));
+  }
+
+  /**
+   * The retention windows set from a dashboard for this namespace, and whether
+   * they or the worker's own config apply. Never saved reads as `"code"` with
+   * every window `null` and `updatedAt: null`.
+   */
+  retentionOverride(): RetentionOverride {
+    return parseRetentionOverride(this.native.retentionOverride());
+  }
+
+  /**
+   * Save dashboard retention windows and pick which source the cleaner
+   * applies. The elected cleaner picks it up on its next sweep. A window under
+   * one hour is refused, before anything is written.
+   */
+  setRetentionOverride(input: RetentionOverrideInput): RetentionOverride {
+    const windows = input.windows ?? {};
+    const body = JSON.stringify({
+      source: input.source,
+      windows: windowsToContract({
+        archivedJobs: windows.archivedJobs ?? null,
+        deadLetter: windows.deadLetter ?? null,
+        taskLogs: windows.taskLogs ?? null,
+        taskMetrics: windows.taskMetrics ?? null,
+        jobErrors: windows.jobErrors ?? null,
+      }),
+    });
+    return parseRetentionOverride(this.native.setRetentionOverride(body));
+  }
+
+  /** Forget the dashboard's retention windows; the worker's config applies. */
+  clearRetentionOverride(): boolean {
+    return this.native.clearRetentionOverride();
   }
 
   // ── Task & queue overrides (dashboard-tunable runtime config) ─────

@@ -24,7 +24,7 @@ use crate::storage::records::AuditRecord;
 ///
 /// Literal routes come before the parameterised ones they could shadow, and
 /// [`match_route`] takes the first match.
-pub const ROUTES: [(&str, &str); 30] = [
+pub const ROUTES: [(&str, &str); 32] = [
     ("POST", "/api/auth/setup"),
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/logout"),
@@ -36,6 +36,8 @@ pub const ROUTES: [(&str, &str); 30] = [
     ("POST", "/api/dead-letters/{dead_id}/retry"),
     ("POST", "/api/queues/{queue}/pause"),
     ("POST", "/api/queues/{queue}/resume"),
+    ("PUT", "/api/retention/override"),
+    ("DELETE", "/api/retention/override"),
     ("PUT", "/api/settings/{*key}"),
     ("DELETE", "/api/settings/{*key}"),
     ("DELETE", "/api/topics/{topic}/subscriptions/{name}"),

@@ -80,7 +80,66 @@ describe("effectiveRetention", () => {
         // A table with no window is kept forever, not purged.
         jobErrors: null,
       },
+      // A document from a cleaner that predates overrides applied its code.
+      source: "code",
+      codeWindows: null,
     });
+  });
+});
+
+describe("retention override", () => {
+  const send = (method: string, body?: unknown) =>
+    fetch(`${base}/api/retention/override`, {
+      method,
+      headers: { ...headers, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+  it("reads as code before anything is saved", async () => {
+    expect(queue.retentionOverride()).toEqual({
+      source: "code",
+      windows: {
+        archivedJobs: null,
+        deadLetter: null,
+        taskLogs: null,
+        taskMetrics: null,
+        jobErrors: null,
+      },
+      updatedAt: null,
+    });
+    expect((await get("/api/retention")).source).toBe("code");
+  });
+
+  it("round-trips the toggle and steers the preview", async () => {
+    const saved = await send("PUT", {
+      source: "dashboard",
+      windows: { task_logs_ttl_ms: DAY_MS, dead_letter_ttl_ms: null },
+    });
+    expect(saved.status).toBe(200);
+    const body = (await saved.json()) as { source: string; updated_at: number };
+    expect(body.source).toBe("dashboard");
+    expect(body.updated_at).toBeGreaterThan(0);
+
+    const preview = await queue.dryRunRetention();
+    expect(preview.windows.taskLogs).toBe(DAY_MS);
+    expect(preview.windows.archivedJobs).toBeNull();
+
+    // Back to code: the windows stay stored for the editor.
+    await send("PUT", { source: "code", windows: { task_logs_ttl_ms: DAY_MS } });
+    expect(queue.retentionOverride().windows.taskLogs).toBe(DAY_MS);
+    expect((await queue.dryRunRetention()).windows.taskLogs).toBe(3 * DAY_MS);
+
+    expect(await (await send("DELETE")).json()).toEqual({ deleted: true });
+    expect(queue.retentionOverride().updatedAt).toBeNull();
+  });
+
+  it.each([
+    { source: "dashboard", windows: { task_logs_ttl_ms: 0 } },
+    { source: "dashboard", windows: { task_log_ttl_ms: DAY_MS } },
+    { source: "always" },
+  ])("refuses %j before writing", async (body) => {
+    expect((await send("PUT", body)).status).toBe(400);
+    expect(queue.retentionOverride().updatedAt).toBeNull();
   });
 });
 

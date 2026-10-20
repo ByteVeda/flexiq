@@ -448,6 +448,36 @@ public interface QueueBackend extends AutoCloseable, ConditionalSettings {
         throw new UnsupportedOperationException("retention dry-run requires the native backend");
     }
 
+    /**
+     * The dashboard's retention override as JSON. The cleaner that reads it is
+     * the native core's, so non-native backends do not support it.
+     *
+     * @return the override as JSON, the {@code code} default when none was saved
+     */
+    default String retentionOverrideJson() {
+        throw new UnsupportedOperationException("retention overrides require the native backend");
+    }
+
+    /**
+     * Validate a dashboard's override body and store it.
+     *
+     * @param bodyJson the {@code {source, windows}} body as JSON
+     * @return the stored override as JSON
+     * @throws IllegalArgumentException when the body is invalid; nothing is written
+     */
+    default String setRetentionOverrideJson(String bodyJson) {
+        throw new UnsupportedOperationException("retention overrides require the native backend");
+    }
+
+    /**
+     * Drop the dashboard's retention override.
+     *
+     * @return true when one existed
+     */
+    default boolean clearRetentionOverride() {
+        throw new UnsupportedOperationException("retention overrides require the native backend");
+    }
+
     // ── Logs ────────────────────────────────────────────────────────
     /**
      * Append one structured log line for a job.

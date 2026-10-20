@@ -358,6 +358,69 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_effectiveRe
     })
 }
 
+/// `String retentionOverride(long handle)` — the dashboard's retention override
+/// as JSON, the `code` default when none was saved. See `BINDING_CONTRACT.md`.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_retentionOverride<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+) -> jstring {
+    guard(&mut env, std::ptr::null_mut(), |env| {
+        let queue = unsafe { borrow_queue(handle) };
+        let json = flexiq_core::scheduler::retention_override::read_retention_override_json(
+            &queue.storage,
+            queue.namespace.as_deref(),
+        )?;
+        new_string(env, json)
+    })
+}
+
+/// `String setRetentionOverride(long handle, String bodyJson)` — validate a
+/// dashboard's override body and store it, returning the stored document. An
+/// invalid body throws `IllegalArgumentException` before anything is written.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_setRetentionOverride<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    body_json: JString<'local>,
+) -> jstring {
+    use flexiq_core::scheduler::retention_override::{write_retention_override, RetentionOverride};
+    guard(&mut env, std::ptr::null_mut(), |env| {
+        let queue = unsafe { borrow_queue(handle) };
+        let body = read_string(env, &body_json)?;
+        let document =
+            RetentionOverride::from_request_json(&body, now_millis()).map_err(|message| {
+                BindingError::with_class("java/lang/IllegalArgumentException", message)
+            })?;
+        write_retention_override(&queue.storage, queue.namespace.as_deref(), &document)?;
+        new_string(env, to_json(&document)?)
+    })
+}
+
+/// `boolean clearRetentionOverride(long handle)` — drop the dashboard's
+/// retention override; true when one existed.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_clearRetentionOverride<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+) -> jboolean {
+    guard(&mut env, JNI_FALSE, |_env| {
+        let queue = unsafe { borrow_queue(handle) };
+        let deleted = flexiq_core::scheduler::retention_override::clear_retention_override(
+            &queue.storage,
+            queue.namespace.as_deref(),
+        )?;
+        Ok(super::to_jboolean(deleted))
+    })
+}
+
 /// `String dryRunRetention(long handle, String retentionJson)` — count what a
 /// retention purge would delete right now, without deleting anything.
 /// `retentionJson` is a `RetentionSpec` (camelCase seconds) to preview those

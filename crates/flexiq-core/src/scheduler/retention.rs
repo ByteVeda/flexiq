@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::scheduler::retention_override::{read_retention_override, RetentionSource};
 use crate::storage::{RetentionCounts, RetentionCutoffs, Storage};
 
 const DAY_MS: i64 = 86_400_000;
@@ -166,6 +167,14 @@ pub struct EffectiveRetention {
     pub reported_at: i64,
     /// The windows themselves.
     pub windows: RetentionConfig,
+    /// Whether `windows` came from code or a dashboard override. Absent in a
+    /// document from a reporter that predates overrides, which applied code.
+    #[serde(default)]
+    pub source: RetentionSource,
+    /// The windows the reporter was configured with in code, so a dashboard
+    /// can show what switching back would apply. `None` from older reporters.
+    #[serde(default)]
+    pub code_windows: Option<RetentionConfig>,
 }
 
 /// Settings key holding the published windows for `namespace`.
@@ -283,6 +292,41 @@ pub fn dry_run_json<S: Storage>(
     )?)?)
 }
 
+/// [`dry_run`] against what this process's next sweep applies: a switched-on
+/// dashboard override, else the code config given. One rule for every shell's
+/// preview, so none previews windows its cleaner would not use.
+pub fn dry_run_applied<S: Storage>(
+    storage: &S,
+    retention: Option<&RetentionConfig>,
+    result_ttl_ms: Option<i64>,
+    namespace: Option<&str>,
+    now: i64,
+) -> Result<RetentionPreview> {
+    match read_retention_override(storage, namespace)?
+        .and_then(|document| document.active_windows())
+    {
+        Some(windows) => dry_run(storage, Some(&windows), None, namespace, now),
+        None => dry_run(storage, retention, result_ttl_ms, namespace, now),
+    }
+}
+
+/// [`dry_run_applied`] serialized to the JSON document a shell forwards.
+pub fn dry_run_applied_json<S: Storage>(
+    storage: &S,
+    retention: Option<&RetentionConfig>,
+    result_ttl_ms: Option<i64>,
+    namespace: Option<&str>,
+    now: i64,
+) -> Result<String> {
+    Ok(serde_json::to_string(&dry_run_applied(
+        storage,
+        retention,
+        result_ttl_ms,
+        namespace,
+        now,
+    )?)?)
+}
+
 /// [`dry_run`] against the policy the elected cleaner *reported* for this
 /// namespace, falling back to the recommended defaults when no cleaner has
 /// swept yet. For shells whose queue handle carries no retention config
@@ -294,6 +338,13 @@ pub fn dry_run_reported<S: Storage>(
     namespace: Option<&str>,
     now: i64,
 ) -> Result<RetentionPreview> {
+    // A switched-on override is what the next sweep applies; previewing it now
+    // spares the operator a cleanup interval of stale counts after a save.
+    if let Some(windows) =
+        read_retention_override(storage, namespace)?.and_then(|document| document.active_windows())
+    {
+        return dry_run(storage, Some(&windows), None, namespace, now);
+    }
     let Some(published) = read_effective_retention(storage, namespace)? else {
         return dry_run(storage, None, None, namespace, now);
     };
@@ -326,6 +377,7 @@ pub fn dry_run_reported_json<S: Storage>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scheduler::retention_override::{write_retention_override, RetentionOverride};
 
     #[test]
     fn recommended_respects_the_ordering_invariant() {
@@ -372,6 +424,8 @@ mod tests {
                 archived_jobs_ttl_ms: Some(DAY_MS),
                 ..RetentionConfig::default()
             },
+            source: RetentionSource::Dashboard,
+            code_windows: Some(RetentionConfig::recommended()),
         };
 
         let json = serde_json::to_string(&snapshot).unwrap();
@@ -439,6 +493,8 @@ mod tests {
                 task_logs_ttl_ms: Some(3_600_000),
                 ..RetentionConfig::default()
             },
+            source: RetentionSource::Code,
+            code_windows: None,
         };
         publish_effective_retention(&storage, None, &published).unwrap();
 
@@ -449,6 +505,33 @@ mod tests {
             preview.windows.archived_jobs_ttl_ms, None,
             "tables the report leaves out keep forever"
         );
+
+        // A switched-on override wins over the report before any sweep runs.
+        let mut document = RetentionOverride {
+            source: RetentionSource::Dashboard,
+            windows: RetentionConfig::uniform(2 * DAY_MS),
+            updated_at: Some(1),
+        };
+        write_retention_override(&storage, None, &document).unwrap();
+        let preview = dry_run_reported(&storage, None, 1_753_200_000_000).unwrap();
+        assert_eq!(preview.windows, RetentionConfig::uniform(2 * DAY_MS));
+        assert!(!preview.defaulted);
+
+        // Switched back to code, the stored windows are ignored again.
+        document.source = RetentionSource::Code;
+        write_retention_override(&storage, None, &document).unwrap();
+        let preview = dry_run_reported(&storage, None, 1_753_200_000_000).unwrap();
+        assert_eq!(preview.windows.task_logs_ttl_ms, Some(3_600_000));
+    }
+
+    /// A document from a reporter that predates overrides still parses, as
+    /// code-sourced, so a rolling upgrade never reads as unreported.
+    #[test]
+    fn an_older_published_document_reads_as_code() {
+        let legacy = r#"{"enabled":true,"defaulted":true,"namespace":"default","reported_at":1,"windows":{}}"#;
+        let parsed: EffectiveRetention = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.source, RetentionSource::Code);
+        assert_eq!(parsed.code_windows, None);
     }
 
     #[test]
