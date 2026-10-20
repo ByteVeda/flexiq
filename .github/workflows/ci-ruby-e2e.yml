@@ -40,7 +40,7 @@ jobs:
           save-if: "false"
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@v1.328.0
+        uses: ruby/setup-ruby@v1.329.0
         with:
           # One version: whether the two halves agree on a wire does not differ
           # per Ruby release, and the matrix lives in ci-ruby.yml.
@@ -60,7 +60,7 @@ jobs:
       # The executor gem has a bundle of its own; setup-ruby caches one
       # working directory per step.
       - name: Set up the executor gem's bundle
-        uses: ruby/setup-ruby@v1.328.0
+        uses: ruby/setup-ruby@v1.329.0
         with:
           ruby-version: "3.4"
           working-directory: sdks/ruby-executor
