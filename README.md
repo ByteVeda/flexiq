@@ -15,7 +15,7 @@
 A Rust-powered task queue with native SDKs. One engine — no broker required, just SQLite, Postgres, or Redis.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ByteVeda/flexiq/blob/master/LICENSE)
-[![PyPI Downloads](https://static.pepy.tech/personalized-badge/taskito?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=BLUE&left_text=downloads)](https://pepy.tech/projects/taskito)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/taskito?period=total&units=INTERNATIONAL_SYSTEM&left_color=GREY&right_color=BLUE&left_text=downloads)](https://pepy.tech/projects/taskito)
 [![Ask DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-0969DA?logo=readthedocs&logoColor=white)](https://deepwiki.com/ByteVeda/flexiq) <br>
 [![PyPI version](https://img.shields.io/pypi/v/flexiq.svg)](https://pypi.org/project/flexiq/)
 [![npm version](https://img.shields.io/npm/v/@byteveda/flexiq.svg)](https://www.npmjs.com/package/@byteveda/flexiq)
