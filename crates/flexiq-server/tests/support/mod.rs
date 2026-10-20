@@ -229,6 +229,7 @@ pub fn dashboard_state_for(
             // Off by default, exactly as in production. Only the delivery
             // tests, whose receiver is on loopback, turn it on.
             allow_private_webhooks: false,
+            demo_enqueue: None,
         },
         oauth: None,
         namespace: None,

@@ -72,6 +72,9 @@ export function ServerFold() {
             <Link className="doclink" to="/server/clients">
               Write a client without an SDK <Arrow />
             </Link>
+            <Link className="doclink" to="/server/operate/demo">
+              Run the public demo <Arrow />
+            </Link>
           </div>
         </div>
       </div>

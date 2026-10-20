@@ -1,0 +1,104 @@
+---
+title: Public demo
+description: "Run a FlexiQ server anyone may look at: a read-only dashboard seeded with every job state, one rate-limited enqueue button, and a reset on a timer."
+---
+
+A demo is a public listener with tokens, so it gets the same treatment as a
+production deployment. The stack in
+[`deploy/demo`](https://github.com/ByteVeda/flexiq/tree/master/deploy/demo)
+is built that way. Visitors can watch everything and change nothing, and the
+one action they can take is fixed and rate-limited.
+
+```bash
+cd deploy/demo
+echo "FLEXIQ_ATTACH_TOKEN=$(openssl rand -base64 32)" > .env
+docker compose up -d --build
+```
+
+Then open `http://localhost`. To serve a real host name, set
+`FLEXIQ_DEMO_SITE=demo.example.com` in `.env`; Caddy then obtains the
+certificate itself.
+
+## What it runs
+
+| Service | Role |
+| --- | --- |
+| `seed` | A one-shot container. It creates the schema, enqueues one job per state, then hands the volume to the server's user |
+| `server` | `flexiq-server` running the scheduler, attach listener, read-only dashboard and trigger |
+| `executor` | `flexiq executor` with a fixed Python task set |
+| `caddy` | The only published port. `/t/demo` goes to the trigger, everything else to the dashboard |
+
+The seeded jobs are:
+
+- `demo.hello` ×5, which succeed
+- `demo.flaky`, which fails every attempt and keeps retrying until the reset
+- `demo.doomed`, which goes to the dead-letter queue
+- `demo.nap`, parked in `step.sleep`
+- a `release` workflow waiting at an approval gate
+
+## A read-only dashboard
+
+```bash
+FLEXIQ_DASHBOARD=0.0.0.0:8080
+FLEXIQ_DASHBOARD_AUTH=public
+FLEXIQ_DASHBOARD_DEMO_ENQUEUE=/t/demo?token=flexiq-public-demo
+```
+
+With `public`, every caller is an anonymous viewer:
+
+- **Reads** answer without a login.
+- **Writes are refused.** Cancel, replay, purge, pause, settings and webhooks
+  all answer `403 read_only`. The refusal happens before the audit trail
+  opens, so being turned away writes nothing.
+- **Admin reads stay closed.** The token inventory and the audit trail are
+  admin reads in session mode, and they stay closed here too.
+- **No login routes.** Login and setup do not exist in this mode.
+- **Probes stay gated.** `/metrics` needs `FLEXIQ_DASHBOARD_METRICS_TOKEN`, as
+  in session mode.
+
+Because none of this can change anything, an off-host bind needs no
+`FLEXIQ_ALLOW_INSECURE`.
+
+`FLEXIQ_DASHBOARD_DEMO_ENQUEUE` puts an **Enqueue a job** button on the
+dashboard's read-only banner. It must be a same-origin path, so `https://…` and
+`//host` are refused at boot, and it is only accepted with `public`. The button
+posts an empty JSON body to that path. The reverse proxy in front routes it to
+the [trigger](/server/operate/triggers) listener.
+
+## Why a trigger, not a producer door
+
+If a public endpoint runs whatever it is sent, it is not a demo. It is a compute
+donation. A trigger can only run the task its definition names. A caller
+chooses the body, never the task, queue or retry budget:
+
+```json
+{
+  "name": "demo",
+  "path": "/t/demo",
+  "task": "demo.hello",
+  "rate_limit": "20/m",
+  "auth": { "kind": "shared_secret", "secret_env": "FLEXIQ_DEMO_TRIGGER_SECRET", "query": "token" },
+  "args": [],
+  "max_retries": 0,
+  "timeout_secs": 30,
+  "max_body_bytes": 1024
+}
+```
+
+Triggers have no anonymous verifier, and the demo keeps that rule: its secret
+exists but is published, because the button carries it in its URL. What
+actually protects the endpoint is that the task is fixed and the rate bucket is
+held in storage. The bucket is shared by every visitor and every replica. A
+request over `20/m` gets `429` and enqueues nothing.
+
+## Reset
+
+`deploy/demo/reset.sh` drops the `flexiq-demo-data` volume and brings the stack
+back up. The seeder then runs again before the server starts. Run it from cron:
+
+```
+0 * * * *  /srv/flexiq/deploy/demo/reset.sh
+```
+
+Caddy's certificates live in a separate volume and survive the reset, so an
+hourly reset does not reissue them.

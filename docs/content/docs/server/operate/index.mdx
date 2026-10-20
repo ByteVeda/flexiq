@@ -149,7 +149,8 @@ it has always been.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `FLEXIQ_DASHBOARD` | Unset | Bind address for the SPA and its API |
-| `FLEXIQ_DASHBOARD_AUTH` | `off` | `off` or `session` |
+| `FLEXIQ_DASHBOARD_AUTH` | `off` | `off`, `session`, or `public` — read-only for anonymous callers, for a [public demo](/server/operate/demo) |
+| `FLEXIQ_DASHBOARD_DEMO_ENQUEUE` | Unset | Same-origin trigger path the read-only banner's enqueue button posts to. Only with `public` |
 | `FLEXIQ_DASHBOARD_ADMIN_USER` / `_PASSWORD` | Unset | Bootstrap the first admin. Only read with `session` |
 | `FLEXIQ_DASHBOARD_ASSETS` | The embedded SPA | Serve the SPA from a directory instead |
 | `FLEXIQ_DASHBOARD_METRICS_TOKEN` | Unset | Bearer token for `/metrics`, for a scraper with no session |

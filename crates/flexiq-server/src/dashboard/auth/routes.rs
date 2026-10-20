@@ -18,10 +18,17 @@ use crate::dashboard::state::SharedState;
 pub async fn status(State(state): State<SharedState>) -> ApiResult<Json<Value>> {
     let enabled = state.config.auth == AuthMode::Session;
     let setup_required = enabled && on_storage(&state, store::count_users).await? == 0;
-    Ok(Json(json!({
+    let mut body = json!({
         "auth_enabled": enabled,
         "setup_required": setup_required,
-    })))
+    });
+    // Public mode is this server's alone, so only it adds the fields: in the
+    // other modes the body stays identical to the SDK dashboards'.
+    if state.config.auth == AuthMode::Public {
+        body["read_only"] = json!(true);
+        body["demo_enqueue"] = json!(state.config.demo_enqueue);
+    }
+    Ok(Json(body))
 }
 
 /// `POST /api/auth/setup` — create the first admin. Only while none exists.
