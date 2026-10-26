@@ -75,7 +75,7 @@ jobs:
           fi
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@v1.329.0
+        uses: ruby/setup-ruby@v1.334.0
         with:
           ruby-version: ${{ env.RUBY_VERSION }}
 
@@ -136,7 +136,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@v1.329.0
+        uses: ruby/setup-ruby@v1.334.0
         with:
           ruby-version: ${{ matrix.ruby }}
           working-directory: sdks/${{ matrix.gem }}
@@ -165,7 +165,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@v1.329.0
+        uses: ruby/setup-ruby@v1.334.0
         with:
           ruby-version: ${{ env.RUBY_VERSION }}
 
