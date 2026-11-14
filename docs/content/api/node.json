@@ -340,20 +340,6 @@
     },
     {
       "owner": "JsQueue",
-      "name": "compensationNodeForJob",
-      "kind": "method",
-      "signature": "compensationNodeForJob(jobId: string): JsWorkflowNodeRef | null",
-      "params": [
-        {
-          "name": "jobId",
-          "type": "string",
-          "default": null
-        }
-      ],
-      "returns": "JsWorkflowNodeRef | null"
-    },
-    {
-      "owner": "JsQueue",
       "name": "countPendingByQueue",
       "kind": "method",
       "signature": "countPendingByQueue(queue: string): number",
@@ -2168,20 +2154,6 @@
     },
     {
       "owner": "JsQueue",
-      "name": "workflowNodeForJob",
-      "kind": "method",
-      "signature": "workflowNodeForJob(jobId: string): JsWorkflowNodeRef | null",
-      "params": [
-        {
-          "name": "jobId",
-          "type": "string",
-          "default": null
-        }
-      ],
-      "returns": "JsWorkflowNodeRef | null"
-    },
-    {
-      "owner": "JsQueue",
       "name": "writeTaskLog",
       "kind": "method",
       "signature": "writeTaskLog(jobId: string, taskName: string, level: string, message: string, extra?: string | undefined | null): void",
@@ -2326,6 +2298,20 @@
       "signature": "id(): string",
       "params": [],
       "returns": "string"
+    },
+    {
+      "owner": "JsWorker",
+      "name": "isCancelSignalled",
+      "kind": "method",
+      "signature": "isCancelSignalled(jobId: string): boolean",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
     },
     {
       "owner": "JsWorker",
