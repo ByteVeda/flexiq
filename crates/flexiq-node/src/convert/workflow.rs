@@ -53,15 +53,6 @@ pub struct JsWorkflowAdvance {
     pub final_state: Option<String>,
 }
 
-/// Identifies the workflow run + node a job belongs to. Returned by
-/// `workflowNodeForJob` so the tracker can classify an outcome without an
-/// in-memory job→run map.
-#[napi(object)]
-pub struct JsWorkflowNodeRef {
-    pub run_id: String,
-    pub node_name: String,
-}
-
 /// Outcome of a fan-out completion check. Returned by `checkFanOutCompletion`
 /// only when this caller performed the parent's terminal transition.
 #[napi(object)]

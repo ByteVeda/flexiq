@@ -20,6 +20,7 @@ use tokio::sync::{oneshot, Semaphore};
 
 use crate::attached_steps::RunningJobs;
 use crate::convert::{JsTaskInvocation, JsTaskOutcome};
+use crate::dispatched::Dispatched;
 
 /// Task callback registered from JS: `(invocation) => Promise<JsTaskOutcome>`.
 /// `false` is napi's `CalleeHandled` flag — the JS side is called with the bare
@@ -46,6 +47,9 @@ pub struct NodeDispatcher {
     /// step opened from JS can find the dispatch it belongs to. `None` for a
     /// worker, which reads the job row from its own storage instead.
     running: Option<Arc<RunningJobs>>,
+    /// Where a worker records each job it runs, for the outcome's workflow
+    /// link. `None` for an attached executor, which reports no outcomes to JS.
+    dispatched: Option<Arc<Dispatched>>,
 }
 
 impl NodeDispatcher {
@@ -56,13 +60,17 @@ impl NodeDispatcher {
         storage: StorageBackend,
         namespace: Option<String>,
         concurrency: Option<usize>,
+        dispatched: Arc<Dispatched>,
     ) -> Self {
-        Self::with_cancels(
-            callback,
-            Arc::new(CancelSignals::from_storage(storage, namespace)),
-            concurrency,
-            None,
-        )
+        Self {
+            dispatched: Some(dispatched),
+            ..Self::with_cancels(
+                callback,
+                Arc::new(CancelSignals::from_storage(storage, namespace)),
+                concurrency,
+                None,
+            )
+        }
     }
 
     /// A dispatcher with no storage, for an attached executor. Cancels arrive
@@ -103,6 +111,7 @@ impl NodeDispatcher {
             cancels,
             concurrency: Arc::new(Semaphore::new(permits)),
             running,
+            dispatched: None,
         }
     }
 }
@@ -126,6 +135,9 @@ impl WorkerDispatcher for NodeDispatcher {
                 Ok(p) => p,
                 Err(_) => break,
             };
+            if let Some(dispatched) = &self.dispatched {
+                dispatched.record(&job.id, job.metadata.as_deref());
+            }
             let callback = self.callback.clone();
             let cancels = self.cancels.clone();
             let running = self.running.clone();

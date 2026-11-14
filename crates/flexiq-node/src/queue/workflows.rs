@@ -22,9 +22,10 @@ use napi_derive::napi;
 
 use super::JsQueue;
 use crate::convert::{
-    node_to_js, run_to_js, JsFanOutCompletion, JsWorkflowAdvance, JsWorkflowNode,
-    JsWorkflowNodeRef, JsWorkflowRun, JsWorkflowRunPlan,
+    node_to_js, run_to_js, JsFanOutCompletion, JsWorkflowAdvance, JsWorkflowNode, JsWorkflowRun,
+    JsWorkflowRunPlan,
 };
+use crate::dispatched::parse_workflow_link;
 use crate::error::{invalid_arg, to_napi_err};
 
 /// Largest number of children a single fan-out may expand into — guards against
@@ -379,21 +380,6 @@ impl JsQueue {
             .into_iter()
             .map(run_to_js)
             .collect())
-    }
-
-    /// The run + node a job belongs to, or `null` for a non-workflow job. Lets
-    /// the tracker classify any worker outcome without an in-memory job→run map.
-    #[napi]
-    pub fn workflow_node_for_job(&self, job_id: String) -> Result<Option<JsWorkflowNodeRef>> {
-        let Some(job) = self
-            .storage
-            .get_job(&job_id, self.namespace.as_deref())
-            .map_err(to_napi_err)?
-        else {
-            return Ok(None);
-        };
-        Ok(parse_workflow_metadata(job.metadata.as_deref())
-            .map(|(run_id, node_name)| JsWorkflowNodeRef { run_id, node_name }))
     }
 
     /// The DAG + step metadata backing a run, so the tracker can reconstruct
@@ -773,22 +759,6 @@ impl JsQueue {
         Ok(job.id)
     }
 
-    /// The run + node a compensation job belongs to, or `null` if `job_id` is not
-    /// a compensation job. The tracker checks this before normal node handling so
-    /// a rollback outcome advances the saga rather than the forward run.
-    #[napi]
-    pub fn compensation_node_for_job(&self, job_id: String) -> Result<Option<JsWorkflowNodeRef>> {
-        let Some(job) = self
-            .storage
-            .get_job(&job_id, self.namespace.as_deref())
-            .map_err(to_napi_err)?
-        else {
-            return Ok(None);
-        };
-        Ok(parse_compensation_metadata(job.metadata.as_deref())
-            .map(|(run_id, node_name)| JsWorkflowNodeRef { run_id, node_name }))
-    }
-
     /// Fail-fast cascade: skip every still-pending node of a run and cancel its
     /// job. Called by the tracker when a managed run's node fails.
     #[napi]
@@ -936,33 +906,9 @@ fn compensation_metadata_json(
 /// Parse `{workflow_run_id, workflow_node_name}` from a job's metadata blob.
 /// Returns `None` for compensation jobs so they never advance the forward run.
 fn parse_workflow_metadata(metadata: Option<&str>) -> Option<(String, String)> {
-    let parsed: serde_json::Value = serde_json::from_str(metadata?).ok()?;
-    if parsed
-        .get("compensation")
-        .and_then(serde_json::Value::as_bool)
-        == Some(true)
-    {
-        return None;
-    }
-    let run_id = parsed.get("workflow_run_id")?.as_str()?.to_string();
-    let node_name = parsed.get("workflow_node_name")?.as_str()?.to_string();
-    Some((run_id, node_name))
-}
-
-/// Parse a compensation job's `{workflow_run_id, workflow_node_name}` — `None`
-/// unless the metadata carries `compensation: true`.
-fn parse_compensation_metadata(metadata: Option<&str>) -> Option<(String, String)> {
-    let parsed: serde_json::Value = serde_json::from_str(metadata?).ok()?;
-    if parsed
-        .get("compensation")
-        .and_then(serde_json::Value::as_bool)
-        != Some(true)
-    {
-        return None;
-    }
-    let run_id = parsed.get("workflow_run_id")?.as_str()?.to_string();
-    let node_name = parsed.get("workflow_node_name")?.as_str()?.to_string();
-    Some((run_id, node_name))
+    parse_workflow_link(metadata)
+        .filter(|link| !link.compensation)
+        .map(|link| (link.run_id, link.node_name))
 }
 
 /// Fail-fast: mark every still-pending node skipped and cancel its job.

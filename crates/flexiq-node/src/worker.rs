@@ -14,6 +14,7 @@ use tokio::sync::Notify;
 
 use crate::config::WorkerOptions;
 use crate::convert::outcome_to_js;
+use crate::dispatched::Dispatched;
 use crate::dispatcher::{NodeDispatcher, TaskCallback};
 #[cfg(feature = "mesh")]
 use crate::error::invalid_arg;
@@ -255,11 +256,13 @@ pub fn start_worker(
     }
 
     // Dispatcher loop: execute each job in JS, report results on `result_tx`.
+    let dispatched = Arc::new(Dispatched::default());
     let dispatcher = NodeDispatcher::new(
         callback,
         dispatcher_storage,
         dispatcher_namespace,
         concurrency,
+        dispatched.clone(),
     );
     spawn(async move {
         dispatcher.run(job_rx, result_tx).await;
@@ -285,6 +288,12 @@ pub fn start_worker(
                     Err(_) => break,
                 }
             }
+            // Settled for every result, reported or not, so the registry never
+            // keeps a finished job's entry.
+            let links: Vec<_> = batch
+                .iter()
+                .map(|result| dispatched.settle(result.job_id()))
+                .collect();
 
             // A panicking batch must not kill the drain loop — a dead loop
             // silently drops every later outcome. The batch widens a panic's
@@ -299,13 +308,14 @@ pub fn start_worker(
                 // middleware (the events layer). `handle_results` returns one
                 // outcome per input, in order, so each job is reported once.
                 Ok(outcomes) => {
-                    for outcome in outcomes {
+                    for (outcome, link) in outcomes.into_iter().zip(links) {
                         match outcome {
                             Ok(outcome) => {
                                 // A superseded result maps to nothing: the job
                                 // is proceeding under another owner and this
                                 // attempt wrote no state to report.
-                                if let Some(js) = outcome_to_js(&outcome) {
+                                if let Some(mut js) = outcome_to_js(&outcome) {
+                                    js.workflow = link;
                                     outcome_callback
                                         .call(js, ThreadsafeFunctionCallMode::NonBlocking);
                                 }

@@ -22,7 +22,7 @@ pub use log::{log_to_js, JsTaskLog};
 pub use ops::{
     circuit_breaker_to_js, replay_to_js, JsCircuitBreaker, JsDagEdge, JsJobDag, JsReplayEntry,
 };
-pub use outcome::{outcome_to_js, JsOutcome};
+pub use outcome::{outcome_to_js, JsOutcome, JsWorkflowLink};
 pub use periodic::{periodic_to_js, JsPeriodicTask};
 pub use pubsub::{
     subscription_to_js, topic_log_stat_to_js, topic_message_to_js, topic_stat_to_js, topic_to_js,
@@ -35,6 +35,6 @@ pub use stats::{
 pub use task_config::{queue_codel, queue_config, task_config};
 #[cfg(feature = "workflows")]
 pub use workflow::{
-    node_to_js, run_to_js, JsFanOutCompletion, JsWorkflowAdvance, JsWorkflowNode,
-    JsWorkflowNodeRef, JsWorkflowRun, JsWorkflowRunPlan,
+    node_to_js, run_to_js, JsFanOutCompletion, JsWorkflowAdvance, JsWorkflowNode, JsWorkflowRun,
+    JsWorkflowRunPlan,
 };
