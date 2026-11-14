@@ -55,7 +55,7 @@ impl CancelSignals {
     /// The out-of-band set is checked first: it needs no I/O, and for a
     /// detached executor it is the only answer there is.
     pub fn is_cancelled(&self, job_id: &str) -> bool {
-        if self.lock().contains(job_id) {
+        if self.is_signalled(job_id) {
             return true;
         }
         self.storage.as_ref().is_some_and(|storage| {
@@ -63,6 +63,12 @@ impl CancelSignals {
                 .is_cancel_requested(job_id, self.namespace.as_deref())
                 .unwrap_or(false)
         })
+    }
+
+    /// Whether `job_id` was signalled out of band. Never touches storage, so a
+    /// caller on a latency-sensitive thread can poll it freely.
+    pub fn is_signalled(&self, job_id: &str) -> bool {
+        self.lock().contains(job_id)
     }
 
     /// Drop the record for a finished job, so the set cannot grow for the life
@@ -152,5 +158,9 @@ mod tests {
             .request_cancel(&job.id, None)
             .expect("request cancel"));
         assert!(signals.is_cancelled(&job.id));
+        // `is_signalled` is the I/O-free half: a storage flag alone is not one.
+        assert!(!signals.is_signalled(&job.id));
+        signals.signal(&job.id);
+        assert!(signals.is_signalled(&job.id));
     }
 }

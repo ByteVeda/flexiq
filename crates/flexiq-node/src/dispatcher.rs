@@ -47,8 +47,9 @@ pub struct NodeDispatcher {
     /// step opened from JS can find the dispatch it belongs to. `None` for a
     /// worker, which reads the job row from its own storage instead.
     running: Option<Arc<RunningJobs>>,
-    /// Where a worker records each job it runs, for the outcome's workflow
-    /// link. `None` for an attached executor, which reports no outcomes to JS.
+    /// Where a worker records each job it runs, for the outcome's workflow link
+    /// and the cancel relay. `None` for an attached executor, which reports no
+    /// outcomes to JS and hears cancels as frames.
     dispatched: Option<Arc<Dispatched>>,
 }
 

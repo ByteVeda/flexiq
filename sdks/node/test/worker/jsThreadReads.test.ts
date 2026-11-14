@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { Queue, type Worker } from "../../src/index";
+import { currentJob, Queue, type Worker } from "../../src/index";
 
 let worker: Worker | undefined;
 
@@ -67,4 +67,42 @@ it("runs a plain job with no storage reads on the JS thread (#962)", async () =>
   // make at least one per job.
   const total = [...counts.values()].reduce((sum, n) => sum + n, 0);
   expect(total, JSON.stringify(Object.fromEntries(counts))).toBeLessThan(jobs / 4);
+});
+
+it("polls a running job's cancel flag without a storage read, and still cancels", async () => {
+  // The poll ticks every 200 ms per running job. As a storage read it was a
+  // round trip on the JS thread per tick per job; the native worker now relays
+  // storage cancels off that thread and the poll reads memory.
+  const queue = new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-jsr-")), "q.db") });
+  let started: () => void = () => {};
+  const running = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  queue.task("slow", async () => {
+    started();
+    const signal = currentJob()?.signal as AbortSignal;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 10_000);
+      signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    signal.throwIfAborted();
+  });
+  const cancelled = new Promise<void>((resolve) => {
+    queue.on("job.cancelled", () => resolve());
+  });
+  const id = queue.enqueue("slow", []);
+
+  const { counts, on } = countNativeCalls(queue);
+  worker = queue.runWorker({ concurrency: 1 });
+  await running;
+  on.value = true;
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  on.value = false;
+  expect(counts.get("isCancelRequested") ?? 0).toBe(0);
+
+  queue.requestCancel(id);
+  await cancelled;
 });

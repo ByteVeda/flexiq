@@ -154,6 +154,9 @@ export class Worker {
       resources,
       queue,
       middlewareTimeoutMs: params.middlewareTimeoutMs,
+      // In memory: the native worker relays storage cancels in one batched
+      // read off this thread, so a poll never stalls the other running jobs.
+      isCancelled: (jobId) => started?.isCancelSignalled(jobId) ?? false,
       steps: {
         openStepSession: async (jobId, attempt) => {
           await workerReady;

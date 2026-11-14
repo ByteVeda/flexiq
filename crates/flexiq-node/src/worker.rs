@@ -4,8 +4,9 @@
 //! so they can carry resource health without a second writer flapping the column.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use flexiq_core::worker::{registry_fingerprint, WorkerDispatcher};
+use flexiq_core::worker::{registry_fingerprint, CancelSignals, WorkerDispatcher};
 use flexiq_core::{Scheduler, SchedulerConfig, Storage, StorageBackend, WorkerRegistration};
 use napi::bindgen_prelude::{spawn, spawn_blocking, within_runtime_if_available, Result};
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
@@ -23,6 +24,8 @@ use crate::queue::OutcomeCallback;
 
 const DEFAULT_QUEUE: &str = "default";
 const DEFAULT_CHANNEL_CAPACITY: usize = 128;
+/// How soon a storage cancel reaches a running job — the JS poll's old cadence.
+const CANCEL_RELAY_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Handle to a running worker. Hold it for the worker's lifetime; call
 /// [`JsWorker::stop`] to shut it down.
@@ -38,6 +41,8 @@ pub struct JsWorker {
     /// This worker's event hub, kept for `eventSinkStats` and the stop-time
     /// drain. The result-drain thread drains it once the last result is handled.
     pub(crate) events: Option<Arc<WorkerEvents>>,
+    /// Cancels the relay has seen for this worker's running jobs.
+    cancels: Arc<CancelSignals>,
     shutdown: Arc<Notify>,
     lifecycle_stop: Arc<Notify>,
     #[cfg(feature = "mesh")]
@@ -51,6 +56,14 @@ impl JsWorker {
     #[napi(getter)]
     pub fn id(&self) -> String {
         self.worker_id.clone()
+    }
+
+    /// Whether a cancel has been requested for one of this worker's running
+    /// jobs. In memory only — the relay does the storage read, off the JS
+    /// thread — so a task's cancel poll never stalls the event loop.
+    #[napi]
+    pub fn is_cancel_signalled(&self, job_id: String) -> bool {
+        self.cancels.is_signalled(&job_id)
     }
 
     /// Stop the worker: the scheduler stops dispatching, the lifecycle task
@@ -259,14 +272,24 @@ pub fn start_worker(
     let dispatched = Arc::new(Dispatched::default());
     let dispatcher = NodeDispatcher::new(
         callback,
-        dispatcher_storage,
-        dispatcher_namespace,
+        dispatcher_storage.clone(),
+        dispatcher_namespace.clone(),
         concurrency,
         dispatched.clone(),
     );
+    let cancels = dispatcher.cancels();
     spawn(async move {
         dispatcher.run(job_rx, result_tx).await;
     });
+    let relay_stop = Arc::new(Notify::new());
+    spawn_cancel_relay(
+        dispatcher_storage,
+        dispatcher_namespace,
+        dispatched.clone(),
+        cancels.clone(),
+        relay_stop.clone(),
+    );
+    let drain_cancels = cancels.clone();
 
     // Result-drain loop: apply outcomes to storage. crossbeam `recv` is
     // blocking, so it runs on a blocking thread; it exits when every result
@@ -292,7 +315,7 @@ pub fn start_worker(
             // keeps a finished job's entry.
             let links: Vec<_> = batch
                 .iter()
-                .map(|result| dispatched.settle(result.job_id()))
+                .map(|result| dispatched.settle(result.job_id(), &drain_cancels))
                 .collect();
 
             // A panicking batch must not kill the drain loop — a dead loop
@@ -329,6 +352,8 @@ pub fn start_worker(
                 Err(_) => log::error!("[flexiq-node] result handling panicked; outcomes dropped"),
             }
         }
+        // Nothing is left running, so nothing is left to cancel.
+        relay_stop.notify_one();
         // Every sender is gone, so the scheduler has stopped and its last
         // result is handled: nothing emits again. Drain here, off the JS thread.
         if let Some(events) = &events {
@@ -341,6 +366,7 @@ pub fn start_worker(
         storage: steps_storage,
         namespace: steps_namespace,
         events: worker_events,
+        cancels,
         shutdown,
         lifecycle_stop,
         #[cfg(feature = "mesh")]
@@ -355,6 +381,43 @@ fn resources_json(resources: Option<&[String]>) -> Option<String> {
     let mut sorted = names.to_vec();
     sorted.sort();
     serde_json::to_string(&sorted).ok()
+}
+
+/// Carry storage cancel requests to this worker's running jobs: one batched
+/// read per tick over everything in flight, on the blocking pool, so a JS task's
+/// cancel poll is an in-memory lookup. Polled per job from JS, each read was a
+/// round trip on the JS thread that stalled every other running job (#962).
+fn spawn_cancel_relay(
+    storage: StorageBackend,
+    namespace: Option<String>,
+    dispatched: Arc<Dispatched>,
+    cancels: Arc<CancelSignals>,
+    stop: Arc<Notify>,
+) {
+    spawn(async move {
+        let mut tick = tokio::time::interval(CANCEL_RELAY_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = stop.notified() => break,
+                _ = tick.tick() => {}
+            }
+            let ids = dispatched.ids();
+            if ids.is_empty() {
+                continue;
+            }
+            let storage = storage.clone();
+            let namespace = namespace.clone();
+            match spawn_blocking(move || storage.cancel_requested_among(&ids, namespace.as_deref()))
+                .await
+            {
+                Ok(Ok(requested)) => dispatched.signal_cancels(&requested, &cancels),
+                // Transient: the next tick reads again.
+                Ok(Err(err)) => log::debug!("[flexiq-node] cancel relay read failed: {err}"),
+                Err(err) => log::warn!("[flexiq-node] cancel relay task failed: {err}"),
+            }
+        }
+    });
 }
 
 /// Register this worker, then unregister once `stop` is signalled.

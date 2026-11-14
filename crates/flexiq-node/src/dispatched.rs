@@ -1,12 +1,16 @@
 //! The jobs a worker has handed to JS and not yet settled.
 //!
-//! Classifying an outcome for the workflow tracker used to cost two job reads
-//! on the JS thread, where one round trip stalls every in-flight job (#962).
-//! The dispatcher records each job here as it runs it, so the result loop
-//! attaches the workflow link to the outcome instead.
+//! Two per-job facts used to cost a storage read on the JS thread, where one
+//! round trip stalls every in-flight job (#962): which workflow node an outcome
+//! belongs to, and whether a running job was cancelled. The dispatcher records
+//! each job here as it runs it, so the result loop attaches the workflow link
+//! to the outcome and the cancel relay checks every running job in one read,
+//! off that thread.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+
+use flexiq_core::worker::CancelSignals;
 
 use crate::convert::JsWorkflowLink;
 
@@ -43,9 +47,29 @@ impl Dispatched {
         self.lock().insert(job_id.to_string(), link);
     }
 
-    /// Forget a job whose result has landed, handing back its workflow link.
-    pub fn settle(&self, job_id: &str) -> Option<JsWorkflowLink> {
-        self.lock().remove(job_id).flatten()
+    /// Forget a job whose result has landed, handing back its workflow link,
+    /// and drop any cancel signalled for it.
+    ///
+    /// Under the registry lock, so the relay cannot signal the job after its
+    /// signal is dropped and leave the id behind for the life of the process.
+    pub fn settle(&self, job_id: &str, cancels: &CancelSignals) -> Option<JsWorkflowLink> {
+        let mut jobs = self.lock();
+        cancels.forget(job_id);
+        jobs.remove(job_id).flatten()
+    }
+
+    /// The ids of every job still running.
+    pub fn ids(&self) -> Vec<String> {
+        self.lock().keys().cloned().collect()
+    }
+
+    /// Signal each of `requested` that is still running, so JS sees the cancel
+    /// on its next in-memory poll.
+    pub fn signal_cancels(&self, requested: &[String], cancels: &CancelSignals) {
+        let jobs = self.lock();
+        for job_id in requested.iter().filter(|id| jobs.contains_key(*id)) {
+            cancels.signal(job_id);
+        }
     }
 
     // The map holds no invariant a panicking holder could break mid-write.
@@ -90,10 +114,31 @@ mod tests {
     #[test]
     fn settle_hands_back_the_link_once() {
         let dispatched = Dispatched::default();
+        let cancels = CancelSignals::detached();
         dispatched.record("j1", Some(LINKED));
         dispatched.record("j2", None);
-        assert!(dispatched.settle("j2").is_none());
-        assert!(dispatched.settle("j1").is_some());
-        assert!(dispatched.settle("j1").is_none());
+        assert_eq!(dispatched.ids().len(), 2);
+        assert!(dispatched.settle("j2", &cancels).is_none());
+        assert!(dispatched.settle("j1", &cancels).is_some());
+        assert!(dispatched.settle("j1", &cancels).is_none());
+        assert!(dispatched.ids().is_empty());
+    }
+
+    #[test]
+    fn cancels_reach_running_jobs_only() {
+        let dispatched = Dispatched::default();
+        let cancels = CancelSignals::detached();
+        dispatched.record("running", None);
+        dispatched.record("done", None);
+        dispatched.settle("done", &cancels);
+
+        let requested = ["running".to_string(), "done".to_string()];
+        dispatched.signal_cancels(&requested, &cancels);
+        assert!(cancels.is_cancelled("running"));
+        // A settled job is not signalled, so its id cannot linger in the set.
+        assert!(!cancels.is_cancelled("done"));
+
+        dispatched.settle("running", &cancels);
+        assert!(!cancels.is_cancelled("running"));
     }
 }
