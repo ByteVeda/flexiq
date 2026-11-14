@@ -75,7 +75,9 @@ class StubSession:
 @pytest.fixture
 def rsa_key() -> RSAKey:
     """A fresh RSA keypair used to sign + verify test ID tokens."""
-    return RSAKey.generate_key(2048, parameters={"kid": "test-kid"}, private=True)
+    # joserfc 1.8 types `generate_key` as `Any`; the annotation keeps mypy strict.
+    key: RSAKey = RSAKey.generate_key(2048, parameters={"kid": "test-kid"}, private=True)
+    return key
 
 
 @pytest.fixture
