@@ -23,7 +23,8 @@ function LoginPage() {
   const loading = status.isLoading || whoami.isLoading;
 
   return (
-    <div className="grid min-h-screen place-items-center bg-[var(--bg)] px-4">
+    // `main` gives the standalone route its own landmark; it has no AppShell.
+    <main className="grid min-h-screen place-items-center bg-[var(--bg)] px-4">
       <div className="flex w-full max-w-sm flex-col items-center gap-6">
         <div className="flex items-center gap-2">
           <div className="grid place-items-center size-9 rounded-md bg-accent text-accent-fg">
@@ -46,6 +47,6 @@ function LoginPage() {
           Refresh
         </button>
       </div>
-    </div>
+    </main>
   );
 }
