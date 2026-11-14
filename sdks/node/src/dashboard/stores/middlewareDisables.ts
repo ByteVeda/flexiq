@@ -1,7 +1,7 @@
 // Per-task middleware disable list. Persisted under
-// `middleware:disabled:<task_name>` as a JSON array of middleware names and
-// read at every invocation, so toggles take effect on the next job without
-// a worker restart.
+// `middleware:disabled:<task_name>` as a JSON array of middleware names. A
+// worker re-reads it at most once a second per task, so toggles take effect
+// without a restart: on the next job in this process, within a second elsewhere.
 
 import type { Middleware } from "../../middleware";
 import { updateSetting } from "../../settingsKv";
@@ -10,6 +10,15 @@ import { ValidationError } from "../errors";
 import type { SettingsAccess } from "./overrides";
 
 const DISABLE_PREFIX = "middleware:disabled:";
+
+/** How long a worker trusts a cached disable list before re-reading storage. */
+const CACHE_TTL_MS = 1000;
+
+/**
+ * Bumped by every write through a store, so a cached reader in this process
+ * sees its own toggles on the next job; other processes' land within the TTL.
+ */
+let writeVersion = 0;
 
 const log = createLogger("dashboard");
 
@@ -41,6 +50,8 @@ function parse(raw: string | null): string[] {
 
 /** List/set/clear per-task middleware disables. */
 export class MiddlewareDisableStore {
+  private readonly cache = new Map<string, { names: string[]; version: number; at: number }>();
+
   constructor(private readonly settings: SettingsAccess) {}
 
   private key(taskName: string): string {
@@ -67,6 +78,22 @@ export class MiddlewareDisableStore {
   }
 
   /**
+   * {@link getFor} behind a per-task cache, for the worker's per-job path. The
+   * read is synchronous on the JS thread, so uncached it stalls every in-flight
+   * job for a storage round trip, twice per job (#962).
+   */
+  getForCached(taskName: string): string[] {
+    const now = performance.now();
+    const hit = this.cache.get(taskName);
+    if (hit && hit.version === writeVersion && now - hit.at < CACHE_TTL_MS) {
+      return hit.names;
+    }
+    const names = this.getFor(taskName);
+    this.cache.set(taskName, { names, version: writeVersion, at: now });
+    return names;
+  }
+
+  /**
    * Flip a middleware on/off for a task; returns the new disable list.
    *
    * An emptied list leaves a `[]` row rather than deleting it. Deleting sat
@@ -84,6 +111,7 @@ export class MiddlewareDisableStore {
     if (!middlewareName) {
       throw new ValidationError("middleware name must not be empty");
     }
+    writeVersion += 1;
     return updateSetting(this.settings, this.key(taskName), parse, (names) => {
       const already = names.includes(middlewareName);
       if (disabled) {
@@ -98,6 +126,7 @@ export class MiddlewareDisableStore {
   }
 
   clearFor(taskName: string): boolean {
+    writeVersion += 1;
     return this.settings.deleteSetting(this.key(taskName));
   }
 }

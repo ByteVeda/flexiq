@@ -114,14 +114,14 @@ export class Worker {
       run,
     } = params;
 
-    // Dashboard-tunable state: per-task middleware disables are re-read on
-    // every invocation (live toggles); task/queue overrides apply here, at
-    // worker startup.
+    // Dashboard-tunable state: per-task middleware disables are live toggles,
+    // cached for a second per task; task/queue overrides apply here, at worker
+    // startup.
     const disables = new MiddlewareDisableStore(queue);
     // The job id is unused here: a worker has storage, so it reads the live
     // toggle list by task name rather than taking one off the dispatch.
     const middlewareFor = (taskName: string): readonly Middleware[] => {
-      const disabled = disables.getFor(taskName);
+      const disabled = disables.getForCached(taskName);
       if (disabled.length === 0) {
         return middleware;
       }
