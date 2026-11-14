@@ -16,6 +16,20 @@ pub struct JsOutcome {
     pub timed_out: Option<bool>,
     /// Execution time in milliseconds; absent when the run wasn't measured.
     pub duration_ms: Option<i64>,
+    /// The workflow node the job ran for; absent for a non-workflow job.
+    pub workflow: Option<JsWorkflowLink>,
+}
+
+/// The workflow node a job runs for, read from its metadata at dispatch.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsWorkflowLink {
+    /// The workflow run.
+    pub run_id: String,
+    /// The node within the run.
+    pub node_name: String,
+    /// A saga rollback job, which advances the compensation, not the forward run.
+    pub compensation: bool,
 }
 
 /// Nanoseconds to whole milliseconds, dropping the core's "not measured" 0 so a
@@ -41,6 +55,7 @@ pub fn outcome_to_js(outcome: &ResultOutcome) -> Option<JsOutcome> {
             retry_count: None,
             timed_out: None,
             duration_ms: duration_ms(*wall_time_ns),
+            workflow: None,
         },
         ResultOutcome::Retry {
             job_id,
@@ -59,6 +74,7 @@ pub fn outcome_to_js(outcome: &ResultOutcome) -> Option<JsOutcome> {
             retry_count: Some(*retry_count),
             timed_out: Some(*timed_out),
             duration_ms: duration_ms(*wall_time_ns),
+            workflow: None,
         },
         ResultOutcome::DeadLettered {
             job_id,
@@ -76,6 +92,7 @@ pub fn outcome_to_js(outcome: &ResultOutcome) -> Option<JsOutcome> {
             retry_count: None,
             timed_out: Some(*timed_out),
             duration_ms: duration_ms(*wall_time_ns),
+            workflow: None,
         },
         ResultOutcome::Cancelled {
             job_id,
@@ -91,6 +108,7 @@ pub fn outcome_to_js(outcome: &ResultOutcome) -> Option<JsOutcome> {
             retry_count: None,
             timed_out: None,
             duration_ms: duration_ms(*wall_time_ns),
+            workflow: None,
         },
         ResultOutcome::Superseded { .. } => return None,
         // Handled where the attempt ended, not here: the task callback pairs

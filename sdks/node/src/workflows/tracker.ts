@@ -136,24 +136,25 @@ export class WorkflowTracker {
     } else if (outcome.kind === "dead") {
       succeeded = false;
     } else if (outcome.kind === "cancelled") {
-      this.settleCancelledJob(outcome.jobId);
+      this.settleCancelledJob(outcome);
       return;
     } else {
       return; // retry is not terminal for workflow advancement
     }
 
+    // The worker reads the link off the job it dispatched, so classifying an
+    // outcome costs no storage read on this (the JS) thread.
+    const link = outcome.workflow;
+    if (!link) {
+      return; // not a workflow job
+    }
     try {
-      // A rollback job advances the saga, not the forward run — check it first.
-      const comp = this.native.compensationNodeForJob(outcome.jobId);
-      if (comp) {
-        this.onCompensationOutcome(comp.runId, comp.nodeName, succeeded, outcome.error ?? null);
+      // A rollback job advances the saga, not the forward run.
+      if (link.compensation) {
+        this.onCompensationOutcome(link.runId, link.nodeName, succeeded, outcome.error ?? null);
         return;
       }
-      const ref = this.native.workflowNodeForJob(outcome.jobId);
-      if (!ref) {
-        return; // not a workflow job
-      }
-      this.advance(outcome.jobId, ref.runId, ref.nodeName, succeeded, outcome.error ?? null);
+      this.advance(outcome.jobId, link.runId, link.nodeName, succeeded, outcome.error ?? null);
     } catch (error) {
       // Workflow bookkeeping must never break the worker loop — but a swallowed
       // failure means a stuck run, so it must be visible at the default level.
@@ -206,15 +207,15 @@ export class WorkflowTracker {
    * `workflow.cancelled` is reserved — this SDK has no run-cancellation API
    * today, so it only fires when the finalizer reports a cancelled run.
    */
-  private settleCancelledJob(jobId: string): void {
+  private settleCancelledJob(outcome: JsOutcome): void {
+    const link = outcome.workflow;
+    if (!link || link.compensation) {
+      return; // not a forward workflow node
+    }
     try {
-      const ref = this.native.workflowNodeForJob(jobId);
-      if (!ref) {
-        return; // not a workflow job
-      }
-      this.settle(ref.runId, this.native.finalizeRunIfTerminal(ref.runId));
+      this.settle(link.runId, this.native.finalizeRunIfTerminal(link.runId));
     } catch (error) {
-      log.error(() => `workflow cancel settle for ${jobId} failed`, error);
+      log.error(() => `workflow cancel settle for ${outcome.jobId} failed`, error);
     }
   }
 

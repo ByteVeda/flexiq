@@ -80,12 +80,6 @@ queue.clearRetentionOverride(): boolean
 queue.closeDashboardAudit(): Promise<void>
 ```
 
-### `queue.compensationNodeForJob()`
-
-```typescript
-queue.compensationNodeForJob(jobId: string): JsWorkflowNodeRef | null
-```
-
 ### `queue.countPendingByQueue()`
 
 ```typescript
@@ -846,12 +840,6 @@ queue.workerHeartbeat(
     workerId: string,
     resourceHealth?: string | undefined | null
 ): Promise<JsHeartbeat>
-```
-
-### `queue.workflowNodeForJob()`
-
-```typescript
-queue.workflowNodeForJob(jobId: string): JsWorkflowNodeRef | null
 ```
 
 ### `queue.writeTaskLog()`
