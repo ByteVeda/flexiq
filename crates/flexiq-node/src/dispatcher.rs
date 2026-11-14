@@ -143,13 +143,19 @@ impl WorkerDispatcher for NodeDispatcher {
             let cancels = self.cancels.clone();
             let running = self.running.clone();
             let result_tx = result_tx.clone();
+            // A worker's registry settles the cancel record once the job's
+            // last dispatch lands; forgetting it here could drop a newer
+            // attempt's cancel.
+            let forgets_cancel = self.dispatched.is_none();
             spawn(async move {
                 let _permit = permit;
                 let job_id = job.id.clone();
                 let result = run_one(&callback, &cancels, running.as_ref(), job).await;
                 // Release the cancel record now the job has reported, so a
                 // long-lived process does not accumulate ids.
-                cancels.forget(&job_id);
+                if forgets_cancel {
+                    cancels.forget(&job_id);
+                }
                 // A full bounded channel parks the sender — do it on the
                 // blocking pool, never on the shared async runtime.
                 match spawn_blocking(move || result_tx.send(result)).await {

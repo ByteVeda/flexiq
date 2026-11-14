@@ -33,29 +33,52 @@ pub(crate) fn parse_workflow_link(metadata: Option<&str>) -> Option<JsWorkflowLi
     })
 }
 
+/// One job's unsettled dispatches and the workflow link they share.
+struct Entry {
+    /// More than one when a job is re-dispatched before an earlier attempt's
+    /// result lands: `step.sleep` commits the job back to `Pending` before its
+    /// `Slept` result reaches the drain, so a due wake can run it again here.
+    dispatches: usize,
+    link: Option<JsWorkflowLink>,
+}
+
 /// Dispatched-but-unsettled jobs, keyed by id, with their workflow link.
 ///
 /// Every result the drain loop sees comes from a job the dispatcher ran, so an
 /// entry recorded at dispatch is always there to settle when its result lands.
 #[derive(Default)]
-pub(crate) struct Dispatched(Mutex<HashMap<String, Option<JsWorkflowLink>>>);
+pub(crate) struct Dispatched(Mutex<HashMap<String, Entry>>);
 
 impl Dispatched {
     /// Record a job as it is handed to JS.
     pub fn record(&self, job_id: &str, metadata: Option<&str>) {
         let link = parse_workflow_link(metadata);
-        self.lock().insert(job_id.to_string(), link);
+        let mut jobs = self.lock();
+        let entry = jobs.entry(job_id.to_string()).or_insert(Entry {
+            dispatches: 0,
+            link: None,
+        });
+        entry.dispatches += 1;
+        // Every attempt carries the same metadata, so the latest parse stands.
+        entry.link = link;
     }
 
-    /// Forget a job whose result has landed, handing back its workflow link,
-    /// and drop any cancel signalled for it.
+    /// Settle one dispatch of a job whose result has landed, handing back its
+    /// workflow link. The last one out drops the entry and any cancel
+    /// signalled for the job; an earlier attempt's result leaves a newer
+    /// attempt's entry and cancel alone.
     ///
     /// Under the registry lock, so the relay cannot signal the job after its
     /// signal is dropped and leave the id behind for the life of the process.
     pub fn settle(&self, job_id: &str, cancels: &CancelSignals) -> Option<JsWorkflowLink> {
         let mut jobs = self.lock();
+        let entry = jobs.get_mut(job_id)?;
+        if entry.dispatches > 1 {
+            entry.dispatches -= 1;
+            return entry.link.clone();
+        }
         cancels.forget(job_id);
-        jobs.remove(job_id).flatten()
+        jobs.remove(job_id).and_then(|entry| entry.link)
     }
 
     /// The ids of every job still running.
@@ -73,7 +96,7 @@ impl Dispatched {
     }
 
     // The map holds no invariant a panicking holder could break mid-write.
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, Option<JsWorkflowLink>>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Entry>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -122,6 +145,27 @@ mod tests {
         assert!(dispatched.settle("j1", &cancels).is_some());
         assert!(dispatched.settle("j1", &cancels).is_none());
         assert!(dispatched.ids().is_empty());
+    }
+
+    #[test]
+    fn an_earlier_attempt_settling_keeps_the_newer_one() {
+        // A slept attempt's result can land after the job was dispatched again.
+        let dispatched = Dispatched::default();
+        let cancels = CancelSignals::detached();
+        dispatched.record("j1", Some(LINKED));
+        dispatched.record("j1", Some(LINKED));
+        dispatched.signal_cancels(&["j1".to_string()], &cancels);
+
+        assert!(dispatched.settle("j1", &cancels).is_some());
+        assert_eq!(dispatched.ids(), vec!["j1".to_string()]);
+        assert!(cancels.is_signalled("j1"), "newer attempt keeps its cancel");
+
+        let link = dispatched
+            .settle("j1", &cancels)
+            .expect("newer attempt's link");
+        assert_eq!(link.run_id, "r");
+        assert!(dispatched.ids().is_empty());
+        assert!(!cancels.is_signalled("j1"));
     }
 
     #[test]
