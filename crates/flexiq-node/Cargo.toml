@@ -34,13 +34,14 @@ flexiq-core = { workspace = true, features = ["attach-tls"] }
 # resolves the Node symbols at load time rather than linking against them.
 # The floor tracks what `napi-derive` expands to — cargo can't see that
 # dependency, so a lone derive bump otherwise resolves against a runtime
-# missing the prelude items it emits (3.12: `NativeBorrow{Scope,Barrier}`).
-napi = { version = "3.12", default-features = false, features = [
+# missing the prelude items it emits (3.12: `NativeBorrow{Scope,Barrier}`;
+# 3.15: `defer_native_borrow_scope`, from derive 3.7).
+napi = { version = "3.15", default-features = false, features = [
     "napi8",
     "tokio_rt",
     "dyn-symbols",
 ] }
-napi-derive = "3.6.2"
+napi-derive = "3.7"
 tokio = { workspace = true }
 crossbeam-channel = { workspace = true }
 async-trait = { workspace = true }
