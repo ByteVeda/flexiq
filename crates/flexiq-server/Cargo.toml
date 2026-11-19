@@ -101,7 +101,7 @@ jsonwebtoken = { version = "10.3", default-features = false, features = [
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Same parser reqwest uses, so the SSRF guard and the request agree on the host.
 url = "2"
-axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+axum-server = { version = "0.9.2", features = ["tls-rustls"] }
 rustls = { version = "0.23.43", default-features = false, features = ["ring"] }
 # The gRPC role, all optional behind `grpc`. Default features carry the router
 # and server; they also carry the channel client, which is what the role's
