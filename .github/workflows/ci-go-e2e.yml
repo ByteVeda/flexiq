@@ -45,7 +45,7 @@ jobs:
           save-if: "false"
 
       - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@v7.1.0
         with:
           # One version, not the matrix ci-go.yml runs. The question here is
           # whether the two halves agree on a wire, and the answer does not
